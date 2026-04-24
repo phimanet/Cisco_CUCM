@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>CUCM AXL Web Portal</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 40px;
+      max-width: 900px;
+    }
+    h1, h2 {
+      margin-top: 30px;
+    }
+    label {
+      font-weight: bold;
+      display: block;
+      margin-top: 14px;
+    }
+    input, textarea {
+      width: 100%;
+      padding: 8px;
+      margin-top: 6px;
+      font-family: monospace;
+    }
+    button {
+      margin-top: 20px;
+      padding: 10px 18px;
+      font-size: 14px;
+    }
+    hr {
+      margin: 35px 0;
+    }
+  </style>
+</head>
+
+<body>
+
+<h1>CUCM AXL Web Portal</h1>
+
+<!-- ================= ADD DIRECTORY NUMBERS ================= -->
+<h2>Add Directory Numbers</h2>
+
+<form action="/add/directorynumbers" method="post" enctype="multipart/form-data">
+
+  <label>CUCM Host</label>
+  <input type="text" name="cucm_host" placeholder="lascucmpl01.ahs.int" required>
+
+  <label>AXL Username</label>
+  <input type="text" name="cucm_user" required>
+
+  <label>AXL Password</label>
+  <input type="password" name="cucm_pass" required>
+
+  <hr>
+
+  <label>Paste Directory Numbers (one per line)</label>
+  <textarea
+    name="manual_patterns"
+    rows="6"
+    placeholder="4695551212
+4695551213
+4695551214"></textarea>
+
+  <p style="font-size:0.9em; color:#555;">
+    Leave this empty to use CSV upload instead.
+  </p>
+
+  <hr>
+
+  <label>Upload CSV (header must be <code>pattern</code>)</label>
+  <input type="file" name="file">
+
+  <button type="submit">Run Add Directory Numbers</button>
+
+</form>
+
+<hr>
+
+<!-- ================= EXPORT DIRECTORY NUMBERS ================= -->
+<h2>Export Directory Numbers</h2>
+
+<form action="/export/directorynumbers" method="post">
+
+  <label>CUCM Host</label>
+  <input type="text" name="cucm_host" placeholder="lascucmpl01.ahs.int" required>
+
+  <label>AXL Username</label>
+  <input type="text" name="cucm_user" required>
+
+  <label>AXL Password</label>
+  <input type="password" name="cucm_pass" required>
+
+  <button type="submit">Export Directory Numbers</button>
+
+</form>
+
+<hr>
+
+<!-- ================= EXPORT END USERS ================= -->
+<h2>Export End Users</h2>
+
+<form action="/export/endusers" method="post">
+
+  <label>CUCM Host</label>
+  <input type="text" name="cucm_host" placeholder="lascucmpl01.ahs.int" required>
+
+  <label>AXL Username</label>
+  <input type="text" name="cucm_user" required>
+
+  <label>AXL Password</label>
+  <input type="password" name="cucm_pass" required>
+
+  <button type="submit">Export End Users</button>
+
+</form>
+
+</body>
+</html>
