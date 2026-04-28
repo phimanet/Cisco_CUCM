@@ -5,7 +5,7 @@ from toolkit.enduser import export_endusers_all_fields
 from toolkit.directory_number import export_directory_numbers
 from toolkit.add_directory_number import add_directory_numbers_from_csv
 
-app = FastAPI(title="CUCM AXL Portal")
+app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -13,15 +13,15 @@ def home():
     return """
 <html>
   <head>
-    <title>CUCM AXL Portal</title>
+    <title>Cisco Voice Server Automation Site - Restricted Access</title>
   </head>
     <body style="font-family: Arial; margin:40px; background-color:#000; color:#fff;">
-    <h2>CUCM AXL Portal</h2>
+    <h2>Cisco Voice Server Automation Site - Restricted Access</h2>
 
     <h3>Add Directory Numbers (Upload CSV)</h3>
 
     <form action="/add/directorynumbers" method="post" enctype="multipart/form-data">
-      CUCM Host:<br>
+    Cisco Callmanager Envronment:<br>
       <input name="cucm_host" value="lascucmpp01.ahs.int"><br><br>
 
       CUCM Username:<br>
@@ -41,7 +41,7 @@ def home():
     <h3>Export Directory Numbers</h3>
 
     <form action="/export/directorynumbers" method="post">
-      CUCM Host:<br>
+    Cisco Callmanager Envronment:<br>
       <input name="cucm_host" value="lascucmpp01.ahs.int"><br><br>
 
       CUCM Username:<br>
@@ -64,7 +64,7 @@ def home():
     <h3>Export End Users</h3>
 
     <form action="/export/endusers" method="post">
-      CUCM Host:<br>
+    Cisco Callmanager Envronment:<br>
       <input name="cucm_host" value="lascucmpp01.ahs.int"><br><br>
 
       CUCM Username:<br>
