@@ -33,6 +33,8 @@ def home():
       CSV File:<br>
       <input type="file" name="csv_file" required><br><br>
 
+            <a href="/download/add-directorynumbers-template">Download CSV Template</a><br><br>
+
       <button type="submit">Run Add Directory Numbers</button>
     </form>
 
@@ -82,6 +84,16 @@ def home():
   </body>
 </html>
 """
+
+
+@app.get("/download/add-directorynumbers-template")
+def download_add_directorynumbers_template():
+    template_csv = "pattern\n5551001\n5551002\n"
+    return Response(
+        template_csv.encode("utf-8"),
+        media_type="text/csv",
+        headers={"Content-Disposition": 'attachment; filename="add_directory_numbers_template.csv"'}
+    )
 
 
 @app.post("/add/directorynumbers")
