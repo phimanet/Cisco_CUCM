@@ -27,7 +27,7 @@ def home():
         <option value="lascucmpl01.ahs.int">LAB CUCM</option>
       </select><br><br>
 
-      CUCM Username:<br>
+      Cisco Callmanager Username:<br>
       <input name="cucm_user"><br><br>
 
       CUCM Password:<br>
@@ -52,7 +52,7 @@ def home():
         <option value="lascucmpl01.ahs.int">LAB CUCM</option>
       </select><br><br>
 
-      CUCM Username:<br>
+      Cisco Callmanager Username:<br>
       <input name="cucm_user"><br><br>
 
       CUCM Password:<br>
@@ -78,7 +78,7 @@ def home():
         <option value="lascucmpl01.ahs.int">LAB CUCM</option>
       </select><br><br>
 
-      CUCM Username:<br>
+      Cisco Callmanager Username:<br>
       <input name="cucm_user"><br><br>
 
       CUCM Password:<br>
