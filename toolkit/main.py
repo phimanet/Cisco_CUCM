@@ -27,7 +27,7 @@ def home():
     Cisco Callmanager Username:<br>
       <input name="cucm_user"><br><br>
 
-      CUCM Password:<br>
+      Cisco Callmanager Password:<br>
       <input type="password" name="cucm_pass"><br><br>
 
       CSV File:<br>
@@ -49,7 +49,7 @@ def home():
     Cisco Callmanager Username:<br>
       <input name="cucm_user"><br><br>
 
-      CUCM Password:<br>
+      Cisco Callmanager Password:<br>
       <input type="password" name="cucm_pass"><br><br>
 
       DN Pattern (supports %):<br>
@@ -72,7 +72,7 @@ def home():
     Cisco Callmanager Username:<br>
       <input name="cucm_user"><br><br>
 
-      CUCM Password:<br>
+      Cisco Callmanager Password:<br>
       <input type="password" name="cucm_pass"><br><br>
 
       Last Name:<br>
