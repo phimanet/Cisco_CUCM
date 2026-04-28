@@ -22,7 +22,7 @@ def home():
 
     <form action="/add/directorynumbers" method="post" enctype="multipart/form-data">
       CUCM Host:<br>
-      <input name="cucm_host" value="lascucmpl01.ahs.int"><br><br>
+      <input name="cucm_host" value="lascucmpp01.ahs.int"><br><br>
 
       CUCM Username:<br>
       <input name="cucm_user"><br><br>
@@ -42,7 +42,7 @@ def home():
 
     <form action="/export/directorynumbers" method="post">
       CUCM Host:<br>
-      <input name="cucm_host" value="lascucmpl01.ahs.int"><br><br>
+      <input name="cucm_host" value="lascucmpp01.ahs.int"><br><br>
 
       CUCM Username:<br>
       <input name="cucm_user"><br><br>
@@ -65,7 +65,7 @@ def home():
 
     <form action="/export/endusers" method="post">
       CUCM Host:<br>
-      <input name="cucm_host" value="lascucmpl01.ahs.int"><br><br>
+      <input name="cucm_host" value="lascucmpp01.ahs.int"><br><br>
 
       CUCM Username:<br>
       <input name="cucm_user"><br><br>
