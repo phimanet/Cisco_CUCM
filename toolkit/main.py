@@ -15,7 +15,7 @@ def home():
   <head>
     <title>CUCM AXL Portal</title>
   </head>
-  <body style="font-family: Arial; margin:40px;">
+    <body style="font-family: Arial; margin:40px; background-color:#000; color:#fff;">
     <h2>CUCM AXL Portal</h2>
 
     <h3>Add Directory Numbers (Upload CSV)</h3>
