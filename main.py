@@ -14,10 +14,32 @@ def home():
     return """
 <html>
   <head>
+    <title>Cisco Voice Administration Page</title>
+  </head>
+  <body style="font-family: Arial; margin:40px; background-color:#000; color:#fff;">
+    <h1>Cisco Voice Administration Page</h1>
+    <p>
+      Welcome to the Cisco Voice administration portal.
+      Use this site to run common CUCM automation and reporting tasks.
+    </p>
+    <p>
+      <a href="/menu" style="color:#7ec8ff; font-weight:bold;">Go to Menu Options</a>
+    </p>
+  </body>
+</html>
+"""
+
+
+@app.get("/menu", response_class=HTMLResponse)
+def menu_page():
+    return """
+<html>
+  <head>
     <title>Cisco Voice Server Automation Site - Restricted Access</title>
   </head>
   <body style="font-family: Arial; margin:40px; background-color:#000; color:#fff;">
     <h2>Cisco Voice Server Automation Site - Restricted Access</h2>
+    <p><a href="/" style="color:#7ec8ff;">Back to Landing Page</a></p>
 
     <h3>Build User CSF Phone From Template</h3>
 
