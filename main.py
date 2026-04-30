@@ -14,25 +14,63 @@ def home():
     return """
 <html>
   <head>
-    <title>Cisco Voice Server Automation Site - Restricted Access</title>
+    <title>Cisco Voice Administration Page</title>
   </head>
   <body style="font-family: Arial; margin:40px; background-color:#000; color:#fff;">
-    <h2>Cisco Voice Server Automation Site - Restricted Access</h2>
+    <h1>Cisco Voice Administration Page</h1>
+    <p>
+      This site is the centralized portal for Cisco Voice administration tasks,
+      including user CSF build automation, directory number exports, end-user exports,
+      and bulk directory number creation.
+    </p>
+    <p>
+      Use the administration tools page to run CUCM automation workflows.
+    </p>
+    <p>
+      <a href="/admin" style="color:#7ec8ff; font-weight:bold;">Open Administration Tools</a>
+    </p>
+    <p>
+      <a href="/pre-landing" style="color:#ffd27e; font-weight:bold;">Open Pre-Landing Page (Legacy)</a>
+    </p>
+  </body>
+</html>
+"""
+
+
+@app.get("/pre-landing", response_class=HTMLResponse)
+@app.get("/admin", response_class=HTMLResponse)
+def admin_page():
+    return """
+<html>
+  <head>
+    <title>Pre-Landing Page - Cisco Voice Administration Tools</title>
+  </head>
+  <body style="font-family: Arial; margin:40px; background-color:#000; color:#fff;">
+    <h2>Pre-Landing Page - Cisco Voice Administration Tools</h2>
+    <p><a href="/" style="color:#7ec8ff;">Back to Landing Page</a></p>
+
+    <h3>Shared CUCM Authentication</h3>
+
+    <label for="shared_cucm_host">Cisco Callmanager Environment:</label><br>
+    <select id="shared_cucm_host">
+      <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
+      <option value="lascucmpl01.ahs.int">LAB CUCM</option>
+    </select><br><br>
+
+    <label for="shared_cucm_user">Cisco Callmanager Username:</label><br>
+    <input id="shared_cucm_user" autocomplete="username"><br><br>
+
+    <label for="shared_cucm_pass">Cisco Callmanager Password:</label><br>
+    <input id="shared_cucm_pass" type="password" autocomplete="current-password"><br><br>
+
+    <hr>
 
     <h3>Build User CSF Phone From Template</h3>
 
-    <form action="/build/user-csf-phone" method="post">
-      Cisco Callmanager Envronment:<br>
-      <select name="cucm_host">
-        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-      </select><br><br>
-
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user"><br><br>
-
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass"><br><br>
+    <form action="/build/user-csf-phone" method="post" class="cucm-action-form">
+      <input type="hidden" name="cucm_host" class="shared-cucm-host">
+      <input type="hidden" name="cucm_user" class="shared-cucm-user">
+      <input type="hidden" name="cucm_pass" class="shared-cucm-pass">
 
       User ID for person to Build Jabber for:<br>
       <input name="target_user" placeholder="john.doe" required><br><br>
@@ -51,18 +89,10 @@ def home():
 
     <h3>Add Directory Numbers (Upload CSV)</h3>
 
-    <form action="/add/directorynumbers" method="post" enctype="multipart/form-data">
-      Cisco Callmanager Envronment:<br>
-      <select name="cucm_host">
-        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-      </select><br><br>
-
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user"><br><br>
-
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass"><br><br>
+    <form action="/add/directorynumbers" method="post" enctype="multipart/form-data" class="cucm-action-form">
+      <input type="hidden" name="cucm_host" class="shared-cucm-host">
+      <input type="hidden" name="cucm_user" class="shared-cucm-user">
+      <input type="hidden" name="cucm_pass" class="shared-cucm-pass">
 
       CSV File:<br>
       <input type="file" name="csv_file" required><br><br>
@@ -76,18 +106,10 @@ def home():
 
     <h3>Export Directory Numbers</h3>
 
-    <form action="/export/directorynumbers" method="post">
-      Cisco Callmanager Envronment:<br>
-      <select name="cucm_host">
-        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-      </select><br><br>
-
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user"><br><br>
-
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass"><br><br>
+    <form action="/export/directorynumbers" method="post" class="cucm-action-form">
+      <input type="hidden" name="cucm_host" class="shared-cucm-host">
+      <input type="hidden" name="cucm_user" class="shared-cucm-user">
+      <input type="hidden" name="cucm_pass" class="shared-cucm-pass">
 
       DN Pattern (supports %):<br>
       <input name="dn_contains"><br><br>
@@ -102,24 +124,36 @@ def home():
 
     <h3>Export End Users</h3>
 
-    <form action="/export/endusers" method="post">
-      Cisco Callmanager Envronment:<br>
-      <select name="cucm_host">
-        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-      </select><br><br>
-
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user"><br><br>
-
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass"><br><br>
+    <form action="/export/endusers" method="post" class="cucm-action-form">
+      <input type="hidden" name="cucm_host" class="shared-cucm-host">
+      <input type="hidden" name="cucm_user" class="shared-cucm-user">
+      <input type="hidden" name="cucm_pass" class="shared-cucm-pass">
 
       Last Name:<br>
       <input name="lastname"><br><br>
 
       <button type="submit">Export End Users</button>
     </form>
+
+    <script>
+      const sharedHost = document.getElementById("shared_cucm_host");
+      const sharedUser = document.getElementById("shared_cucm_user");
+      const sharedPass = document.getElementById("shared_cucm_pass");
+
+      document.querySelectorAll(".cucm-action-form").forEach((form) => {
+        form.addEventListener("submit", (event) => {
+          if (!sharedUser.value || !sharedPass.value) {
+            event.preventDefault();
+            alert("Enter shared Cisco Callmanager username and password first.");
+            return;
+          }
+
+          form.querySelector(".shared-cucm-host").value = sharedHost.value;
+          form.querySelector(".shared-cucm-user").value = sharedUser.value;
+          form.querySelector(".shared-cucm-pass").value = sharedPass.value;
+        });
+      });
+    </script>
 
   </body>
 </html>
