@@ -19,6 +19,36 @@ def home():
   <body style="font-family: Arial; margin:40px; background-color:#000; color:#fff;">
     <h2>Cisco Voice Server Automation Site - Restricted Access</h2>
 
+    <h3>Build User CSF Phone From Template</h3>
+
+    <form action="/build/user-csf-phone" method="post">
+      Cisco Callmanager Envronment:<br>
+      <select name="cucm_host">
+        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
+        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
+      </select><br><br>
+
+      Cisco Callmanager Username:<br>
+      <input name="cucm_user"><br><br>
+
+      Cisco Callmanager Password:<br>
+      <input type="password" name="cucm_pass"><br><br>
+
+      User ID for person to Build Jabber for:<br>
+      <input name="target_user" placeholder="john.doe" required><br><br>
+
+      DN Type:<br>
+      <select name="dn_type">
+        <option value="recruiter">Recruiter (469)</option>
+        <option value="general" selected>General FTE (214)</option>
+        <option value="strike">Strike (945)</option>
+      </select><br><br>
+
+      <button type="submit">Run Build User CSF Phone</button>
+    </form>
+
+    <hr>
+
     <h3>Add Directory Numbers (Upload CSV)</h3>
 
     <form action="/add/directorynumbers" method="post" enctype="multipart/form-data">
@@ -89,36 +119,6 @@ def home():
       <input name="lastname"><br><br>
 
       <button type="submit">Export End Users</button>
-    </form>
-
-    <hr>
-
-    <h3>Build User CSF Phone From Template</h3>
-
-    <form action="/build/user-csf-phone" method="post">
-      Cisco Callmanager Envronment:<br>
-      <select name="cucm_host">
-        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-      </select><br><br>
-
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user"><br><br>
-
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass"><br><br>
-
-      User ID for person to Build Jabber for:<br>
-      <input name="target_user" placeholder="john.doe" required><br><br>
-
-      DN Type:<br>
-      <select name="dn_type">
-        <option value="recruiter">Recruiter (469)</option>
-        <option value="general" selected>General FTE (214)</option>
-        <option value="strike">Strike (945)</option>
-      </select><br><br>
-
-      <button type="submit">Run Build User CSF Phone</button>
     </form>
 
   </body>
