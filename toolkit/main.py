@@ -99,7 +99,7 @@ def home():
       Cisco Callmanager Password:<br>
       <input type="password" name="cucm_pass"><br><br>
 
-      Target User ID:<br>
+      User ID for person to Build Jabber for:<br>
       <input name="target_user" placeholder="john.doe" required><br><br>
 
       DN Type:<br>
@@ -108,9 +108,6 @@ def home():
         <option value="general" selected>General FTE (214)</option>
         <option value="strike">Strike (945)</option>
       </select><br><br>
-
-      Template:<br>
-      <input value="phone_device_template_lab_csf.json (server default)" readonly><br><br>
 
       <button type="submit">Run Build User CSF Phone</button>
     </form>
