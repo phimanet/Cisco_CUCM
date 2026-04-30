@@ -2,6 +2,7 @@ import csv
 import datetime
 import io
 import json
+import os
 import urllib3
 import requests
 import xml.etree.ElementTree as ET
@@ -12,6 +13,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 LAB_CUCM_IP = "lascucmpl01.ahs.int"
 PROD_CUCM_IP = "lascucmpp01.ahs.int"
+TEMPLATE_FILE = "phone_device_template_lab_csf.json"
 ROUTE_PARTITION = "ENT_DEVICE_PT"
 UNITY_LAB_SERVER = "LASCUTYPL01.ahs.int"
 UNITY_PROD_SERVER = "SANCUTYP01.ahs.int"
@@ -599,7 +601,6 @@ def build_user_csf_phone_from_template(
     cucm_pass,
     target_user,
     dn_type,
-    template_bytes,
 ):
     dn_map = {
         "recruiter": ("469", "Recruiter"),
@@ -618,10 +619,15 @@ def build_user_csf_phone_from_template(
     if not target_user or not target_user.strip():
         return _write_error_csv("target_user is required")
 
+    template_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), TEMPLATE_FILE)
+    if not os.path.exists(template_path):
+        return _write_error_csv(f"Template file not found: {template_path}")
+
     try:
-        template = json.loads(template_bytes.decode("utf-8-sig"))
+        with open(template_path, "r", encoding="utf-8") as f:
+            template = json.load(f)
     except Exception as e:
-        return _write_error_csv(f"Invalid template JSON: {e}")
+        return _write_error_csv(f"Invalid template JSON file {template_path}: {e}")
 
     required_template_keys = [
         "deviceNamePrefix",
