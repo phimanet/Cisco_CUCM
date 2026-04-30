@@ -4,6 +4,7 @@ from fastapi.responses import HTMLResponse, Response
 from toolkit.enduser import export_endusers_all_fields
 from toolkit.directory_number import export_directory_numbers
 from toolkit.add_directory_number import add_directory_numbers_from_csv
+from toolkit.build_user_csf_phone import build_user_csf_phone_from_template
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 
@@ -90,6 +91,39 @@ def home():
       <button type="submit">Export End Users</button>
     </form>
 
+    <hr>
+
+    <h3>Build User CSF Phone From Template (Upload JSON)</h3>
+
+    <form action="/build/user-csf-phone" method="post" enctype="multipart/form-data">
+      Cisco Callmanager Envronment:<br>
+      <select name="cucm_host">
+        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
+        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
+      </select><br><br>
+
+      Cisco Callmanager Username:<br>
+      <input name="cucm_user"><br><br>
+
+      Cisco Callmanager Password:<br>
+      <input type="password" name="cucm_pass"><br><br>
+
+      Target User ID:<br>
+      <input name="target_user" placeholder="john.doe" required><br><br>
+
+      DN Type:<br>
+      <select name="dn_type">
+        <option value="recruiter">Recruiter (469)</option>
+        <option value="general" selected>General FTE (214)</option>
+        <option value="strike">Strike (945)</option>
+      </select><br><br>
+
+      Template JSON File:<br>
+      <input type="file" name="template_file" accept=".json" required><br><br>
+
+      <button type="submit">Run Build User CSF Phone</button>
+    </form>
+
   </body>
 </html>
 """
@@ -150,6 +184,31 @@ def export_endusers(
 ):
     data, filename = export_endusers_all_fields(
         cucm_host, cucm_user, cucm_pass, lastname
+    )
+    return Response(
+        data,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+
+@app.post("/build/user-csf-phone")
+async def build_user_csf_phone(
+    cucm_host: str = Form(...),
+    cucm_user: str = Form(...),
+    cucm_pass: str = Form(...),
+    target_user: str = Form(...),
+    dn_type: str = Form("general"),
+    template_file: UploadFile = File(...)
+):
+    template_bytes = await template_file.read()
+    data, filename = build_user_csf_phone_from_template(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        target_user=target_user,
+        dn_type=dn_type,
+        template_bytes=template_bytes,
     )
     return Response(
         data,
