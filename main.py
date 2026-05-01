@@ -72,7 +72,7 @@ def menu_page():
 
     <hr>
 
-    <h3>Offboard User (Option 11)</h3>
+    <h3>Offboard User - Delete all Jabber (Option 10)</h3>
 
     <form action="/decommission/user-csf-voicemail" method="post">
       Cisco Callmanager Envronment:<br>
@@ -90,7 +90,7 @@ def menu_page():
       User ID for person to Offboard:<br>
       <input name="target_user" placeholder="john.doe" required><br><br>
 
-      <button type="submit">Run Offboard User (Option 11)</button>
+      <button type="submit">Run Offboard User - Delete all Jabber (Option 10)</button>
     </form>
 
     <hr>
