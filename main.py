@@ -60,15 +60,13 @@ def _prune_auth_sessions_locked(now_epoch: float):
     AUTH_SESSIONS.pop(sid, None)
 
 
-def _create_auth_session(cucm_host: str, username: str, password: str) -> str:
+def _create_auth_session(cucm_host: str, username: str) -> str:
   session_id = str(uuid4())
   now_epoch = time.time()
   AUTH_SESSIONS[session_id] = {
     "cucm_host": (cucm_host or "").strip(),
     "username": (username or "").strip(),
-    "password": password or "",
     "unity_user": "",
-    "unity_pass": "",
     "created_at": now_epoch,
     "last_seen": now_epoch,
   }
@@ -94,9 +92,7 @@ def _update_cached_credentials(
   request: Request,
   cucm_host: str = "",
   cucm_user: str = "",
-  cucm_pass: str = "",
   unity_user: str = "",
-  unity_pass: str = "",
 ):
   session = _get_auth_session(request)
   if not session:
@@ -106,12 +102,8 @@ def _update_cached_credentials(
     session["cucm_host"] = cucm_host.strip()
   if (cucm_user or "").strip():
     session["username"] = cucm_user.strip()
-  if cucm_pass:
-    session["password"] = cucm_pass
   if (unity_user or "").strip():
     session["unity_user"] = unity_user.strip()
-  if unity_pass:
-    session["unity_pass"] = unity_pass
 
 
 def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, cucm_pass: str):
@@ -121,10 +113,10 @@ def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, 
 
   resolved_host = (cucm_host or "").strip() or session.get("cucm_host", "")
   resolved_user = (cucm_user or "").strip() or session.get("username", "")
-  resolved_pass = cucm_pass or session.get("password", "")
+  resolved_pass = cucm_pass
 
   if not resolved_host or not resolved_user or not resolved_pass:
-    raise RuntimeError("Missing CUCM credentials. Please log in again.")
+    raise RuntimeError("Missing CUCM credentials. Enter username/password for this action.")
 
   return resolved_host, resolved_user, resolved_pass
 
@@ -135,10 +127,10 @@ def _resolve_unity_credentials(request: Request, unity_user: str, unity_pass: st
     raise RuntimeError("Authentication required.")
 
   resolved_user = (unity_user or "").strip() or session.get("unity_user", "") or session.get("username", "")
-  resolved_pass = unity_pass or session.get("unity_pass", "") or session.get("password", "")
+  resolved_pass = unity_pass
 
   if not resolved_user or not resolved_pass:
-    raise RuntimeError("Missing Unity credentials. Please provide Unity username/password or log in again.")
+    raise RuntimeError("Missing Unity credentials. Enter Unity admin username/password for this action.")
 
   return resolved_user, resolved_pass
 
@@ -539,7 +531,7 @@ def login(
       status_code=401,
     )
 
-  session_id = _create_auth_session(cucm_host, cucm_user, cucm_pass)
+  session_id = _create_auth_session(cucm_host, cucm_user)
   response = RedirectResponse(url="/menu", status_code=303)
   response.set_cookie(
     key=SESSION_COOKIE_NAME,
@@ -848,7 +840,7 @@ def menu_page(request: Request):
     <h2>Cisco Voice Server Automation Site - Restricted Access</h2>
     <p>Authenticated as: <strong>__AUTH_USER__</strong></p>
     <p><a href="/">Back to Landing Page</a></p>
-    <p>Session credentials from login are used automatically for all options.</p>
+    <p>Security mode: passwords are not cached server-side. Enter admin password for each action.</p>
     <p><a href="/download/audit-trail">Download Audit Trail (CSV)</a></p>
 
     <h3>Build Cisco Jabber Laptop and Voicemail - New Hire or New Jabber Laptop/VM Add</h3>
@@ -860,6 +852,12 @@ def menu_page(request: Request):
           <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
           <option value="lascucmpl01.ahs.int">LAB CUCM</option>
         </select><br><br>
+
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
 
         User ID for person to Build Jabber for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
@@ -898,6 +896,12 @@ def menu_page(request: Request):
           <option value="lascutypl01.ahs.int">LAB UNITY</option>
         </select><br><br>
 
+        Unity Admin Username:<br>
+        <input name="unity_user" value="__AUTH_USER__" required><br><br>
+
+        Unity Admin Password:<br>
+        <input type="password" name="unity_pass" required><br><br>
+
         Voicemail Username to Reset PIN for:<br>
         <input name="voicemail_user" placeholder="john.doe" required><br><br>
 
@@ -934,6 +938,12 @@ def menu_page(request: Request):
           <option value="lascucmpl01.ahs.int">LAB CUCM</option>
         </select><br><br>
 
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
         User ID for person to Offboard:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
 
@@ -963,6 +973,12 @@ def menu_page(request: Request):
           <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
           <option value="lascucmpl01.ahs.int">LAB CUCM</option>
         </select><br><br>
+
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
 
         User ID for person to add secondary iPhone device for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
@@ -994,6 +1010,12 @@ def menu_page(request: Request):
           <option value="lascucmpl01.ahs.int">LAB CUCM</option>
         </select><br><br>
 
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
         User ID for person to add secondary Android device for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
 
@@ -1024,6 +1046,12 @@ def menu_page(request: Request):
           <option value="lascucmpl01.ahs.int">LAB CUCM</option>
         </select><br><br>
 
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
         User ID for person to add STRIKE MODE devices for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
 
@@ -1053,6 +1081,12 @@ def menu_page(request: Request):
         <option value="lascucmpl01.ahs.int">LAB CUCM</option>
       </select><br><br>
 
+      Cisco Callmanager Username:<br>
+      <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+      Cisco Callmanager Password:<br>
+      <input type="password" name="cucm_pass" required><br><br>
+
       CSV File:<br>
       <input type="file" name="csv_file" required><br><br>
 
@@ -1071,6 +1105,12 @@ def menu_page(request: Request):
         <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
         <option value="lascucmpl01.ahs.int">LAB CUCM</option>
       </select><br><br>
+
+      Cisco Callmanager Username:<br>
+      <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+      Cisco Callmanager Password:<br>
+      <input type="password" name="cucm_pass" required><br><br>
 
       DN Pattern (supports %):<br>
       <input name="dn_contains"><br><br>
@@ -1092,6 +1132,12 @@ def menu_page(request: Request):
         <option value="lascucmpl01.ahs.int">LAB CUCM</option>
       </select><br><br>
 
+      Cisco Callmanager Username:<br>
+      <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+      Cisco Callmanager Password:<br>
+      <input type="password" name="cucm_pass" required><br><br>
+
       Last Name:<br>
       <input name="lastname"><br><br>
 
@@ -1100,6 +1146,22 @@ def menu_page(request: Request):
 
     <script>
       const fieldRules = {
+        cucm_user: {
+          required: true,
+          requiredMessage: "Cisco Callmanager Username is required.",
+        },
+        cucm_pass: {
+          required: true,
+          requiredMessage: "Cisco Callmanager Password is required.",
+        },
+        unity_user: {
+          required: true,
+          requiredMessage: "Unity Admin Username is required.",
+        },
+        unity_pass: {
+          required: true,
+          requiredMessage: "Unity Admin Password is required.",
+        },
         target_user: {
           required: true,
           requiredMessage: "User ID is required.",
@@ -1514,7 +1576,7 @@ async def add_directorynumbers(
     csv_file: UploadFile = File(...)
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
     csv_bytes = await csv_file.read()
     log_csv, filename = add_directory_numbers_from_csv(
         cucm_host, cucm_user, cucm_pass, csv_bytes, {}
@@ -1541,7 +1603,7 @@ def export_directorynumbers(
     route_partition: str = Form("")
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
     data, filename = export_directory_numbers(
         cucm_host, cucm_user, cucm_pass, dn_contains, route_partition
     )
@@ -1566,7 +1628,7 @@ def export_endusers(
     lastname: str = Form(...)
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
     data, filename = export_endusers_all_fields(
         cucm_host, cucm_user, cucm_pass, lastname
     )
@@ -1592,7 +1654,7 @@ async def build_user_csf_phone(
     inline: bool = Query(False),
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
     data, filename = build_user_csf_phone_from_template(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
@@ -1631,7 +1693,7 @@ def decommission_user_csf_voicemail_route(
     inline: bool = Query(False),
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
     data, filename = decommission_user_csf_voicemail(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
@@ -1671,7 +1733,7 @@ def reset_unity_voicemail_pin_route(
     inline: bool = Query(False),
 ):
     unity_user, unity_pass = _resolve_unity_credentials(request, unity_user, unity_pass)
-    _update_cached_credentials(request, unity_user=unity_user, unity_pass=unity_pass)
+    _update_cached_credentials(request, unity_user=unity_user)
     if new_voicemail_pin != confirm_voicemail_pin:
       data = b"Step,Status,Details\nValidation,Failed,Voicemail PIN values must match\n"
       filename = "reset_unity_voicemail_pin_validation_error.csv"
@@ -1715,7 +1777,7 @@ def add_secondary_tct_device_route(
     inline: bool = Query(False),
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
     data, filename = add_secondary_tct_device(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
@@ -1753,7 +1815,7 @@ def add_secondary_bot_device_route(
     inline: bool = Query(False),
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
     data, filename = add_secondary_bot_device(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
@@ -1791,7 +1853,7 @@ def add_secondary_strike_devices_route(
     inline: bool = Query(False),
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
     data, filename = add_secondary_strike_devices(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
