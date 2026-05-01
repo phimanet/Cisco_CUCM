@@ -49,7 +49,7 @@ def menu_page():
 
     <h3>Build User CSF Phone From Template</h3>
 
-    <form action="/build/user-csf-phone" method="post">
+    <form class="target-user-form" action="/build/user-csf-phone" method="post">
       Cisco Callmanager Envronment:<br>
       <select name="cucm_host">
         <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
@@ -79,7 +79,7 @@ def menu_page():
 
     <h3>Offboard User - Delete all Jabber (Option 10)</h3>
 
-    <form action="/decommission/user-csf-voicemail" method="post">
+    <form class="target-user-form" action="/decommission/user-csf-voicemail" method="post">
       Cisco Callmanager Envronment:<br>
       <select name="cucm_host">
         <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
@@ -102,7 +102,7 @@ def menu_page():
 
     <h3>Add Secondary Device - Jabber for iPhone (Option 3)</h3>
 
-    <form action="/add/secondary-tct-device" method="post">
+    <form class="target-user-form" action="/add/secondary-tct-device" method="post">
       Cisco Callmanager Envronment:<br>
       <select name="cucm_host">
         <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
@@ -125,7 +125,7 @@ def menu_page():
 
     <h3>Add Secondary Device - Jabber for Android (Option 4)</h3>
 
-    <form action="/add/secondary-bot-device" method="post">
+    <form class="target-user-form" action="/add/secondary-bot-device" method="post">
       Cisco Callmanager Envronment:<br>
       <select name="cucm_host">
         <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
@@ -148,7 +148,7 @@ def menu_page():
 
     <h3>STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)</h3>
 
-    <form action="/add/secondary-strike-devices" method="post">
+    <form class="target-user-form" action="/add/secondary-strike-devices" method="post">
       Cisco Callmanager Envronment:<br>
       <select name="cucm_host">
         <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
@@ -241,6 +241,19 @@ def menu_page():
       <button type="submit">Export End Users</button>
     </form>
 
+    <script>
+      document.querySelectorAll("form.target-user-form").forEach((form) => {
+        form.addEventListener("submit", () => {
+          const targetUserInput = form.querySelector('input[name="target_user"]');
+          if (!targetUserInput) {
+            return;
+          }
+          setTimeout(() => {
+            targetUserInput.value = "";
+          }, 0);
+        });
+      });
+    </script>
   </body>
 </html>
 """

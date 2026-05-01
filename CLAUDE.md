@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-04-30
+- Date: 2026-05-01
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -21,6 +21,33 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [ ] Centralize environment-specific values (CUCM hosts, Unity hosts, partitions, default PIN) into config/env vars.
 - [ ] Add lightweight health check and structured error responses for web routes.
 - [ ] Add minimal regression tests for toolkit functions that generate CSV outputs.
+
+## Enhancement Backlog
+- [ ] [P1][Planned] Convert HTTP to HTTPS using internally signed enterprise certificate, with Nginx TLS termination and HTTP -> HTTPS redirect.
+- [ ] [P1][Idea] Add input validation and user-friendly error display on all web forms.
+- [ ] [P1][Idea] Add reusable environment/config file for CUCM/Unity hosts, partitions, and defaults.
+- [ ] [P1][In Progress] Remediate Ubuntu 24.04 vulnerabilities and clean up host hardening findings (SNOW TASK0723797).
+  - [x] CVE-2024-6387 (CVSSv3 8.1) — OpenSSH patched to 9.6p1-3ubuntu13.16 ✓
+  - [ ] FTP unencrypted (CVSSv3 7.5) — vsftpd stopped; blocked on Sean Beavers identifying 10.241.17.165 before disabling
+  - [ ] SSH Weak MACs (CVSSv3 7.5) — 1 of 4 removed; 3 remaining (umac-64@openssh.com, hmac-sha1-etm@openssh.com, hmac-sha1); Cisco CER backup test passed
+  - [ ] CVE-2025-61984 (CVSSv3 3.6) — Not started
+- [ ] [P1][Idea] Before creating Jabber devices or voicemail, always verify whether the target resource already exists to prevent duplicate provisioning and resource waste.
+- [x] [P2][Done] After job submission, clear the "User ID for person..." input field to prevent accidental repeat Jabber creation.
+- [ ] [P2][Idea] Refresh the web portal theme to align with AMN Healthcare visual style (brand colors, typography, spacing, and overall look/feel).
+- [ ] [P2][Idea] Add per-option success/failure summary panel in the UI after CSV generation.
+- [ ] [P2][Idea] Add a lightweight audit trail (who ran what option and when) for internal operations.
+- [ ] [P3][Idea] Add optional dry-run mode for high-impact actions before execution.
+
+Status keys:
+- `[Idea]` captured but not planned
+- `[Planned]` approved and queued
+- `[In Progress]` currently being implemented
+- `[Done]` completed and validated
+
+Priority keys:
+- `[P1]` high impact / urgent
+- `[P2]` medium priority
+- `[P3]` low priority / nice to have
 
 ## In Progress
 - Baseline analysis of `main.py` and `toolkit/` completed; preparing hardening roadmap without changing current behavior.
@@ -43,9 +70,23 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 
 ## Open Questions
 - Which immediate deliverable should be prioritized first in this repository?
+- `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
+
+### 2026-05-01
+- TASK0723797: vsftpd log analysis showed two FTP clients: `10.241.18.11` (CUCM CDR uploads, confirmed) and `10.241.17.165` (unknown — suspected networking device sending backups).
+- Reached out to Sean Beavers to identify `10.241.17.165` and assess whether it can migrate to SFTP.
+- vsftpd remains stopped; CDR uploads from CUCM are not flowing until decision is made.
+- SSH MAC hardening in progress: 1 of 4 weak MACs removed; 3 remaining (umac-64@openssh.com, hmac-sha1-etm@openssh.com, hmac-sha1); removing one at a time on user schedule.
+- Validation: Cisco CER backup works after Weak MAC hardening change (pass).
+- Production CUCM confirmed: `lascucmpp01.ahs.int` (10.241.18.11), System version: 15.0.1.12900-234.
+- Production Unity Connection confirmed: `lascutyp01.ahs.int` (10.241.18.17), System version: 15.0.1.12900-43.
+- LAB CUCM confirmed: `lascucmpl01.ahs.int` (10.241.18.200), System version: 15.0.1.14901-2.
+- LAB Unity Connection confirmed: `lascutypl01.ahs.int` (10.241.18.202), System version: 15.0.1.13900-61.
+- Terminology: CallManager = Cisco Unified Communications Manager (CUCM).
+- UI enhancement implemented: target "User ID for person..." field now clears immediately after form submission on target-user workflows.
 
 ### 2026-04-30
 - Initialized project tracker format.
