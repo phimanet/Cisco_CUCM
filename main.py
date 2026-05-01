@@ -57,17 +57,93 @@ def _render_job_result(title: str, csv_data, filename: str) -> HTMLResponse:
 <html>
   <head>
     <title>{escape(title)} - Job Output</title>
+    <style>
+      :root {{
+        --amn-blue: #005eb8;
+        --amn-navy: #002f6c;
+        --amn-sky: #eaf4ff;
+        --amn-text: #12304a;
+        --amn-border: #c8dbee;
+      }}
+
+      body {{
+        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        margin: 0;
+        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+        color: var(--amn-text);
+      }}
+
+      .topbar {{
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 24px;
+        background: linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
+        color: #fff;
+        box-shadow: 0 2px 12px rgba(0, 47, 108, 0.25);
+      }}
+
+      .logo {{
+        height: 28px;
+        width: auto;
+        border-radius: 4px;
+        background: #fff;
+        padding: 3px;
+      }}
+
+      .brand-fallback {{
+        font-weight: 700;
+        letter-spacing: 0.2px;
+      }}
+
+      .content {{
+        max-width: 1280px;
+        margin: 22px auto;
+        padding: 0 18px 26px 18px;
+      }}
+
+      .panel {{
+        background: #fff;
+        border: 1px solid var(--amn-border);
+        border-radius: 12px;
+        padding: 18px;
+        box-shadow: 0 8px 20px rgba(0, 47, 108, 0.08);
+      }}
+
+      a {{ color: var(--amn-blue); }}
+
+      textarea {{
+        width: 100%;
+        height: 420px;
+        font-family: Consolas, "Courier New", monospace;
+        border: 1px solid var(--amn-border);
+        border-radius: 8px;
+        padding: 10px;
+        background: var(--amn-sky);
+        color: #0f2940;
+      }}
+    </style>
   </head>
-  <body style="font-family: Arial; margin:40px; background-color:#000; color:#fff;">
-    <h2>{escape(title)} - Job Output</h2>
-    <p><a href="/menu" style="color:#7ec8ff;">Back to Menu</a></p>
-    <p>
-      <a href="/download/job-output/{job_id}" style="color:#7ec8ff; font-weight:bold;">
-        Download CSV Output
-      </a>
-    </p>
-    <p>Output Preview:</p>
-    <textarea readonly style="width:100%; height:420px; font-family: Consolas, monospace;">{output_text}</textarea>
+  <body>
+    <header class="topbar">
+      <img class="logo" src="https://logo.clearbit.com/amnhealthcare.com" alt="AMN Healthcare Logo" onerror="this.style.display='none'; document.getElementById('brand-fallback').style.display='inline';">
+      <span id="brand-fallback" class="brand-fallback" style="display:none;">AMN Healthcare</span>
+      <strong>Voice Operations Portal</strong>
+    </header>
+
+    <main class="content">
+      <section class="panel">
+        <h2>{escape(title)} - Job Output</h2>
+        <p><a href="/menu">Back to Menu</a></p>
+        <p>
+          <a href="/download/job-output/{job_id}" style="font-weight:bold;">
+            Download CSV Output
+          </a>
+        </p>
+        <p>Output Preview:</p>
+        <textarea readonly>{output_text}</textarea>
+      </section>
+    </main>
   </body>
 </html>
 """
@@ -80,16 +156,76 @@ def home():
 <html>
   <head>
     <title>Cisco Voice Administration Page</title>
+    <style>
+      :root {
+        --amn-blue: #005eb8;
+        --amn-navy: #002f6c;
+        --amn-sky: #eaf4ff;
+        --amn-text: #12304a;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        margin: 0;
+        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+        color: var(--amn-text);
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 24px;
+        background: linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
+        color: #fff;
+      }
+
+      .logo {
+        height: 28px;
+        width: auto;
+        border-radius: 4px;
+        background: #fff;
+        padding: 3px;
+      }
+
+      .brand-fallback {
+        font-weight: 700;
+        letter-spacing: 0.2px;
+      }
+
+      .hero {
+        max-width: 900px;
+        margin: 48px auto;
+        background: #fff;
+        border: 1px solid #c8dbee;
+        border-radius: 14px;
+        padding: 28px;
+        box-shadow: 0 8px 20px rgba(0, 47, 108, 0.08);
+      }
+
+      a {
+        color: var(--amn-blue);
+        font-weight: 700;
+      }
+    </style>
   </head>
-  <body style="font-family: Arial; margin:40px; background-color:#000; color:#fff;">
-    <h1>Cisco Voice Administration Page</h1>
-    <p>
-      Welcome to the Cisco Voice administration portal.
-      Use this site to run common CUCM automation and reporting tasks.
-    </p>
-    <p>
-      <a href="/menu" style="color:#7ec8ff; font-weight:bold;">Go to Menu Options</a>
-    </p>
+  <body>
+    <header class="topbar">
+      <img class="logo" src="https://logo.clearbit.com/amnhealthcare.com" alt="AMN Healthcare Logo" onerror="this.style.display='none'; document.getElementById('brand-fallback').style.display='inline';">
+      <span id="brand-fallback" class="brand-fallback" style="display:none;">AMN Healthcare</span>
+      <strong>Voice Operations Portal</strong>
+    </header>
+
+    <section class="hero">
+      <h1>Cisco Voice Administration Page</h1>
+      <p>
+        Welcome to the Cisco Voice administration portal.
+        Use this site to run common CUCM automation and reporting tasks.
+      </p>
+      <p>
+        <a href="/menu">Go to Menu Options</a>
+      </p>
+    </section>
   </body>
 </html>
 """
@@ -102,6 +238,108 @@ def menu_page():
   <head>
     <title>Cisco Voice Server Automation Site - Restricted Access</title>
     <style>
+      :root {
+        --amn-blue: #005eb8;
+        --amn-navy: #002f6c;
+        --amn-sky: #eaf4ff;
+        --amn-text: #12304a;
+        --amn-border: #c8dbee;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        margin: 0;
+        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+        color: var(--amn-text);
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 24px;
+        background: linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
+        color: #fff;
+        box-shadow: 0 2px 12px rgba(0, 47, 108, 0.25);
+      }
+
+      .logo {
+        height: 28px;
+        width: auto;
+        border-radius: 4px;
+        background: #fff;
+        padding: 3px;
+      }
+
+      .brand-fallback {
+        font-weight: 700;
+        letter-spacing: 0.2px;
+      }
+
+      .content {
+        max-width: 1400px;
+        margin: 18px auto 24px auto;
+        padding: 0 16px;
+      }
+
+      h2 {
+        margin-top: 6px;
+      }
+
+      h3 {
+        margin: 18px 0 10px 0;
+        color: var(--amn-navy);
+      }
+
+      form,
+      .build-user-output,
+      .offboard-output,
+      .secondary-output {
+        background: #fff;
+        border: 1px solid var(--amn-border);
+        border-radius: 10px;
+        padding: 14px;
+        box-shadow: 0 6px 16px rgba(0, 47, 108, 0.07);
+      }
+
+      input,
+      select,
+      button,
+      textarea {
+        border-radius: 8px;
+        border: 1px solid var(--amn-border);
+      }
+
+      input,
+      select {
+        min-height: 34px;
+        padding: 6px 8px;
+        width: min(520px, 100%);
+      }
+
+      button {
+        background: var(--amn-blue);
+        color: #fff;
+        border: none;
+        padding: 10px 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: #004f9e;
+      }
+
+      a {
+        color: var(--amn-blue);
+      }
+
+      hr {
+        border: none;
+        border-top: 1px solid var(--amn-border);
+        margin: 22px 0;
+      }
+
       .build-user-layout {
         display: flex;
         gap: 24px;
@@ -117,8 +355,6 @@ def menu_page():
       .build-user-output {
         flex: 1 1 480px;
         min-width: 320px;
-        border: 1px solid #333;
-        background: #0f0f0f;
         padding: 12px;
       }
 
@@ -130,13 +366,12 @@ def menu_page():
         width: 100%;
         height: 380px;
         font-family: Consolas, monospace;
-        background: #000;
-        color: #fff;
-        border: 1px solid #2f2f2f;
+        background: var(--amn-sky);
+        color: #0f2940;
       }
 
       .build-user-status {
-        color: #b0dfff;
+        color: #2c5c8a;
         min-height: 18px;
       }
 
@@ -155,8 +390,6 @@ def menu_page():
       .offboard-output {
         flex: 1 1 480px;
         min-width: 320px;
-        border: 1px solid #333;
-        background: #0f0f0f;
         padding: 12px;
       }
 
@@ -168,13 +401,12 @@ def menu_page():
         width: 100%;
         height: 380px;
         font-family: Consolas, monospace;
-        background: #000;
-        color: #fff;
-        border: 1px solid #2f2f2f;
+        background: var(--amn-sky);
+        color: #0f2940;
       }
 
       .offboard-status {
-        color: #b0dfff;
+        color: #2c5c8a;
         min-height: 18px;
       }
 
@@ -193,8 +425,6 @@ def menu_page():
       .secondary-output {
         flex: 1 1 480px;
         min-width: 320px;
-        border: 1px solid #333;
-        background: #0f0f0f;
         padding: 12px;
       }
 
@@ -206,13 +436,12 @@ def menu_page():
         width: 100%;
         height: 380px;
         font-family: Consolas, monospace;
-        background: #000;
-        color: #fff;
-        border: 1px solid #2f2f2f;
+        background: var(--amn-sky);
+        color: #0f2940;
       }
 
       .secondary-status {
-        color: #b0dfff;
+        color: #2c5c8a;
         min-height: 18px;
       }
 
@@ -231,9 +460,16 @@ def menu_page():
       }
     </style>
   </head>
-  <body style="font-family: Arial; margin:40px; background-color:#000; color:#fff;">
+  <body>
+    <header class="topbar">
+      <img class="logo" src="https://logo.clearbit.com/amnhealthcare.com" alt="AMN Healthcare Logo" onerror="this.style.display='none'; document.getElementById('brand-fallback').style.display='inline';">
+      <span id="brand-fallback" class="brand-fallback" style="display:none;">AMN Healthcare</span>
+      <strong>Voice Operations Portal</strong>
+    </header>
+
+    <main class="content">
     <h2>Cisco Voice Server Automation Site - Restricted Access</h2>
-    <p><a href="/" style="color:#7ec8ff;">Back to Landing Page</a></p>
+    <p><a href="/">Back to Landing Page</a></p>
 
     <h3>Build Cisco Jabber Laptop and Voicemail - New Hire or New Jabber Laptop/VM Add</h3>
 
@@ -763,6 +999,7 @@ def menu_page():
         });
       });
     </script>
+    </main>
   </body>
 </html>
 """
