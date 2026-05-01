@@ -980,7 +980,10 @@ def menu_page(request: Request):
         Confirm New Voicemail PIN:<br>
         <input type="password" name="confirm_voicemail_pin" required><br><br>
 
-        <button type="submit">Run Reset Unity Voicemail PIN (Option 2)</button>
+        <div class="action-row">
+          <button type="submit">Run Reset Unity Voicemail PIN (Option 2)</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
       </form>
 
       <section class="secondary-output" aria-live="polite">
@@ -1010,7 +1013,10 @@ def menu_page(request: Request):
         User ID for person to Offboard:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
 
-        <button type="submit">Run Offboard User - Delete all Jabber and Voicemail Box (Option 10)</button>
+        <div class="action-row">
+          <button type="submit">Run Offboard User - Delete all Jabber and Voicemail Box (Option 10)</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
       </form>
 
       <section class="offboard-output" aria-live="polite">
@@ -1040,7 +1046,10 @@ def menu_page(request: Request):
         User ID for person to add secondary iPhone device for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
 
-        <button type="submit">Run Add Secondary Device - Jabber for iPhone (Option 3)</button>
+        <div class="action-row">
+          <button type="submit">Run Add Secondary Device - Jabber for iPhone (Option 3)</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
       </form>
 
       <section class="secondary-output" aria-live="polite">
@@ -1070,7 +1079,10 @@ def menu_page(request: Request):
         User ID for person to add secondary Android device for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
 
-        <button type="submit">Run Add Secondary Device - Jabber for Android (Option 4)</button>
+        <div class="action-row">
+          <button type="submit">Run Add Secondary Device - Jabber for Android (Option 4)</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
       </form>
 
       <section class="secondary-output" aria-live="polite">
@@ -1100,7 +1112,10 @@ def menu_page(request: Request):
         User ID for person to add STRIKE MODE devices for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
 
-        <button type="submit">Run STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)</button>
+        <div class="action-row">
+          <button type="submit">Run STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
       </form>
 
       <section class="secondary-output" aria-live="polite">
@@ -1131,7 +1146,10 @@ def menu_page(request: Request):
 
       <a href="/download/add-directorynumbers-template">Download CSV Template</a><br><br>
 
-      <button type="submit">Run Add Directory Numbers</button>
+      <div class="action-row">
+        <button type="submit">Run Add Directory Numbers</button>
+        <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+      </div>
     </form>
 
     <hr>
