@@ -178,8 +178,54 @@ def menu_page():
         min-height: 18px;
       }
 
+      .secondary-layout {
+        display: flex;
+        gap: 24px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+
+      .secondary-form {
+        flex: 1 1 420px;
+        min-width: 320px;
+      }
+
+      .secondary-output {
+        flex: 1 1 480px;
+        min-width: 320px;
+        border: 1px solid #333;
+        background: #0f0f0f;
+        padding: 12px;
+      }
+
+      .secondary-output h4 {
+        margin: 0 0 10px 0;
+      }
+
+      .secondary-output textarea {
+        width: 100%;
+        height: 380px;
+        font-family: Consolas, monospace;
+        background: #000;
+        color: #fff;
+        border: 1px solid #2f2f2f;
+      }
+
+      .secondary-status {
+        color: #b0dfff;
+        min-height: 18px;
+      }
+
       @media (max-width: 980px) {
         .build-user-output textarea {
+          height: 280px;
+        }
+
+        .offboard-output textarea {
+          height: 280px;
+        }
+
+        .secondary-output textarea {
           height: 280px;
         }
       }
@@ -270,70 +316,109 @@ def menu_page():
 
     <h3>Add Secondary Device - Jabber for iPhone (Option 3)</h3>
 
-    <form class="target-user-form" action="/add/secondary-tct-device" method="post">
-      Cisco Callmanager Envronment:<br>
-      <select name="cucm_host">
-        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-      </select><br><br>
+    <div class="secondary-layout">
+      <form id="secondary-tct-form" class="target-user-form secondary-form" action="/add/secondary-tct-device" method="post">
+        Cisco Callmanager Envronment:<br>
+        <select name="cucm_host">
+          <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
+          <option value="lascucmpl01.ahs.int">LAB CUCM</option>
+        </select><br><br>
 
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user"><br><br>
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user"><br><br>
 
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass"><br><br>
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass"><br><br>
 
-      User ID for person to add secondary iPhone device for:<br>
-      <input name="target_user" placeholder="john.doe" required><br><br>
+        User ID for person to add secondary iPhone device for:<br>
+        <input name="target_user" placeholder="john.doe" required><br><br>
 
-      <button type="submit">Run Add Secondary Device - Jabber for iPhone (Option 3)</button>
-    </form>
+        <button type="submit">Run Add Secondary Device - Jabber for iPhone (Option 3)</button>
+      </form>
+
+      <section class="secondary-output" aria-live="polite">
+        <h4>Option 3 Output Preview</h4>
+        <p id="secondary-tct-status" class="secondary-status">Run Option 3 to view output here.</p>
+        <p>
+          <a id="secondary-tct-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
+            Download CSV Output
+          </a>
+        </p>
+        <textarea id="secondary-tct-preview" readonly></textarea>
+      </section>
+    </div>
 
     <hr>
 
     <h3>Add Secondary Device - Jabber for Android (Option 4)</h3>
 
-    <form class="target-user-form" action="/add/secondary-bot-device" method="post">
-      Cisco Callmanager Envronment:<br>
-      <select name="cucm_host">
-        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-      </select><br><br>
+    <div class="secondary-layout">
+      <form id="secondary-bot-form" class="target-user-form secondary-form" action="/add/secondary-bot-device" method="post">
+        Cisco Callmanager Envronment:<br>
+        <select name="cucm_host">
+          <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
+          <option value="lascucmpl01.ahs.int">LAB CUCM</option>
+        </select><br><br>
 
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user"><br><br>
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user"><br><br>
 
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass"><br><br>
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass"><br><br>
 
-      User ID for person to add secondary Android device for:<br>
-      <input name="target_user" placeholder="john.doe" required><br><br>
+        User ID for person to add secondary Android device for:<br>
+        <input name="target_user" placeholder="john.doe" required><br><br>
 
-      <button type="submit">Run Add Secondary Device - Jabber for Android (Option 4)</button>
-    </form>
+        <button type="submit">Run Add Secondary Device - Jabber for Android (Option 4)</button>
+      </form>
+
+      <section class="secondary-output" aria-live="polite">
+        <h4>Option 4 Output Preview</h4>
+        <p id="secondary-bot-status" class="secondary-status">Run Option 4 to view output here.</p>
+        <p>
+          <a id="secondary-bot-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
+            Download CSV Output
+          </a>
+        </p>
+        <textarea id="secondary-bot-preview" readonly></textarea>
+      </section>
+    </div>
 
     <hr>
 
     <h3>STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)</h3>
 
-    <form class="target-user-form" action="/add/secondary-strike-devices" method="post">
-      Cisco Callmanager Envronment:<br>
-      <select name="cucm_host">
-        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-      </select><br><br>
+    <div class="secondary-layout">
+      <form id="secondary-strike-form" class="target-user-form secondary-form" action="/add/secondary-strike-devices" method="post">
+        Cisco Callmanager Envronment:<br>
+        <select name="cucm_host">
+          <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
+          <option value="lascucmpl01.ahs.int">LAB CUCM</option>
+        </select><br><br>
 
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user"><br><br>
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user"><br><br>
 
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass"><br><br>
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass"><br><br>
 
-      User ID for person to add STRIKE MODE devices for:<br>
-      <input name="target_user" placeholder="john.doe" required><br><br>
+        User ID for person to add STRIKE MODE devices for:<br>
+        <input name="target_user" placeholder="john.doe" required><br><br>
 
-      <button type="submit">Run STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)</button>
-    </form>
+        <button type="submit">Run STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)</button>
+      </form>
+
+      <section class="secondary-output" aria-live="polite">
+        <h4>Option 5 Output Preview</h4>
+        <p id="secondary-strike-status" class="secondary-status">Run Option 5 to view output here.</p>
+        <p>
+          <a id="secondary-strike-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
+            Download CSV Output
+          </a>
+        </p>
+        <textarea id="secondary-strike-preview" readonly></textarea>
+      </section>
+    </div>
 
     <hr>
 
@@ -569,6 +654,44 @@ def menu_page():
         }
       }
 
+      async function submitSecondaryInline(form, config) {
+        const statusEl = document.getElementById(config.statusId);
+        const outputEl = document.getElementById(config.previewId);
+        const downloadEl = document.getElementById(config.downloadId);
+
+        statusEl.textContent = config.runningText;
+        outputEl.value = "";
+        downloadEl.style.display = "none";
+        downloadEl.removeAttribute("href");
+
+        try {
+          const formData = new FormData(form);
+          const response = await fetch(`${form.action}?inline=1`, {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText || `Request failed with status ${response.status}`);
+          }
+
+          const result = await response.json();
+          outputEl.value = result.output_text || "";
+          statusEl.textContent = `Completed: ${result.filename || config.defaultFilename}`;
+          downloadEl.href = result.download_url;
+          downloadEl.style.display = "inline";
+
+          const targetUserInput = form.querySelector('input[name="target_user"]');
+          if (targetUserInput) {
+            targetUserInput.value = "";
+          }
+        } catch (error) {
+          statusEl.textContent = config.failedText;
+          outputEl.value = error.message || "Unknown error.";
+        }
+      }
+
       document.querySelectorAll("form").forEach((form) => {
         form.querySelectorAll("input").forEach((field) => {
           field.addEventListener("input", () => clearFieldError(field));
@@ -589,6 +712,45 @@ def menu_page():
           if (form.id === "offboard-user-form") {
             event.preventDefault();
             submitOffboardInline(form);
+            return;
+          }
+
+          if (form.id === "secondary-tct-form") {
+            event.preventDefault();
+            submitSecondaryInline(form, {
+              statusId: "secondary-tct-status",
+              previewId: "secondary-tct-preview",
+              downloadId: "secondary-tct-download",
+              runningText: "Running Option 3...",
+              failedText: "Option 3 failed. Review output and retry.",
+              defaultFilename: "option3_output.csv",
+            });
+            return;
+          }
+
+          if (form.id === "secondary-bot-form") {
+            event.preventDefault();
+            submitSecondaryInline(form, {
+              statusId: "secondary-bot-status",
+              previewId: "secondary-bot-preview",
+              downloadId: "secondary-bot-download",
+              runningText: "Running Option 4...",
+              failedText: "Option 4 failed. Review output and retry.",
+              defaultFilename: "option4_output.csv",
+            });
+            return;
+          }
+
+          if (form.id === "secondary-strike-form") {
+            event.preventDefault();
+            submitSecondaryInline(form, {
+              statusId: "secondary-strike-status",
+              previewId: "secondary-strike-preview",
+              downloadId: "secondary-strike-download",
+              runningText: "Running Option 5...",
+              failedText: "Option 5 failed. Review output and retry.",
+              defaultFilename: "option5_output.csv",
+            });
             return;
           }
 
@@ -732,6 +894,7 @@ def add_secondary_tct_device_route(
     cucm_user: str = Form(...),
     cucm_pass: str = Form(...),
     target_user: str = Form(...),
+    inline: bool = Query(False),
 ):
     data, filename = add_secondary_tct_device(
         cucm_host=cucm_host,
@@ -739,6 +902,16 @@ def add_secondary_tct_device_route(
         cucm_pass=cucm_pass,
         target_user=target_user,
     )
+
+    if inline:
+        job_output = _prepare_job_output(data, filename)
+        return JSONResponse({
+            "job_id": job_output["job_id"],
+            "filename": job_output["filename"],
+            "output_text": job_output["output_text"],
+            "download_url": f"/download/job-output/{job_output['job_id']}",
+        })
+
     return _render_job_result("Add Secondary Device - Jabber for iPhone (Option 3)", data, filename)
 
 
@@ -748,6 +921,7 @@ def add_secondary_bot_device_route(
     cucm_user: str = Form(...),
     cucm_pass: str = Form(...),
     target_user: str = Form(...),
+    inline: bool = Query(False),
 ):
     data, filename = add_secondary_bot_device(
         cucm_host=cucm_host,
@@ -755,6 +929,16 @@ def add_secondary_bot_device_route(
         cucm_pass=cucm_pass,
         target_user=target_user,
     )
+
+    if inline:
+        job_output = _prepare_job_output(data, filename)
+        return JSONResponse({
+            "job_id": job_output["job_id"],
+            "filename": job_output["filename"],
+            "output_text": job_output["output_text"],
+            "download_url": f"/download/job-output/{job_output['job_id']}",
+        })
+
     return _render_job_result("Add Secondary Device - Jabber for Android (Option 4)", data, filename)
 
 
@@ -764,6 +948,7 @@ def add_secondary_strike_devices_route(
     cucm_user: str = Form(...),
     cucm_pass: str = Form(...),
     target_user: str = Form(...),
+    inline: bool = Query(False),
 ):
     data, filename = add_secondary_strike_devices(
         cucm_host=cucm_host,
@@ -771,4 +956,14 @@ def add_secondary_strike_devices_route(
         cucm_pass=cucm_pass,
         target_user=target_user,
     )
+
+    if inline:
+        job_output = _prepare_job_output(data, filename)
+        return JSONResponse({
+            "job_id": job_output["job_id"],
+            "filename": job_output["filename"],
+            "output_text": job_output["output_text"],
+            "download_url": f"/download/job-output/{job_output['job_id']}",
+        })
+
     return _render_job_result("STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)", data, filename)
