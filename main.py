@@ -590,11 +590,49 @@ def menu_page(request: Request):
       .topbar {
         display: flex;
         align-items: center;
+        justify-content: space-between;
         gap: 12px;
         padding: 14px 24px;
         background: linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
         color: #fff;
         box-shadow: 0 2px 12px rgba(0, 47, 108, 0.25);
+      }
+
+      .topbar-brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .topbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .topbar-btn {
+        display: inline-block;
+        padding: 10px 18px;
+        border-radius: 10px;
+        font-size: 14px;
+        font-weight: 700;
+        text-decoration: none;
+        border: 1px solid rgba(255, 255, 255, 0.65);
+      }
+
+      .topbar-btn-login {
+        color: #fff;
+        background: rgba(255, 255, 255, 0.14);
+      }
+
+      .topbar-btn-logout {
+        color: #fff;
+        background: #b42318;
+        border-color: #fda29b;
+      }
+
+      .topbar-btn:hover {
+        filter: brightness(1.06);
       }
 
       .logo {
@@ -796,15 +834,21 @@ def menu_page(request: Request):
   </head>
   <body>
     <header class="topbar">
-      <span class="brand-fallback">AMN Healthcare</span>
-      <strong>Voice Operations Portal</strong>
+      <div class="topbar-brand">
+        <span class="brand-fallback">AMN Healthcare</span>
+        <strong>Voice Operations Portal</strong>
+      </div>
+      <div class="topbar-actions">
+        <a class="topbar-btn topbar-btn-login" href="/">Log In</a>
+        <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
+      </div>
     </header>
 
     <main class="content">
     <h2>Cisco Voice Server Automation Site - Restricted Access</h2>
-    <p>Authenticated as: <strong>__AUTH_USER__</strong> | <a href="/logout">Log Out</a></p>
+    <p>Authenticated as: <strong>__AUTH_USER__</strong></p>
     <p><a href="/">Back to Landing Page</a></p>
-    <p>Tip: You can leave username/password fields blank to use your authenticated session credentials.</p>
+    <p>Session credentials from login are used automatically for all options.</p>
     <p><a href="/download/audit-trail">Download Audit Trail (CSV)</a></p>
 
     <h3>Build Cisco Jabber Laptop and Voicemail - New Hire or New Jabber Laptop/VM Add</h3>
@@ -816,12 +860,6 @@ def menu_page(request: Request):
           <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
           <option value="lascucmpl01.ahs.int">LAB CUCM</option>
         </select><br><br>
-
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user"><br><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass"><br><br>
 
         User ID for person to Build Jabber for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
@@ -860,12 +898,6 @@ def menu_page(request: Request):
           <option value="lascutypl01.ahs.int">LAB UNITY</option>
         </select><br><br>
 
-        Unity Admin Username:<br>
-        <input name="unity_user"><br><br>
-
-        Unity Admin Password:<br>
-        <input type="password" name="unity_pass"><br><br>
-
         Voicemail Username to Reset PIN for:<br>
         <input name="voicemail_user" placeholder="john.doe" required><br><br>
 
@@ -902,12 +934,6 @@ def menu_page(request: Request):
           <option value="lascucmpl01.ahs.int">LAB CUCM</option>
         </select><br><br>
 
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user"><br><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass"><br><br>
-
         User ID for person to Offboard:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
 
@@ -937,12 +963,6 @@ def menu_page(request: Request):
           <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
           <option value="lascucmpl01.ahs.int">LAB CUCM</option>
         </select><br><br>
-
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user"><br><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass"><br><br>
 
         User ID for person to add secondary iPhone device for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
@@ -974,12 +994,6 @@ def menu_page(request: Request):
           <option value="lascucmpl01.ahs.int">LAB CUCM</option>
         </select><br><br>
 
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user"><br><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass"><br><br>
-
         User ID for person to add secondary Android device for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
 
@@ -1010,12 +1024,6 @@ def menu_page(request: Request):
           <option value="lascucmpl01.ahs.int">LAB CUCM</option>
         </select><br><br>
 
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user"><br><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass"><br><br>
-
         User ID for person to add STRIKE MODE devices for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
 
@@ -1045,12 +1053,6 @@ def menu_page(request: Request):
         <option value="lascucmpl01.ahs.int">LAB CUCM</option>
       </select><br><br>
 
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user"><br><br>
-
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass"><br><br>
-
       CSV File:<br>
       <input type="file" name="csv_file" required><br><br>
 
@@ -1069,12 +1071,6 @@ def menu_page(request: Request):
         <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
         <option value="lascucmpl01.ahs.int">LAB CUCM</option>
       </select><br><br>
-
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user"><br><br>
-
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass"><br><br>
 
       DN Pattern (supports %):<br>
       <input name="dn_contains"><br><br>
@@ -1095,12 +1091,6 @@ def menu_page(request: Request):
         <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
         <option value="lascucmpl01.ahs.int">LAB CUCM</option>
       </select><br><br>
-
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user"><br><br>
-
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass"><br><br>
 
       Last Name:<br>
       <input name="lastname"><br><br>
