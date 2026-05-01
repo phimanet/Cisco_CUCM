@@ -13,8 +13,6 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - Keep service internal-only with no internet exposure.
 
 ## Pending Tasks
-- [ ] Complete HTTPS cutover with Nginx reverse proxy using internally signed certificate.
-- [ ] Apply internal certificate files (cert/key/chain), validate Nginx TLS config, and enforce HTTP -> HTTPS redirect.
 - [ ] Define internal certificate renewal/rotation procedure and owner.
 - [ ] Confirm internal subnet allow-list for UFW/Nginx access control.
 - [ ] Document deployment/runtime prerequisites (Python env, FastAPI/Uvicorn, network access to CUCM/Unity).
@@ -23,7 +21,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [ ] Add minimal regression tests for toolkit functions that generate CSV outputs.
 
 ## Enhancement Backlog
-- [ ] [P1][Planned] Convert HTTP to HTTPS using internally signed enterprise certificate, with Nginx TLS termination and HTTP -> HTTPS redirect.
+- [x] [P1][Done] Convert HTTP to HTTPS using internally signed enterprise certificate, with Nginx TLS termination and HTTP -> HTTPS redirect.
 - [x] [P1][Done] Add input validation and user-friendly error display on all web forms.
 - [ ] [P1][Idea] Add reusable environment/config file for CUCM/Unity hosts, partitions, and defaults.
 - [ ] [P1][In Progress] Remediate Ubuntu 24.04 vulnerabilities and clean up host hardening findings (SNOW TASK0723797).
@@ -52,13 +50,13 @@ Priority keys:
 ## In Progress
 - Baseline analysis of `main.py` and `toolkit/` completed; preparing hardening roadmap without changing current behavior.
 - Drafted Ubuntu 24.04 HTTPS migration runbook for this project.
-- Waiting on internal PKI signed certificate issuance before final HTTPS activation.
 - HTTPS migration target host confirmed: `lascrtmp01.ahs.int` (DNS already working).
 - Ubuntu server IP confirmed: `10.241.18.15`.
 
 ## Completed Tasks
 - [x] Created central project tracking structure in `CLAUDE.md`.
 - [x] Confirmed current scripts and pages are working as baseline behavior.
+- [x] Completed HTTPS cutover with internally signed enterprise certificate, Nginx TLS termination, and HTTP -> HTTPS redirect.
 
 ## Key Decisions
 - 2026-04-30: Use `CLAUDE.md` as the canonical running log for goals, pending tasks, and key decisions for this repository.

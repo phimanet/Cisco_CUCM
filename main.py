@@ -1,3 +1,8 @@
+import csv
+import datetime
+import os
+import threading
+
 from fastapi import FastAPI, Form, UploadFile, File, Query
 from fastapi.responses import HTMLResponse, Response, JSONResponse
 from html import escape
@@ -16,6 +21,90 @@ from toolkit.add_secondary_devices import (
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 JOB_OUTPUTS = {}
+AUDIT_LOG_LOCK = threading.Lock()
+AUDIT_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+AUDIT_RETENTION_DAYS = 365
+AUDIT_FIELDS = [
+  "timestamp",
+  "action",
+  "cucm_host",
+  "operator",
+  "target",
+  "output_filename",
+  "inline_mode",
+]
+AUDIT_LOG_PATH = os.path.join(
+  os.path.dirname(os.path.abspath(__file__)),
+  "logs",
+  "audit_trail.csv",
+)
+
+
+def _ensure_audit_log():
+  os.makedirs(os.path.dirname(AUDIT_LOG_PATH), exist_ok=True)
+  if os.path.exists(AUDIT_LOG_PATH):
+    return
+
+  with open(AUDIT_LOG_PATH, "w", newline="", encoding="utf-8") as handle:
+    writer = csv.writer(handle)
+    writer.writerow(AUDIT_FIELDS)
+
+
+def _prune_audit_log_locked():
+  _ensure_audit_log()
+
+  with open(AUDIT_LOG_PATH, "r", newline="", encoding="utf-8") as handle:
+    reader = csv.DictReader(handle)
+    rows = list(reader)
+
+  cutoff = datetime.datetime.now() - datetime.timedelta(days=AUDIT_RETENTION_DAYS)
+  kept_rows = []
+  for row in rows:
+    ts_text = (row.get("timestamp") or "").strip()
+    if not ts_text:
+      continue
+
+    try:
+      ts = datetime.datetime.strptime(ts_text, AUDIT_TIMESTAMP_FORMAT)
+    except ValueError:
+      # Keep malformed legacy rows to avoid destructive data loss.
+      kept_rows.append(row)
+      continue
+
+    if ts >= cutoff:
+      kept_rows.append(row)
+
+  with open(AUDIT_LOG_PATH, "w", newline="", encoding="utf-8") as handle:
+    writer = csv.DictWriter(handle, fieldnames=AUDIT_FIELDS)
+    writer.writeheader()
+    for row in kept_rows:
+      writer.writerow({field: row.get(field, "") for field in AUDIT_FIELDS})
+
+
+def _append_audit_event(
+  action: str,
+  cucm_host: str,
+  operator: str,
+  target: str,
+  output_filename: str,
+  inline_mode: bool,
+):
+  row = [
+    datetime.datetime.now().strftime(AUDIT_TIMESTAMP_FORMAT),
+    action,
+    cucm_host,
+    operator,
+    target,
+    output_filename,
+    str(bool(inline_mode)).lower(),
+  ]
+
+  with AUDIT_LOG_LOCK:
+    _ensure_audit_log()
+    _prune_audit_log_locked()
+    with open(AUDIT_LOG_PATH, "a", newline="", encoding="utf-8") as handle:
+      writer = csv.writer(handle)
+      writer.writerow(row)
 
 
 def _to_bytes(data):
@@ -467,6 +556,7 @@ def menu_page():
     <main class="content">
     <h2>Cisco Voice Server Automation Site - Restricted Access</h2>
     <p><a href="/">Back to Landing Page</a></p>
+    <p><a href="/download/audit-trail">Download Audit Trail (CSV)</a></p>
 
     <h3>Build Cisco Jabber Laptop and Voicemail - New Hire or New Jabber Laptop/VM Add</h3>
 
@@ -1023,6 +1113,37 @@ def download_job_output(job_id: str):
     media_type="text/csv",
     headers={"Content-Disposition": f'attachment; filename="{job_output["filename"]}"'}
   )
+
+
+@app.get("/download/audit-trail")
+def download_audit_trail():
+  with AUDIT_LOG_LOCK:
+    _ensure_audit_log()
+    _prune_audit_log_locked()
+    with open(AUDIT_LOG_PATH, "rb") as handle:
+      data = handle.read()
+
+  return Response(
+    data,
+    media_type="text/csv",
+    headers={"Content-Disposition": 'attachment; filename="audit_trail.csv"'}
+  )
+
+
+@app.get("/audit-trail/stats")
+def audit_trail_stats():
+  with AUDIT_LOG_LOCK:
+    _ensure_audit_log()
+    _prune_audit_log_locked()
+    with open(AUDIT_LOG_PATH, "r", newline="", encoding="utf-8") as handle:
+      reader = csv.DictReader(handle)
+      record_count = sum(1 for _ in reader)
+
+  return JSONResponse({
+    "audit_log_path": AUDIT_LOG_PATH,
+    "retention_days": AUDIT_RETENTION_DAYS,
+    "record_count": record_count,
+  })
     
 
 @app.post("/add/directorynumbers")
@@ -1035,6 +1156,15 @@ async def add_directorynumbers(
     csv_bytes = await csv_file.read()
     log_csv, filename = add_directory_numbers_from_csv(
         cucm_host, cucm_user, cucm_pass, csv_bytes, {}
+    )
+    csv_name = csv_file.filename or "uploaded.csv"
+    _append_audit_event(
+      action="add_directory_numbers",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=csv_name,
+      output_filename=filename,
+      inline_mode=False,
     )
     return _render_job_result("Add Directory Numbers", log_csv, filename)
 
@@ -1050,6 +1180,15 @@ def export_directorynumbers(
     data, filename = export_directory_numbers(
         cucm_host, cucm_user, cucm_pass, dn_contains, route_partition
     )
+    target = f"pattern={dn_contains};partition={route_partition or '*'}"
+    _append_audit_event(
+      action="export_directory_numbers",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=target,
+      output_filename=filename,
+      inline_mode=False,
+    )
     return _render_job_result("Export Directory Numbers", data, filename)
 
 
@@ -1062,6 +1201,14 @@ def export_endusers(
 ):
     data, filename = export_endusers_all_fields(
         cucm_host, cucm_user, cucm_pass, lastname
+    )
+    _append_audit_event(
+      action="export_end_users",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=lastname,
+      output_filename=filename,
+      inline_mode=False,
     )
     return _render_job_result("Export End Users", data, filename)
 
@@ -1081,6 +1228,14 @@ async def build_user_csf_phone(
         cucm_pass=cucm_pass,
         target_user=target_user,
         dn_type=dn_type,
+    )
+    _append_audit_event(
+      action="build_user_csf_phone",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=target_user,
+      output_filename=filename,
+      inline_mode=inline,
     )
 
     if inline:
@@ -1109,6 +1264,14 @@ def decommission_user_csf_voicemail_route(
         cucm_pass=cucm_pass,
         target_user=target_user,
     )
+    _append_audit_event(
+      action="offboard_user_option_10",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=target_user,
+      output_filename=filename,
+      inline_mode=inline,
+    )
 
     if inline:
         job_output = _prepare_job_output(data, filename)
@@ -1135,6 +1298,14 @@ def add_secondary_tct_device_route(
         cucm_user=cucm_user,
         cucm_pass=cucm_pass,
         target_user=target_user,
+    )
+    _append_audit_event(
+      action="add_secondary_tct_option_3",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=target_user,
+      output_filename=filename,
+      inline_mode=inline,
     )
 
     if inline:
@@ -1163,6 +1334,14 @@ def add_secondary_bot_device_route(
         cucm_pass=cucm_pass,
         target_user=target_user,
     )
+    _append_audit_event(
+      action="add_secondary_bot_option_4",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=target_user,
+      output_filename=filename,
+      inline_mode=inline,
+    )
 
     if inline:
         job_output = _prepare_job_output(data, filename)
@@ -1189,6 +1368,14 @@ def add_secondary_strike_devices_route(
         cucm_user=cucm_user,
         cucm_pass=cucm_pass,
         target_user=target_user,
+    )
+    _append_audit_event(
+      action="add_secondary_strike_option_5",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=target_user,
+      output_filename=filename,
+      inline_mode=inline,
     )
 
     if inline:
