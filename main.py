@@ -1,5 +1,5 @@
-from fastapi import FastAPI, Form, UploadFile, File
-from fastapi.responses import HTMLResponse, Response
+from fastapi import FastAPI, Form, UploadFile, File, Query
+from fastapi.responses import HTMLResponse, Response, JSONResponse
 from html import escape
 from uuid import uuid4
 
@@ -38,10 +38,20 @@ def _store_job_output(csv_data: bytes, filename: str) -> str:
     return job_id
 
 
-def _render_job_result(title: str, csv_data, filename: str) -> HTMLResponse:
+def _prepare_job_output(csv_data, filename: str) -> dict:
     csv_bytes = _to_bytes(csv_data)
     job_id = _store_job_output(csv_bytes, filename)
-    output_text = escape(csv_bytes.decode("utf-8", errors="replace"))
+    return {
+        "job_id": job_id,
+        "filename": filename,
+        "output_text": csv_bytes.decode("utf-8", errors="replace"),
+    }
+
+
+def _render_job_result(title: str, csv_data, filename: str) -> HTMLResponse:
+    job_output = _prepare_job_output(csv_data, filename)
+    job_id = job_output["job_id"]
+    output_text = escape(job_output["output_text"])
 
     html = f"""
 <html>
@@ -91,6 +101,89 @@ def menu_page():
 <html>
   <head>
     <title>Cisco Voice Server Automation Site - Restricted Access</title>
+    <style>
+      .build-user-layout {
+        display: flex;
+        gap: 24px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+
+      .build-user-form {
+        flex: 1 1 420px;
+        min-width: 320px;
+      }
+
+      .build-user-output {
+        flex: 1 1 480px;
+        min-width: 320px;
+        border: 1px solid #333;
+        background: #0f0f0f;
+        padding: 12px;
+      }
+
+      .build-user-output h4 {
+        margin: 0 0 10px 0;
+      }
+
+      .build-user-output textarea {
+        width: 100%;
+        height: 380px;
+        font-family: Consolas, monospace;
+        background: #000;
+        color: #fff;
+        border: 1px solid #2f2f2f;
+      }
+
+      .build-user-status {
+        color: #b0dfff;
+        min-height: 18px;
+      }
+
+      .offboard-layout {
+        display: flex;
+        gap: 24px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+
+      .offboard-form {
+        flex: 1 1 420px;
+        min-width: 320px;
+      }
+
+      .offboard-output {
+        flex: 1 1 480px;
+        min-width: 320px;
+        border: 1px solid #333;
+        background: #0f0f0f;
+        padding: 12px;
+      }
+
+      .offboard-output h4 {
+        margin: 0 0 10px 0;
+      }
+
+      .offboard-output textarea {
+        width: 100%;
+        height: 380px;
+        font-family: Consolas, monospace;
+        background: #000;
+        color: #fff;
+        border: 1px solid #2f2f2f;
+      }
+
+      .offboard-status {
+        color: #b0dfff;
+        min-height: 18px;
+      }
+
+      @media (max-width: 980px) {
+        .build-user-output textarea {
+          height: 280px;
+        }
+      }
+    </style>
   </head>
   <body style="font-family: Arial; margin:40px; background-color:#000; color:#fff;">
     <h2>Cisco Voice Server Automation Site - Restricted Access</h2>
@@ -98,54 +191,80 @@ def menu_page():
 
     <h3>Build User CSF Phone From Template</h3>
 
-    <form class="target-user-form" action="/build/user-csf-phone" method="post">
-      Cisco Callmanager Envronment:<br>
-      <select name="cucm_host">
-        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-      </select><br><br>
+    <div class="build-user-layout">
+      <form id="build-user-form" class="target-user-form build-user-form" action="/build/user-csf-phone" method="post">
+        Cisco Callmanager Envronment:<br>
+        <select name="cucm_host">
+          <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
+          <option value="lascucmpl01.ahs.int">LAB CUCM</option>
+        </select><br><br>
 
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user"><br><br>
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user"><br><br>
 
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass"><br><br>
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass"><br><br>
 
-      User ID for person to Build Jabber for:<br>
-      <input name="target_user" placeholder="john.doe" required><br><br>
+        User ID for person to Build Jabber for:<br>
+        <input name="target_user" placeholder="john.doe" required><br><br>
 
-      DN Type:<br>
-      <select name="dn_type">
-        <option value="recruiter">Recruiter (469)</option>
-        <option value="general" selected>General FTE (214)</option>
-        <option value="strike">Strike (945)</option>
-      </select><br><br>
+        DN Type:<br>
+        <select name="dn_type">
+          <option value="recruiter">Recruiter (469)</option>
+          <option value="general" selected>General FTE (214)</option>
+          <option value="strike">Strike (945)</option>
+        </select><br><br>
 
-      <button type="submit">Run Build User CSF Phone</button>
-    </form>
+        <button type="submit">Run Build User CSF Phone</button>
+      </form>
+
+      <section class="build-user-output" aria-live="polite">
+        <h4>Build User Output Preview</h4>
+        <p id="build-user-status" class="build-user-status">Run Build User to view output here.</p>
+        <p>
+          <a id="build-user-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
+            Download CSV Output
+          </a>
+        </p>
+        <textarea id="build-user-preview" readonly></textarea>
+      </section>
+    </div>
 
     <hr>
 
     <h3>Offboard User - Delete all Jabber (Option 10)</h3>
 
-    <form class="target-user-form" action="/decommission/user-csf-voicemail" method="post">
-      Cisco Callmanager Envronment:<br>
-      <select name="cucm_host">
-        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-      </select><br><br>
+    <div class="offboard-layout">
+      <form id="offboard-user-form" class="target-user-form offboard-form" action="/decommission/user-csf-voicemail" method="post">
+        Cisco Callmanager Envronment:<br>
+        <select name="cucm_host">
+          <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
+          <option value="lascucmpl01.ahs.int">LAB CUCM</option>
+        </select><br><br>
 
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user"><br><br>
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user"><br><br>
 
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass"><br><br>
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass"><br><br>
 
-      User ID for person to Offboard:<br>
-      <input name="target_user" placeholder="john.doe" required><br><br>
+        User ID for person to Offboard:<br>
+        <input name="target_user" placeholder="john.doe" required><br><br>
 
-      <button type="submit">Run Offboard User - Delete all Jabber (Option 10)</button>
-    </form>
+        <button type="submit">Run Offboard User - Delete all Jabber (Option 10)</button>
+      </form>
+
+      <section class="offboard-output" aria-live="polite">
+        <h4>Offboard Output Preview</h4>
+        <p id="offboard-status" class="offboard-status">Run Offboard User to view output here.</p>
+        <p>
+          <a id="offboard-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
+            Download CSV Output
+          </a>
+        </p>
+        <textarea id="offboard-preview" readonly></textarea>
+      </section>
+    </div>
 
     <hr>
 
@@ -374,6 +493,82 @@ def menu_page():
         return !hasErrors;
       }
 
+      async function submitBuildUserInline(form) {
+        const statusEl = document.getElementById("build-user-status");
+        const outputEl = document.getElementById("build-user-preview");
+        const downloadEl = document.getElementById("build-user-download");
+
+        statusEl.textContent = "Running Build User...";
+        outputEl.value = "";
+        downloadEl.style.display = "none";
+        downloadEl.removeAttribute("href");
+
+        try {
+          const formData = new FormData(form);
+          const response = await fetch(`${form.action}?inline=1`, {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText || `Request failed with status ${response.status}`);
+          }
+
+          const result = await response.json();
+          outputEl.value = result.output_text || "";
+          statusEl.textContent = `Completed: ${result.filename || "build_user_output.csv"}`;
+          downloadEl.href = result.download_url;
+          downloadEl.style.display = "inline";
+
+          const targetUserInput = form.querySelector('input[name="target_user"]');
+          if (targetUserInput) {
+            targetUserInput.value = "";
+          }
+        } catch (error) {
+          statusEl.textContent = "Build User failed. Review output and retry.";
+          outputEl.value = error.message || "Unknown error.";
+        }
+      }
+
+      async function submitOffboardInline(form) {
+        const statusEl = document.getElementById("offboard-status");
+        const outputEl = document.getElementById("offboard-preview");
+        const downloadEl = document.getElementById("offboard-download");
+
+        statusEl.textContent = "Running Offboard User...";
+        outputEl.value = "";
+        downloadEl.style.display = "none";
+        downloadEl.removeAttribute("href");
+
+        try {
+          const formData = new FormData(form);
+          const response = await fetch(`${form.action}?inline=1`, {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText || `Request failed with status ${response.status}`);
+          }
+
+          const result = await response.json();
+          outputEl.value = result.output_text || "";
+          statusEl.textContent = `Completed: ${result.filename || "offboard_output.csv"}`;
+          downloadEl.href = result.download_url;
+          downloadEl.style.display = "inline";
+
+          const targetUserInput = form.querySelector('input[name="target_user"]');
+          if (targetUserInput) {
+            targetUserInput.value = "";
+          }
+        } catch (error) {
+          statusEl.textContent = "Offboard User failed. Review output and retry.";
+          outputEl.value = error.message || "Unknown error.";
+        }
+      }
+
       document.querySelectorAll("form").forEach((form) => {
         form.querySelectorAll("input").forEach((field) => {
           field.addEventListener("input", () => clearFieldError(field));
@@ -382,6 +577,18 @@ def menu_page():
         form.addEventListener("submit", (event) => {
           if (!validateForm(form)) {
             event.preventDefault();
+            return;
+          }
+
+          if (form.id === "build-user-form") {
+            event.preventDefault();
+            submitBuildUserInline(form);
+            return;
+          }
+
+          if (form.id === "offboard-user-form") {
+            event.preventDefault();
+            submitOffboardInline(form);
             return;
           }
 
@@ -409,17 +616,17 @@ def download_add_directorynumbers_template():
   )
 
 
-  @app.get("/download/job-output/{job_id}")
-  def download_job_output(job_id: str):
-    job_output = JOB_OUTPUTS.get(job_id)
-    if not job_output:
-      return Response("Job output not found.", media_type="text/plain", status_code=404)
+@app.get("/download/job-output/{job_id}")
+def download_job_output(job_id: str):
+  job_output = JOB_OUTPUTS.get(job_id)
+  if not job_output:
+    return Response("Job output not found.", media_type="text/plain", status_code=404)
 
-    return Response(
-      job_output["data"],
-      media_type="text/csv",
-      headers={"Content-Disposition": f'attachment; filename="{job_output["filename"]}"'}
-    )
+  return Response(
+    job_output["data"],
+    media_type="text/csv",
+    headers={"Content-Disposition": f'attachment; filename="{job_output["filename"]}"'}
+  )
     
 
 @app.post("/add/directorynumbers")
@@ -469,7 +676,8 @@ async def build_user_csf_phone(
     cucm_user: str = Form(...),
     cucm_pass: str = Form(...),
     target_user: str = Form(...),
-    dn_type: str = Form("general")
+    dn_type: str = Form("general"),
+    inline: bool = Query(False),
 ):
     data, filename = build_user_csf_phone_from_template(
         cucm_host=cucm_host,
@@ -478,6 +686,16 @@ async def build_user_csf_phone(
         target_user=target_user,
         dn_type=dn_type,
     )
+
+    if inline:
+        job_output = _prepare_job_output(data, filename)
+        return JSONResponse({
+            "job_id": job_output["job_id"],
+            "filename": job_output["filename"],
+            "output_text": job_output["output_text"],
+            "download_url": f"/download/job-output/{job_output['job_id']}",
+        })
+
     return _render_job_result("Build User CSF Phone", data, filename)
 
 
@@ -487,6 +705,7 @@ def decommission_user_csf_voicemail_route(
     cucm_user: str = Form(...),
     cucm_pass: str = Form(...),
     target_user: str = Form(...),
+    inline: bool = Query(False),
 ):
     data, filename = decommission_user_csf_voicemail(
         cucm_host=cucm_host,
@@ -494,6 +713,16 @@ def decommission_user_csf_voicemail_route(
         cucm_pass=cucm_pass,
         target_user=target_user,
     )
+
+    if inline:
+        job_output = _prepare_job_output(data, filename)
+        return JSONResponse({
+            "job_id": job_output["job_id"],
+            "filename": job_output["filename"],
+            "output_text": job_output["output_text"],
+            "download_url": f"/download/job-output/{job_output['job_id']}",
+        })
+
     return _render_job_result("Offboard User - Delete all Jabber (Option 10)", data, filename)
 
 
