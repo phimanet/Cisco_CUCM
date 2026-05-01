@@ -24,7 +24,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 
 ## Enhancement Backlog
 - [ ] [P1][Planned] Convert HTTP to HTTPS using internally signed enterprise certificate, with Nginx TLS termination and HTTP -> HTTPS redirect.
-- [ ] [P1][Idea] Add input validation and user-friendly error display on all web forms.
+- [x] [P1][Done] Add input validation and user-friendly error display on all web forms.
 - [ ] [P1][Idea] Add reusable environment/config file for CUCM/Unity hosts, partitions, and defaults.
 - [ ] [P1][In Progress] Remediate Ubuntu 24.04 vulnerabilities and clean up host hardening findings (SNOW TASK0723797).
   - [x] CVE-2024-6387 (CVSSv3 8.1) — OpenSSH patched to 9.6p1-3ubuntu13.16 ✓
@@ -87,6 +87,7 @@ Priority keys:
 - LAB Unity Connection confirmed: `lascutypl01.ahs.int` (10.241.18.202), System version: 15.0.1.13900-61.
 - Terminology: CallManager = Cisco Unified Communications Manager (CUCM).
 - UI enhancement implemented: target "User ID for person..." field now clears immediately after form submission on target-user workflows.
+- UI enhancement implemented: client-side validation now shows friendly inline errors for required/format fields across menu forms.
 
 ### 2026-04-30
 - Initialized project tracker format.

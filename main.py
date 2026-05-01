@@ -242,15 +242,106 @@ def menu_page():
     </form>
 
     <script>
-      document.querySelectorAll("form.target-user-form").forEach((form) => {
-        form.addEventListener("submit", () => {
-          const targetUserInput = form.querySelector('input[name="target_user"]');
-          if (!targetUserInput) {
+      const fieldRules = {
+        cucm_user: {
+          required: true,
+          requiredMessage: "Cisco Callmanager Username is required.",
+        },
+        cucm_pass: {
+          required: true,
+          requiredMessage: "Cisco Callmanager Password is required.",
+        },
+        target_user: {
+          required: true,
+          requiredMessage: "User ID is required.",
+          pattern: /^[A-Za-z0-9._-]+$/,
+          patternMessage: "User ID can only contain letters, numbers, dot, underscore, or hyphen.",
+        },
+        dn_contains: {
+          required: true,
+          requiredMessage: "DN Pattern is required.",
+        },
+        lastname: {
+          required: true,
+          requiredMessage: "Last Name is required.",
+        },
+      };
+
+      function clearFieldError(field) {
+        const errorEl = field.nextElementSibling;
+        if (errorEl && errorEl.classList.contains("field-error")) {
+          errorEl.remove();
+        }
+        field.style.borderColor = "";
+      }
+
+      function addFieldError(field, message) {
+        clearFieldError(field);
+        const errorEl = document.createElement("div");
+        errorEl.className = "field-error";
+        errorEl.style.color = "#ff8a8a";
+        errorEl.style.fontSize = "12px";
+        errorEl.style.marginTop = "4px";
+        errorEl.textContent = message;
+        field.style.borderColor = "#ff6b6b";
+        field.insertAdjacentElement("afterend", errorEl);
+      }
+
+      function validateForm(form) {
+        let firstInvalid = null;
+        let hasErrors = false;
+
+        Object.entries(fieldRules).forEach(([fieldName, rule]) => {
+          const field = form.querySelector(`[name="${fieldName}"]`);
+          if (!field) {
             return;
           }
-          setTimeout(() => {
-            targetUserInput.value = "";
-          }, 0);
+
+          const value = (field.value || "").trim();
+          clearFieldError(field);
+
+          if (rule.required && !value) {
+            addFieldError(field, rule.requiredMessage);
+            hasErrors = true;
+            if (!firstInvalid) {
+              firstInvalid = field;
+            }
+            return;
+          }
+
+          if (rule.pattern && value && !rule.pattern.test(value)) {
+            addFieldError(field, rule.patternMessage);
+            hasErrors = true;
+            if (!firstInvalid) {
+              firstInvalid = field;
+            }
+          }
+        });
+
+        if (firstInvalid) {
+          firstInvalid.focus();
+        }
+
+        return !hasErrors;
+      }
+
+      document.querySelectorAll("form").forEach((form) => {
+        form.querySelectorAll("input").forEach((field) => {
+          field.addEventListener("input", () => clearFieldError(field));
+        });
+
+        form.addEventListener("submit", (event) => {
+          if (!validateForm(form)) {
+            event.preventDefault();
+            return;
+          }
+
+          const targetUserInput = form.querySelector('input[name="target_user"]');
+          if (targetUserInput) {
+            setTimeout(() => {
+              targetUserInput.value = "";
+            }, 0);
+          }
         });
       });
     </script>
