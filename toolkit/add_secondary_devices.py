@@ -264,10 +264,21 @@ def _run_secondary_add(cucm_host, cucm_user, cucm_pass, target_user, options, ou
             writer.writerow([f"Resolve {label} Device Name", "Success", f"Target device name {new_device}"])
 
             if new_device in current_devices:
-                writer.writerow([f"Check {label} Device", "Skipped", f"{new_device} already associated to user"])
+                if label == "TCT":
+                    writer.writerow(["Check TCT Device", "Skipped", "Jabber for Iphone Already created."])
+                elif label == "BOT":
+                    writer.writerow(["Check BOT Device", "Skipped", "Jabber for Android Already created."])
+                else:
+                    writer.writerow([f"Check {label} Device", "Skipped", f"{new_device} already associated to user"])
                 continue
 
             if _phone_exists(session, cucm_host, new_device):
+                if label == "TCT":
+                    writer.writerow(["Check TCT Device", "Skipped", "Jabber for Iphone Already created."])
+                    continue
+                if label == "BOT":
+                    writer.writerow(["Check BOT Device", "Skipped", "Jabber for Android Already created."])
+                    continue
                 raise RuntimeError(f"Target device {new_device} already exists in CUCM. Choose a different approach.")
 
             writer.writerow([
