@@ -1,5 +1,7 @@
 from fastapi import FastAPI, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, Response
+from html import escape
+from uuid import uuid4
 
 from toolkit.enduser import export_endusers_all_fields
 from toolkit.directory_number import export_directory_numbers
@@ -13,6 +15,53 @@ from toolkit.add_secondary_devices import (
 )
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
+JOB_OUTPUTS = {}
+
+
+def _to_bytes(data):
+    if isinstance(data, bytes):
+        return data
+    if isinstance(data, str):
+        return data.encode("utf-8")
+    return str(data).encode("utf-8")
+
+
+def _store_job_output(csv_data: bytes, filename: str) -> str:
+    job_id = str(uuid4())
+    JOB_OUTPUTS[job_id] = {"data": csv_data, "filename": filename}
+
+    # Keep an in-memory cap so older outputs naturally roll off.
+    if len(JOB_OUTPUTS) > 100:
+        oldest_key = next(iter(JOB_OUTPUTS))
+        JOB_OUTPUTS.pop(oldest_key, None)
+
+    return job_id
+
+
+def _render_job_result(title: str, csv_data, filename: str) -> HTMLResponse:
+    csv_bytes = _to_bytes(csv_data)
+    job_id = _store_job_output(csv_bytes, filename)
+    output_text = escape(csv_bytes.decode("utf-8", errors="replace"))
+
+    html = f"""
+<html>
+  <head>
+    <title>{escape(title)} - Job Output</title>
+  </head>
+  <body style="font-family: Arial; margin:40px; background-color:#000; color:#fff;">
+    <h2>{escape(title)} - Job Output</h2>
+    <p><a href="/menu" style="color:#7ec8ff;">Back to Menu</a></p>
+    <p>
+      <a href="/download/job-output/{job_id}" style="color:#7ec8ff; font-weight:bold;">
+        Download CSV Output
+      </a>
+    </p>
+    <p>Output Preview:</p>
+    <textarea readonly style="width:100%; height:420px; font-family: Consolas, monospace;">{output_text}</textarea>
+  </body>
+</html>
+"""
+    return HTMLResponse(html)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -358,6 +407,19 @@ def download_add_directorynumbers_template():
     media_type="text/csv",
     headers={"Content-Disposition": 'attachment; filename="add_directory_numbers_template.csv"'}
   )
+
+
+  @app.get("/download/job-output/{job_id}")
+  def download_job_output(job_id: str):
+    job_output = JOB_OUTPUTS.get(job_id)
+    if not job_output:
+      return Response("Job output not found.", media_type="text/plain", status_code=404)
+
+    return Response(
+      job_output["data"],
+      media_type="text/csv",
+      headers={"Content-Disposition": f'attachment; filename="{job_output["filename"]}"'}
+    )
     
 
 @app.post("/add/directorynumbers")
@@ -371,11 +433,7 @@ async def add_directorynumbers(
     log_csv, filename = add_directory_numbers_from_csv(
         cucm_host, cucm_user, cucm_pass, csv_bytes, {}
     )
-    return Response(
-        log_csv,
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-    )
+    return _render_job_result("Add Directory Numbers", log_csv, filename)
 
 
 @app.post("/export/directorynumbers")
@@ -389,11 +447,7 @@ def export_directorynumbers(
     data, filename = export_directory_numbers(
         cucm_host, cucm_user, cucm_pass, dn_contains, route_partition
     )
-    return Response(
-        data,
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-    )
+    return _render_job_result("Export Directory Numbers", data, filename)
 
 
 @app.post("/export/endusers")
@@ -406,11 +460,7 @@ def export_endusers(
     data, filename = export_endusers_all_fields(
         cucm_host, cucm_user, cucm_pass, lastname
     )
-    return Response(
-        data,
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-    )
+    return _render_job_result("Export End Users", data, filename)
 
 
 @app.post("/build/user-csf-phone")
@@ -428,11 +478,7 @@ async def build_user_csf_phone(
         target_user=target_user,
         dn_type=dn_type,
     )
-    return Response(
-        data,
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-    )
+    return _render_job_result("Build User CSF Phone", data, filename)
 
 
 @app.post("/decommission/user-csf-voicemail")
@@ -448,11 +494,7 @@ def decommission_user_csf_voicemail_route(
         cucm_pass=cucm_pass,
         target_user=target_user,
     )
-    return Response(
-        data,
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-    )
+    return _render_job_result("Offboard User - Delete all Jabber (Option 10)", data, filename)
 
 
 @app.post("/add/secondary-tct-device")
@@ -468,11 +510,7 @@ def add_secondary_tct_device_route(
         cucm_pass=cucm_pass,
         target_user=target_user,
     )
-    return Response(
-        data,
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-    )
+    return _render_job_result("Add Secondary Device - Jabber for iPhone (Option 3)", data, filename)
 
 
 @app.post("/add/secondary-bot-device")
@@ -488,11 +526,7 @@ def add_secondary_bot_device_route(
         cucm_pass=cucm_pass,
         target_user=target_user,
     )
-    return Response(
-        data,
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-    )
+    return _render_job_result("Add Secondary Device - Jabber for Android (Option 4)", data, filename)
 
 
 @app.post("/add/secondary-strike-devices")
@@ -508,8 +542,4 @@ def add_secondary_strike_devices_route(
         cucm_pass=cucm_pass,
         target_user=target_user,
     )
-    return Response(
-        data,
-        media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-    )
+    return _render_job_result("STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)", data, filename)

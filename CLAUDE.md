@@ -34,7 +34,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [ ] [P1][Idea] Before creating Jabber devices or voicemail, always verify whether the target resource already exists to prevent duplicate provisioning and resource waste.
 - [x] [P2][Done] After job submission, clear the "User ID for person..." input field to prevent accidental repeat Jabber creation.
 - [ ] [P2][Idea] Refresh the web portal theme to align with AMN Healthcare visual style (brand colors, typography, spacing, and overall look/feel).
-- [ ] [P2][Idea] Add per-option success/failure summary panel in the UI after CSV generation.
+- [x] [P2][Done] Add per-option success/failure summary panel in the UI after CSV generation.
 - [ ] [P2][Idea] Add a lightweight audit trail (who ran what option and when) for internal operations.
 - [ ] [P3][Idea] Add optional dry-run mode for high-impact actions before execution.
 
@@ -88,6 +88,7 @@ Priority keys:
 - Terminology: CallManager = Cisco Unified Communications Manager (CUCM).
 - UI enhancement implemented: target "User ID for person..." field now clears immediately after form submission on target-user workflows.
 - UI enhancement implemented: client-side validation now shows friendly inline errors for required/format fields across menu forms.
+- UI enhancement implemented: job routes now return a result page with a text output preview box and a CSV download link.
 
 ### 2026-04-30
 - Initialized project tracker format.
