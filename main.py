@@ -235,7 +235,7 @@ def menu_page():
     <h2>Cisco Voice Server Automation Site - Restricted Access</h2>
     <p><a href="/" style="color:#7ec8ff;">Back to Landing Page</a></p>
 
-    <h3>Build User CSF Phone From Template</h3>
+    <h3>Build Cisco Jabber Laptop and Voicemail - New Hire or New Jabber Laptop/VM Add</h3>
 
     <div class="build-user-layout">
       <form id="build-user-form" class="target-user-form build-user-form" action="/build/user-csf-phone" method="post">
@@ -278,7 +278,7 @@ def menu_page():
 
     <hr>
 
-    <h3>Offboard User - Delete all Jabber (Option 10)</h3>
+    <h3>Offboard User - Delete all Jabber and Voicemail Box (Option 10)</h3>
 
     <div class="offboard-layout">
       <form id="offboard-user-form" class="target-user-form offboard-form" action="/decommission/user-csf-voicemail" method="post">
@@ -297,7 +297,7 @@ def menu_page():
         User ID for person to Offboard:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
 
-        <button type="submit">Run Offboard User - Delete all Jabber (Option 10)</button>
+        <button type="submit">Run Offboard User - Delete all Jabber and Voicemail Box (Option 10)</button>
       </form>
 
       <section class="offboard-output" aria-live="polite">
@@ -885,7 +885,7 @@ def decommission_user_csf_voicemail_route(
             "download_url": f"/download/job-output/{job_output['job_id']}",
         })
 
-    return _render_job_result("Offboard User - Delete all Jabber (Option 10)", data, filename)
+    return _render_job_result("Offboard User - Delete all Jabber and Voicemail Box (Option 10)", data, filename)
 
 
 @app.post("/add/secondary-tct-device")

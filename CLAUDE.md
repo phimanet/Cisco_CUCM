@@ -68,6 +68,11 @@ Priority keys:
 - 2026-04-30: Use internally signed enterprise certificate for Ubuntu production TLS cutover.
 - 2026-04-30: Environment remains internal-network only; no internet exposure planned.
 
+## Known Configuration
+- TLS is used for CUCM/Unity API traffic (`https://<host>:8443/axl/` for AXL).
+- Python `requests` certificate verification is intentionally disabled in current toolkit sessions (`verify=False`) to preserve compatibility with existing CUCM/Unity certificate trust state.
+- Decision on 2026-05-01: Do not change `verify=False` yet; revisit after controlled internal CA trust-chain validation to avoid breaking current automation workflows.
+
 ## Open Questions
 - Which immediate deliverable should be prioritized first in this repository?
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
@@ -81,6 +86,7 @@ Priority keys:
 - vsftpd remains stopped; CDR uploads from CUCM are not flowing until decision is made.
 - SSH MAC hardening in progress: 1 of 4 weak MACs removed; 3 remaining (umac-64@openssh.com, hmac-sha1-etm@openssh.com, hmac-sha1); removing one at a time on user schedule.
 - Validation: Cisco CER backup works after Weak MAC hardening change (pass).
+- Confirmed CUCM AXL calls are sent to `https://...:8443/axl/` (TLS in transit); cert verification remains disabled by design (`verify=False`) and logged under Known Configuration.
 - Production CUCM confirmed: `lascucmpp01.ahs.int` (10.241.18.11), System version: 15.0.1.12900-234.
 - Production Unity Connection confirmed: `lascutyp01.ahs.int` (10.241.18.17), System version: 15.0.1.12900-43.
 - LAB CUCM confirmed: `lascucmpl01.ahs.int` (10.241.18.200), System version: 15.0.1.14901-2.
@@ -101,7 +107,7 @@ Priority keys:
 - Confirmed deployment scope is internal-only (no internet exposure).
 - Added documented rollback procedure to return from HTTPS to HTTP if TLS cutover fails.
 - Updated Offboard User web mapping to Option 10 and aligned backend logic to remove CSF/BOT/TCT devices, delete Unity mailbox, and mark all associated DNs inactive.
-- Renamed Option 10 web text to "Offboard User - Delete all Jabber (Option 10)".
+- Renamed Option 10 web text to "Offboard User - Delete all Jabber and Voicemail Box (Option 10)".
 - Added new web options 3/4/5 for secondary device workflows: TCT, BOT, and STRIKE MODE (TCT+BOT), including FastAPI routes and toolkit backend logic.
 
 ## Working Agreement
