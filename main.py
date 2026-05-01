@@ -492,6 +492,34 @@ def home(request: Request):
         background: #004f9e;
       }
 
+      .action-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .env-action-pill {
+        display: inline-block;
+        padding: 10px 12px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 800;
+        border: 1px solid var(--amn-border);
+      }
+
+      .env-action-pill.env-banner-prod {
+        color: #083252;
+        background: #d8ecff;
+        border-color: #8bb9e2;
+      }
+
+      .env-action-pill.env-banner-lab {
+        color: #5c2700;
+        background: #ffe6cc;
+        border-color: #f7b267;
+      }
+
       .login-note {
         color: #244e78;
         font-size: 13px;
@@ -913,7 +941,10 @@ def menu_page(request: Request):
           <option value="strike">Strike (945)</option>
         </select><br><br>
 
-        <button type="submit">Run Build User CSF Phone</button>
+        <div class="action-row">
+          <button type="submit">Run Build User CSF Phone</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
       </form>
 
       <section class="build-user-output" aria-live="polite">
