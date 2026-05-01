@@ -2,10 +2,14 @@ import csv
 import datetime
 import os
 import threading
+import time
 
-from fastapi import FastAPI, Form, UploadFile, File, Query
-from fastapi.responses import HTMLResponse, Response, JSONResponse
+import requests
+import urllib3
+from fastapi import FastAPI, Form, UploadFile, File, Query, Request
+from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse
 from html import escape
+from requests.auth import HTTPBasicAuth
 from uuid import uuid4
 
 from toolkit.enduser import export_endusers_all_fields
@@ -22,6 +26,9 @@ from toolkit.add_secondary_devices import (
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 JOB_OUTPUTS = {}
+AUTH_SESSIONS = {}
+SESSION_COOKIE_NAME = "cucm_web_session"
+SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
 AUDIT_LOG_LOCK = threading.Lock()
 AUDIT_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 AUDIT_RETENTION_DAYS = 365
@@ -39,6 +46,146 @@ AUDIT_LOG_PATH = os.path.join(
   "logs",
   "audit_trail.csv",
 )
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+def _prune_auth_sessions_locked(now_epoch: float):
+  expired = [
+    sid
+    for sid, data in AUTH_SESSIONS.items()
+    if (now_epoch - float(data.get("last_seen", 0))) > SESSION_IDLE_TIMEOUT_SECONDS
+  ]
+  for sid in expired:
+    AUTH_SESSIONS.pop(sid, None)
+
+
+def _create_auth_session(cucm_host: str, username: str, password: str) -> str:
+  session_id = str(uuid4())
+  now_epoch = time.time()
+  AUTH_SESSIONS[session_id] = {
+    "cucm_host": (cucm_host or "").strip(),
+    "username": (username or "").strip(),
+    "password": password or "",
+    "unity_user": "",
+    "unity_pass": "",
+    "created_at": now_epoch,
+    "last_seen": now_epoch,
+  }
+  return session_id
+
+
+def _get_auth_session(request: Request):
+  session_id = request.cookies.get(SESSION_COOKIE_NAME, "")
+  if not session_id:
+    return None
+
+  now_epoch = time.time()
+  _prune_auth_sessions_locked(now_epoch)
+  session = AUTH_SESSIONS.get(session_id)
+  if not session:
+    return None
+
+  session["last_seen"] = now_epoch
+  return session
+
+
+def _update_cached_credentials(
+  request: Request,
+  cucm_host: str = "",
+  cucm_user: str = "",
+  cucm_pass: str = "",
+  unity_user: str = "",
+  unity_pass: str = "",
+):
+  session = _get_auth_session(request)
+  if not session:
+    return
+
+  if (cucm_host or "").strip():
+    session["cucm_host"] = cucm_host.strip()
+  if (cucm_user or "").strip():
+    session["username"] = cucm_user.strip()
+  if cucm_pass:
+    session["password"] = cucm_pass
+  if (unity_user or "").strip():
+    session["unity_user"] = unity_user.strip()
+  if unity_pass:
+    session["unity_pass"] = unity_pass
+
+
+def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, cucm_pass: str):
+  session = _get_auth_session(request)
+  if not session:
+    raise RuntimeError("Authentication required.")
+
+  resolved_host = (cucm_host or "").strip() or session.get("cucm_host", "")
+  resolved_user = (cucm_user or "").strip() or session.get("username", "")
+  resolved_pass = cucm_pass or session.get("password", "")
+
+  if not resolved_host or not resolved_user or not resolved_pass:
+    raise RuntimeError("Missing CUCM credentials. Please log in again.")
+
+  return resolved_host, resolved_user, resolved_pass
+
+
+def _resolve_unity_credentials(request: Request, unity_user: str, unity_pass: str):
+  session = _get_auth_session(request)
+  if not session:
+    raise RuntimeError("Authentication required.")
+
+  resolved_user = (unity_user or "").strip() or session.get("unity_user", "") or session.get("username", "")
+  resolved_pass = unity_pass or session.get("unity_pass", "") or session.get("password", "")
+
+  if not resolved_user or not resolved_pass:
+    raise RuntimeError("Missing Unity credentials. Please provide Unity username/password or log in again.")
+
+  return resolved_user, resolved_pass
+
+
+def _validate_cucm_login(cucm_host: str, cucm_user: str, cucm_pass: str):
+  soap_xml = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getCCMVersion/>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  url = f"https://{cucm_host}:8443/axl/"
+  try:
+    response = requests.post(
+      url,
+      data=soap_xml.encode("utf-8"),
+      headers={"Content-Type": "text/xml"},
+      auth=HTTPBasicAuth(cucm_user, cucm_pass),
+      timeout=20,
+      verify=False,
+    )
+  except Exception as exc:
+    return False, f"Could not reach CUCM AXL endpoint: {exc}"
+
+  if response.status_code == 200:
+    return True, "Login successful"
+
+  return False, f"Login failed (HTTP {response.status_code}). Verify host/username/password."
+
+
+def _is_public_path(path: str):
+  return path in {"/", "/login"}
+
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+  if _is_public_path(request.url.path):
+    return await call_next(request)
+
+  session = _get_auth_session(request)
+  if not session:
+    return RedirectResponse(url="/", status_code=303)
+
+  request.state.auth_session = session
+  return await call_next(request)
 
 
 def _ensure_audit_log():
@@ -240,7 +387,11 @@ def _render_job_result(title: str, csv_data, filename: str) -> HTMLResponse:
 
 
 @app.get("/", response_class=HTMLResponse)
-def home():
+def home(request: Request):
+    session = _get_auth_session(request)
+    if session:
+      return RedirectResponse(url="/menu", status_code=303)
+
     return """
 <html>
   <head>
@@ -296,6 +447,38 @@ def home():
         color: var(--amn-blue);
         font-weight: 700;
       }
+
+      input,
+      select,
+      button {
+        border-radius: 8px;
+        border: 1px solid #c8dbee;
+      }
+
+      input,
+      select {
+        min-height: 34px;
+        padding: 6px 8px;
+        width: min(520px, 100%);
+      }
+
+      button {
+        background: var(--amn-blue);
+        color: #fff;
+        border: none;
+        padding: 10px 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: #004f9e;
+      }
+
+      .login-note {
+        color: #244e78;
+        font-size: 13px;
+      }
     </style>
   </head>
   <body>
@@ -310,8 +493,25 @@ def home():
         Welcome to the Cisco Voice administration portal.
         Use this site to run common CUCM automation and reporting tasks.
       </p>
-      <p>
-        <a href="/menu">Go to Menu Options</a>
+
+      <h3>Log In</h3>
+      <form action="/login" method="post">
+        Cisco Callmanager Environment:<br>
+        <select name="cucm_host">
+          <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
+          <option value="lascucmpl01.ahs.int">LAB CUCM</option>
+        </select><br><br>
+
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user" required><br><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
+        <button type="submit">Log In</button>
+      </form>
+      <p class="login-note">
+        You must log in before opening Menu Options.
       </p>
     </section>
   </body>
@@ -319,9 +519,55 @@ def home():
 """
 
 
+@app.post("/login")
+def login(
+  cucm_host: str = Form(...),
+  cucm_user: str = Form(...),
+  cucm_pass: str = Form(...),
+):
+  ok, message = _validate_cucm_login(cucm_host.strip(), cucm_user.strip(), cucm_pass)
+  if not ok:
+    safe = escape(message)
+    return HTMLResponse(
+      f"""
+<html><body style=\"font-family:Segoe UI,Arial,sans-serif;padding:24px;\">
+  <h3>Login Failed</h3>
+  <p>{safe}</p>
+  <p><a href=\"/\">Back to Login</a></p>
+</body></html>
+""",
+      status_code=401,
+    )
+
+  session_id = _create_auth_session(cucm_host, cucm_user, cucm_pass)
+  response = RedirectResponse(url="/menu", status_code=303)
+  response.set_cookie(
+    key=SESSION_COOKIE_NAME,
+    value=session_id,
+    httponly=True,
+    samesite="lax",
+    secure=True,
+    max_age=SESSION_IDLE_TIMEOUT_SECONDS,
+  )
+  return response
+
+
+@app.get("/logout")
+def logout(request: Request):
+  session_id = request.cookies.get(SESSION_COOKIE_NAME, "")
+  if session_id:
+    AUTH_SESSIONS.pop(session_id, None)
+
+  response = RedirectResponse(url="/", status_code=303)
+  response.delete_cookie(SESSION_COOKIE_NAME)
+  return response
+
+
 @app.get("/menu", response_class=HTMLResponse)
-def menu_page():
-    return """
+def menu_page(request: Request):
+  session = _get_auth_session(request) or {}
+  auth_user = escape(str(session.get("username", "")))
+  return """
 <html>
   <head>
     <title>Cisco Voice Server Automation Site - Restricted Access</title>
@@ -556,7 +802,9 @@ def menu_page():
 
     <main class="content">
     <h2>Cisco Voice Server Automation Site - Restricted Access</h2>
+    <p>Authenticated as: <strong>__AUTH_USER__</strong> | <a href="/logout">Log Out</a></p>
     <p><a href="/">Back to Landing Page</a></p>
+    <p>Tip: You can leave username/password fields blank to use your authenticated session credentials.</p>
     <p><a href="/download/audit-trail">Download Audit Trail (CSV)</a></p>
 
     <h3>Build Cisco Jabber Laptop and Voicemail - New Hire or New Jabber Laptop/VM Add</h3>
@@ -613,10 +861,10 @@ def menu_page():
         </select><br><br>
 
         Unity Admin Username:<br>
-        <input name="unity_user" required><br><br>
+        <input name="unity_user"><br><br>
 
         Unity Admin Password:<br>
-        <input type="password" name="unity_pass" required><br><br>
+        <input type="password" name="unity_pass"><br><br>
 
         Voicemail Username to Reset PIN for:<br>
         <input name="voicemail_user" placeholder="john.doe" required><br><br>
@@ -862,14 +1110,6 @@ def menu_page():
 
     <script>
       const fieldRules = {
-        cucm_user: {
-          required: true,
-          requiredMessage: "Cisco Callmanager Username is required.",
-        },
-        cucm_pass: {
-          required: true,
-          requiredMessage: "Cisco Callmanager Password is required.",
-        },
         target_user: {
           required: true,
           requiredMessage: "User ID is required.",
@@ -1218,7 +1458,7 @@ def menu_page():
     </main>
   </body>
 </html>
-"""
+""".replace("__AUTH_USER__", auth_user)
 
 
 @app.get("/download/add-directorynumbers-template")
@@ -1277,11 +1517,14 @@ def audit_trail_stats():
 
 @app.post("/add/directorynumbers")
 async def add_directorynumbers(
-    cucm_host: str = Form(...),
-    cucm_user: str = Form(...),
-    cucm_pass: str = Form(...),
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
     csv_file: UploadFile = File(...)
 ):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
     csv_bytes = await csv_file.read()
     log_csv, filename = add_directory_numbers_from_csv(
         cucm_host, cucm_user, cucm_pass, csv_bytes, {}
@@ -1300,12 +1543,15 @@ async def add_directorynumbers(
 
 @app.post("/export/directorynumbers")
 def export_directorynumbers(
-    cucm_host: str = Form(...),
-    cucm_user: str = Form(...),
-    cucm_pass: str = Form(...),
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
     dn_contains: str = Form(...),
     route_partition: str = Form("")
 ):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
     data, filename = export_directory_numbers(
         cucm_host, cucm_user, cucm_pass, dn_contains, route_partition
     )
@@ -1323,11 +1569,14 @@ def export_directorynumbers(
 
 @app.post("/export/endusers")
 def export_endusers(
-    cucm_host: str = Form(...),
-    cucm_user: str = Form(...),
-    cucm_pass: str = Form(...),
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
     lastname: str = Form(...)
 ):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
     data, filename = export_endusers_all_fields(
         cucm_host, cucm_user, cucm_pass, lastname
     )
@@ -1344,13 +1593,16 @@ def export_endusers(
 
 @app.post("/build/user-csf-phone")
 async def build_user_csf_phone(
-    cucm_host: str = Form(...),
-    cucm_user: str = Form(...),
-    cucm_pass: str = Form(...),
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
     target_user: str = Form(...),
     dn_type: str = Form("general"),
     inline: bool = Query(False),
 ):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
     data, filename = build_user_csf_phone_from_template(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
@@ -1381,12 +1633,15 @@ async def build_user_csf_phone(
 
 @app.post("/decommission/user-csf-voicemail")
 def decommission_user_csf_voicemail_route(
-    cucm_host: str = Form(...),
-    cucm_user: str = Form(...),
-    cucm_pass: str = Form(...),
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
     target_user: str = Form(...),
     inline: bool = Query(False),
 ):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
     data, filename = decommission_user_csf_voicemail(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
@@ -1416,14 +1671,17 @@ def decommission_user_csf_voicemail_route(
 
 @app.post("/reset/unity-voicemail-pin")
 def reset_unity_voicemail_pin_route(
+    request: Request,
     unity_server: str = Form(...),
-    unity_user: str = Form(...),
-    unity_pass: str = Form(...),
+    unity_user: str = Form(""),
+    unity_pass: str = Form(""),
     voicemail_user: str = Form(...),
     new_voicemail_pin: str = Form(...),
     confirm_voicemail_pin: str = Form(...),
     inline: bool = Query(False),
-  ):
+):
+    unity_user, unity_pass = _resolve_unity_credentials(request, unity_user, unity_pass)
+    _update_cached_credentials(request, unity_user=unity_user, unity_pass=unity_pass)
     if new_voicemail_pin != confirm_voicemail_pin:
       data = b"Step,Status,Details\nValidation,Failed,Voicemail PIN values must match\n"
       filename = "reset_unity_voicemail_pin_validation_error.csv"
@@ -1459,12 +1717,15 @@ def reset_unity_voicemail_pin_route(
 
 @app.post("/add/secondary-tct-device")
 def add_secondary_tct_device_route(
-    cucm_host: str = Form(...),
-    cucm_user: str = Form(...),
-    cucm_pass: str = Form(...),
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
     target_user: str = Form(...),
     inline: bool = Query(False),
 ):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
     data, filename = add_secondary_tct_device(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
@@ -1494,12 +1755,15 @@ def add_secondary_tct_device_route(
 
 @app.post("/add/secondary-bot-device")
 def add_secondary_bot_device_route(
-    cucm_host: str = Form(...),
-    cucm_user: str = Form(...),
-    cucm_pass: str = Form(...),
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
     target_user: str = Form(...),
     inline: bool = Query(False),
 ):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
     data, filename = add_secondary_bot_device(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
@@ -1529,12 +1793,15 @@ def add_secondary_bot_device_route(
 
 @app.post("/add/secondary-strike-devices")
 def add_secondary_strike_devices_route(
-    cucm_host: str = Form(...),
-    cucm_user: str = Form(...),
-    cucm_pass: str = Form(...),
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
     target_user: str = Form(...),
     inline: bool = Query(False),
 ):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
     data, filename = add_secondary_strike_devices(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
