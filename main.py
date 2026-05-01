@@ -13,6 +13,7 @@ from toolkit.directory_number import export_directory_numbers
 from toolkit.add_directory_number import add_directory_numbers_from_csv
 from toolkit.build_user_csf_phone import build_user_csf_phone_from_template
 from toolkit.decommission_user_csf_voicemail import decommission_user_csf_voicemail
+from toolkit.reset_unity_voicemail_pin import reset_unity_voicemail_pin
 from toolkit.add_secondary_devices import (
   add_secondary_tct_device,
   add_secondary_bot_device,
@@ -601,6 +602,48 @@ def menu_page():
 
     <hr>
 
+    <h3>Reset Unity Voicemail PIN (Option 2)</h3>
+
+    <div class="secondary-layout">
+      <form id="reset-pin-form" class="secondary-form" action="/reset/unity-voicemail-pin" method="post">
+        Voicemail Environment:<br>
+        <select name="unity_server">
+          <option value="SANCUTYP01.ahs.int" selected>PRODUCTION UNITY</option>
+          <option value="lascutypl01.ahs.int">LAB UNITY</option>
+        </select><br><br>
+
+        Unity Admin Username:<br>
+        <input name="unity_user" required><br><br>
+
+        Unity Admin Password:<br>
+        <input type="password" name="unity_pass" required><br><br>
+
+        Voicemail Username to Reset PIN for:<br>
+        <input name="voicemail_user" placeholder="john.doe" required><br><br>
+
+        New Voicemail PIN:<br>
+        <input type="password" name="new_voicemail_pin" required><br><br>
+
+        Confirm New Voicemail PIN:<br>
+        <input type="password" name="confirm_voicemail_pin" required><br><br>
+
+        <button type="submit">Run Reset Unity Voicemail PIN (Option 2)</button>
+      </form>
+
+      <section class="secondary-output" aria-live="polite">
+        <h4>Option 2 Output Preview</h4>
+        <p id="reset-pin-status" class="secondary-status">Run Option 2 to view output here.</p>
+        <p>
+          <a id="reset-pin-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
+            Download CSV Output
+          </a>
+        </p>
+        <textarea id="reset-pin-preview" readonly></textarea>
+      </section>
+    </div>
+
+    <hr>
+
     <h3>Offboard User - Delete all Jabber and Voicemail Box (Option 10)</h3>
 
     <div class="offboard-layout">
@@ -833,6 +876,24 @@ def menu_page():
           pattern: /^[A-Za-z0-9._-]+$/,
           patternMessage: "User ID can only contain letters, numbers, dot, underscore, or hyphen.",
         },
+        voicemail_user: {
+          required: true,
+          requiredMessage: "Voicemail Username is required.",
+          pattern: /^[A-Za-z0-9._-]+$/,
+          patternMessage: "Voicemail Username can only contain letters, numbers, dot, underscore, or hyphen.",
+        },
+        new_voicemail_pin: {
+          required: true,
+          requiredMessage: "New Voicemail PIN is required.",
+          pattern: /^\d{4,20}$/,
+          patternMessage: "Voicemail PIN must be numeric and 4-20 digits.",
+        },
+        confirm_voicemail_pin: {
+          required: true,
+          requiredMessage: "Confirm Voicemail PIN is required.",
+          pattern: /^\d{4,20}$/,
+          patternMessage: "Voicemail PIN must be numeric and 4-20 digits.",
+        },
         dn_contains: {
           required: true,
           requiredMessage: "DN Pattern is required.",
@@ -901,6 +962,23 @@ def menu_page():
         return !hasErrors;
       }
 
+      function validatePinConfirmation(form) {
+        const newPinField = form.querySelector('[name="new_voicemail_pin"]');
+        const confirmPinField = form.querySelector('[name="confirm_voicemail_pin"]');
+        if (!newPinField || !confirmPinField) {
+          return true;
+        }
+
+        clearFieldError(confirmPinField);
+        if ((newPinField.value || "") !== (confirmPinField.value || "")) {
+          addFieldError(confirmPinField, "Voicemail PIN values must match.");
+          confirmPinField.focus();
+          return false;
+        }
+
+        return true;
+      }
+
       async function submitBuildUserInline(form) {
         const statusEl = document.getElementById("build-user-status");
         const outputEl = document.getElementById("build-user-preview");
@@ -935,6 +1013,46 @@ def menu_page():
           }
         } catch (error) {
           statusEl.textContent = "Build User failed. Review output and retry.";
+          outputEl.value = error.message || "Unknown error.";
+        }
+      }
+
+      async function submitResetPinInline(form) {
+        const statusEl = document.getElementById("reset-pin-status");
+        const outputEl = document.getElementById("reset-pin-preview");
+        const downloadEl = document.getElementById("reset-pin-download");
+
+        statusEl.textContent = "Running Option 2...";
+        outputEl.value = "";
+        downloadEl.style.display = "none";
+        downloadEl.removeAttribute("href");
+
+        try {
+          const formData = new FormData(form);
+          const response = await fetch(`${form.action}?inline=1`, {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText || `Request failed with status ${response.status}`);
+          }
+
+          const result = await response.json();
+          outputEl.value = result.output_text || "";
+          statusEl.textContent = `Completed: ${result.filename || "option2_output.csv"}`;
+          downloadEl.href = result.download_url;
+          downloadEl.style.display = "inline";
+
+          const voicemailUserInput = form.querySelector('input[name="voicemail_user"]');
+          const newPinInput = form.querySelector('input[name="new_voicemail_pin"]');
+          const confirmPinInput = form.querySelector('input[name="confirm_voicemail_pin"]');
+          if (voicemailUserInput) voicemailUserInput.value = "";
+          if (newPinInput) newPinInput.value = "";
+          if (confirmPinInput) confirmPinInput.value = "";
+        } catch (error) {
+          statusEl.textContent = "Option 2 failed. Review output and retry.";
           outputEl.value = error.message || "Unknown error.";
         }
       }
@@ -1026,9 +1144,20 @@ def menu_page():
             return;
           }
 
+          if (!validatePinConfirmation(form)) {
+            event.preventDefault();
+            return;
+          }
+
           if (form.id === "build-user-form") {
             event.preventDefault();
             submitBuildUserInline(form);
+            return;
+          }
+
+          if (form.id === "reset-pin-form") {
+            event.preventDefault();
+            submitResetPinInline(form);
             return;
           }
 
@@ -1283,6 +1412,49 @@ def decommission_user_csf_voicemail_route(
         })
 
     return _render_job_result("Offboard User - Delete all Jabber and Voicemail Box (Option 10)", data, filename)
+
+
+@app.post("/reset/unity-voicemail-pin")
+def reset_unity_voicemail_pin_route(
+    unity_server: str = Form(...),
+    unity_user: str = Form(...),
+    unity_pass: str = Form(...),
+    voicemail_user: str = Form(...),
+    new_voicemail_pin: str = Form(...),
+    confirm_voicemail_pin: str = Form(...),
+    inline: bool = Query(False),
+  ):
+    if new_voicemail_pin != confirm_voicemail_pin:
+      data = b"Step,Status,Details\nValidation,Failed,Voicemail PIN values must match\n"
+      filename = "reset_unity_voicemail_pin_validation_error.csv"
+    else:
+      data, filename = reset_unity_voicemail_pin(
+        unity_server=unity_server,
+        unity_user=unity_user,
+        unity_pass=unity_pass,
+        target_alias=voicemail_user,
+        new_pin=new_voicemail_pin,
+      )
+
+    _append_audit_event(
+      action="reset_unity_voicemail_pin_option_2",
+      cucm_host=unity_server,
+      operator=unity_user,
+      target=voicemail_user,
+      output_filename=filename,
+      inline_mode=inline,
+    )
+
+    if inline:
+      job_output = _prepare_job_output(data, filename)
+      return JSONResponse({
+        "job_id": job_output["job_id"],
+        "filename": job_output["filename"],
+        "output_text": job_output["output_text"],
+        "download_url": f"/download/job-output/{job_output['job_id']}",
+      })
+
+    return _render_job_result("Reset Unity Voicemail PIN (Option 2)", data, filename)
 
 
 @app.post("/add/secondary-tct-device")
