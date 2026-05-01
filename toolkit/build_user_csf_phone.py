@@ -37,8 +37,11 @@ UNITY_ENV_SETTINGS = {
 
 def _axl_post(session, cucm_ip, soap_xml):
     url = f"https://{cucm_ip}:8443/axl/"
+    print(f"DEBUG AXL POST to {url}", flush=True)
     headers = {"Content-Type": "text/xml"}
-    return session.post(url, data=soap_xml.encode("utf-8"), headers=headers, timeout=120)
+    r = session.post(url, data=soap_xml.encode("utf-8"), headers=headers, timeout=120)
+    print(f"DEBUG AXL response status {r.status_code}", flush=True)
+    return r
 
 
 def _strip_ns(tag):
