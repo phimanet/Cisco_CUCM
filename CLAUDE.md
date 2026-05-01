@@ -59,6 +59,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - Added documented rollback procedure to return from HTTPS to HTTP if TLS cutover fails.
 - Updated Offboard User web mapping to Option 10 and aligned backend logic to remove CSF/BOT/TCT devices, delete Unity mailbox, and mark all associated DNs inactive.
 - Renamed Option 10 web text to "Offboard User - Delete all Jabber (Option 10)".
+- Added new web options 3/4/5 for secondary device workflows: TCT, BOT, and STRIKE MODE (TCT+BOT), including FastAPI routes and toolkit backend logic.
 
 ## Working Agreement
 - Update this file at the end of each substantial change set.

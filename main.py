@@ -6,6 +6,11 @@ from toolkit.directory_number import export_directory_numbers
 from toolkit.add_directory_number import add_directory_numbers_from_csv
 from toolkit.build_user_csf_phone import build_user_csf_phone_from_template
 from toolkit.decommission_user_csf_voicemail import decommission_user_csf_voicemail
+from toolkit.add_secondary_devices import (
+  add_secondary_tct_device,
+  add_secondary_bot_device,
+  add_secondary_strike_devices,
+)
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 
@@ -91,6 +96,75 @@ def menu_page():
       <input name="target_user" placeholder="john.doe" required><br><br>
 
       <button type="submit">Run Offboard User - Delete all Jabber (Option 10)</button>
+    </form>
+
+    <hr>
+
+    <h3>Add Secondary Device - Jabber for iPhone (Option 3)</h3>
+
+    <form action="/add/secondary-tct-device" method="post">
+      Cisco Callmanager Envronment:<br>
+      <select name="cucm_host">
+        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
+        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
+      </select><br><br>
+
+      Cisco Callmanager Username:<br>
+      <input name="cucm_user"><br><br>
+
+      Cisco Callmanager Password:<br>
+      <input type="password" name="cucm_pass"><br><br>
+
+      User ID for person to add secondary iPhone device for:<br>
+      <input name="target_user" placeholder="john.doe" required><br><br>
+
+      <button type="submit">Run Add Secondary Device - Jabber for iPhone (Option 3)</button>
+    </form>
+
+    <hr>
+
+    <h3>Add Secondary Device - Jabber for Android (Option 4)</h3>
+
+    <form action="/add/secondary-bot-device" method="post">
+      Cisco Callmanager Envronment:<br>
+      <select name="cucm_host">
+        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
+        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
+      </select><br><br>
+
+      Cisco Callmanager Username:<br>
+      <input name="cucm_user"><br><br>
+
+      Cisco Callmanager Password:<br>
+      <input type="password" name="cucm_pass"><br><br>
+
+      User ID for person to add secondary Android device for:<br>
+      <input name="target_user" placeholder="john.doe" required><br><br>
+
+      <button type="submit">Run Add Secondary Device - Jabber for Android (Option 4)</button>
+    </form>
+
+    <hr>
+
+    <h3>STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)</h3>
+
+    <form action="/add/secondary-strike-devices" method="post">
+      Cisco Callmanager Envronment:<br>
+      <select name="cucm_host">
+        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
+        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
+      </select><br><br>
+
+      Cisco Callmanager Username:<br>
+      <input name="cucm_user"><br><br>
+
+      Cisco Callmanager Password:<br>
+      <input type="password" name="cucm_pass"><br><br>
+
+      User ID for person to add STRIKE MODE devices for:<br>
+      <input name="target_user" placeholder="john.doe" required><br><br>
+
+      <button type="submit">Run STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)</button>
     </form>
 
     <hr>
@@ -265,6 +339,66 @@ def decommission_user_csf_voicemail_route(
     target_user: str = Form(...),
 ):
     data, filename = decommission_user_csf_voicemail(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        target_user=target_user,
+    )
+    return Response(
+        data,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+
+@app.post("/add/secondary-tct-device")
+def add_secondary_tct_device_route(
+    cucm_host: str = Form(...),
+    cucm_user: str = Form(...),
+    cucm_pass: str = Form(...),
+    target_user: str = Form(...),
+):
+    data, filename = add_secondary_tct_device(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        target_user=target_user,
+    )
+    return Response(
+        data,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+
+@app.post("/add/secondary-bot-device")
+def add_secondary_bot_device_route(
+    cucm_host: str = Form(...),
+    cucm_user: str = Form(...),
+    cucm_pass: str = Form(...),
+    target_user: str = Form(...),
+):
+    data, filename = add_secondary_bot_device(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        target_user=target_user,
+    )
+    return Response(
+        data,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+
+@app.post("/add/secondary-strike-devices")
+def add_secondary_strike_devices_route(
+    cucm_host: str = Form(...),
+    cucm_user: str = Form(...),
+    cucm_pass: str = Form(...),
+    target_user: str = Form(...),
+):
+    data, filename = add_secondary_strike_devices(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
         cucm_pass=cucm_pass,
