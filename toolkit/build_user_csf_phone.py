@@ -389,6 +389,79 @@ def _get_user_details(session, cucm_ip, username):
     }
 
 
+def _get_phone_details(session, cucm_ip, phone_name):
+    soap = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+   <soapenv:Body>
+      <axl:getPhone>
+         <name>{escape(phone_name)}</name>
+      </axl:getPhone>
+   </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = _axl_post(session, cucm_ip, soap)
+    if response.status_code != 200:
+        return None
+
+    root = ET.fromstring(response.text)
+    phone_node = None
+    for elem in root.iter():
+        if _strip_ns(elem.tag) == "phone":
+            phone_node = elem
+            break
+
+    if phone_node is None:
+        return None
+
+    lines = []
+    lines_parent = _find_child(phone_node, "lines")
+    if lines_parent is not None:
+        for line in list(lines_parent):
+            if _strip_ns(line.tag) != "line":
+                continue
+            pattern = _find_first_text(line, [["dirn", "pattern"]])
+            partition = _find_first_text(line, [["dirn", "routePartitionName"]])
+            if pattern:
+                lines.append({
+                    "pattern": pattern,
+                    "partition": partition,
+                })
+
+    return {
+        "name": phone_name,
+        "lines": lines,
+    }
+
+
+def _find_existing_csf_assignment(session, cucm_ip, associated_devices):
+    csf_devices = [d for d in associated_devices if d and d.upper().startswith("CSF")]
+    for device in sorted(csf_devices):
+        details = _get_phone_details(session, cucm_ip, device)
+        if not details:
+            continue
+        if details["lines"]:
+            first_line = details["lines"][0]
+            return {
+                "device": device,
+                "pattern": (first_line.get("pattern") or "").strip(),
+                "partition": (first_line.get("partition") or "").strip() or ROUTE_PARTITION,
+            }
+
+    return None
+
+
+def _extract_unity_extension(unity_user):
+    if not isinstance(unity_user, dict):
+        return ""
+
+    for key in ["DtmfAccessId", "dtmfAccessId", "Extension", "extension"]:
+        value = str(unity_user.get(key, "")).strip()
+        if value:
+            return value
+
+    return ""
+
+
 def _list_available_dns(session, cucm_ip, prefix):
     soap = f"""<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
@@ -665,6 +738,38 @@ def build_user_csf_phone_from_template(
         user_details = _get_user_details(session, cucm_host, target_user.strip())
         full_name = " ".join(part for part in [user_details["firstName"], user_details["lastName"]] if part).strip()
         display_name = full_name or user_details["displayName"] or user_details["userid"]
+
+        # Pre-check existing Jabber and voicemail assignment to prevent duplicate provisioning.
+        existing_csf = _find_existing_csf_assignment(session, cucm_host, user_details.get("associatedDevices", []))
+        if existing_csf:
+            unity_user = _get_unity_user_by_alias(unity_session, unity_server, user_details["userid"])
+            unity_extension = ""
+            if unity_user and unity_user.get("ObjectId"):
+                unity_detail = _get_unity_user_by_object_id(unity_session, unity_server, unity_user["ObjectId"])
+                unity_extension = _extract_unity_extension(unity_detail)
+
+            csf_dn = existing_csf["pattern"]
+            csf_partition = existing_csf["partition"]
+            vm_status = (
+                f"Unity mailbox extension {unity_extension}"
+                if unity_extension
+                else "Unity mailbox not found or extension unavailable"
+            )
+            match_status = "matches" if unity_extension and unity_extension == csf_dn else "does not match"
+
+            log_writer.writerow(["Environment", "Success", f"{env_name} ({cucm_host})"])
+            log_writer.writerow(["Lookup User", "Success", f"Found user {user_details['userid']} ({display_name})"])
+            log_writer.writerow([
+                "Pre-check Existing Resources",
+                "Skipped",
+                (
+                    f"{user_details['userid']} already has Jabber device {existing_csf['device']} with "
+                    f"extension {csf_dn}/{csf_partition}. {vm_status}; voicemail {match_status} Jabber extension. "
+                    "No new Jabber or voicemail was created."
+                ),
+            ])
+            return out.getvalue().encode("utf-8"), filename
+
         new_dn = _choose_available_dn(session, cucm_host, dn_prefix)
         phone_name = f"{template['deviceNamePrefix']}{new_dn}"
         description = f"CSF {display_name}".strip()
