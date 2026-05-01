@@ -126,8 +126,7 @@ def _render_job_result(title: str, csv_data, filename: str) -> HTMLResponse:
   </head>
   <body>
     <header class="topbar">
-      <img class="logo" src="https://logo.clearbit.com/amnhealthcare.com" alt="AMN Healthcare Logo" onerror="this.style.display='none'; document.getElementById('brand-fallback').style.display='inline';">
-      <span id="brand-fallback" class="brand-fallback" style="display:none;">AMN Healthcare</span>
+      <span class="brand-fallback">AMN Healthcare</span>
       <strong>Voice Operations Portal</strong>
     </header>
 
@@ -211,8 +210,7 @@ def home():
   </head>
   <body>
     <header class="topbar">
-      <img class="logo" src="https://logo.clearbit.com/amnhealthcare.com" alt="AMN Healthcare Logo" onerror="this.style.display='none'; document.getElementById('brand-fallback').style.display='inline';">
-      <span id="brand-fallback" class="brand-fallback" style="display:none;">AMN Healthcare</span>
+      <span class="brand-fallback">AMN Healthcare</span>
       <strong>Voice Operations Portal</strong>
     </header>
 
@@ -462,8 +460,7 @@ def menu_page():
   </head>
   <body>
     <header class="topbar">
-      <img class="logo" src="https://logo.clearbit.com/amnhealthcare.com" alt="AMN Healthcare Logo" onerror="this.style.display='none'; document.getElementById('brand-fallback').style.display='inline';">
-      <span id="brand-fallback" class="brand-fallback" style="display:none;">AMN Healthcare</span>
+      <span class="brand-fallback">AMN Healthcare</span>
       <strong>Voice Operations Portal</strong>
     </header>
 
