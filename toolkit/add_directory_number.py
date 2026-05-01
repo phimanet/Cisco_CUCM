@@ -13,7 +13,7 @@ SOAP_NS = "http://schemas.xmlsoap.org/soap/envelope/"
 AXL_NS = "http://www.cisco.com/AXL/API/15.0"
 NS = {"soapenv": SOAP_NS}
 
-# v1 LOCKED BODY – DO NOT MODIFY
+# v1 LOCKED BODY ï¿½ DO NOT MODIFY
 BODY_TEMPLATE = r"""<soapenv:Body>
  <axl:addLine>
  <line>
@@ -64,13 +64,16 @@ def _soap_envelope(body_xml: str) -> str:
 
 
 def _axl_post(session, cucm_host, soap_xml):
+    url = f"https://{cucm_host}:8443/axl/"
+    print(f"DEBUG AXL POST to {url}", flush=True)
     r = session.post(
-        f"https://{cucm_host}:8443/axl/",
+        url,
         data=soap_xml.encode("utf-8"),
         headers={"Content-Type": "text/xml"},
         timeout=60,
         verify=False,
     )
+    print(f"DEBUG AXL response status {r.status_code}", flush=True)
     r.raise_for_status()
     return r.text
 
@@ -103,12 +106,12 @@ def add_directory_numbers_from_csv(
 
     patterns = []
 
-    # ? PRIMARY PATH — MANUAL INPUT
+    # ? PRIMARY PATH ï¿½ MANUAL INPUT
     manual_text = defaults.get("manual_patterns", "").strip()
     if manual_text:
         patterns = _parse_manual_patterns(manual_text)
 
-    # ? SECONDARY PATH — CSV (only if manual missing)
+    # ? SECONDARY PATH ï¿½ CSV (only if manual missing)
     if not patterns:
         if not csv_bytes:
             return _error_csv("NO_INPUT", "No manual numbers or CSV provided")
