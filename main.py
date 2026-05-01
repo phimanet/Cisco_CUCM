@@ -29,6 +29,10 @@ JOB_OUTPUTS = {}
 AUTH_SESSIONS = {}
 SESSION_COOKIE_NAME = "cucm_web_session"
 SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
+PROD_CUCM_HOST = "lascucmpp01.ahs.int"
+LAB_CUCM_HOST = "lascucmpl01.ahs.int"
+PROD_UNITY_HOST = "SANCUTYP01.ahs.int"
+LAB_UNITY_HOST = "lascutypl01.ahs.int"
 AUDIT_LOG_LOCK = threading.Lock()
 AUDIT_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 AUDIT_RETENTION_DAYS = 365
@@ -161,6 +165,27 @@ def _validate_cucm_login(cucm_host: str, cucm_user: str, cucm_pass: str):
     return True, "Login successful"
 
   return False, f"Login failed (HTTP {response.status_code}). Verify host/username/password."
+
+
+def _is_lab_host(cucm_host: str):
+  return (cucm_host or "").strip().lower() == LAB_CUCM_HOST.lower()
+
+
+def _get_environment_label(cucm_host: str):
+  if _is_lab_host(cucm_host):
+    return "LAB Voice Servers - TESTING ONLY", "env-banner-lab"
+  return "Production Voice Servers", "env-banner-prod"
+
+
+def _get_unity_server_for_session(request: Request):
+  session = _get_auth_session(request)
+  if not session:
+    raise RuntimeError("Authentication required.")
+
+  cucm_host = session.get("cucm_host", "")
+  if _is_lab_host(cucm_host):
+    return LAB_UNITY_HOST
+  return PROD_UNITY_HOST
 
 
 def _is_public_path(path: str):
@@ -559,6 +584,8 @@ def logout(request: Request):
 def menu_page(request: Request):
   session = _get_auth_session(request) or {}
   auth_user = escape(str(session.get("username", "")))
+  auth_cucm_host = str(session.get("cucm_host", ""))
+  env_text, env_css_class = _get_environment_label(auth_cucm_host)
   return """
 <html>
   <head>
@@ -644,6 +671,27 @@ def menu_page(request: Request):
         max-width: 1400px;
         margin: 18px auto 24px auto;
         padding: 0 16px;
+      }
+
+      .env-banner {
+        display: inline-block;
+        margin: 8px 0 14px 0;
+        padding: 10px 16px;
+        border-radius: 10px;
+        font-weight: 800;
+        letter-spacing: 0.2px;
+      }
+
+      .env-banner-prod {
+        color: #083252;
+        background: #d8ecff;
+        border: 1px solid #8bb9e2;
+      }
+
+      .env-banner-lab {
+        color: #5c2700;
+        background: #ffe6cc;
+        border: 1px solid #f7b267;
       }
 
       h2 {
@@ -839,7 +887,9 @@ def menu_page(request: Request):
     <main class="content">
     <h2>Cisco Voice Server Automation Site - Restricted Access</h2>
     <p>Authenticated as: <strong>__AUTH_USER__</strong></p>
+    <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
     <p><a href="/">Back to Landing Page</a></p>
+    <p>Environment was selected at login and is locked for this session.</p>
     <p>Security mode: passwords are not cached server-side. Enter admin password for each action.</p>
     <p><a href="/download/audit-trail">Download Audit Trail (CSV)</a></p>
 
@@ -847,12 +897,6 @@ def menu_page(request: Request):
 
     <div class="build-user-layout">
       <form id="build-user-form" class="target-user-form build-user-form" action="/build/user-csf-phone" method="post">
-        Cisco Callmanager Envronment:<br>
-        <select name="cucm_host">
-          <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-          <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-        </select><br><br>
-
         Cisco Callmanager Username:<br>
         <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -890,12 +934,6 @@ def menu_page(request: Request):
 
     <div class="secondary-layout">
       <form id="reset-pin-form" class="secondary-form" action="/reset/unity-voicemail-pin" method="post">
-        Voicemail Environment:<br>
-        <select name="unity_server">
-          <option value="SANCUTYP01.ahs.int" selected>PRODUCTION UNITY</option>
-          <option value="lascutypl01.ahs.int">LAB UNITY</option>
-        </select><br><br>
-
         Unity Admin Username:<br>
         <input name="unity_user" value="__AUTH_USER__" required><br><br>
 
@@ -932,12 +970,6 @@ def menu_page(request: Request):
 
     <div class="offboard-layout">
       <form id="offboard-user-form" class="target-user-form offboard-form" action="/decommission/user-csf-voicemail" method="post">
-        Cisco Callmanager Envronment:<br>
-        <select name="cucm_host">
-          <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-          <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-        </select><br><br>
-
         Cisco Callmanager Username:<br>
         <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -968,12 +1000,6 @@ def menu_page(request: Request):
 
     <div class="secondary-layout">
       <form id="secondary-tct-form" class="target-user-form secondary-form" action="/add/secondary-tct-device" method="post">
-        Cisco Callmanager Envronment:<br>
-        <select name="cucm_host">
-          <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-          <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-        </select><br><br>
-
         Cisco Callmanager Username:<br>
         <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -1004,12 +1030,6 @@ def menu_page(request: Request):
 
     <div class="secondary-layout">
       <form id="secondary-bot-form" class="target-user-form secondary-form" action="/add/secondary-bot-device" method="post">
-        Cisco Callmanager Envronment:<br>
-        <select name="cucm_host">
-          <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-          <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-        </select><br><br>
-
         Cisco Callmanager Username:<br>
         <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -1040,12 +1060,6 @@ def menu_page(request: Request):
 
     <div class="secondary-layout">
       <form id="secondary-strike-form" class="target-user-form secondary-form" action="/add/secondary-strike-devices" method="post">
-        Cisco Callmanager Envronment:<br>
-        <select name="cucm_host">
-          <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-          <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-        </select><br><br>
-
         Cisco Callmanager Username:<br>
         <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -1075,12 +1089,6 @@ def menu_page(request: Request):
     <h3>Add Directory Numbers (Upload CSV)</h3>
 
     <form action="/add/directorynumbers" method="post" enctype="multipart/form-data">
-      Cisco Callmanager Envronment:<br>
-      <select name="cucm_host">
-        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-      </select><br><br>
-
       Cisco Callmanager Username:<br>
       <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -1100,12 +1108,6 @@ def menu_page(request: Request):
     <h3>Export Directory Numbers</h3>
 
     <form action="/export/directorynumbers" method="post">
-      Cisco Callmanager Envronment:<br>
-      <select name="cucm_host">
-        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-      </select><br><br>
-
       Cisco Callmanager Username:<br>
       <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -1126,12 +1128,6 @@ def menu_page(request: Request):
     <h3>Export End Users</h3>
 
     <form action="/export/endusers" method="post">
-      Cisco Callmanager Envronment:<br>
-      <select name="cucm_host">
-        <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-        <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-      </select><br><br>
-
       Cisco Callmanager Username:<br>
       <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -1510,7 +1506,7 @@ def menu_page(request: Request):
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user)
+""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
 
 
 @app.get("/download/add-directorynumbers-template")
@@ -1724,7 +1720,6 @@ def decommission_user_csf_voicemail_route(
 @app.post("/reset/unity-voicemail-pin")
 def reset_unity_voicemail_pin_route(
     request: Request,
-    unity_server: str = Form(...),
     unity_user: str = Form(""),
     unity_pass: str = Form(""),
     voicemail_user: str = Form(...),
@@ -1732,6 +1727,7 @@ def reset_unity_voicemail_pin_route(
     confirm_voicemail_pin: str = Form(...),
     inline: bool = Query(False),
 ):
+    unity_server = _get_unity_server_for_session(request)
     unity_user, unity_pass = _resolve_unity_credentials(request, unity_user, unity_pass)
     _update_cached_credentials(request, unity_user=unity_user)
     if new_voicemail_pin != confirm_voicemail_pin:
