@@ -17,8 +17,8 @@
   "subscribeCallingSearchSpaceName": "Route_Internal_CSS",
   "rerouteCallingSearchSpaceName": "Route_LAS_CSS",
   "routePartitionName": "ENT_DEVICE_PT",
-  "lineMaxNumCalls": "6",
-  "lineBusyTrigger": "2",
+  "lineMaxNumCalls": "2",
+  "lineBusyTrigger": "1",
   "userLocale": "English United States",
   "networkLocale": "United States"
 }
