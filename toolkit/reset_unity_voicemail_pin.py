@@ -115,7 +115,7 @@ def reset_unity_voicemail_pin(unity_server, unity_user, unity_pass, target_alias
         alias = target_alias.strip()
         mailbox = _get_user_by_alias(session, unity_server, alias)
         if not mailbox:
-            raise RuntimeError(f"Unity mailbox '{alias}' was not found")
+            raise RuntimeError(f"Voicemail box for {alias} not found. No reset was performed.")
 
         object_id = str(mailbox.get("ObjectId") or "").strip()
         if not object_id:
