@@ -1222,13 +1222,13 @@ def menu_page(request: Request):
         new_voicemail_pin: {
           required: true,
           requiredMessage: "New Voicemail PIN is required.",
-          pattern: /^\d{4,20}$/,
+          pattern: /^\\d{4,20}$/,
           patternMessage: "Voicemail PIN must be numeric and 4-20 digits.",
         },
         confirm_voicemail_pin: {
           required: true,
           requiredMessage: "Confirm Voicemail PIN is required.",
-          pattern: /^\d{4,20}$/,
+          pattern: /^\\d{4,20}$/,
           patternMessage: "Voicemail PIN must be numeric and 4-20 digits.",
         },
         dn_contains: {
