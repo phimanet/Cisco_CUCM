@@ -23,7 +23,7 @@ from toolkit.add_secondary_devices import (
   add_secondary_bot_device,
   add_secondary_strike_devices,
 )
-from toolkit.edit_line_group_members import edit_line_group_members
+from toolkit.edit_line_group_members import edit_line_group_members, search_line_groups
 from toolkit.extract_rpo_phones import extract_rpo_phones
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
@@ -1144,8 +1144,19 @@ def menu_page(request: Request):
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
 
-        Line Group Name:<br>
-        <input name="line_group_name" placeholder="Example_LineGroup" required><br><br>
+        Search Line Group Name:<br>
+        <input name="line_group_search" placeholder="Example_LineGroup"><br><br>
+
+        <div class="action-row">
+          <button type="button" id="line-group-search-btn">Search Line Groups</button>
+        </div>
+        <p id="line-group-search-status" class="secondary-status">Search first, then choose a matching Line Group.</p>
+        <br>
+
+        Select Matching Line Group:<br>
+        <select name="line_group_name" required>
+          <option value="" selected>Select a Line Group...</option>
+        </select><br><br>
 
         Action:<br>
         <select name="membership_action" required>
@@ -1314,6 +1325,10 @@ def menu_page(request: Request):
         dn_contains: {
           required: true,
           requiredMessage: "DN Pattern is required.",
+        },
+        line_group_name: {
+          required: true,
+          requiredMessage: "Select a Line Group after search.",
         },
         lastname: {
           required: true,
@@ -1550,6 +1565,54 @@ def menu_page(request: Request):
         }
       }
 
+      async function searchLineGroups(form) {
+        const searchStatusEl = document.getElementById("line-group-search-status");
+        const selectEl = form.querySelector('select[name="line_group_name"]');
+
+        searchStatusEl.textContent = "Searching Line Groups...";
+
+        while (selectEl.options.length > 1) {
+          selectEl.remove(1);
+        }
+        selectEl.value = "";
+
+        try {
+          const formData = new FormData(form);
+          const response = await fetch("/line-groups/search", {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText || `Request failed with status ${response.status}`);
+          }
+
+          const result = await response.json();
+          const matches = result.matches || [];
+
+          if (!matches.length) {
+            searchStatusEl.textContent = "No matching Line Groups found.";
+            return;
+          }
+
+          matches.forEach((name) => {
+            const opt = document.createElement("option");
+            opt.value = name;
+            opt.textContent = name;
+            selectEl.appendChild(opt);
+          });
+
+          if (matches.length === 1) {
+            selectEl.value = matches[0];
+          }
+
+          searchStatusEl.textContent = `Found ${matches.length} matching Line Group(s).`;
+        } catch (error) {
+          searchStatusEl.textContent = `Search failed: ${error.message || "Unknown error."}`;
+        }
+      }
+
       document.querySelectorAll("form").forEach((form) => {
         form.querySelectorAll("input").forEach((field) => {
           field.addEventListener("input", () => clearFieldError(field));
@@ -1657,6 +1720,14 @@ def menu_page(request: Request):
           }
         });
       });
+
+      const lineGroupForm = document.getElementById("line-group-form");
+      const lineGroupSearchBtn = document.getElementById("line-group-search-btn");
+      if (lineGroupForm && lineGroupSearchBtn) {
+        lineGroupSearchBtn.addEventListener("click", () => {
+          searchLineGroups(lineGroupForm);
+        });
+      }
     </script>
     </main>
   </body>
@@ -2074,6 +2145,25 @@ def edit_line_group_members_route(
       })
 
     return _render_job_result("Edit Line Group Members (Option 17)", data, filename)
+
+
+@app.post("/line-groups/search")
+def search_line_groups_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  line_group_search: str = Form(""),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+  matches = search_line_groups(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    search_text=line_group_search,
+  )
+  return JSONResponse({"matches": matches})
 
 
 @app.post("/export/rpo-phones")

@@ -54,6 +54,23 @@ def _soap_get_line_group(line_group_name):
 </soapenv:Envelope>"""
 
 
+def _soap_list_line_groups(search_text):
+     search_name = f"%{search_text}%" if search_text else "%"
+     return f"""<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+    <soapenv:Body>
+        <axl:listLineGroup>
+            <searchCriteria>
+                <name>{escape(search_name)}</name>
+            </searchCriteria>
+            <returnedTags>
+                <name/>
+            </returnedTags>
+        </axl:listLineGroup>
+    </soapenv:Body>
+</soapenv:Envelope>"""
+
+
 def _soap_update_line_group_members(line_group_name, members):
     member_xml = []
     for member in members:
@@ -101,6 +118,27 @@ def _extract_line_group_members(root):
                 "routePartitionName": partition,
             })
     return members
+
+
+def search_line_groups(cucm_host, cucm_user, cucm_pass, search_text):
+    session = requests.Session()
+    session.verify = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    response = _axl_post(session, cucm_host, _soap_list_line_groups((search_text or "").strip()))
+    if response.status_code != 200:
+        raise RuntimeError(f"listLineGroup failed with HTTP {response.status_code}: {response.text[:1200]}")
+
+    root = ET.fromstring(response.text)
+    names = []
+    for elem in root.iter():
+        if _strip_ns(elem.tag) != "lineGroup":
+            continue
+        name = _find_first_text(elem, [["name"]])
+        if name:
+            names.append(name)
+
+    return sorted(set(names))
 
 
 def edit_line_group_members(cucm_host, cucm_user, cucm_pass, line_group_name, action, dn_pattern, dn_partition):
