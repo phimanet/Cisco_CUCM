@@ -23,6 +23,8 @@ from toolkit.add_secondary_devices import (
   add_secondary_bot_device,
   add_secondary_strike_devices,
 )
+from toolkit.edit_line_group_members import edit_line_group_members
+from toolkit.extract_rpo_phones import extract_rpo_phones
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 JOB_OUTPUTS = {}
@@ -1132,6 +1134,84 @@ def menu_page(request: Request):
 
     <hr>
 
+    <h3>Edit Line Group Members (Add/Remove DN) (Option 17)</h3>
+
+    <div class="secondary-layout">
+      <form id="line-group-form" class="secondary-form" action="/line-groups/edit-members" method="post">
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
+        Line Group Name:<br>
+        <input name="line_group_name" placeholder="Example_LineGroup" required><br><br>
+
+        Action:<br>
+        <select name="membership_action" required>
+          <option value="add" selected>Add DN</option>
+          <option value="remove">Remove DN</option>
+        </select><br><br>
+
+        Directory Number Pattern:<br>
+        <input name="dn_pattern" placeholder="8585236620" required><br><br>
+
+        Route Partition:<br>
+        <input name="dn_partition" value="ENT_DEVICE_PT" required><br><br>
+
+        <div class="action-row">
+          <button type="submit">Run Edit Line Group Members (Option 17)</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
+      </form>
+
+      <section class="secondary-output" aria-live="polite">
+        <h4>Option 17 Output Preview</h4>
+        <p id="line-group-status" class="secondary-status">Run Option 17 to view output here.</p>
+        <p>
+          <a id="line-group-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
+            Download CSV Output
+          </a>
+        </p>
+        <textarea id="line-group-preview" readonly></textarea>
+      </section>
+    </div>
+
+    <hr>
+
+    <h3>Extract RPO Phones (CSF Only, Multi-Line by User) (Option 18)</h3>
+
+    <div class="secondary-layout">
+      <form id="rpo-form" class="secondary-form" action="/export/rpo-phones" method="post">
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
+        User IDs (one per line):<br>
+        <textarea name="rpo_userids" rows="8" placeholder="john.doe&#10;jane.smith" required></textarea><br><br>
+
+        <div class="action-row">
+          <button type="submit">Run Extract RPO Phones (Option 18)</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
+      </form>
+
+      <section class="secondary-output" aria-live="polite">
+        <h4>Option 18 Output Preview</h4>
+        <p id="rpo-status" class="secondary-status">Run Option 18 to view output here.</p>
+        <p>
+          <a id="rpo-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
+            Download CSV Output
+          </a>
+        </p>
+        <textarea id="rpo-preview" readonly></textarea>
+      </section>
+    </div>
+
+    <hr>
+
     <h3>Add Directory Numbers (Upload CSV)</h3>
 
     <form action="/add/directorynumbers" method="post" enctype="multipart/form-data">
@@ -1543,6 +1623,32 @@ def menu_page(request: Request):
             return;
           }
 
+          if (form.id === "line-group-form") {
+            event.preventDefault();
+            submitSecondaryInline(form, {
+              statusId: "line-group-status",
+              previewId: "line-group-preview",
+              downloadId: "line-group-download",
+              runningText: "Running Option 17...",
+              failedText: "Option 17 failed. Review output and retry.",
+              defaultFilename: "option17_output.csv",
+            });
+            return;
+          }
+
+          if (form.id === "rpo-form") {
+            event.preventDefault();
+            submitSecondaryInline(form, {
+              statusId: "rpo-status",
+              previewId: "rpo-preview",
+              downloadId: "rpo-download",
+              runningText: "Running Option 18...",
+              failedText: "Option 18 failed. Review output and retry.",
+              defaultFilename: "option18_output.csv",
+            });
+            return;
+          }
+
           const targetUserInput = form.querySelector('input[name="target_user"]');
           if (targetUserInput) {
             setTimeout(() => {
@@ -1924,3 +2030,86 @@ def add_secondary_strike_devices_route(
         })
 
     return _render_job_result("STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)", data, filename)
+
+
+@app.post("/line-groups/edit-members")
+def edit_line_group_members_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    line_group_name: str = Form(...),
+    membership_action: str = Form(...),
+    dn_pattern: str = Form(...),
+    dn_partition: str = Form("ENT_DEVICE_PT"),
+    inline: bool = Query(False),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+    data, filename = edit_line_group_members(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        line_group_name=line_group_name,
+        action=membership_action,
+        dn_pattern=dn_pattern,
+        dn_partition=dn_partition,
+    )
+    _append_audit_event(
+      action="edit_line_group_members_option_17",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=f"{line_group_name} [{membership_action}] {dn_pattern}/{dn_partition}",
+      output_filename=filename,
+      inline_mode=inline,
+    )
+
+    if inline:
+      job_output = _prepare_job_output(data, filename)
+      return JSONResponse({
+        "job_id": job_output["job_id"],
+        "filename": job_output["filename"],
+        "output_text": job_output["output_text"],
+        "download_url": f"/download/job-output/{job_output['job_id']}",
+      })
+
+    return _render_job_result("Edit Line Group Members (Option 17)", data, filename)
+
+
+@app.post("/export/rpo-phones")
+def extract_rpo_phones_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    rpo_userids: str = Form(...),
+    inline: bool = Query(False),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+    data, filename = extract_rpo_phones(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        userids_text=rpo_userids,
+    )
+    target_count = len([u for u in (rpo_userids or "").splitlines() if u.strip()])
+    _append_audit_event(
+      action="extract_rpo_phones_option_18",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=f"user_count={target_count}",
+      output_filename=filename,
+      inline_mode=inline,
+    )
+
+    if inline:
+      job_output = _prepare_job_output(data, filename)
+      return JSONResponse({
+        "job_id": job_output["job_id"],
+        "filename": job_output["filename"],
+        "output_text": job_output["output_text"],
+        "download_url": f"/download/job-output/{job_output['job_id']}",
+      })
+
+    return _render_job_result("Extract RPO Phones (Option 18)", data, filename)
