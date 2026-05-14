@@ -73,17 +73,23 @@ def _soap_list_line_groups(search_text):
 
 def _soap_update_line_group_members(line_group_name, members):
     member_xml = []
-    for member in members:
+    for idx, member in enumerate(members, start=1):
         pattern = member.get("pattern", "").strip()
         partition = member.get("routePartitionName", "").strip()
         if not pattern or not partition:
             continue
+
+        line_selection_order = str(member.get("lineSelectionOrder", "")).strip()
+        if not line_selection_order:
+            line_selection_order = str(idx)
+
         member_xml.append(
             "            <member>\n"
             "              <directoryNumber>\n"
             f"                <pattern>{escape(pattern)}</pattern>\n"
             f"                <routePartitionName>{escape(partition)}</routePartitionName>\n"
             "              </directoryNumber>\n"
+            f"              <lineSelectionOrder>{escape(line_selection_order)}</lineSelectionOrder>\n"
             "            </member>"
         )
 
@@ -112,10 +118,12 @@ def _extract_line_group_members(root):
             member,
             [["directoryNumber", "routePartitionName"], ["routePartitionName"]],
         )
+        line_selection_order = _find_first_text(member, [["lineSelectionOrder"]])
         if pattern and partition:
             members.append({
                 "pattern": pattern,
                 "routePartitionName": partition,
+                "lineSelectionOrder": line_selection_order,
             })
     return members
 
@@ -207,6 +215,9 @@ def edit_line_group_members(cucm_host, cucm_user, cucm_pass, line_group_name, ac
                 ])
             else:
                 members.append(target)
+                # Keep lineSelectionOrder contiguous and deterministic after add.
+                for index, row in enumerate(members, start=1):
+                    row["lineSelectionOrder"] = str(index)
                 writer.writerow([
                     "Modify Members",
                     "Success",
@@ -228,6 +239,9 @@ def edit_line_group_members(cucm_host, cucm_user, cucm_pass, line_group_name, ac
                         and m.get("routePartitionName") == target["routePartitionName"]
                     )
                 ]
+                # Re-index ordering after remove to avoid null/duplicate orders.
+                for index, row in enumerate(members, start=1):
+                    row["lineSelectionOrder"] = str(index)
                 writer.writerow([
                     "Modify Members",
                     "Success",
