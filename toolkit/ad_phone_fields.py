@@ -1,7 +1,24 @@
 import json
+import os
 import re
 import shutil
 import subprocess
+
+try:
+    from ldap3 import (
+        ALL,
+        MODIFY_DELETE,
+        MODIFY_REPLACE,
+        NTLM,
+        SIMPLE,
+        SUBTREE,
+        Connection,
+        Server,
+    )
+
+    LDAP3_AVAILABLE = True
+except Exception:
+    LDAP3_AVAILABLE = False
 
 
 def _normalize_samaccountname(value):
@@ -28,6 +45,227 @@ def _resolve_powershell_executable():
     for candidate in ["powershell", "pwsh"]:
         if shutil.which(candidate):
             return candidate
+    return ""
+
+
+def _escape_ldap_filter_value(value):
+    escaped = str(value or "")
+    escaped = escaped.replace("\\", r"\5c")
+    escaped = escaped.replace("*", r"\2a")
+    escaped = escaped.replace("(", r"\28")
+    escaped = escaped.replace(")", r"\29")
+    escaped = escaped.replace("\x00", r"\00")
+    return escaped
+
+
+def _resolve_ldap_config():
+    server = (os.getenv("AD_LDAP_SERVER") or "").strip()
+    base_dn = (os.getenv("AD_LDAP_BASE_DN") or "").strip()
+    if not server or not base_dn:
+        return None, "Missing AD_LDAP_SERVER or AD_LDAP_BASE_DN environment configuration"
+
+    use_ssl_raw = (os.getenv("AD_LDAP_USE_SSL") or "true").strip().lower()
+    use_ssl = use_ssl_raw in {"1", "true", "yes", "y", "on"}
+
+    port_raw = (os.getenv("AD_LDAP_PORT") or "").strip()
+    if port_raw:
+        try:
+            port = int(port_raw)
+        except ValueError:
+            return None, "AD_LDAP_PORT must be a valid integer"
+    else:
+        port = 636 if use_ssl else 389
+
+    auth_mode = (os.getenv("AD_LDAP_AUTH") or "auto").strip().lower()
+    default_domain = (os.getenv("AD_LDAP_DOMAIN") or "").strip()
+    upn_suffix = (os.getenv("AD_LDAP_UPN_SUFFIX") or "").strip()
+
+    return {
+        "server": server,
+        "base_dn": base_dn,
+        "use_ssl": use_ssl,
+        "port": port,
+        "auth_mode": auth_mode,
+        "default_domain": default_domain,
+        "upn_suffix": upn_suffix,
+    }, ""
+
+
+def _resolve_ldap_bind_credentials(auth_context, config):
+    username = str((auth_context or {}).get("username") or "").strip()
+    password = str((auth_context or {}).get("password") or "")
+    if not username or not password:
+        return None, None, "LDAP bind requires username and password"
+
+    mode = config["auth_mode"]
+    if mode not in {"auto", "ntlm", "simple"}:
+        return None, None, "AD_LDAP_AUTH must be auto, ntlm, or simple"
+
+    if mode == "ntlm":
+        if "\\" in username:
+            return username, NTLM, ""
+        if config["default_domain"]:
+            return f"{config['default_domain']}\\{username}", NTLM, ""
+        return None, None, "NTLM auth selected but username is not DOMAIN\\user and AD_LDAP_DOMAIN is not set"
+
+    if mode == "simple":
+        if "@" in username:
+            return username, SIMPLE, ""
+        if config["upn_suffix"]:
+            return f"{username}@{config['upn_suffix']}", SIMPLE, ""
+        return username, SIMPLE, ""
+
+    if "\\" in username:
+        return username, NTLM, ""
+    if "@" in username:
+        return username, SIMPLE, ""
+    if config["default_domain"]:
+        return f"{config['default_domain']}\\{username}", NTLM, ""
+    if config["upn_suffix"]:
+        return f"{username}@{config['upn_suffix']}", SIMPLE, ""
+    return username, SIMPLE, ""
+
+
+def _run_ldap_lookup(samaccountname, auth_context):
+    if not LDAP3_AVAILABLE:
+        return None, "ldap3 package is not installed on this server"
+
+    config, config_error = _resolve_ldap_config()
+    if config_error:
+        return None, config_error
+
+    bind_user, bind_auth, bind_error = _resolve_ldap_bind_credentials(auth_context, config)
+    if bind_error:
+        return None, bind_error
+
+    try:
+        server = Server(
+            config["server"],
+            port=config["port"],
+            use_ssl=config["use_ssl"],
+            get_info=ALL,
+            connect_timeout=20,
+        )
+        conn = Connection(
+            server,
+            user=bind_user,
+            password=str((auth_context or {}).get("password") or ""),
+            authentication=bind_auth,
+            auto_bind=True,
+            receive_timeout=20,
+        )
+    except Exception as exc:
+        return None, f"LDAP bind failed: {exc}"
+
+    search_filter = f"(&(objectClass=user)(sAMAccountName={_escape_ldap_filter_value(samaccountname)}))"
+    try:
+        ok = conn.search(
+            search_base=config["base_dn"],
+            search_filter=search_filter,
+            search_scope=SUBTREE,
+            attributes=["distinguishedName", "telephoneNumber", "ipPhone"],
+        )
+    except Exception as exc:
+        try:
+            conn.unbind()
+        except Exception:
+            pass
+        return None, f"LDAP search failed: {exc}"
+
+    if not ok or not conn.entries:
+        try:
+            conn.unbind()
+        except Exception:
+            pass
+        return {
+            "found": False,
+            "distinguishedName": "",
+            "telephoneNumber": "",
+            "ipPhone": "",
+        }, ""
+
+    entry = conn.entries[0]
+    dn = str(getattr(entry, "entry_dn", "") or "").strip()
+    telephone = str(getattr(getattr(entry, "telephoneNumber", None), "value", "") or "").strip()
+    ip_phone = str(getattr(getattr(entry, "ipPhone", None), "value", "") or "").strip()
+
+    try:
+        conn.unbind()
+    except Exception:
+        pass
+
+    return {
+        "found": True,
+        "distinguishedName": dn,
+        "telephoneNumber": telephone,
+        "ipPhone": ip_phone,
+    }, ""
+
+
+def _run_ldap_modify(distinguished_name, auth_context, replace_attrs=None, clear_attrs=None):
+    if not LDAP3_AVAILABLE:
+        return "ldap3 package is not installed on this server"
+
+    config, config_error = _resolve_ldap_config()
+    if config_error:
+        return config_error
+
+    bind_user, bind_auth, bind_error = _resolve_ldap_bind_credentials(auth_context, config)
+    if bind_error:
+        return bind_error
+
+    try:
+        server = Server(
+            config["server"],
+            port=config["port"],
+            use_ssl=config["use_ssl"],
+            get_info=ALL,
+            connect_timeout=20,
+        )
+        conn = Connection(
+            server,
+            user=bind_user,
+            password=str((auth_context or {}).get("password") or ""),
+            authentication=bind_auth,
+            auto_bind=True,
+            receive_timeout=20,
+        )
+    except Exception as exc:
+        return f"LDAP bind failed: {exc}"
+
+    changes = {}
+    for key, value in (replace_attrs or {}).items():
+        changes[key] = [(MODIFY_REPLACE, [value])]
+    for key in (clear_attrs or []):
+        changes[key] = [(MODIFY_DELETE, [])]
+
+    if not changes:
+        try:
+            conn.unbind()
+        except Exception:
+            pass
+        return "No LDAP changes were provided"
+
+    try:
+        ok = conn.modify(distinguished_name, changes)
+    except Exception as exc:
+        try:
+            conn.unbind()
+        except Exception:
+            pass
+        return f"LDAP modify failed: {exc}"
+
+    result = conn.result or {}
+    try:
+        conn.unbind()
+    except Exception:
+        pass
+
+    if not ok:
+        desc = str(result.get("description") or "unknown").strip()
+        msg = str(result.get("message") or "").strip()
+        return f"LDAP modify failed ({desc}): {msg}".strip()
+
     return ""
 
 
@@ -103,11 +341,15 @@ if ($null -eq $user) {
 """
 
     data, error = _run_powershell_json(script, payload)
-    if error:
-        return None, error
-    if not isinstance(data, dict):
-        return None, "AD lookup returned an invalid response"
-    return data, ""
+    if not error:
+        if not isinstance(data, dict):
+            return None, "AD lookup returned an invalid response"
+        return data, ""
+
+    ldap_data, ldap_error = _run_ldap_lookup(samaccountname, auth_context)
+    if ldap_error:
+        return None, f"{error}; LDAP fallback failed: {ldap_error}"
+    return ldap_data, ""
 
 
 def update_ad_phone_fields(samaccountname, phone_number, auth_context=None):
@@ -154,7 +396,16 @@ if ($payload.username -and $payload.password) {
 
     _, update_error = _run_powershell_json(script, payload)
     if update_error:
-        return False, f"AD update failed for {sam}: {update_error}"
+        ldap_error = _run_ldap_modify(
+            user_data.get("distinguishedName", ""),
+            auth_context,
+            replace_attrs={
+                "telephoneNumber": formatted_dash,
+                "ipPhone": formatted_plain,
+            },
+        )
+        if ldap_error:
+            return False, f"AD update failed for {sam}: {update_error}; LDAP fallback failed: {ldap_error}"
 
     return True, f"Updated AD phone fields for {sam} (telephoneNumber={formatted_dash}, ipPhone={formatted_plain})"
 
@@ -196,6 +447,12 @@ if ($payload.username -and $payload.password) {
 
     _, clear_error = _run_powershell_json(script, payload)
     if clear_error:
-        return False, f"AD clear failed for {sam}: {clear_error}"
+        ldap_error = _run_ldap_modify(
+            user_data.get("distinguishedName", ""),
+            auth_context,
+            clear_attrs=["telephoneNumber", "ipPhone"],
+        )
+        if ldap_error:
+            return False, f"AD clear failed for {sam}: {clear_error}; LDAP fallback failed: {ldap_error}"
 
     return True, f"Cleared AD phone fields for {sam}"

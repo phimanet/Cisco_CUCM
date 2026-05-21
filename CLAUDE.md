@@ -100,6 +100,7 @@ Priority keys:
 - Option 10 (Offboard User) enhanced to accept optional AD credentials in the web form and attempt AD phone field clear (`telephoneNumber`, `ipPhone`) after CUCM/Unity decommission workflow.
 - Added shared toolkit helper module for AD phone field operations via PowerShell ActiveDirectory module, with explicit CSV result rows for AD success/failure.
 - Updated Option 9 and Option 10 authentication flow to reuse the same CUCM credentials for AD operations (single credential set for CUCM/Unity/AD in these workflows).
+- Added Ubuntu-safe LDAP fallback in AD helper so Option 9/10 can update AD when PowerShell/ActiveDirectory cmdlets are not available on Linux hosts.
 
 ### 2026-04-30
 - Initialized project tracker format.
