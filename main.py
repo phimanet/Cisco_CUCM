@@ -924,6 +924,7 @@ def menu_page(request: Request):
     <p><a href="/download/audit-trail">Download Audit Trail (CSV)</a></p>
 
     <h3>Build Cisco Jabber Laptop and Voicemail - New Hire or New Jabber Laptop/VM Add</h3>
+    <p>Authentication note: Cisco Callmanager credentials entered below are reused for Unity voicemail and Active Directory actions.</p>
 
     <div class="build-user-layout">
       <form id="build-user-form" class="target-user-form build-user-form" action="/build/user-csf-phone" method="post">
@@ -1003,6 +1004,7 @@ def menu_page(request: Request):
     <hr>
 
     <h3>Offboard User - Delete all Jabber and Voicemail Box (Option 10)</h3>
+    <p>Authentication note: Cisco Callmanager credentials entered below are reused for Unity voicemail and Active Directory actions.</p>
 
     <div class="offboard-layout">
       <form id="offboard-user-form" class="target-user-form offboard-form" action="/decommission/user-csf-voicemail" method="post">
@@ -1883,6 +1885,8 @@ async def build_user_csf_phone(
         cucm_pass=cucm_pass,
         target_user=target_user,
         dn_type=dn_type,
+        ad_username=cucm_user,
+        ad_password=cucm_pass,
     )
     _append_audit_event(
       action="build_user_csf_phone",
@@ -1921,6 +1925,8 @@ def decommission_user_csf_voicemail_route(
         cucm_user=cucm_user,
         cucm_pass=cucm_pass,
         target_user=target_user,
+        ad_username=cucm_user,
+        ad_password=cucm_pass,
     )
     _append_audit_event(
       action="offboard_user_option_10",

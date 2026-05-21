@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-05-01
+- Date: 2026-05-07
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -27,7 +27,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [ ] [P1][In Progress] Remediate Ubuntu 24.04 vulnerabilities and clean up host hardening findings (SNOW TASK0723797).
   - [x] CVE-2024-6387 (CVSSv3 8.1) — OpenSSH patched to 9.6p1-3ubuntu13.16 ✓
   - [ ] FTP unencrypted (CVSSv3 7.5) — vsftpd stopped; blocked on Sean Beavers identifying 10.241.17.165 before disabling
-  - [ ] SSH Weak MACs (CVSSv3 7.5) — 1 of 4 removed; 3 remaining (umac-64@openssh.com, hmac-sha1-etm@openssh.com, hmac-sha1); Cisco CER backup test passed
+  - [ ] SSH Weak MACs (CVSSv3 7.5) — umac-64 removed; next step is controlled removal test of hmac-sha1-etm and hmac-sha1 to verify Cisco systems negotiate stronger MACs
   - [ ] CVE-2025-61984 (CVSSv3 3.6) — Not started
 - [ ] [P1][Idea] Before creating Jabber devices or voicemail, always verify whether the target resource already exists to prevent duplicate provisioning and resource waste.
 - [x] [P2][Done] After job submission, clear the "User ID for person..." input field to prevent accidental repeat Jabber creation.
@@ -79,6 +79,7 @@ Priority keys:
 - Keep this section concise with short chronological notes after significant updates.
 
 ### 2026-05-01
+- Decision update: proceed with a controlled test to remove `hmac-sha1` after removing `hmac-sha1-etm`, then validate Cisco CUCM/Unity systems negotiate stronger MACs; rollback if any SSH automation fails.
 - TASK0723797: vsftpd log analysis showed two FTP clients: `10.241.18.11` (CUCM CDR uploads, confirmed) and `10.241.17.165` (unknown — suspected networking device sending backups).
 - Reached out to Sean Beavers to identify `10.241.17.165` and assess whether it can migrate to SFTP.
 - vsftpd remains stopped; CDR uploads from CUCM are not flowing until decision is made.
@@ -93,6 +94,12 @@ Priority keys:
 - UI enhancement implemented: target "User ID for person..." field now clears immediately after form submission on target-user workflows.
 - UI enhancement implemented: client-side validation now shows friendly inline errors for required/format fields across menu forms.
 - UI enhancement implemented: job routes now return a result page with a text output preview box and a CSV download link.
+
+### 2026-05-21
+- Option 9 (Build User CSF Phone) enhanced to accept optional AD credentials in the web form and attempt AD phone field update (`telephoneNumber`, `ipPhone`) after CUCM device/line provisioning.
+- Option 10 (Offboard User) enhanced to accept optional AD credentials in the web form and attempt AD phone field clear (`telephoneNumber`, `ipPhone`) after CUCM/Unity decommission workflow.
+- Added shared toolkit helper module for AD phone field operations via PowerShell ActiveDirectory module, with explicit CSV result rows for AD success/failure.
+- Updated Option 9 and Option 10 authentication flow to reuse the same CUCM credentials for AD operations (single credential set for CUCM/Unity/AD in these workflows).
 
 ### 2026-04-30
 - Initialized project tracker format.

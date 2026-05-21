@@ -7,6 +7,11 @@ import xml.etree.ElementTree as ET
 from requests.auth import HTTPBasicAuth
 from xml.sax.saxutils import escape
 
+try:
+    from .ad_phone_fields import clear_ad_phone_fields
+except ImportError:
+    from ad_phone_fields import clear_ad_phone_fields
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 LAB_CUCM_IP = "lascucmpl01.ahs.int"
@@ -371,6 +376,8 @@ def decommission_user_csf_voicemail(
     cucm_user,
     cucm_pass,
     target_user,
+    ad_username="",
+    ad_password="",
 ):
     if not target_user or not target_user.strip():
         return _write_error_csv("target_user is required")
@@ -391,6 +398,21 @@ def decommission_user_csf_voicemail(
     unity_session = requests.Session()
     unity_session.verify = False
     unity_session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    ad_user_clean = (ad_username or "").strip()
+    ad_context = None
+    if ad_user_clean or ad_password:
+        if ad_user_clean and ad_password:
+            ad_context = {
+                "username": ad_user_clean,
+                "password": ad_password,
+            }
+        else:
+            log_writer.writerow([
+                "Clear AD Phone Fields",
+                "Skipped",
+                "AD username and AD password must both be provided to run AD clear with alternate credentials",
+            ])
 
     try:
         user_details = _get_user_details(session, cucm_host, target_user.strip())
@@ -616,6 +638,13 @@ def decommission_user_csf_voicemail(
                     ])
         else:
             log_writer.writerow(["Update Line Inactive", "Skipped", "No DN found on matched devices"])
+
+        ad_ok, ad_message = clear_ad_phone_fields(user_details["userid"], ad_context)
+        log_writer.writerow([
+            "Clear AD Phone Fields",
+            "Success" if ad_ok else "Failed",
+            ad_message,
+        ])
 
     except Exception as e:
         log_writer.writerow(["Script", "Error", str(e)])

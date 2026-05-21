@@ -9,6 +9,11 @@ import xml.etree.ElementTree as ET
 from requests.auth import HTTPBasicAuth
 from xml.sax.saxutils import escape
 
+try:
+    from .ad_phone_fields import update_ad_phone_fields
+except ImportError:
+    from ad_phone_fields import update_ad_phone_fields
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 LAB_CUCM_IP = "lascucmpl01.ahs.int"
@@ -677,6 +682,8 @@ def build_user_csf_phone_from_template(
     cucm_pass,
     target_user,
     dn_type,
+    ad_username="",
+    ad_password="",
 ):
     dn_map = {
         "recruiter": ("469", "Recruiter"),
@@ -733,6 +740,21 @@ def build_user_csf_phone_from_template(
     unity_session = requests.Session()
     unity_session.verify = False
     unity_session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    ad_user_clean = (ad_username or "").strip()
+    ad_context = None
+    if ad_user_clean or ad_password:
+        if ad_user_clean and ad_password:
+            ad_context = {
+                "username": ad_user_clean,
+                "password": ad_password,
+            }
+        else:
+            log_writer.writerow([
+                "Update AD Phone Fields",
+                "Skipped",
+                "AD username and AD password must both be provided to run AD update with alternate credentials",
+            ])
 
     try:
         user_details = _get_user_details(session, cucm_host, target_user.strip())
@@ -811,6 +833,13 @@ def build_user_csf_phone_from_template(
             return out.getvalue().encode("utf-8"), filename
 
         log_writer.writerow(["Update User", "Success", f"Updated {user_details['userid']} with phone {phone_name} and DN {new_dn}"])
+
+        ad_ok, ad_message = update_ad_phone_fields(user_details["userid"], new_dn, ad_context)
+        log_writer.writerow([
+            "Update AD Phone Fields",
+            "Success" if ad_ok else "Failed",
+            ad_message,
+        ])
 
         unity_email = user_details.get("mailid", "").strip() or f"{user_details['userid'].lower()}@amnhealthcare.com"
         unity_first = user_details.get("firstName", "").strip() or user_details["userid"]
