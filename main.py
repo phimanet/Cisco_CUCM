@@ -1847,7 +1847,7 @@ def menu_page(request: Request):
         const outputEl = document.getElementById("offboard-preview");
         const downloadEl = document.getElementById("offboard-download");
         const targetUserInput = form.querySelector('input[name="target_user"]');
-        const targetUser = (targetUserInput?.value || "").trim();
+        const targetUser = ((targetUserInput && targetUserInput.value) || "").trim();
 
         const confirmed = confirm(
           `DANGER: This will offboard user "${targetUser}" and remove Jabber devices and voicemail.\n\nDo you want to continue?`
