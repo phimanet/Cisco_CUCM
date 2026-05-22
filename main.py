@@ -1019,7 +1019,7 @@ def menu_page(request: Request):
         <input name="target_user" placeholder="john.doe" required><br><br>
 
         <div class="action-row">
-          <button id="jabber-check-btn" type="submit">Check Jabber Build Status</button>
+          <button id="jabber-check-btn" type="button" onclick="return runJabberPrecheckLegacy();">Check Jabber Build Status</button>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
       </form>
@@ -1034,90 +1034,96 @@ def menu_page(request: Request):
     <script>
       function runJabberPrecheckLegacy() {
         var form = document.getElementById("jabber-check-form");
-        var statusEl = document.getElementById("jabber-check-status");
-        var outputEl = document.getElementById("jabber-check-preview");
-        if (!form || !statusEl || !outputEl) {
-          return false;
-        }
+        try {
+          var statusEl = document.getElementById("jabber-check-status");
+          var outputEl = document.getElementById("jabber-check-preview");
+          if (!form || !statusEl || !outputEl) {
+            return false;
+          }
 
-        var userField = form.querySelector('input[name="cucm_user"]');
-        var passField = form.querySelector('input[name="cucm_pass"]');
-        var targetField = form.querySelector('input[name="target_user"]');
+          var userField = form.querySelector('input[name="cucm_user"]');
+          var passField = form.querySelector('input[name="cucm_pass"]');
+          var targetField = form.querySelector('input[name="target_user"]');
 
-        var cucmUser = (userField && userField.value ? userField.value : "").trim();
-        var cucmPass = passField && passField.value ? passField.value : "";
-        var targetUser = (targetField && targetField.value ? targetField.value : "").trim();
+          var cucmUser = (userField && userField.value ? userField.value : "").trim();
+          var cucmPass = passField && passField.value ? passField.value : "";
+          var targetUser = (targetField && targetField.value ? targetField.value : "").trim();
 
-        if (!cucmUser || !cucmPass || !targetUser) {
-          statusEl.textContent = "Fill in Callmanager username, password, and User ID.";
+          if (!cucmUser || !cucmPass || !targetUser) {
+            statusEl.textContent = "Fill in Callmanager username, password, and User ID.";
+            outputEl.textContent = "";
+            if (!cucmUser && userField) {
+              userField.focus();
+            } else if (!cucmPass && passField) {
+              passField.focus();
+            } else if (targetField) {
+              targetField.focus();
+            }
+            return false;
+          }
+
+          statusEl.textContent = "Running Jabber lookup...";
           outputEl.textContent = "";
-          if (!cucmUser && userField) {
-            userField.focus();
-          } else if (!cucmPass && passField) {
-            passField.focus();
-          } else if (targetField) {
-            targetField.focus();
+
+          var body = "cucm_user=" + encodeURIComponent(cucmUser) +
+            "&cucm_pass=" + encodeURIComponent(cucmPass) +
+            "&target_user=" + encodeURIComponent(targetUser);
+
+          var xhr = new XMLHttpRequest();
+          xhr.open("POST", "/check/jabber-status", true);
+          xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+          xhr.setRequestHeader("Accept", "application/json");
+          xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+          xhr.onreadystatechange = function () {
+            if (xhr.readyState !== 4) {
+              return;
+            }
+
+            var payload = null;
+            try {
+              payload = JSON.parse(xhr.responseText || "{}");
+            } catch (_err) {
+              payload = null;
+            }
+
+            if (xhr.status >= 200 && xhr.status < 300 && payload) {
+              var lines = [
+                "User: " + (payload.target_user || ""),
+                "Jabber Built: " + (payload.jabber_built ? "YES" : "NO"),
+                "Device Name: " + (payload.device_name || "Not found"),
+                "Jabber Extension: " + (payload.extension || "Not found"),
+                "Voicemail Extension: " + (payload.voicemail_extension || "Not found"),
+                "Environment: " + (payload.environment || ""),
+                "CUCM Host: " + (payload.cucm_host || ""),
+                "Unity Server: " + (payload.unity_server || "")
+              ];
+              if (payload.unity_lookup_error) {
+                lines.push("Unity Lookup Error: " + payload.unity_lookup_error);
+              }
+              outputEl.textContent = lines.join("\n");
+              statusEl.textContent = "Lookup complete.";
+              if (targetField) {
+                targetField.value = "";
+              }
+              return;
+            }
+
+            var errMsg = "Request failed.";
+            if (payload && payload.detail) {
+              errMsg = payload.detail;
+            } else if (xhr.responseText) {
+              errMsg = xhr.responseText;
+            }
+            statusEl.textContent = "Lookup failed. Review message and retry.";
+            outputEl.textContent = errMsg;
+          };
+
+          xhr.send(body);
+        } catch (_legacyErr) {
+          if (form) {
+            form.submit();
           }
-          return false;
         }
-
-        statusEl.textContent = "Running Jabber lookup...";
-        outputEl.textContent = "";
-
-        var body = "cucm_user=" + encodeURIComponent(cucmUser) +
-          "&cucm_pass=" + encodeURIComponent(cucmPass) +
-          "&target_user=" + encodeURIComponent(targetUser);
-
-        var xhr = new XMLHttpRequest();
-        xhr.open("POST", "/check/jabber-status", true);
-        xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
-        xhr.setRequestHeader("Accept", "application/json");
-        xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
-        xhr.onreadystatechange = function () {
-          if (xhr.readyState !== 4) {
-            return;
-          }
-
-          var payload = null;
-          try {
-            payload = JSON.parse(xhr.responseText || "{}");
-          } catch (_err) {
-            payload = null;
-          }
-
-          if (xhr.status >= 200 && xhr.status < 300 && payload) {
-            var lines = [
-              "User: " + (payload.target_user || ""),
-              "Jabber Built: " + (payload.jabber_built ? "YES" : "NO"),
-              "Device Name: " + (payload.device_name || "Not found"),
-              "Jabber Extension: " + (payload.extension || "Not found"),
-              "Voicemail Extension: " + (payload.voicemail_extension || "Not found"),
-              "Environment: " + (payload.environment || ""),
-              "CUCM Host: " + (payload.cucm_host || ""),
-              "Unity Server: " + (payload.unity_server || "")
-            ];
-            if (payload.unity_lookup_error) {
-              lines.push("Unity Lookup Error: " + payload.unity_lookup_error);
-            }
-            outputEl.textContent = lines.join("\n");
-            statusEl.textContent = "Lookup complete.";
-            if (targetField) {
-              targetField.value = "";
-            }
-            return;
-          }
-
-          var errMsg = "Request failed.";
-          if (payload && payload.detail) {
-            errMsg = payload.detail;
-          } else if (xhr.responseText) {
-            errMsg = xhr.responseText;
-          }
-          statusEl.textContent = "Lookup failed. Review message and retry.";
-          outputEl.textContent = errMsg;
-        };
-
-        xhr.send(body);
         return false;
       }
     </script>
