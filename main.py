@@ -1116,7 +1116,7 @@ def menu_page(request: Request):
     <p>Authentication note: Cisco Callmanager credentials entered below are reused for Unity voicemail and Active Directory actions.</p>
 
     <div class="build-user-layout">
-      <form id="build-user-form" class="target-user-form build-user-form" action="/build/user-csf-phone" method="post">
+      <form id="build-user-form" class="target-user-form build-user-form" action="javascript:void(0)" method="post" onsubmit="return false;">
         Cisco Callmanager Username:<br>
         <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -1134,7 +1134,7 @@ def menu_page(request: Request):
         </select><br><br>
 
         <div class="action-row">
-          <button type="submit">Run Build User CSF Phone</button>
+          <button id="build-user-btn" type="button">Run Build User CSF Phone</button>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
       </form>
@@ -1150,6 +1150,82 @@ def menu_page(request: Request):
         <textarea id="build-user-preview" readonly></textarea>
       </section>
     </div>
+
+    <script>
+      (function () {
+        const form = document.getElementById("build-user-form");
+        const button = document.getElementById("build-user-btn");
+        const statusEl = document.getElementById("build-user-status");
+        const outputEl = document.getElementById("build-user-preview");
+        const downloadEl = document.getElementById("build-user-download");
+
+        if (!form || !button || !statusEl || !outputEl || !downloadEl) {
+          return;
+        }
+
+        async function runBuild() {
+          const targetUserField = form.querySelector('input[name="target_user"]');
+          const targetUser = ((targetUserField && targetUserField.value) || "").trim();
+          if (!targetUser) {
+            statusEl.textContent = "Enter a User ID to build.";
+            if (targetUserField) {
+              targetUserField.focus();
+            }
+            return;
+          }
+
+          statusEl.textContent = "Running Build User...";
+          outputEl.value = "";
+          downloadEl.style.display = "none";
+          downloadEl.removeAttribute("href");
+
+          try {
+            const formData = new FormData(form);
+            const response = await fetch("/build/user-csf-phone?inline=1", {
+              method: "POST",
+              body: formData,
+              credentials: "same-origin",
+            });
+
+            const responseText = await response.text();
+            let payload = null;
+            try {
+              payload = JSON.parse(responseText || "{}");
+            } catch (_parseErr) {
+              throw new Error(responseText || `Request failed with status ${response.status}`);
+            }
+
+            if (!response.ok) {
+              throw new Error((payload && payload.detail) || `Request failed with status ${response.status}`);
+            }
+
+            outputEl.value = payload.output_text || "";
+            statusEl.textContent = `Completed: ${payload.filename || "build_user_output.csv"}`;
+            if (payload.download_url) {
+              downloadEl.href = payload.download_url;
+              downloadEl.style.display = "inline";
+            }
+
+            if (targetUserField) {
+              targetUserField.value = "";
+            }
+          } catch (err) {
+            statusEl.textContent = "Build User failed. Review output and retry.";
+            outputEl.value = (err && err.message) ? err.message : "Unknown error.";
+          }
+        }
+
+        form.addEventListener("submit", function (event) {
+          event.preventDefault();
+          runBuild();
+        });
+
+        button.addEventListener("click", function (event) {
+          event.preventDefault();
+          runBuild();
+        });
+      })();
+    </script>
 
     <hr>
 
@@ -1196,7 +1272,7 @@ def menu_page(request: Request):
     <p>Authentication note: Cisco Callmanager credentials entered below are reused for Unity voicemail and Active Directory actions.</p>
 
     <div class="offboard-layout">
-      <form id="offboard-user-form" class="target-user-form offboard-form" action="/decommission/user-csf-voicemail" method="post">
+      <form id="offboard-user-form" class="target-user-form offboard-form" action="javascript:void(0)" method="post" onsubmit="return false;">
         Cisco Callmanager Username:<br>
         <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -1207,7 +1283,7 @@ def menu_page(request: Request):
         <input name="target_user" placeholder="john.doe" required><br><br>
 
         <div class="action-row">
-          <button type="submit" class="offboard-danger-btn">DANGER: Run Offboard User - Delete all Jabber and Voicemail Box (Option 10)</button>
+          <button id="offboard-user-btn" type="button" class="offboard-danger-btn">DANGER: Run Offboard User - Delete all Jabber and Voicemail Box (Option 10)</button>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
       </form>
@@ -1223,6 +1299,90 @@ def menu_page(request: Request):
         <textarea id="offboard-preview" readonly></textarea>
       </section>
     </div>
+
+    <script>
+      (function () {
+        const form = document.getElementById("offboard-user-form");
+        const button = document.getElementById("offboard-user-btn");
+        const statusEl = document.getElementById("offboard-status");
+        const outputEl = document.getElementById("offboard-preview");
+        const downloadEl = document.getElementById("offboard-download");
+
+        if (!form || !button || !statusEl || !outputEl || !downloadEl) {
+          return;
+        }
+
+        async function runOffboard() {
+          const targetUserField = form.querySelector('input[name="target_user"]');
+          const targetUser = ((targetUserField && targetUserField.value) || "").trim();
+          if (!targetUser) {
+            statusEl.textContent = "Enter a User ID to offboard.";
+            if (targetUserField) {
+              targetUserField.focus();
+            }
+            return;
+          }
+
+          const confirmed = confirm(
+            `DANGER: This will offboard user "${targetUser}" and remove Jabber devices and voicemail.\n\nDo you want to continue?`
+          );
+          if (!confirmed) {
+            statusEl.textContent = "Offboard action canceled.";
+            return;
+          }
+
+          statusEl.textContent = "Running Offboard User...";
+          outputEl.value = "";
+          downloadEl.style.display = "none";
+          downloadEl.removeAttribute("href");
+
+          try {
+            const formData = new FormData(form);
+            const response = await fetch("/decommission/user-csf-voicemail?inline=1", {
+              method: "POST",
+              body: formData,
+              credentials: "same-origin",
+            });
+
+            const responseText = await response.text();
+            let payload = null;
+            try {
+              payload = JSON.parse(responseText || "{}");
+            } catch (_parseErr) {
+              throw new Error(responseText || `Request failed with status ${response.status}`);
+            }
+
+            if (!response.ok) {
+              throw new Error((payload && payload.detail) || `Request failed with status ${response.status}`);
+            }
+
+            outputEl.value = payload.output_text || "";
+            statusEl.textContent = `Completed: ${payload.filename || "offboard_output.csv"}`;
+            if (payload.download_url) {
+              downloadEl.href = payload.download_url;
+              downloadEl.style.display = "inline";
+            }
+
+            if (targetUserField) {
+              targetUserField.value = "";
+            }
+          } catch (err) {
+            statusEl.textContent = "Offboard User failed. Review output and retry.";
+            outputEl.value = (err && err.message) ? err.message : "Unknown error.";
+          }
+        }
+
+        form.addEventListener("submit", function (event) {
+          event.preventDefault();
+          runOffboard();
+        });
+
+        button.addEventListener("click", function (event) {
+          event.preventDefault();
+          runOffboard();
+        });
+      })();
+    </script>
 
     <hr>
 
