@@ -1120,8 +1120,13 @@ def menu_page(request: Request):
 
           xhr.send(body);
         } catch (_legacyErr) {
-          if (form) {
-            form.submit();
+          var statusElFallback = document.getElementById("jabber-check-status");
+          var outputElFallback = document.getElementById("jabber-check-preview");
+          if (statusElFallback) {
+            statusElFallback.textContent = "Inline lookup error. Review details below.";
+          }
+          if (outputElFallback) {
+            outputElFallback.textContent = (_legacyErr && _legacyErr.message) ? _legacyErr.message : String(_legacyErr || "Unknown error");
           }
         }
         return false;
