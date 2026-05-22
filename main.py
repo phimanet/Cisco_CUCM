@@ -753,6 +753,68 @@ def menu_page(request: Request):
         color: var(--amn-navy);
       }
 
+      .portal-shell {
+        display: grid;
+        grid-template-columns: 280px minmax(0, 1fr);
+        gap: 16px;
+        align-items: start;
+        margin-top: 12px;
+      }
+
+      .portal-sidebar {
+        position: sticky;
+        top: 76px;
+        background: #fff;
+        border: 1px solid var(--amn-border);
+        border-radius: 12px;
+        padding: 10px;
+        box-shadow: 0 6px 16px rgba(0, 47, 108, 0.07);
+      }
+
+      .portal-sidebar h4 {
+        margin: 6px 8px 10px 8px;
+        color: var(--amn-navy);
+      }
+
+      .portal-nav {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .portal-nav-btn {
+        width: 100%;
+        text-align: left;
+        background: #eef5fb;
+        color: #10324f;
+        border: 1px solid #c7d9ea;
+        border-radius: 8px;
+        padding: 9px 10px;
+        font-size: 13px;
+      }
+
+      .portal-nav-btn:hover {
+        background: #dcecff;
+      }
+
+      .portal-nav-btn.active {
+        background: var(--amn-blue);
+        color: #fff;
+        border-color: var(--amn-blue);
+      }
+
+      .portal-main {
+        min-width: 0;
+      }
+
+      .tool-panel {
+        display: none;
+      }
+
+      .tool-panel.active {
+        display: block;
+      }
+
       form,
       .build-user-output,
       .offboard-output,
@@ -962,6 +1024,19 @@ def menu_page(request: Request):
       }
 
       @media (max-width: 980px) {
+        .portal-shell {
+          grid-template-columns: 1fr;
+        }
+
+        .portal-sidebar {
+          position: static;
+        }
+
+        .portal-nav {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
         .build-user-output textarea {
           height: 280px;
         }
@@ -997,6 +1072,30 @@ def menu_page(request: Request):
     <p>Security mode: passwords are not cached server-side. Enter admin password for each action.</p>
     <p><a href="/download/audit-trail">Download Audit Trail (CSV)</a></p>
 
+    <div class="portal-shell">
+      <aside class="portal-sidebar">
+        <h4>Operations Menu</h4>
+        <div class="portal-nav">
+          <button type="button" class="portal-nav-btn active" data-panel="precheck">Pre-Check</button>
+          <button type="button" class="portal-nav-btn" data-panel="build">Build User (Option 9)</button>
+          <button type="button" class="portal-nav-btn" data-panel="pin">Reset PIN (Option 2)</button>
+          <button type="button" class="portal-nav-btn" data-panel="offboard">Offboard (Option 10)</button>
+          <button type="button" class="portal-nav-btn" data-panel="ad">AD Update (Option 11)</button>
+          <button type="button" class="portal-nav-btn" data-panel="tct">Secondary iPhone (Option 3)</button>
+          <button type="button" class="portal-nav-btn" data-panel="bot">Secondary Android (Option 4)</button>
+          <button type="button" class="portal-nav-btn" data-panel="strike">Strike Mode (Option 5)</button>
+          <button type="button" class="portal-nav-btn" data-panel="linegroup">Line Groups (Option 17)</button>
+          <button type="button" class="portal-nav-btn" data-panel="rpo">Extract RPO (Option 18)</button>
+          <button type="button" class="portal-nav-btn" data-panel="adddn">Add DNs</button>
+          <button type="button" class="portal-nav-btn" data-panel="exportdn">Export DNs</button>
+          <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
+        </div>
+      </aside>
+
+      <section class="portal-main">
+
+    <section class="tool-panel active" data-panel="precheck">
+
     <h3>Pre-Check: Is Jabber Already Built?</h3>
     <p>Use this quick lookup before building or offboarding. It returns device name, Jabber extension, and voicemail extension.</p>
 
@@ -1023,8 +1122,9 @@ def menu_page(request: Request):
         <iframe id="jabber-check-frame" name="jabber-check-frame" class="jabber-check-frame" title="Jabber Lookup Result"></iframe>
       </section>
     </div>
+    </section>
 
-    <hr>
+    <section class="tool-panel" data-panel="build">
 
     <h3>Build Cisco Jabber Laptop and Voicemail - New Hire or New Jabber Laptop/VM Add</h3>
     <p>Authentication note: Cisco Callmanager credentials entered below are reused for Unity voicemail and Active Directory actions.</p>
@@ -1141,8 +1241,9 @@ def menu_page(request: Request):
 
       })();
     </script>
+    </section>
 
-    <hr>
+    <section class="tool-panel" data-panel="pin">
 
     <h3>Reset Unity Voicemail PIN (Option 2)</h3>
 
@@ -1180,8 +1281,9 @@ def menu_page(request: Request):
         <textarea id="reset-pin-preview" readonly></textarea>
       </section>
     </div>
+    </section>
 
-    <hr>
+    <section class="tool-panel" data-panel="offboard">
 
     <h3 class="offboard-h3">Offboard User - Delete all Jabber and Voicemail Box (Option 10)</h3>
     <p>Authentication note: Cisco Callmanager credentials entered below are reused for Unity voicemail and Active Directory actions.</p>
@@ -1298,8 +1400,9 @@ def menu_page(request: Request):
         });
       })();
     </script>
+    </section>
 
-    <hr>
+    <section class="tool-panel" data-panel="ad">
 
     <h3>Update Active Directory Telephone and ipPhone field only (Option 11)</h3>
     <p>Authentication note: Cisco Callmanager credentials entered below are used for Active Directory authentication.</p>
@@ -1335,8 +1438,9 @@ def menu_page(request: Request):
         <textarea id="ad-update-preview" readonly></textarea>
       </section>
     </div>
+    </section>
 
-    <hr>
+    <section class="tool-panel" data-panel="tct">
 
     <h3>Add Secondary Device - Jabber for iPhone (Option 3)</h3>
 
@@ -1368,8 +1472,9 @@ def menu_page(request: Request):
         <textarea id="secondary-tct-preview" readonly></textarea>
       </section>
     </div>
+    </section>
 
-    <hr>
+    <section class="tool-panel" data-panel="bot">
 
     <h3>Add Secondary Device - Jabber for Android (Option 4)</h3>
 
@@ -1401,8 +1506,9 @@ def menu_page(request: Request):
         <textarea id="secondary-bot-preview" readonly></textarea>
       </section>
     </div>
+    </section>
 
-    <hr>
+    <section class="tool-panel" data-panel="strike">
 
     <h3>STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)</h3>
 
@@ -1434,8 +1540,9 @@ def menu_page(request: Request):
         <textarea id="secondary-strike-preview" readonly></textarea>
       </section>
     </div>
+    </section>
 
-    <hr>
+    <section class="tool-panel" data-panel="linegroup">
 
     <h3>Edit Line Group Members (Add/Remove DN) (Option 17)</h3>
 
@@ -1490,8 +1597,9 @@ def menu_page(request: Request):
         <textarea id="line-group-preview" readonly></textarea>
       </section>
     </div>
+    </section>
 
-    <hr>
+    <section class="tool-panel" data-panel="rpo">
 
     <h3>Extract RPO Phones (CSF Only, Multi-Line by User) (Option 18)</h3>
 
@@ -1523,8 +1631,9 @@ def menu_page(request: Request):
         <textarea id="rpo-preview" readonly></textarea>
       </section>
     </div>
+    </section>
 
-    <hr>
+    <section class="tool-panel" data-panel="adddn">
 
     <h3>Add Directory Numbers (Upload CSV)</h3>
 
@@ -1545,8 +1654,9 @@ def menu_page(request: Request):
         <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
       </div>
     </form>
+    </section>
 
-    <hr>
+    <section class="tool-panel" data-panel="exportdn">
 
     <h3>Export Directory Numbers</h3>
 
@@ -1565,8 +1675,9 @@ def menu_page(request: Request):
 
       <button type="submit">Export Directory Numbers</button>
     </form>
+    </section>
 
-    <hr>
+    <section class="tool-panel" data-panel="exportusers">
 
     <h3>Export End Users</h3>
 
@@ -1582,6 +1693,7 @@ def menu_page(request: Request):
 
       <button type="submit">Export End Users</button>
     </form>
+    </section>
 
     <script>
       const fieldRules = {
@@ -2098,7 +2210,29 @@ def menu_page(request: Request):
         });
       }
 
+      const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
+      const panels = Array.from(document.querySelectorAll(".tool-panel"));
+
+      function showPanel(panelKey) {
+        panels.forEach((panel) => {
+          const isActive = panel.dataset.panel === panelKey;
+          panel.classList.toggle("active", isActive);
+        });
+
+        navButtons.forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.panel === panelKey);
+        });
+      }
+
+      navButtons.forEach((btn) => {
+        btn.addEventListener("click", () => {
+          showPanel(btn.dataset.panel);
+        });
+      });
+
     </script>
+      </section>
+    </div>
     </main>
   </body>
 </html>
