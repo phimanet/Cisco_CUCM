@@ -15,7 +15,7 @@ from uuid import uuid4
 from toolkit.enduser import export_endusers_all_fields
 from toolkit.directory_number import export_directory_numbers
 from toolkit.add_directory_number import add_directory_numbers_from_csv
-from toolkit.build_user_csf_phone import build_user_csf_phone_from_template
+from toolkit.build_user_csf_phone import build_user_csf_phone_from_template, lookup_user_jabber_status
 from toolkit.decommission_user_csf_voicemail import decommission_user_csf_voicemail
 from toolkit.reset_unity_voicemail_pin import reset_unity_voicemail_pin
 from toolkit.update_ad_phone_only import update_ad_phone_fields_only
@@ -809,6 +809,48 @@ def menu_page(request: Request):
         flex-wrap: wrap;
       }
 
+      .jabber-check-layout {
+        display: flex;
+        gap: 24px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+
+      .jabber-check-form {
+        flex: 1 1 420px;
+        min-width: 320px;
+      }
+
+      .jabber-check-output {
+        flex: 1 1 480px;
+        min-width: 320px;
+        padding: 12px;
+      }
+
+      .jabber-check-output h4 {
+        margin: 0 0 10px 0;
+      }
+
+      .jabber-check-preview {
+        width: 100%;
+        min-height: 190px;
+        margin: 0;
+        padding: 12px;
+        box-sizing: border-box;
+        font-family: Consolas, monospace;
+        font-size: 13px;
+        border-radius: 8px;
+        border: 1px solid var(--amn-border);
+        background: var(--amn-sky);
+        color: #0f2940;
+        white-space: pre-wrap;
+      }
+
+      .jabber-check-status {
+        color: #2c5c8a;
+        min-height: 18px;
+      }
+
       .build-user-form {
         flex: 1 1 420px;
         min-width: 320px;
@@ -961,6 +1003,35 @@ def menu_page(request: Request):
     <p>Environment was selected at login and is locked for this session.</p>
     <p>Security mode: passwords are not cached server-side. Enter admin password for each action.</p>
     <p><a href="/download/audit-trail">Download Audit Trail (CSV)</a></p>
+
+    <h3>Pre-Check: Is Jabber Already Built?</h3>
+    <p>Use this quick lookup before building or offboarding. It returns device name, Jabber extension, and voicemail extension.</p>
+
+    <div class="jabber-check-layout">
+      <form id="jabber-check-form" class="target-user-form jabber-check-form" action="/check/jabber-status" method="post">
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
+        User ID to check:<br>
+        <input name="target_user" placeholder="john.doe" required><br><br>
+
+        <div class="action-row">
+          <button type="submit">Check Jabber Build Status</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
+      </form>
+
+      <section class="jabber-check-output" aria-live="polite">
+        <h4>Jabber Lookup Result</h4>
+        <p id="jabber-check-status" class="jabber-check-status">Run lookup to view status here.</p>
+        <pre id="jabber-check-preview" class="jabber-check-preview"></pre>
+      </section>
+    </div>
+
+    <hr>
 
     <h3>Build Cisco Jabber Laptop and Voicemail - New Hire or New Jabber Laptop/VM Add</h3>
     <p>Authentication note: Cisco Callmanager credentials entered below are reused for Unity voicemail and Active Directory actions.</p>
@@ -1527,6 +1598,49 @@ def menu_page(request: Request):
         }
       }
 
+      async function submitJabberCheckInline(form) {
+        const statusEl = document.getElementById("jabber-check-status");
+        const outputEl = document.getElementById("jabber-check-preview");
+
+        statusEl.textContent = "Running Jabber lookup...";
+        outputEl.textContent = "";
+
+        try {
+          const formData = new FormData(form);
+          const response = await fetch(form.action, {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText || `Request failed with status ${response.status}`);
+          }
+
+          const result = await response.json();
+          outputEl.textContent = [
+            `User: ${result.target_user || ""}`,
+            `Jabber Built: ${result.jabber_built ? "YES" : "NO"}`,
+            `Device Name: ${result.device_name || "Not found"}`,
+            `Jabber Extension: ${result.extension || "Not found"}`,
+            `Voicemail Extension: ${result.voicemail_extension || "Not found"}`,
+            `Environment: ${result.environment || ""}`,
+            `CUCM Host: ${result.cucm_host || ""}`,
+            `Unity Server: ${result.unity_server || ""}`,
+            result.unity_lookup_error ? `Unity Lookup Error: ${result.unity_lookup_error}` : "",
+          ].filter(Boolean).join("\n");
+          statusEl.textContent = "Lookup complete.";
+
+          const targetUserInput = form.querySelector('input[name="target_user"]');
+          if (targetUserInput) {
+            targetUserInput.value = "";
+          }
+        } catch (error) {
+          statusEl.textContent = "Lookup failed. Review message and retry.";
+          outputEl.textContent = error.message || "Unknown error.";
+        }
+      }
+
       async function submitResetPinInline(form) {
         const statusEl = document.getElementById("reset-pin-status");
         const outputEl = document.getElementById("reset-pin-preview");
@@ -1769,6 +1883,12 @@ def menu_page(request: Request):
           if (form.id === "build-user-form") {
             event.preventDefault();
             submitBuildUserInline(form);
+            return;
+          }
+
+          if (form.id === "jabber-check-form") {
+            event.preventDefault();
+            submitJabberCheckInline(form);
             return;
           }
 
@@ -2048,6 +2168,36 @@ async def build_user_csf_phone(
         })
 
     return _render_job_result("Build User CSF Phone", data, filename)
+
+
+@app.post("/check/jabber-status")
+def check_jabber_status_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    target_user: str = Form(...),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+    result = lookup_user_jabber_status(
+      cucm_host=cucm_host,
+      cucm_user=cucm_user,
+      cucm_pass=cucm_pass,
+      target_user=target_user,
+    )
+
+    _append_audit_event(
+      action="check_jabber_status",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=target_user,
+      output_filename="inline_json",
+      inline_mode=True,
+    )
+
+    return JSONResponse(result)
 
 
 @app.post("/decommission/user-csf-voicemail")

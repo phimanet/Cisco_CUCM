@@ -886,3 +886,53 @@ def build_user_csf_phone_from_template(
             log_writer.writerow(["Script", "Error", err_msg])
 
     return out.getvalue().encode("utf-8"), filename
+
+
+def lookup_user_jabber_status(cucm_host, cucm_user, cucm_pass, target_user):
+    clean_target = (target_user or "").strip()
+    if not clean_target:
+        raise RuntimeError("target_user is required")
+
+    env_name = "PRODUCTION" if (cucm_host or "").strip().lower() == PROD_CUCM_IP else "LAB"
+    unity_server = UNITY_ENV_SETTINGS[env_name]["server"]
+
+    session = requests.Session()
+    session.verify = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    unity_session = requests.Session()
+    unity_session.verify = False
+    unity_session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    try:
+        user_details = _get_user_details(session, cucm_host, clean_target)
+    except Exception as exc:
+        err_msg = str(exc)
+        if "The specified User was not found" in err_msg or "5007" in err_msg:
+            raise RuntimeError(f"Invalid user: {clean_target} was not found in CUCM") from exc
+        raise
+
+    existing_csf = _find_existing_csf_assignment(session, cucm_host, user_details.get("associatedDevices", []))
+
+    unity_extension = ""
+    unity_lookup_error = ""
+    try:
+        unity_user = _get_unity_user_by_alias(unity_session, unity_server, user_details["userid"])
+        if unity_user and unity_user.get("ObjectId"):
+            unity_detail = _get_unity_user_by_object_id(unity_session, unity_server, unity_user["ObjectId"])
+            unity_extension = _extract_unity_extension(unity_detail)
+    except Exception as exc:
+        unity_lookup_error = str(exc)
+
+    return {
+        "environment": env_name,
+        "cucm_host": cucm_host,
+        "unity_server": unity_server,
+        "target_user": user_details.get("userid", clean_target),
+        "jabber_built": bool(existing_csf),
+        "device_name": (existing_csf or {}).get("device", ""),
+        "extension": (existing_csf or {}).get("pattern", ""),
+        "partition": (existing_csf or {}).get("partition", ""),
+        "voicemail_extension": unity_extension,
+        "unity_lookup_error": unity_lookup_error,
+    }
