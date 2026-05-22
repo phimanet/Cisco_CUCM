@@ -1085,9 +1085,9 @@ def menu_page(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="bot">Add in Jabber Android</button>
           <button type="button" class="portal-nav-btn" data-panel="strike">Strike Mode - Add in both Jabber iPhone and Android</button>
           <button type="button" class="portal-nav-btn" data-panel="linegroup">Update Hunt List Line Group</button>
-          <button type="button" class="portal-nav-btn" data-panel="rpo">Extract RPO (Option 18)</button>
-          <button type="button" class="portal-nav-btn" data-panel="adddn">Add DNs</button>
-          <button type="button" class="portal-nav-btn" data-panel="exportdn">Export DNs</button>
+          <button type="button" class="portal-nav-btn" data-panel="rpo">Extract RPO Phone information</button>
+          <button type="button" class="portal-nav-btn" data-panel="adddn">Add Directory Numbers</button>
+          <button type="button" class="portal-nav-btn" data-panel="exportdn">Export Directory Numbers</button>
           <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
         </div>
       </aside>
