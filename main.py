@@ -1008,7 +1008,7 @@ def menu_page(request: Request):
     <p>Use this quick lookup before building or offboarding. It returns device name, Jabber extension, and voicemail extension.</p>
 
     <div class="jabber-check-layout">
-      <form id="jabber-check-form" class="target-user-form jabber-check-form" action="/check/jabber-status" method="post">
+      <form id="jabber-check-form" class="target-user-form jabber-check-form" action="/check/jabber-status" method="post" onsubmit="event.preventDefault(); if (validateForm(this)) { submitJabberCheckInline(this); }">
         Cisco Callmanager Username:<br>
         <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
