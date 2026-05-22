@@ -1076,7 +1076,7 @@ def menu_page(request: Request):
       <aside class="portal-sidebar">
         <h4>Operations Menu</h4>
         <div class="portal-nav">
-          <button type="button" class="portal-nav-btn active" data-panel="precheck">Pre-Check</button>
+          <button type="button" class="portal-nav-btn active" data-panel="precheck">Check for Existing Jabber Configuration</button>
           <button type="button" class="portal-nav-btn" data-panel="build">Build User (Option 9)</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset PIN (Option 2)</button>
           <button type="button" class="portal-nav-btn" data-panel="offboard">Offboard (Option 10)</button>
