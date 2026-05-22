@@ -1077,8 +1077,8 @@ def menu_page(request: Request):
         <h4>Operations Menu</h4>
         <div class="portal-nav">
           <button type="button" class="portal-nav-btn active" data-panel="precheck">Check for Existing Jabber Configuration</button>
-          <button type="button" class="portal-nav-btn" data-panel="build">Build User (Option 9)</button>
-          <button type="button" class="portal-nav-btn" data-panel="pin">Reset PIN (Option 2)</button>
+          <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
+          <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
           <button type="button" class="portal-nav-btn" data-panel="offboard">Offboard (Option 10)</button>
           <button type="button" class="portal-nav-btn" data-panel="ad">AD Update (Option 11)</button>
           <button type="button" class="portal-nav-btn" data-panel="tct">Secondary iPhone (Option 3)</button>
