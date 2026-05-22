@@ -1008,7 +1008,7 @@ def menu_page(request: Request):
     <p>Use this quick lookup before building or offboarding. It returns device name, Jabber extension, and voicemail extension.</p>
 
     <div class="jabber-check-layout">
-      <form id="jabber-check-form" class="target-user-form jabber-check-form" action="/check/jabber-status" method="post">
+      <form id="jabber-check-form" class="target-user-form jabber-check-form" action="javascript:void(0)" method="post" onsubmit="return false;">
         Cisco Callmanager Username:<br>
         <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -1019,7 +1019,7 @@ def menu_page(request: Request):
         <input name="target_user" placeholder="john.doe" required><br><br>
 
         <div class="action-row">
-          <button type="submit">Check Jabber Build Status</button>
+          <button id="jabber-check-btn" type="button">Check Jabber Build Status</button>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
       </form>
@@ -1607,7 +1607,7 @@ def menu_page(request: Request):
 
         try {
           const formData = new FormData(form);
-          const response = await fetch(form.action, {
+          const response = await fetch("/check/jabber-status", {
             method: "POST",
             body: formData,
           });
@@ -1997,6 +1997,7 @@ def menu_page(request: Request):
       }
 
       const jabberCheckForm = document.getElementById("jabber-check-form");
+      const jabberCheckBtn = document.getElementById("jabber-check-btn");
       if (jabberCheckForm) {
         jabberCheckForm.querySelectorAll("input").forEach((field) => {
           field.addEventListener("input", () => clearFieldError(field));
@@ -2009,6 +2010,25 @@ def menu_page(request: Request):
           }
           submitJabberCheckInline(jabberCheckForm);
         });
+      }
+
+      if (jabberCheckForm && jabberCheckBtn) {
+        jabberCheckBtn.addEventListener("click", () => {
+          if (!validateForm(jabberCheckForm)) {
+            return;
+          }
+          submitJabberCheckInline(jabberCheckForm);
+        });
+
+        const jabberUserField = jabberCheckForm.querySelector('input[name="target_user"]');
+        if (jabberUserField) {
+          jabberUserField.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              jabberCheckBtn.click();
+            }
+          });
+        }
       }
     </script>
     </main>
