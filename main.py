@@ -1019,7 +1019,7 @@ def menu_page(request: Request):
         <input name="target_user" placeholder="john.doe" required><br><br>
 
         <div class="action-row">
-          <button id="jabber-check-btn" type="submit">Check Jabber Build Status</button>
+          <button id="jabber-check-btn" type="button">Check Jabber Build Status</button>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
       </form>
@@ -2151,6 +2151,22 @@ def menu_page(request: Request):
       if (lineGroupForm && lineGroupSearchBtn) {
         lineGroupSearchBtn.addEventListener("click", () => {
           searchLineGroups(lineGroupForm);
+        });
+      }
+
+      const jabberCheckForm = document.getElementById("jabber-check-form");
+      const jabberCheckBtn = document.getElementById("jabber-check-btn");
+      if (jabberCheckForm && jabberCheckBtn) {
+        jabberCheckBtn.addEventListener("click", () => {
+          if (!validateForm(jabberCheckForm)) {
+            return;
+          }
+
+          if (!validatePinConfirmation(jabberCheckForm)) {
+            return;
+          }
+
+          submitJabberCheckInline(jabberCheckForm);
         });
       }
 
