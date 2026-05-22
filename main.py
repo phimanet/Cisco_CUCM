@@ -19,6 +19,8 @@ from toolkit.build_user_csf_phone import build_user_csf_phone_from_template
 from toolkit.decommission_user_csf_voicemail import decommission_user_csf_voicemail
 from toolkit.reset_unity_voicemail_pin import reset_unity_voicemail_pin
 from toolkit.add_secondary_devices import (
+from toolkit.update_ad_phone_only import update_ad_phone_fields_only
+from toolkit.add_secondary_devices import (
   add_secondary_tct_device,
   add_secondary_bot_device,
   add_secondary_strike_devices,
@@ -526,6 +528,18 @@ def home(request: Request):
         color: #244e78;
         font-size: 13px;
       }
+
+      .offboard-h3 {
+        color: #d62828;
+      }
+
+      .offboard-form button {
+        background: #d62828;
+      }
+
+      .offboard-form button:hover {
+        background: #b52020;
+      }
     </style>
   </head>
   <body>
@@ -1003,7 +1017,7 @@ def menu_page(request: Request):
 
     <hr>
 
-    <h3>Offboard User - Delete all Jabber and Voicemail Box (Option 10)</h3>
+    <h3 class="offboard-h3">Offboard User - Delete all Jabber and Voicemail Box (Option 10)</h3>
     <p>Authentication note: Cisco Callmanager credentials entered below are reused for Unity voicemail and Active Directory actions.</p>
 
     <div class="offboard-layout">
@@ -1032,6 +1046,43 @@ def menu_page(request: Request):
           </a>
         </p>
         <textarea id="offboard-preview" readonly></textarea>
+      </section>
+    </div>
+
+    <hr>
+
+    <h3>Update Active Directory Telephone and ipPhone field only (Option 11)</h3>
+    <p>Authentication note: Cisco Callmanager credentials entered below are used for Active Directory authentication.</p>
+
+    <div class="ad-update-layout">
+      <form id="ad-update-form" class="target-user-form ad-update-form" action="/update/ad-phone-fields" method="post">
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
+        User ID for person to update:<br>
+        <input name="target_user" placeholder="john.doe" required><br><br>
+
+        10-Digit Phone Number (or leave blank to clear):<br>
+        <input name="phone_number" placeholder="2145551234" pattern="[0-9]{0,10}"><br><br>
+
+        <div class="action-row">
+          <button type="submit">Update AD Phone Fields (Option 11)</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
+      </form>
+
+      <section class="ad-update-output" aria-live="polite">
+        <h4>AD Update Output Preview</h4>
+        <p id="ad-update-status" class="ad-update-status">Run Update AD Phone Fields to view output here.</p>
+        <p>
+          <a id="ad-update-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
+            Download CSV Output
+          </a>
+        </p>
+        <textarea id="ad-update-preview" readonly></textarea>
       </section>
     </div>
 
@@ -1567,6 +1618,56 @@ def menu_page(request: Request):
         }
       }
 
+      async function submitAdUpdateInline(form) {
+        const statusEl = document.getElementById("ad-update-status");
+        const outputEl = document.getElementById("ad-update-preview");
+        const downloadEl = document.getElementById("ad-update-download");
+        const phoneField = form.querySelector('input[name="phone_number"]');
+        const userField = form.querySelector('input[name="target_user"]');
+
+        const phoneValue = (phoneField.value || "").trim();
+
+        if (!phoneValue) {
+          const username = (userField.value || "").trim();
+          const confirmed = confirm(
+            `Are you sure you want to clear the phone field for "${username}"?`
+          );
+          if (!confirmed) {
+            return;
+          }
+        }
+
+        statusEl.textContent = "Running AD Phone Field Update...";
+        outputEl.value = "";
+        downloadEl.style.display = "none";
+        downloadEl.removeAttribute("href");
+
+        try {
+          const formData = new FormData(form);
+          const response = await fetch(`${form.action}?inline=1`, {
+            method: "POST",
+            body: formData,
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(errorText || `Request failed with status ${response.status}`);
+          }
+
+          const result = await response.json();
+          outputEl.value = result.output_text || "";
+          statusEl.textContent = `Completed: ${result.filename || "ad_update_output.csv"}`;
+          downloadEl.href = result.download_url;
+          downloadEl.style.display = "inline";
+
+          userField.value = "";
+          phoneField.value = "";
+        } catch (error) {
+          statusEl.textContent = "AD Phone Field Update failed. Review output and retry.";
+          outputEl.value = error.message || "Unknown error.";
+        }
+      }
+
       async function searchLineGroups(form) {
         const searchStatusEl = document.getElementById("line-group-search-status");
         const selectEl = form.querySelector('select[name="line_group_name"]');
@@ -1646,6 +1747,12 @@ def menu_page(request: Request):
           if (form.id === "offboard-user-form") {
             event.preventDefault();
             submitOffboardInline(form);
+            return;
+          }
+
+          if (form.id === "ad-update-form") {
+            event.preventDefault();
+            submitAdUpdateInline(form);
             return;
           }
 
@@ -1972,7 +2079,44 @@ def reset_unity_voicemail_pin_route(
         unity_pass=unity_pass,
         target_alias=voicemail_user,
         new_pin=new_voicemail_pin,
-      )
+
+
+      @app.post("/update/ad-phone-fields")
+      def update_ad_phone_fields_route(
+        request: Request,
+        cucm_user: str = Form(""),
+        cucm_pass: str = Form(""),
+        target_user: str = Form(...),
+        phone_number: str = Form(""),
+        inline: bool = Query(False),
+      ):
+        _update_cached_credentials(request, cucm_host="", cucm_user=cucm_user)
+        data, filename = update_ad_phone_fields_only(
+          target_user=target_user,
+          phone_number=phone_number,
+          ad_username=cucm_user,
+          ad_password=cucm_pass,
+        )
+        _append_audit_event(
+          action="update_ad_phone_only_option_11",
+          cucm_host="",
+          operator=cucm_user,
+          target=target_user,
+          output_filename=filename,
+          inline_mode=inline,
+        )
+
+        if inline:
+          job_output = _prepare_job_output(data, filename)
+          return JSONResponse({
+            "job_id": job_output["job_id"],
+            "filename": job_output["filename"],
+            "output_text": job_output["output_text"],
+            "download_url": f"/download/job-output/{job_output['job_id']}",
+          })
+
+        return _render_job_result("Update Active Directory Telephone and ipPhone field only (Option 11)", data, filename)
+
 
     _append_audit_event(
       action="reset_unity_voicemail_pin_option_2",

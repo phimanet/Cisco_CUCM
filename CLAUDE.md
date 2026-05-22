@@ -102,6 +102,13 @@ Priority keys:
 - Updated Option 9 and Option 10 authentication flow to reuse the same CUCM credentials for AD operations (single credential set for CUCM/Unity/AD in these workflows).
 - Added Ubuntu-safe LDAP fallback in AD helper so Option 9/10 can update AD when PowerShell/ActiveDirectory cmdlets are not available on Linux hosts.
 
+### 2026-05-21 (LAB VALIDATION COMPLETE)
+- LAB LDAP Configuration Final: `AD_LDAP_SERVER=lasdc01.ahs.int`, `AD_LDAP_AUTH=simple` (NTLM has MD4 issues on Ubuntu 24.04; SIMPLE UPN auth works)
+- Option 9 LAB Test: ✓ PASS - AD phone fields updated successfully for test user (Alfredo.Salcedo)
+- Option 10 LAB Test: ✓ PASS - AD phone fields cleared successfully for test user
+- CSV output rows confirmed working for both workflows ("Update AD Phone Fields" / "Clear AD Phone Fields" with Success/Failed status)
+- Production Requirement: TCP 636 (LDAPS) must be open from lascrtmp01.ahs.int (10.241.18.15) to lasdc01.ahs.int for LDAP operations
+
 ### 2026-04-30
 - Initialized project tracker format.
 - Confirmed workspace purpose: website front end that executes manually imported, working Python CUCM scripts.
