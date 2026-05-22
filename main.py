@@ -803,6 +803,22 @@ def menu_page(request: Request):
         border-color: var(--amn-blue);
       }
 
+      .portal-nav-btn-danger {
+        background: #fbe9ea;
+        color: #8e1f28;
+        border-color: #e8b6bc;
+      }
+
+      .portal-nav-btn-danger:hover {
+        background: #f8d9dc;
+      }
+
+      .portal-nav-btn-danger.active {
+        background: #b4232d;
+        color: #fff;
+        border-color: #b4232d;
+      }
+
       .portal-main {
         min-width: 0;
       }
@@ -1079,7 +1095,7 @@ def menu_page(request: Request):
           <button type="button" class="portal-nav-btn active" data-panel="precheck">Check for Existing Jabber Configuration</button>
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
-          <button type="button" class="portal-nav-btn" data-panel="offboard">Offboard Cisco Jabber</button>
+          <button type="button" class="portal-nav-btn portal-nav-btn-danger" data-panel="offboard">Offboard Cisco Jabber</button>
           <button type="button" class="portal-nav-btn" data-panel="ad">Update AD Telephone/ipPhone Field Only</button>
           <button type="button" class="portal-nav-btn" data-panel="tct">Add in Jabber iPhone</button>
           <button type="button" class="portal-nav-btn" data-panel="bot">Add in Jabber Android</button>
