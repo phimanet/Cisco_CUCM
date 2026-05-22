@@ -1571,6 +1571,16 @@ def menu_page(request: Request):
         const statusEl = document.getElementById("offboard-status");
         const outputEl = document.getElementById("offboard-preview");
         const downloadEl = document.getElementById("offboard-download");
+        const targetUserInput = form.querySelector('input[name="target_user"]');
+        const targetUser = (targetUserInput?.value || "").trim();
+
+        const confirmed = confirm(
+          `DANGER: This will offboard user "${targetUser}" and remove Jabber devices and voicemail.\n\nDo you want to continue?`
+        );
+        if (!confirmed) {
+          statusEl.textContent = "Offboard action canceled.";
+          return;
+        }
 
         statusEl.textContent = "Running Offboard User...";
         outputEl.value = "";
@@ -1595,7 +1605,6 @@ def menu_page(request: Request):
           downloadEl.href = result.download_url;
           downloadEl.style.display = "inline";
 
-          const targetUserInput = form.querySelector('input[name="target_user"]');
           if (targetUserInput) {
             targetUserInput.value = "";
           }
