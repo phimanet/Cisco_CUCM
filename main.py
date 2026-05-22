@@ -1008,7 +1008,7 @@ def menu_page(request: Request):
     <p>Use this quick lookup before building or offboarding. It returns device name, Jabber extension, and voicemail extension.</p>
 
     <div class="jabber-check-layout">
-      <form id="jabber-check-form" class="target-user-form jabber-check-form" action="javascript:void(0)" method="post">
+      <form id="jabber-check-form" class="target-user-form jabber-check-form" action="javascript:void(0)" method="post" onsubmit="return false;">
         Cisco Callmanager Username:<br>
         <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -1030,85 +1030,6 @@ def menu_page(request: Request):
         <pre id="jabber-check-preview" class="jabber-check-preview"></pre>
       </section>
     </div>
-
-    <script>
-      (function () {
-        const form = document.getElementById("jabber-check-form");
-        const button = document.getElementById("jabber-check-btn");
-        const statusEl = document.getElementById("jabber-check-status");
-        const outputEl = document.getElementById("jabber-check-preview");
-
-        if (!form || !button || !statusEl || !outputEl) {
-          return;
-        }
-
-        async function runJabberPrecheck() {
-          const targetUserField = form.querySelector('input[name="target_user"]');
-          const targetUser = ((targetUserField && targetUserField.value) || "").trim();
-          if (!targetUser) {
-            statusEl.textContent = "Enter a User ID to check.";
-            outputEl.textContent = "";
-            if (targetUserField) {
-              targetUserField.focus();
-            }
-            return;
-          }
-
-          statusEl.textContent = "Running Jabber lookup...";
-          outputEl.textContent = "";
-
-          try {
-            const formData = new FormData(form);
-            const response = await fetch("/check/jabber-status", {
-              method: "POST",
-              body: formData,
-              credentials: "same-origin",
-            });
-
-            const responseText = await response.text();
-            let payload = null;
-            try {
-              payload = JSON.parse(responseText || "{}");
-            } catch (_parseErr) {
-              throw new Error(responseText || `Request failed with status ${response.status}`);
-            }
-
-            if (!response.ok) {
-              throw new Error((payload && payload.detail) || `Request failed with status ${response.status}`);
-            }
-
-            outputEl.textContent = [
-              `User: ${payload.target_user || ""}`,
-              `Jabber Built: ${payload.jabber_built ? "YES" : "NO"}`,
-              `Device Name: ${payload.device_name || "Not found"}`,
-              `Jabber Extension: ${payload.extension || "Not found"}`,
-              `Voicemail Extension: ${payload.voicemail_extension || "Not found"}`,
-              `Environment: ${payload.environment || ""}`,
-              `CUCM Host: ${payload.cucm_host || ""}`,
-              `Unity Server: ${payload.unity_server || ""}`,
-              payload.unity_lookup_error ? `Unity Lookup Error: ${payload.unity_lookup_error}` : "",
-            ].filter(Boolean).join("\n");
-            statusEl.textContent = "Lookup complete.";
-            if (targetUserField) {
-              targetUserField.value = "";
-            }
-          } catch (err) {
-            statusEl.textContent = "Lookup failed. Review message and retry.";
-            outputEl.textContent = (err && err.message) ? err.message : "Unknown error.";
-          }
-        }
-
-        form.addEventListener("submit", function (event) {
-          event.preventDefault();
-          runJabberPrecheck();
-        });
-
-        button.addEventListener("click", function (event) {
-          event.preventDefault();
-          runJabberPrecheck();
-        });
-      })();
-    </script>
 
     <hr>
 
@@ -1158,9 +1079,73 @@ def menu_page(request: Request):
         const statusEl = document.getElementById("build-user-status");
         const outputEl = document.getElementById("build-user-preview");
         const downloadEl = document.getElementById("build-user-download");
+        const jabberForm = document.getElementById("jabber-check-form");
+        const jabberBtn = document.getElementById("jabber-check-btn");
+        const jabberStatusEl = document.getElementById("jabber-check-status");
+        const jabberOutputEl = document.getElementById("jabber-check-preview");
 
         if (!form || !button || !statusEl || !outputEl || !downloadEl) {
           return;
+        }
+
+        async function runJabberPrecheckFromBuildScript() {
+          if (!jabberForm || !jabberStatusEl || !jabberOutputEl) {
+            return;
+          }
+
+          const targetUserField = jabberForm.querySelector('input[name="target_user"]');
+          const targetUser = ((targetUserField && targetUserField.value) || "").trim();
+          if (!targetUser) {
+            jabberStatusEl.textContent = "Enter a User ID to check.";
+            jabberOutputEl.textContent = "";
+            if (targetUserField) {
+              targetUserField.focus();
+            }
+            return;
+          }
+
+          jabberStatusEl.textContent = "Running Jabber lookup...";
+          jabberOutputEl.textContent = "";
+
+          try {
+            const formData = new FormData(jabberForm);
+            const response = await fetch("/check/jabber-status", {
+              method: "POST",
+              body: formData,
+              credentials: "same-origin",
+            });
+
+            const responseText = await response.text();
+            let payload = null;
+            try {
+              payload = JSON.parse(responseText || "{}");
+            } catch (_parseErr) {
+              throw new Error(responseText || `Request failed with status ${response.status}`);
+            }
+
+            if (!response.ok) {
+              throw new Error((payload && payload.detail) || `Request failed with status ${response.status}`);
+            }
+
+            jabberOutputEl.textContent = [
+              `User: ${payload.target_user || ""}`,
+              `Jabber Built: ${payload.jabber_built ? "YES" : "NO"}`,
+              `Device Name: ${payload.device_name || "Not found"}`,
+              `Jabber Extension: ${payload.extension || "Not found"}`,
+              `Voicemail Extension: ${payload.voicemail_extension || "Not found"}`,
+              `Environment: ${payload.environment || ""}`,
+              `CUCM Host: ${payload.cucm_host || ""}`,
+              `Unity Server: ${payload.unity_server || ""}`,
+              payload.unity_lookup_error ? `Unity Lookup Error: ${payload.unity_lookup_error}` : "",
+            ].filter(Boolean).join("\n");
+            jabberStatusEl.textContent = "Lookup complete.";
+            if (targetUserField) {
+              targetUserField.value = "";
+            }
+          } catch (err) {
+            jabberStatusEl.textContent = "Lookup failed. Review message and retry.";
+            jabberOutputEl.textContent = (err && err.message) ? err.message : "Unknown error.";
+          }
         }
 
         async function runBuild() {
@@ -1224,6 +1209,20 @@ def menu_page(request: Request):
           event.preventDefault();
           runBuild();
         });
+
+        if (jabberForm) {
+          jabberForm.addEventListener("submit", function (event) {
+            event.preventDefault();
+            runJabberPrecheckFromBuildScript();
+          });
+        }
+
+        if (jabberBtn) {
+          jabberBtn.addEventListener("click", function (event) {
+            event.preventDefault();
+            runJabberPrecheckFromBuildScript();
+          });
+        }
       })();
     </script>
 
