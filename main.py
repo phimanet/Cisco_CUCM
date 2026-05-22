@@ -18,7 +18,6 @@ from toolkit.add_directory_number import add_directory_numbers_from_csv
 from toolkit.build_user_csf_phone import build_user_csf_phone_from_template
 from toolkit.decommission_user_csf_voicemail import decommission_user_csf_voicemail
 from toolkit.reset_unity_voicemail_pin import reset_unity_voicemail_pin
-from toolkit.add_secondary_devices import (
 from toolkit.update_ad_phone_only import update_ad_phone_fields_only
 from toolkit.add_secondary_devices import (
   add_secondary_tct_device,
@@ -2079,44 +2078,7 @@ def reset_unity_voicemail_pin_route(
         unity_pass=unity_pass,
         target_alias=voicemail_user,
         new_pin=new_voicemail_pin,
-
-
-      @app.post("/update/ad-phone-fields")
-      def update_ad_phone_fields_route(
-        request: Request,
-        cucm_user: str = Form(""),
-        cucm_pass: str = Form(""),
-        target_user: str = Form(...),
-        phone_number: str = Form(""),
-        inline: bool = Query(False),
-      ):
-        _update_cached_credentials(request, cucm_host="", cucm_user=cucm_user)
-        data, filename = update_ad_phone_fields_only(
-          target_user=target_user,
-          phone_number=phone_number,
-          ad_username=cucm_user,
-          ad_password=cucm_pass,
-        )
-        _append_audit_event(
-          action="update_ad_phone_only_option_11",
-          cucm_host="",
-          operator=cucm_user,
-          target=target_user,
-          output_filename=filename,
-          inline_mode=inline,
-        )
-
-        if inline:
-          job_output = _prepare_job_output(data, filename)
-          return JSONResponse({
-            "job_id": job_output["job_id"],
-            "filename": job_output["filename"],
-            "output_text": job_output["output_text"],
-            "download_url": f"/download/job-output/{job_output['job_id']}",
-          })
-
-        return _render_job_result("Update Active Directory Telephone and ipPhone field only (Option 11)", data, filename)
-
+      )
 
     _append_audit_event(
       action="reset_unity_voicemail_pin_option_2",
@@ -2137,6 +2099,43 @@ def reset_unity_voicemail_pin_route(
       })
 
     return _render_job_result("Reset Unity Voicemail PIN (Option 2)", data, filename)
+
+
+@app.post("/update/ad-phone-fields")
+def update_ad_phone_fields_route(
+    request: Request,
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    target_user: str = Form(...),
+    phone_number: str = Form(""),
+    inline: bool = Query(False),
+):
+    _update_cached_credentials(request, cucm_host="", cucm_user=cucm_user)
+    data, filename = update_ad_phone_fields_only(
+      target_user=target_user,
+      phone_number=phone_number,
+      ad_username=cucm_user,
+      ad_password=cucm_pass,
+    )
+    _append_audit_event(
+      action="update_ad_phone_only_option_11",
+      cucm_host="",
+      operator=cucm_user,
+      target=target_user,
+      output_filename=filename,
+      inline_mode=inline,
+    )
+
+    if inline:
+      job_output = _prepare_job_output(data, filename)
+      return JSONResponse({
+        "job_id": job_output["job_id"],
+        "filename": job_output["filename"],
+        "output_text": job_output["output_text"],
+        "download_url": f"/download/job-output/{job_output['job_id']}",
+      })
+
+    return _render_job_result("Update Active Directory Telephone and ipPhone field only (Option 11)", data, filename)
 
 
 @app.post("/add/secondary-tct-device")
