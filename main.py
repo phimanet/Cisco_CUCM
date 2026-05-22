@@ -1083,8 +1083,8 @@ def menu_page(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="ad">Update AD Telephone/ipPhone Field Only</button>
           <button type="button" class="portal-nav-btn" data-panel="tct">Add in Jabber iPhone</button>
           <button type="button" class="portal-nav-btn" data-panel="bot">Add in Jabber Android</button>
-          <button type="button" class="portal-nav-btn" data-panel="strike">Strike Mode (Option 5)</button>
-          <button type="button" class="portal-nav-btn" data-panel="linegroup">Line Groups (Option 17)</button>
+          <button type="button" class="portal-nav-btn" data-panel="strike">Strike Mode - Add in both Jabber iPhone and Android</button>
+          <button type="button" class="portal-nav-btn" data-panel="linegroup">Update Hunt List Line Group</button>
           <button type="button" class="portal-nav-btn" data-panel="rpo">Extract RPO (Option 18)</button>
           <button type="button" class="portal-nav-btn" data-panel="adddn">Add DNs</button>
           <button type="button" class="portal-nav-btn" data-panel="exportdn">Export DNs</button>
