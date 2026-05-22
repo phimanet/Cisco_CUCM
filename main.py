@@ -1008,7 +1008,7 @@ def menu_page(request: Request):
     <p>Use this quick lookup before building or offboarding. It returns device name, Jabber extension, and voicemail extension.</p>
 
     <div class="jabber-check-layout">
-      <form id="jabber-check-form" class="target-user-form jabber-check-form" action="javascript:void(0)" method="post" onsubmit="return runJabberPrecheckLegacy();">
+      <form id="jabber-check-form" class="target-user-form jabber-check-form" action="/check/jabber-status" method="post" onsubmit="return runJabberPrecheckLegacy();">
         Cisco Callmanager Username:<br>
         <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -1019,7 +1019,7 @@ def menu_page(request: Request):
         <input name="target_user" placeholder="john.doe" required><br><br>
 
         <div class="action-row">
-          <button id="jabber-check-btn" type="submit" onclick="return runJabberPrecheckLegacy();">Check Jabber Build Status</button>
+          <button id="jabber-check-btn" type="submit">Check Jabber Build Status</button>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
       </form>
@@ -1071,6 +1071,8 @@ def menu_page(request: Request):
         var xhr = new XMLHttpRequest();
         xhr.open("POST", "/check/jabber-status", true);
         xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
+        xhr.setRequestHeader("Accept", "application/json");
+        xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
         xhr.onreadystatechange = function () {
           if (xhr.readyState !== 4) {
             return;
@@ -1860,6 +1862,10 @@ def menu_page(request: Request):
           const response = await fetch("/check/jabber-status", {
             method: "POST",
             body: formData,
+            headers: {
+              "Accept": "application/json",
+              "X-Requested-With": "XMLHttpRequest",
+            },
           });
 
           if (!response.ok) {
@@ -2458,7 +2464,43 @@ def check_jabber_status_route(
       inline_mode=True,
     )
 
-    return JSONResponse(result)
+    is_ajax = (request.headers.get("x-requested-with", "").lower() == "xmlhttprequest")
+    if is_ajax:
+      return JSONResponse(result)
+
+    html_result = f"""
+<!doctype html>
+<html>
+  <head>
+    <meta charset=\"utf-8\" />
+    <title>Jabber Pre-Check Result</title>
+    <style>
+      body {{ font-family: Segoe UI, Arial, sans-serif; background: #f4f8fc; color: #10324f; margin: 24px; }}
+      .card {{ max-width: 880px; background: #ffffff; border: 1px solid #d7e2ee; border-radius: 10px; padding: 18px; }}
+      pre {{ background: #eef5fb; border: 1px solid #d7e2ee; border-radius: 8px; padding: 12px; white-space: pre-wrap; }}
+      a {{ color: #005cb9; font-weight: 600; }}
+    </style>
+  </head>
+  <body>
+    <div class=\"card\">
+      <h2>Jabber Pre-Check Result</h2>
+      <pre>{escape(chr(10).join([
+        f"User: {result.get('target_user', '')}",
+        f"Jabber Built: {'YES' if result.get('jabber_built') else 'NO'}",
+        f"Device Name: {result.get('device_name') or 'Not found'}",
+        f"Jabber Extension: {result.get('extension') or 'Not found'}",
+        f"Voicemail Extension: {result.get('voicemail_extension') or 'Not found'}",
+        f"Environment: {result.get('environment', '')}",
+        f"CUCM Host: {result.get('cucm_host', '')}",
+        f"Unity Server: {result.get('unity_server', '')}",
+        f"Unity Lookup Error: {result.get('unity_lookup_error', '')}" if result.get('unity_lookup_error') else "",
+      ]))}</pre>
+      <p><a href=\"/menu\">Back to Menu</a></p>
+    </div>
+  </body>
+</html>
+"""
+    return HTMLResponse(content=html_result)
 
 
 @app.post("/decommission/user-csf-voicemail")
