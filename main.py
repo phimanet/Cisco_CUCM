@@ -831,21 +831,6 @@ def menu_page(request: Request):
         margin: 0 0 10px 0;
       }
 
-      .jabber-check-preview {
-        width: 100%;
-        min-height: 190px;
-        margin: 0;
-        padding: 12px;
-        box-sizing: border-box;
-        font-family: Consolas, monospace;
-        font-size: 13px;
-        border-radius: 8px;
-        border: 1px solid var(--amn-border);
-        background: var(--amn-sky);
-        color: #0f2940;
-        white-space: pre-wrap;
-      }
-
       .jabber-check-frame {
         width: 100%;
         min-height: 240px;
@@ -1028,7 +1013,6 @@ def menu_page(request: Request):
 
         <div class="action-row">
           <button id="jabber-check-btn" type="submit">Check Jabber Build Status</button>
-          <a href="/check/jabber-status" style="display:none;">Fallback</a>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
       </form>
@@ -1765,53 +1749,6 @@ def menu_page(request: Request):
         } catch (error) {
           statusEl.textContent = "Build User failed. Review output and retry.";
           outputEl.value = error.message || "Unknown error.";
-        }
-      }
-
-      async function submitJabberCheckInline(form) {
-        const statusEl = document.getElementById("jabber-check-status");
-        const outputEl = document.getElementById("jabber-check-preview");
-
-        statusEl.textContent = "Running Jabber lookup...";
-        outputEl.textContent = "";
-
-        try {
-          const formData = new FormData(form);
-          const response = await fetch("/check/jabber-status", {
-            method: "POST",
-            body: formData,
-            headers: {
-              "Accept": "application/json",
-              "X-Requested-With": "XMLHttpRequest",
-            },
-          });
-
-          if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(errorText || `Request failed with status ${response.status}`);
-          }
-
-          const result = await response.json();
-          outputEl.textContent = [
-            `User: ${result.target_user || ""}`,
-            `Jabber Built: ${result.jabber_built ? "YES" : "NO"}`,
-            `Device Name: ${result.device_name || "Not found"}`,
-            `Jabber Extension: ${result.extension || "Not found"}`,
-            `Voicemail Extension: ${result.voicemail_extension || "Not found"}`,
-            `Environment: ${result.environment || ""}`,
-            `CUCM Host: ${result.cucm_host || ""}`,
-            `Unity Server: ${result.unity_server || ""}`,
-            result.unity_lookup_error ? `Unity Lookup Error: ${result.unity_lookup_error}` : "",
-          ].filter(Boolean).join("\n");
-          statusEl.textContent = "Lookup complete.";
-
-          const targetUserInput = form.querySelector('input[name="target_user"]');
-          if (targetUserInput) {
-            targetUserInput.value = "";
-          }
-        } catch (error) {
-          statusEl.textContent = "Lookup failed. Review message and retry.";
-          outputEl.textContent = error.message || "Unknown error.";
         }
       }
 
