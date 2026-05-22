@@ -1088,6 +1088,10 @@ def menu_page(request: Request):
           return;
         }
 
+        if (jabberStatusEl) {
+          jabberStatusEl.textContent = "Pre-check ready.";
+        }
+
         async function runJabberPrecheckFromBuildScript() {
           if (!jabberForm || !jabberStatusEl || !jabberOutputEl) {
             return;
@@ -1218,6 +1222,12 @@ def menu_page(request: Request):
         }
 
         if (jabberBtn) {
+          jabberBtn.onclick = function (event) {
+            event.preventDefault();
+            runJabberPrecheckFromBuildScript();
+            return false;
+          };
+
           jabberBtn.addEventListener("click", function (event) {
             event.preventDefault();
             runJabberPrecheckFromBuildScript();
