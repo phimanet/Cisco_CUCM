@@ -1008,7 +1008,7 @@ def menu_page(request: Request):
     <p>Use this quick lookup before building or offboarding. It returns device name, Jabber extension, and voicemail extension.</p>
 
     <div class="jabber-check-layout">
-      <form id="jabber-check-form" class="target-user-form jabber-check-form" action="/check/jabber-status" method="post" onsubmit="event.preventDefault(); if (validateForm(this)) { submitJabberCheckInline(this); }">
+      <form id="jabber-check-form" class="target-user-form jabber-check-form" action="/check/jabber-status" method="post">
         Cisco Callmanager Username:<br>
         <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -1865,6 +1865,10 @@ def menu_page(request: Request):
       }
 
       document.querySelectorAll("form").forEach((form) => {
+        if (form.id === "jabber-check-form") {
+          return;
+        }
+
         form.querySelectorAll("input").forEach((field) => {
           field.addEventListener("input", () => clearFieldError(field));
         });
@@ -1989,6 +1993,21 @@ def menu_page(request: Request):
       if (lineGroupForm && lineGroupSearchBtn) {
         lineGroupSearchBtn.addEventListener("click", () => {
           searchLineGroups(lineGroupForm);
+        });
+      }
+
+      const jabberCheckForm = document.getElementById("jabber-check-form");
+      if (jabberCheckForm) {
+        jabberCheckForm.querySelectorAll("input").forEach((field) => {
+          field.addEventListener("input", () => clearFieldError(field));
+        });
+
+        jabberCheckForm.addEventListener("submit", (event) => {
+          event.preventDefault();
+          if (!validateForm(jabberCheckForm)) {
+            return;
+          }
+          submitJabberCheckInline(jabberCheckForm);
         });
       }
     </script>
