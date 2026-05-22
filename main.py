@@ -529,15 +529,22 @@ def home(request: Request):
       }
 
       .offboard-h3 {
-        color: #d62828;
+        color: #b00020;
+        font-weight: 900;
+        letter-spacing: 0.2px;
+        text-transform: uppercase;
       }
 
-      .offboard-form button {
-        background: #d62828;
+      .offboard-form .offboard-danger-btn {
+        background: #b00020;
+        border: 2px solid #7a0015;
+        color: #ffffff;
+        font-weight: 800;
+        box-shadow: 0 0 0 2px rgba(176, 0, 32, 0.15);
       }
 
-      .offboard-form button:hover {
-        background: #b52020;
+      .offboard-form .offboard-danger-btn:hover {
+        background: #7a0015;
       }
     </style>
   </head>
@@ -1031,7 +1038,7 @@ def menu_page(request: Request):
         <input name="target_user" placeholder="john.doe" required><br><br>
 
         <div class="action-row">
-          <button type="submit">Run Offboard User - Delete all Jabber and Voicemail Box (Option 10)</button>
+          <button type="submit" class="offboard-danger-btn">DANGER: Run Offboard User - Delete all Jabber and Voicemail Box (Option 10)</button>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
       </form>
