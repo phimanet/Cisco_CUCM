@@ -1079,7 +1079,7 @@ def menu_page(request: Request):
           <button type="button" class="portal-nav-btn active" data-panel="precheck">Check for Existing Jabber Configuration</button>
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
-          <button type="button" class="portal-nav-btn" data-panel="offboard">Offboard (Option 10)</button>
+          <button type="button" class="portal-nav-btn" data-panel="offboard">Offboard Cisco Jabber</button>
           <button type="button" class="portal-nav-btn" data-panel="ad">AD Update (Option 11)</button>
           <button type="button" class="portal-nav-btn" data-panel="tct">Secondary iPhone (Option 3)</button>
           <button type="button" class="portal-nav-btn" data-panel="bot">Secondary Android (Option 4)</button>
