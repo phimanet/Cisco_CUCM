@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-05-07
+- Date: 2026-05-21
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -16,7 +16,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [ ] Define internal certificate renewal/rotation procedure and owner.
 - [ ] Confirm internal subnet allow-list for UFW/Nginx access control.
 - [ ] Document deployment/runtime prerequisites (Python env, FastAPI/Uvicorn, network access to CUCM/Unity).
-- [ ] Centralize environment-specific values (CUCM hosts, Unity hosts, partitions, default PIN) into config/env vars.
+- [x] Centralize environment-specific values — AD LDAP config deployed via `/opt/cucm-web/.env` + systemd EnvironmentFile on both LAB and PROD.
 - [ ] Add lightweight health check and structured error responses for web routes.
 - [ ] Add minimal regression tests for toolkit functions that generate CSV outputs.
 
