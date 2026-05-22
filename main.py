@@ -1031,6 +1031,85 @@ def menu_page(request: Request):
       </section>
     </div>
 
+    <script>
+      (function () {
+        const form = document.getElementById("jabber-check-form");
+        const button = document.getElementById("jabber-check-btn");
+        const statusEl = document.getElementById("jabber-check-status");
+        const outputEl = document.getElementById("jabber-check-preview");
+
+        if (!form || !button || !statusEl || !outputEl) {
+          return;
+        }
+
+        async function runLookup() {
+          const targetUserField = form.querySelector('input[name="target_user"]');
+          const targetUser = ((targetUserField && targetUserField.value) || "").trim();
+          if (!targetUser) {
+            statusEl.textContent = "Enter a User ID to check.";
+            outputEl.textContent = "";
+            if (targetUserField) {
+              targetUserField.focus();
+            }
+            return;
+          }
+
+          statusEl.textContent = "Running Jabber lookup...";
+          outputEl.textContent = "";
+
+          try {
+            const formData = new FormData(form);
+            const response = await fetch("/check/jabber-status", {
+              method: "POST",
+              body: formData,
+              credentials: "same-origin",
+            });
+
+            let payload = null;
+            try {
+              payload = await response.json();
+            } catch (_parseErr) {
+              const rawText = await response.text();
+              throw new Error(rawText || `Request failed with status ${response.status}`);
+            }
+
+            if (!response.ok) {
+              throw new Error((payload && payload.detail) || `Request failed with status ${response.status}`);
+            }
+
+            outputEl.textContent = [
+              `User: ${payload.target_user || ""}`,
+              `Jabber Built: ${payload.jabber_built ? "YES" : "NO"}`,
+              `Device Name: ${payload.device_name || "Not found"}`,
+              `Jabber Extension: ${payload.extension || "Not found"}`,
+              `Voicemail Extension: ${payload.voicemail_extension || "Not found"}`,
+              `Environment: ${payload.environment || ""}`,
+              `CUCM Host: ${payload.cucm_host || ""}`,
+              `Unity Server: ${payload.unity_server || ""}`,
+              payload.unity_lookup_error ? `Unity Lookup Error: ${payload.unity_lookup_error}` : "",
+            ].filter(Boolean).join("\n");
+            statusEl.textContent = "Lookup complete.";
+            if (targetUserField) {
+              targetUserField.value = "";
+            }
+          } catch (err) {
+            statusEl.textContent = "Lookup failed. Review message and retry.";
+            outputEl.textContent = (err && err.message) ? err.message : "Unknown error.";
+          }
+        }
+
+        form.addEventListener("submit", function (event) {
+          event.preventDefault();
+          runLookup();
+        });
+
+        button.addEventListener("click", function (event) {
+          event.preventDefault();
+          runLookup();
+        });
+      })();
+    </script>
+
     <hr>
 
     <h3>Build Cisco Jabber Laptop and Voicemail - New Hire or New Jabber Laptop/VM Add</h3>
