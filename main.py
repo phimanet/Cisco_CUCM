@@ -846,6 +846,14 @@ def menu_page(request: Request):
         white-space: pre-wrap;
       }
 
+      .jabber-check-frame {
+        width: 100%;
+        min-height: 240px;
+        border: 1px solid var(--amn-border);
+        border-radius: 8px;
+        background: var(--amn-sky);
+      }
+
       .jabber-check-status {
         color: #2c5c8a;
         min-height: 18px;
@@ -1008,7 +1016,7 @@ def menu_page(request: Request):
     <p>Use this quick lookup before building or offboarding. It returns device name, Jabber extension, and voicemail extension.</p>
 
     <div class="jabber-check-layout">
-      <form id="jabber-check-form" class="target-user-form jabber-check-form" action="/check/jabber-status" method="post" onsubmit="if (typeof runJabberPrecheckLegacy === 'function') { return runJabberPrecheckLegacy(); } return false;">
+      <form id="jabber-check-form" class="target-user-form jabber-check-form" action="/check/jabber-status?embedded=1" method="post" target="jabber-check-frame">
         Cisco Callmanager Username:<br>
         <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -1019,120 +1027,18 @@ def menu_page(request: Request):
         <input name="target_user" placeholder="john.doe" required><br><br>
 
         <div class="action-row">
-          <button id="jabber-check-btn" type="button" onclick="return runJabberPrecheckLegacy();">Check Jabber Build Status</button>
-          <button type="submit" onclick="this.form.onsubmit=null; return true;">Open Result Page (Fallback)</button>
+          <button id="jabber-check-btn" type="submit">Check Jabber Build Status</button>
+          <a href="/check/jabber-status" style="display:none;">Fallback</a>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
       </form>
 
       <section class="jabber-check-output" aria-live="polite">
         <h4>Jabber Lookup Result</h4>
-        <p id="jabber-check-status" class="jabber-check-status">Run lookup to view status here.</p>
-        <pre id="jabber-check-preview" class="jabber-check-preview"></pre>
+        <p id="jabber-check-status" class="jabber-check-status">Run lookup to load results below.</p>
+        <iframe id="jabber-check-frame" name="jabber-check-frame" class="jabber-check-frame" title="Jabber Lookup Result"></iframe>
       </section>
     </div>
-
-    <script>
-      function runJabberPrecheckLegacy() {
-        var form = document.getElementById("jabber-check-form");
-        try {
-          var statusEl = document.getElementById("jabber-check-status");
-          var outputEl = document.getElementById("jabber-check-preview");
-          if (!form || !statusEl || !outputEl) {
-            return false;
-          }
-
-          var userField = form.querySelector('input[name="cucm_user"]');
-          var passField = form.querySelector('input[name="cucm_pass"]');
-          var targetField = form.querySelector('input[name="target_user"]');
-
-          var cucmUser = (userField && userField.value ? userField.value : "").trim();
-          var cucmPass = passField && passField.value ? passField.value : "";
-          var targetUser = (targetField && targetField.value ? targetField.value : "").trim();
-
-          if (!cucmUser || !cucmPass || !targetUser) {
-            statusEl.textContent = "Fill in Callmanager username, password, and User ID.";
-            outputEl.textContent = "";
-            if (!cucmUser && userField) {
-              userField.focus();
-            } else if (!cucmPass && passField) {
-              passField.focus();
-            } else if (targetField) {
-              targetField.focus();
-            }
-            return false;
-          }
-
-          statusEl.textContent = "Running Jabber lookup...";
-          outputEl.textContent = "";
-
-          var body = "cucm_user=" + encodeURIComponent(cucmUser) +
-            "&cucm_pass=" + encodeURIComponent(cucmPass) +
-            "&target_user=" + encodeURIComponent(targetUser);
-
-          var xhr = new XMLHttpRequest();
-          xhr.open("POST", "/check/jabber-status", true);
-          xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8");
-          xhr.setRequestHeader("Accept", "application/json");
-          xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
-          xhr.onreadystatechange = function () {
-            if (xhr.readyState !== 4) {
-              return;
-            }
-
-            var payload = null;
-            try {
-              payload = JSON.parse(xhr.responseText || "{}");
-            } catch (_err) {
-              payload = null;
-            }
-
-            if (xhr.status >= 200 && xhr.status < 300 && payload) {
-              var lines = [
-                "User: " + (payload.target_user || ""),
-                "Jabber Built: " + (payload.jabber_built ? "YES" : "NO"),
-                "Device Name: " + (payload.device_name || "Not found"),
-                "Jabber Extension: " + (payload.extension || "Not found"),
-                "Voicemail Extension: " + (payload.voicemail_extension || "Not found"),
-                "Environment: " + (payload.environment || ""),
-                "CUCM Host: " + (payload.cucm_host || ""),
-                "Unity Server: " + (payload.unity_server || "")
-              ];
-              if (payload.unity_lookup_error) {
-                lines.push("Unity Lookup Error: " + payload.unity_lookup_error);
-              }
-              outputEl.textContent = lines.join("\n");
-              statusEl.textContent = "Lookup complete.";
-              if (targetField) {
-                targetField.value = "";
-              }
-              return;
-            }
-
-            var errMsg = "Request failed.";
-            if (payload && payload.detail) {
-              errMsg = payload.detail;
-            } else if (xhr.responseText) {
-              errMsg = xhr.responseText;
-            }
-            statusEl.textContent = "Lookup failed. Review message and retry.";
-            outputEl.textContent = errMsg;
-          };
-
-          xhr.send(body);
-        } catch (_legacyErr) {
-          var statusElFallback = document.getElementById("jabber-check-status");
-          var outputElFallback = document.getElementById("jabber-check-preview");
-          if (statusElFallback) {
-            statusElFallback.textContent = "Inline lookup error. Review details below.";
-          }
-          if (outputElFallback) {
-            outputElFallback.textContent = (_legacyErr && _legacyErr.message) ? _legacyErr.message : String(_legacyErr || "Unknown error");
-          }
-        }
-        return false;
-      }
-    </script>
 
     <hr>
 
@@ -2155,12 +2061,6 @@ def menu_page(request: Request):
             return;
           }
 
-          if (form.id === "jabber-check-form") {
-            event.preventDefault();
-            submitJabberCheckInline(form);
-            return;
-          }
-
           if (form.id === "reset-pin-form") {
             event.preventDefault();
             submitResetPinInline(form);
@@ -2456,6 +2356,7 @@ def check_jabber_status_route(
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
     target_user: str = Form(...),
+  embedded: bool = Query(False),
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
     _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
@@ -2512,6 +2413,10 @@ def check_jabber_status_route(
   </body>
 </html>
 """
+
+    if embedded:
+      return HTMLResponse(content=html_result)
+
     return HTMLResponse(content=html_result)
 
 
