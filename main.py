@@ -849,6 +849,25 @@ def menu_page(request: Request):
         min-width: 320px;
       }
 
+      .offboard-h3 {
+        color: #b00020;
+        font-weight: 900;
+        letter-spacing: 0.2px;
+        text-transform: uppercase;
+      }
+
+      .offboard-form .offboard-danger-btn {
+        background: #b00020;
+        border: 2px solid #7a0015;
+        color: #ffffff;
+        font-weight: 800;
+        box-shadow: 0 0 0 2px rgba(176, 0, 32, 0.15);
+      }
+
+      .offboard-form .offboard-danger-btn:hover {
+        background: #7a0015;
+      }
+
       .offboard-output {
         flex: 1 1 480px;
         min-width: 320px;
