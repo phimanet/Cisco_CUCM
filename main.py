@@ -1065,12 +1065,12 @@ def menu_page(request: Request):
               credentials: "same-origin",
             });
 
+            const responseText = await response.text();
             let payload = null;
             try {
-              payload = await response.json();
+              payload = JSON.parse(responseText || "{}");
             } catch (_parseErr) {
-              const rawText = await response.text();
-              throw new Error(rawText || `Request failed with status ${response.status}`);
+              throw new Error(responseText || `Request failed with status ${response.status}`);
             }
 
             if (!response.ok) {
