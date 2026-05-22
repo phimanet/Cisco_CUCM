@@ -636,7 +636,7 @@ def menu_page(request: Request):
   auth_user = escape(str(session.get("username", "")))
   auth_cucm_host = str(session.get("cucm_host", ""))
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
-  return """
+  html = """
 <html>
   <head>
     <title>Cisco Voice Server Automation Site - Restricted Access</title>
@@ -2239,6 +2239,15 @@ def menu_page(request: Request):
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
+
+  return HTMLResponse(
+    content=html,
+    headers={
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    },
+  )
 
 
 @app.get("/download/add-directorynumbers-template")
