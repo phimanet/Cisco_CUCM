@@ -222,61 +222,58 @@ def extract_rpo_phones(cucm_host, cucm_user, cucm_pass, userids_text):
                 ])
                 continue
 
-            wrote_any_rows = False
+            device_names = []
+            line_indexes = []
+            patterns = []
+            partitions = []
+            labels = []
+            displays = []
+            details_messages = []
+            has_success_data = False
+
             for device_name in csf_devices:
                 phone_resp = _axl_post(session, cucm_host, _soap_get_phone(device_name))
                 if phone_resp.status_code != 200:
-                    writer.writerow([
-                        userid,
-                        display_name,
-                        device_name,
-                        "",
-                        "",
-                        "",
-                        "",
-                        "",
-                        "Failed",
-                        f"getPhone HTTP {phone_resp.status_code}: {phone_resp.text[:600]}",
-                    ])
+                    details_messages.append(
+                        f"{device_name}: getPhone HTTP {phone_resp.status_code}: {phone_resp.text[:300]}"
+                    )
                     continue
 
                 phone_details = _parse_phone_details(phone_resp.text, device_name)
+                resolved_device_name = phone_details.get("name", device_name)
+                if resolved_device_name not in device_names:
+                    device_names.append(resolved_device_name)
+
                 lines = sorted(
                     phone_details.get("lines", []),
                     key=lambda item: int(item.get("index") or 9999),
                 )
                 if not lines:
-                    writer.writerow([
-                        userid,
-                        display_name,
-                        device_name,
-                        "",
-                        "",
-                        "",
-                        "",
-                        "",
-                        "Skipped",
-                        "CSF device has no line entries",
-                    ])
-                    wrote_any_rows = True
+                    details_messages.append(f"{resolved_device_name}: CSF device has no line entries")
                     continue
 
                 for line in lines:
-                    writer.writerow([
-                        userid,
-                        display_name,
-                        phone_details.get("name", device_name),
-                        line.get("index", ""),
-                        line.get("pattern", ""),
-                        line.get("partition", ""),
-                        line.get("label", ""),
-                        line.get("display", ""),
-                        "Success",
-                        "",
-                    ])
-                    wrote_any_rows = True
+                    line_indexes.append(line.get("index", ""))
+                    patterns.append(line.get("pattern", ""))
+                    partitions.append(line.get("partition", ""))
+                    labels.append(line.get("label", ""))
+                    displays.append(line.get("display", ""))
+                    has_success_data = True
 
-            if not wrote_any_rows:
+            if has_success_data:
+                writer.writerow([
+                    userid,
+                    display_name,
+                    " | ".join(device_names),
+                    " | ".join(line_indexes),
+                    " | ".join(patterns),
+                    " | ".join(partitions),
+                    " | ".join(labels),
+                    " | ".join(displays),
+                    "Success",
+                    " ; ".join(details_messages),
+                ])
+            else:
                 writer.writerow([
                     userid,
                     display_name,
@@ -287,7 +284,7 @@ def extract_rpo_phones(cucm_host, cucm_user, cucm_pass, userids_text):
                     "",
                     "",
                     "Skipped",
-                    "No exportable rows generated for this user",
+                    " ; ".join(details_messages) or "No exportable rows generated for this user",
                 ])
 
         except Exception as exc:
