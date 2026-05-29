@@ -1,6 +1,8 @@
 import csv
 import datetime
+import io
 import os
+import re
 import threading
 import time
 
@@ -303,6 +305,61 @@ def _prepare_job_output(csv_data, filename: str) -> dict:
         "filename": filename,
         "output_text": csv_bytes.decode("utf-8", errors="replace"),
     }
+
+
+def _extract_added_dn_from_build_output(csv_data) -> str:
+    csv_text = _to_bytes(csv_data).decode("utf-8", errors="replace")
+    reader = csv.reader(io.StringIO(csv_text))
+
+    # Prefer the explicit DN selection row, then fall back to other success rows.
+    for row in reader:
+        if len(row) < 3:
+            continue
+        step = (row[0] or "").strip()
+        status = (row[1] or "").strip().lower()
+        details = (row[2] or "").strip()
+        if step == "Select DN" and status == "success":
+            match = re.search(r"\b(\d{4,})\b", details)
+            if match:
+                return match.group(1)
+
+    reader = csv.reader(io.StringIO(csv_text))
+    for row in reader:
+        if len(row) < 3:
+            continue
+        step = (row[0] or "").strip()
+        status = (row[1] or "").strip().lower()
+        details = (row[2] or "").strip()
+        if step in {"Add Phone", "Update User", "Unity Voicemail"} and status == "success":
+            match = re.search(r"\b(\d{4,})\b", details)
+            if match:
+                return match.group(1)
+
+    return ""
+
+
+def _extract_deleted_dns_from_offboard_output(csv_data) -> list[str]:
+    csv_text = _to_bytes(csv_data).decode("utf-8", errors="replace")
+    reader = csv.reader(io.StringIO(csv_text))
+    deleted_dns = []
+
+    for row in reader:
+        if len(row) < 3:
+            continue
+        step = (row[0] or "").strip()
+        status = (row[1] or "").strip().lower()
+        details = (row[2] or "").strip()
+        if step != "Update Line Inactive" or status != "success":
+            continue
+
+        # Expected format: "Marked <pattern>/<partition> inactive and reusable"
+        match = re.search(r"Marked\s+([^/\s]+)\/", details)
+        if match:
+            dn = match.group(1)
+            if dn not in deleted_dns:
+                deleted_dns.append(dn)
+
+    return deleted_dns
 
 
 def _render_job_result(title: str, csv_data, filename: str) -> HTMLResponse:
@@ -2406,20 +2463,24 @@ async def build_user_csf_phone(
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
     _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+    clean_target_user = (target_user or "").strip()
     data, filename = build_user_csf_phone_from_template(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
         cucm_pass=cucm_pass,
-        target_user=target_user,
+        target_user=clean_target_user,
         dn_type=dn_type,
         ad_username=cucm_user,
         ad_password=cucm_pass,
     )
+    added_dn = _extract_added_dn_from_build_output(data)
+    added_count = 1 if added_dn else 0
+    audit_target = f"account={clean_target_user};dn_added={added_dn or 'none'};added_count={added_count}"
     _append_audit_event(
       action="build_user_csf_phone",
       cucm_host=cucm_host,
       operator=cucm_user,
-      target=target_user,
+      target=audit_target,
       output_filename=filename,
       inline_mode=inline,
     )
@@ -2518,19 +2579,25 @@ def decommission_user_csf_voicemail_route(
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
     _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+    clean_target_user = (target_user or "").strip()
     data, filename = decommission_user_csf_voicemail(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
         cucm_pass=cucm_pass,
-        target_user=target_user,
+        target_user=clean_target_user,
         ad_username=cucm_user,
         ad_password=cucm_pass,
+    )
+    deleted_dns = _extract_deleted_dns_from_offboard_output(data)
+    deleted_dn_text = "|".join(deleted_dns) if deleted_dns else "none"
+    audit_target = (
+      f"account={clean_target_user};dn_deleted={deleted_dn_text};deleted_count={len(deleted_dns)}"
     )
     _append_audit_event(
       action="offboard_user_option_10",
       cucm_host=cucm_host,
       operator=cucm_user,
-      target=target_user,
+      target=audit_target,
       output_filename=filename,
       inline_mode=inline,
     )
