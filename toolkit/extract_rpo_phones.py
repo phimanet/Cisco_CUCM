@@ -151,46 +151,37 @@ def extract_rpo_phones(cucm_host, cucm_user, cucm_pass, userids_text):
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"extract_rpo_phones_{ts}.csv"
 
+    userids = _normalize_userids(userids_text)
     out = io.StringIO()
     writer = csv.writer(out)
-    writer.writerow([
-        "User ID",
-        "Display Name",
-        "Device Name",
-        "Line Index",
-        "Pattern",
-        "Route Partition",
-        "Line Label",
-        "Line Display",
-        "Status",
-        "Details",
-    ])
 
-    userids = _normalize_userids(userids_text)
     if not userids:
-        writer.writerow(["", "", "", "", "", "", "", "", "Failed", "No user IDs were provided"])
+        writer.writerow([
+            "User ID",
+            "Display Name",
+            "Status",
+            "Details",
+        ])
+        writer.writerow(["", "", "Failed", "No user IDs were provided"])
         return out.getvalue().encode("utf-8"), filename
 
     session = requests.Session()
     session.verify = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
+    records = []
+
     for userid in userids:
         try:
             user_resp = _axl_post(session, cucm_host, _soap_get_user(userid))
             if user_resp.status_code != 200:
-                writer.writerow([
-                    userid,
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "Failed",
-                    f"getUser HTTP {user_resp.status_code}: {user_resp.text[:600]}",
-                ])
+                records.append({
+                    "userid": userid,
+                    "display_name": "",
+                    "status": "Failed",
+                    "details": f"getUser HTTP {user_resp.status_code}: {user_resp.text[:600]}",
+                    "lines": [],
+                })
                 continue
 
             user_details = _parse_user_details(user_resp.text, userid)
@@ -208,26 +199,16 @@ def extract_rpo_phones(cucm_host, cucm_user, cucm_pass, userids_text):
                 d for d in user_details.get("associatedDevices", []) if d.upper().startswith(TARGET_DEVICE_PREFIX)
             ]
             if not csf_devices:
-                writer.writerow([
-                    userid,
-                    display_name,
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "Skipped",
-                    "No CSF devices associated to user",
-                ])
+                records.append({
+                    "userid": userid,
+                    "display_name": display_name,
+                    "status": "Skipped",
+                    "details": "No CSF devices associated to user",
+                    "lines": [],
+                })
                 continue
 
-            device_names = []
-            line_indexes = []
-            patterns = []
-            partitions = []
-            labels = []
-            displays = []
+            line_entries = []
             details_messages = []
             has_success_data = False
 
@@ -241,8 +222,6 @@ def extract_rpo_phones(cucm_host, cucm_user, cucm_pass, userids_text):
 
                 phone_details = _parse_phone_details(phone_resp.text, device_name)
                 resolved_device_name = phone_details.get("name", device_name)
-                if resolved_device_name not in device_names:
-                    device_names.append(resolved_device_name)
 
                 lines = sorted(
                     phone_details.get("lines", []),
@@ -253,52 +232,83 @@ def extract_rpo_phones(cucm_host, cucm_user, cucm_pass, userids_text):
                     continue
 
                 for line in lines:
-                    line_indexes.append(line.get("index", ""))
-                    patterns.append(line.get("pattern", ""))
-                    partitions.append(line.get("partition", ""))
-                    labels.append(line.get("label", ""))
-                    displays.append(line.get("display", ""))
+                    line_entries.append({
+                        "device_name": resolved_device_name,
+                        "index": line.get("index", ""),
+                        "pattern": line.get("pattern", ""),
+                        "partition": line.get("partition", ""),
+                        "label": line.get("label", ""),
+                        "display": line.get("display", ""),
+                    })
                     has_success_data = True
 
             if has_success_data:
-                writer.writerow([
-                    userid,
-                    display_name,
-                    " | ".join(device_names),
-                    " | ".join(line_indexes),
-                    " | ".join(patterns),
-                    " | ".join(partitions),
-                    " | ".join(labels),
-                    " | ".join(displays),
-                    "Success",
-                    " ; ".join(details_messages),
-                ])
+                records.append({
+                    "userid": userid,
+                    "display_name": display_name,
+                    "status": "Success",
+                    "details": " ; ".join(details_messages),
+                    "lines": line_entries,
+                })
             else:
-                writer.writerow([
-                    userid,
-                    display_name,
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    "Skipped",
-                    " ; ".join(details_messages) or "No exportable rows generated for this user",
-                ])
+                records.append({
+                    "userid": userid,
+                    "display_name": display_name,
+                    "status": "Skipped",
+                    "details": " ; ".join(details_messages) or "No exportable rows generated for this user",
+                    "lines": [],
+                })
 
         except Exception as exc:
-            writer.writerow([
-                userid,
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                "Error",
-                str(exc),
+            records.append({
+                "userid": userid,
+                "display_name": "",
+                "status": "Error",
+                "details": str(exc),
+                "lines": [],
+            })
+
+    max_line_count = max((len(record["lines"]) for record in records), default=0)
+
+    header = [
+        "User ID",
+        "Display Name",
+        "Status",
+        "Details",
+    ]
+    for idx in range(1, max_line_count + 1):
+        header.extend([
+            f"Line {idx} Device Name",
+            f"Line {idx} Index",
+            f"Line {idx} Pattern",
+            f"Line {idx} Route Partition",
+            f"Line {idx} Label",
+            f"Line {idx} Display",
+        ])
+
+    writer.writerow(header)
+
+    for record in records:
+        row = [
+            record.get("userid", ""),
+            record.get("display_name", ""),
+            record.get("status", ""),
+            record.get("details", ""),
+        ]
+        for line in record.get("lines", []):
+            row.extend([
+                line.get("device_name", ""),
+                line.get("index", ""),
+                line.get("pattern", ""),
+                line.get("partition", ""),
+                line.get("label", ""),
+                line.get("display", ""),
             ])
+
+        remaining = max_line_count - len(record.get("lines", []))
+        for _ in range(remaining):
+            row.extend(["", "", "", "", "", ""])
+
+        writer.writerow(row)
 
     return out.getvalue().encode("utf-8"), filename
