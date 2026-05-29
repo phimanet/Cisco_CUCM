@@ -47,6 +47,9 @@ AUDIT_FIELDS = [
   "cucm_host",
   "operator",
   "target",
+  "account",
+  "extension_added",
+  "extension_deleted",
   "output_filename",
   "inline_mode",
 ]
@@ -258,6 +261,9 @@ def _append_audit_event(
   target: str,
   output_filename: str,
   inline_mode: bool,
+  account: str = "",
+  extension_added: str = "",
+  extension_deleted: str = "",
 ):
   row = [
     datetime.datetime.now().strftime(AUDIT_TIMESTAMP_FORMAT),
@@ -265,6 +271,9 @@ def _append_audit_event(
     cucm_host,
     operator,
     target,
+    account,
+    extension_added,
+    extension_deleted,
     output_filename,
     str(bool(inline_mode)).lower(),
   ]
@@ -2481,6 +2490,9 @@ async def build_user_csf_phone(
       cucm_host=cucm_host,
       operator=cucm_user,
       target=audit_target,
+      account=clean_target_user,
+      extension_added=added_dn,
+      extension_deleted="",
       output_filename=filename,
       inline_mode=inline,
     )
@@ -2598,6 +2610,9 @@ def decommission_user_csf_voicemail_route(
       cucm_host=cucm_host,
       operator=cucm_user,
       target=audit_target,
+      account=clean_target_user,
+      extension_added="",
+      extension_deleted=deleted_dn_text if deleted_dn_text != "none" else "",
       output_filename=filename,
       inline_mode=inline,
     )
