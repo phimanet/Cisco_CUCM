@@ -92,7 +92,7 @@ def _build_update_line_identity_soap(pattern, route_partition, display_name):
       <alertingName>{escape(display_name)}</alertingName>
       <asciiAlertingName>{escape(display_name)}</asciiAlertingName>
             <display>{escape(display_name)}</display>
-      <asciiDisplay>{escape(display_name)}</asciiDisplay>
+            <displayAscii>{escape(display_name)}</displayAscii>
     </axl:updateLine>
   </soapenv:Body>
 </soapenv:Envelope>"""
