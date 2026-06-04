@@ -83,9 +83,9 @@ def _build_update_phone_description_soap(phone_name, description):
 
 
 def _build_update_line_identity_soap(pattern, route_partition, display_name):
-    partition_xml = ""
-    if (route_partition or "").strip():
-        partition_xml = f"\n      <routePartitionName>{escape(route_partition)}</routePartitionName>"
+        partition_xml = ""
+        if (route_partition or "").strip():
+                partition_xml = f"\n      <routePartitionName>{escape(route_partition)}</routePartitionName>"
 
     return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
@@ -101,11 +101,11 @@ def _build_update_line_identity_soap(pattern, route_partition, display_name):
 
 
 def _build_update_phone_line_display_soap(phone_name, line_index, pattern, route_partition, display_name):
-    partition_xml = ""
-    if (route_partition or "").strip():
-        partition_xml = f"\n            <routePartitionName>{escape(route_partition)}</routePartitionName>"
+        partition_xml = ""
+        if (route_partition or "").strip():
+                partition_xml = f"\n            <routePartitionName>{escape(route_partition)}</routePartitionName>"
 
-    return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+        return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
     <soapenv:Body>
         <axl:updatePhone>
