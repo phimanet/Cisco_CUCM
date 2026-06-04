@@ -262,8 +262,6 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
         if not display_name:
             display_name = user.get("userid", clean_target_user)
 
-        phone_description = f"CSF - {display_name}"
-
         smtp_address = _build_smtp_address(user.get("firstName", ""), user.get("lastName", ""), user.get("userid", ""))
 
         writer.writerow(["Lookup End User", "Success", f"Found {user.get('userid', clean_target_user)} with display name '{display_name}'"])
@@ -282,10 +280,10 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
             try:
                 phone = _get_phone_details(session, cucm_host, device_name)
 
-                phone_soap = _build_update_phone_description_soap(device_name, phone_description)
+                phone_soap = _build_update_phone_description_soap(device_name, display_name)
                 phone_response = _axl_post(session, cucm_host, phone_soap)
                 if phone_response.status_code == 200:
-                    writer.writerow(["Update Phone Description", "Success", f"{device_name}: description set to '{phone_description}'"])
+                    writer.writerow(["Update Phone Description", "Success", f"{device_name}: description set to '{display_name}'"])
                 else:
                     writer.writerow([
                         "Update Phone Description",
