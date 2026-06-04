@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-06-04
+- Date: 2026-05-21
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -17,7 +17,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [ ] Confirm internal subnet allow-list for UFW/Nginx access control.
 - [ ] Document deployment/runtime prerequisites (Python env, FastAPI/Uvicorn, network access to CUCM/Unity).
 - [x] Centralize environment-specific values — AD LDAP config deployed via `/opt/cucm-web/.env` + systemd EnvironmentFile on both LAB and PROD.
-- [x] Add lightweight health check and structured error responses for web routes.
+- [ ] Add lightweight health check and structured error responses for web routes.
 - [ ] Add minimal regression tests for toolkit functions that generate CSV outputs.
 
 ## Enhancement Backlog
@@ -34,7 +34,6 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [ ] [P2][Idea] Refresh the web portal theme to align with AMN Healthcare visual style (brand colors, typography, spacing, and overall look/feel).
 - [x] [P2][Done] Add per-option success/failure summary panel in the UI after CSV generation.
 - [ ] [P2][Idea] Add a lightweight audit trail (who ran what option and when) for internal operations.
-- [x] [P2][Done] Added Called Name Change workflow to sync CUCM phone/line display fields and Unity display/SMTP from End User updates.
 - [ ] [P3][Idea] Add optional dry-run mode for high-impact actions before execution.
 
 Status keys:
@@ -58,7 +57,6 @@ Priority keys:
 - [x] Created central project tracking structure in `CLAUDE.md`.
 - [x] Confirmed current scripts and pages are working as baseline behavior.
 - [x] Completed HTTPS cutover with internally signed enterprise certificate, Nginx TLS termination, and HTTP -> HTTPS redirect.
-- [x] Added standalone `/genesys-admin` placeholder page and linked it from Cisco landing/menu pages while keeping Cisco workflows isolated.
 
 ## Key Decisions
 - 2026-04-30: Use `CLAUDE.md` as the canonical running log for goals, pending tasks, and key decisions for this repository.
@@ -79,22 +77,6 @@ Priority keys:
 
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
-
-### 2026-06-04
-- Added a lightweight health endpoint (`/healthz`) and centralized structured error handling for JSON/HTML responses in `main.py`.
-- Added new Called Name Change option in the Cisco menu UI, with inline output preview and CSV download support.
-- Added new toolkit workflow `toolkit/called_name_change.py` to:
-  - Look up End User in CUCM and read Display Name / First Name / Last Name.
-  - Update description on each associated Jabber phone (CSF/BOT/TCT).
-  - Update line fields per extension (`alertingName`, `asciiAlertingName`, `display`, `asciiDisplay`).
-  - Update Unity mailbox profile (`DisplayName`, `EmailAddress`) using `firstname.lastname` format.
-- Added backend route `/called-name-change` and audit trail logging for the new action.
-
-### 2026-06-03
-- Added a new standalone Genesys Admin placeholder route (`/genesys-admin`) in `main.py` with a dedicated placeholder UI.
-- Linked the new Genesys page from both Cisco landing (`/`) and Cisco menu (`/menu`) for easy navigation.
-- Updated auth middleware public-path allow-list to include `/genesys-admin` so access is independent of Cisco login sessions.
-- Kept Cisco admin actions and routes unchanged so Cisco and Genesys changes do not interfere.
 
 ### 2026-05-01
 - Decision update: proceed with a controlled test to remove `hmac-sha1` after removing `hmac-sha1-etm`, then validate Cisco CUCM/Unity systems negotiate stronger MACs; rollback if any SSH automation fails.

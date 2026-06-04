@@ -26,7 +26,6 @@ from toolkit.add_secondary_devices import (
   add_secondary_bot_device,
   add_secondary_strike_devices,
 )
-from toolkit.called_name_change import run_called_name_change
 from toolkit.edit_line_group_members import edit_line_group_members, search_line_groups
 from toolkit.extract_rpo_phones import extract_rpo_phones
 
@@ -35,7 +34,6 @@ JOB_OUTPUTS = {}
 AUTH_SESSIONS = {}
 SESSION_COOKIE_NAME = "cucm_web_session"
 SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
-APP_START_EPOCH = time.time()
 PROD_CUCM_HOST = "lascucmpp01.ahs.int"
 LAB_CUCM_HOST = "lascucmpl01.ahs.int"
 PROD_UNITY_HOST = "SANCUTYP01.ahs.int"
@@ -199,124 +197,7 @@ def _get_unity_server_for_session(request: Request):
 
 
 def _is_public_path(path: str):
-  return path in {"/", "/login", "/genesys-admin", "/healthz"}
-
-
-def _wants_json_response(request: Request) -> bool:
-  requested_with = (request.headers.get("x-requested-with", "") or "").lower()
-  accept_header = (request.headers.get("accept", "") or "").lower()
-  inline_flag = (request.query_params.get("inline", "") or "").strip().lower()
-
-  if requested_with == "xmlhttprequest":
-    return True
-  if "application/json" in accept_header:
-    return True
-  if inline_flag in {"1", "true", "yes", "on"}:
-    return True
-  if request.url.path in {"/line-groups/search", "/audit-trail/stats", "/healthz"}:
-    return True
-  return False
-
-
-def _render_error_page(title: str, message: str, status_code: int) -> HTMLResponse:
-  safe_title = escape(title or "Request Error")
-  safe_message = escape(message or "Unexpected error")
-  html = f"""
-<html>
-  <head>
-    <title>{safe_title}</title>
-    <style>
-      body {{
-        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
-        margin: 0;
-        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
-        color: #12304a;
-      }}
-
-      .card {{
-        max-width: 880px;
-        margin: 48px auto;
-        background: #fff;
-        border: 1px solid #c8dbee;
-        border-radius: 12px;
-        padding: 22px;
-        box-shadow: 0 8px 20px rgba(0, 47, 108, 0.08);
-      }}
-
-      h2 {{
-        margin-top: 0;
-        color: #002f6c;
-      }}
-
-      p {{
-        line-height: 1.45;
-      }}
-
-      .meta {{
-        color: #355978;
-        font-size: 13px;
-      }}
-
-      a {{
-        color: #005eb8;
-        font-weight: 700;
-      }}
-    </style>
-  </head>
-  <body>
-    <section class="card">
-      <h2>{safe_title}</h2>
-      <p>{safe_message}</p>
-      <p class="meta">Status: {status_code}</p>
-      <p><a href="/menu">Back to Menu</a> | <a href="/">Back to Landing Page</a></p>
-    </section>
-  </body>
-</html>
-"""
-  return HTMLResponse(content=html, status_code=status_code)
-
-
-@app.exception_handler(RuntimeError)
-async def runtime_error_handler(request: Request, exc: RuntimeError):
-  message = str(exc) or "Request validation failed."
-  status_code = 401 if "authentication required" in message.lower() else 400
-
-  if _wants_json_response(request):
-    return JSONResponse(
-      {
-        "ok": False,
-        "error": {
-          "type": "runtime_error",
-          "message": message,
-          "path": request.url.path,
-          "status": status_code,
-        },
-      },
-      status_code=status_code,
-    )
-
-  return _render_error_page("Request Error", message, status_code)
-
-
-@app.exception_handler(Exception)
-async def unhandled_error_handler(request: Request, exc: Exception):
-  message = "Unexpected server error. Retry the request and contact support if it continues."
-
-  if _wants_json_response(request):
-    return JSONResponse(
-      {
-        "ok": False,
-        "error": {
-          "type": "internal_error",
-          "message": message,
-          "path": request.url.path,
-          "status": 500,
-        },
-      },
-      status_code=500,
-    )
-
-  return _render_error_page("Server Error", message, 500)
+  return path in {"/", "/login"}
 
 
 @app.middleware("http")
@@ -765,107 +646,7 @@ def home(request: Request):
       <p class="login-note">
         You must log in before opening Menu Options.
       </p>
-
-      <hr>
-      <h3>Other Admin Portals</h3>
-      <p>
-        Need Genesys tools? Open the separate placeholder page here:
-        <a href="/genesys-admin">Genesys Admin</a>
-      </p>
     </section>
-  </body>
-</html>
-"""
-
-
-@app.get("/genesys-admin", response_class=HTMLResponse)
-def genesys_admin_placeholder():
-  return """
-<html>
-  <head>
-    <title>Genesys Admin - Placeholder</title>
-    <style>
-      :root {
-        --amn-blue: #005eb8;
-        --amn-navy: #002f6c;
-        --amn-sky: #eaf4ff;
-        --amn-text: #12304a;
-        --amn-border: #c8dbee;
-      }
-
-      body {
-        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
-        margin: 0;
-        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
-        color: var(--amn-text);
-      }
-
-      .topbar {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 14px 24px;
-        background: linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
-        color: #fff;
-      }
-
-      .brand-fallback {
-        font-weight: 700;
-        letter-spacing: 0.2px;
-      }
-
-      .content {
-        max-width: 900px;
-        margin: 48px auto;
-        padding: 0 16px;
-      }
-
-      .panel {
-        background: #fff;
-        border: 1px solid var(--amn-border);
-        border-radius: 12px;
-        padding: 22px;
-        box-shadow: 0 8px 20px rgba(0, 47, 108, 0.08);
-      }
-
-      .badge {
-        display: inline-block;
-        padding: 8px 12px;
-        border-radius: 8px;
-        background: #ffe6cc;
-        border: 1px solid #f7b267;
-        color: #5c2700;
-        font-weight: 700;
-      }
-
-      a {
-        color: var(--amn-blue);
-        font-weight: 700;
-      }
-    </style>
-  </head>
-  <body>
-    <header class="topbar">
-      <span class="brand-fallback">AMN Healthcare</span>
-      <strong>Voice Operations Portal</strong>
-    </header>
-
-    <main class="content">
-      <section class="panel">
-        <h1>Genesys Admin</h1>
-        <p class="badge">Placeholder Page</p>
-        <p>
-          This page is reserved for the future Genesys Admin workflow.
-          Development and deployments for Genesys Admin are intended to be handled independently from Cisco Admin.
-        </p>
-        <ul>
-          <li>LAB first, then Production rollout.</li>
-          <li>Separate code path and change process from Cisco Admin.</li>
-          <li>Use the same Ubuntu server with independent service restart ownership.</li>
-        </ul>
-        <p><a href="/">Back to Cisco Landing Page</a></p>
-      </section>
-    </main>
   </body>
 </html>
 """
@@ -1369,7 +1150,6 @@ def menu_page(request: Request):
     <p>Authenticated as: <strong>__AUTH_USER__</strong></p>
     <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
     <p><a href="/">Back to Landing Page</a></p>
-    <p><a href="/genesys-admin">Open Genesys Admin Placeholder</a></p>
     <p>Environment was selected at login and is locked for this session.</p>
     <p>Security mode: passwords are not cached server-side. Enter admin password for each action.</p>
     <p><a href="/download/audit-trail">Download Audit Trail (CSV)</a></p>
@@ -1380,7 +1160,6 @@ def menu_page(request: Request):
         <div class="portal-nav">
           <button type="button" class="portal-nav-btn active" data-panel="precheck">Check for Existing Jabber Configuration</button>
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
-          <button type="button" class="portal-nav-btn" data-panel="namechange">Called Name Change</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
           <button type="button" class="portal-nav-btn portal-nav-btn-danger" data-panel="offboard">Offboard Cisco Jabber</button>
           <button type="button" class="portal-nav-btn" data-panel="ad">Update AD Telephone/ipPhone Field Only</button>
@@ -1544,44 +1323,6 @@ def menu_page(request: Request):
 
       })();
     </script>
-    </section>
-
-    <section class="tool-panel" data-panel="namechange">
-
-    <h3>Called Name Change (Update CUCM Phone/Line + Unity Display/SMTP)</h3>
-    <p>
-      This option reads Display Name from CUCM End User, updates all Jabber phone descriptions,
-      updates line alerting/caller ID fields, and updates Unity voicemail Display Name and SMTP.
-    </p>
-
-    <div class="secondary-layout">
-      <form id="called-name-form" class="target-user-form secondary-form" action="/called-name-change" method="post">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
-
-        User ID for name change update:<br>
-        <input name="target_user" placeholder="john.doe" required><br><br>
-
-        <div class="action-row">
-          <button type="submit">Run Called Name Change</button>
-          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
-        </div>
-      </form>
-
-      <section class="secondary-output" aria-live="polite">
-        <h4>Called Name Change Output Preview</h4>
-        <p id="called-name-status" class="secondary-status">Run Called Name Change to view output here.</p>
-        <p>
-          <a id="called-name-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
-            Download CSV Output
-          </a>
-        </p>
-        <textarea id="called-name-preview" readonly></textarea>
-      </section>
-    </div>
     </section>
 
     <section class="tool-panel" data-panel="pin">
@@ -2469,19 +2210,6 @@ def menu_page(request: Request):
             return;
           }
 
-          if (form.id === "called-name-form") {
-            event.preventDefault();
-            submitSecondaryInline(form, {
-              statusId: "called-name-status",
-              previewId: "called-name-preview",
-              downloadId: "called-name-download",
-              runningText: "Running Called Name Change...",
-              failedText: "Called Name Change failed. Review output and retry.",
-              defaultFilename: "called_name_change_output.csv",
-            });
-            return;
-          }
-
           if (form.id === "secondary-tct-form") {
             event.preventDefault();
             submitSecondaryInline(form, {
@@ -2609,28 +2337,6 @@ def download_add_directorynumbers_template():
     template_csv.encode("utf-8"),
     media_type="text/csv",
     headers={"Content-Disposition": 'attachment; filename="add_directory_numbers_template.csv"'}
-  )
-
-
-@app.get("/healthz")
-def healthz():
-  now_epoch = time.time()
-  _prune_auth_sessions_locked(now_epoch)
-  with AUDIT_LOG_LOCK:
-    _ensure_audit_log()
-    _prune_audit_log_locked()
-
-  return JSONResponse(
-    {
-      "status": "ok",
-      "service": "cucm-web",
-      "timestamp": datetime.datetime.now().strftime(AUDIT_TIMESTAMP_FORMAT),
-      "uptime_seconds": int(now_epoch - APP_START_EPOCH),
-      "active_sessions": len(AUTH_SESSIONS),
-      "job_output_cache_entries": len(JOB_OUTPUTS),
-      "audit_log_exists": os.path.exists(AUDIT_LOG_PATH),
-      "audit_retention_days": AUDIT_RETENTION_DAYS,
-    }
   )
 
 
@@ -3004,50 +2710,6 @@ def update_ad_phone_fields_route(
       })
 
     return _render_job_result("Update Active Directory Telephone and ipPhone field only (Option 11)", data, filename)
-
-
-@app.post("/called-name-change")
-def called_name_change_route(
-    request: Request,
-    cucm_host: str = Form(""),
-    cucm_user: str = Form(""),
-    cucm_pass: str = Form(""),
-    target_user: str = Form(...),
-    inline: bool = Query(False),
-):
-    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
-    unity_server = _get_unity_server_for_session(request)
-    clean_target_user = (target_user or "").strip()
-
-    data, filename = run_called_name_change(
-      cucm_host=cucm_host,
-      cucm_user=cucm_user,
-      cucm_pass=cucm_pass,
-      unity_server=unity_server,
-      target_user=clean_target_user,
-    )
-
-    _append_audit_event(
-      action="called_name_change",
-      cucm_host=cucm_host,
-      operator=cucm_user,
-      target=clean_target_user,
-      account=clean_target_user,
-      output_filename=filename,
-      inline_mode=inline,
-    )
-
-    if inline:
-      job_output = _prepare_job_output(data, filename)
-      return JSONResponse({
-        "job_id": job_output["job_id"],
-        "filename": job_output["filename"],
-        "output_text": job_output["output_text"],
-        "download_url": f"/download/job-output/{job_output['job_id']}",
-      })
-
-    return _render_job_result("Called Name Change", data, filename)
 
 
 @app.post("/add/secondary-tct-device")
