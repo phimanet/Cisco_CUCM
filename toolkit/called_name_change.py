@@ -231,17 +231,6 @@ def _build_smtp_address(first_name, last_name, userid):
     return _clean_email_part(userid) or "unknown.user"
 
 
-def _build_device_description(device_name, display_name):
-    upper_name = (device_name or "").upper()
-    if upper_name.startswith("TCT"):
-        prefix = "TCT"
-    elif upper_name.startswith("BOT"):
-        prefix = "BOT"
-    else:
-        prefix = "CSF"
-    return f"{prefix} - {display_name}"
-
-
 def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target_user):
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"called_name_change_{(target_user or '').strip() or 'unknown'}_{ts}.csv"
@@ -273,6 +262,8 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
         if not display_name:
             display_name = user.get("userid", clean_target_user)
 
+        phone_description = f"CSF - {display_name}"
+
         smtp_address = _build_smtp_address(user.get("firstName", ""), user.get("lastName", ""), user.get("userid", ""))
 
         writer.writerow(["Lookup End User", "Success", f"Found {user.get('userid', clean_target_user)} with display name '{display_name}'"])
@@ -290,8 +281,6 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
         for device_name in jabber_devices:
             try:
                 phone = _get_phone_details(session, cucm_host, device_name)
-
-                phone_description = _build_device_description(device_name, display_name)
 
                 phone_soap = _build_update_phone_description_soap(device_name, phone_description)
                 phone_response = _axl_post(session, cucm_host, phone_soap)
