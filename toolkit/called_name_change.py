@@ -83,18 +83,45 @@ def _build_update_phone_description_soap(phone_name, description):
 
 
 def _build_update_line_identity_soap(pattern, route_partition, display_name):
+        partition_xml = ""
+        if (route_partition or "").strip():
+                partition_xml = f"\n      <routePartitionName>{escape(route_partition)}</routePartitionName>"
+
     return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
   <soapenv:Body>
     <axl:updateLine>
       <pattern>{escape(pattern)}</pattern>
-      <routePartitionName>{escape(route_partition)}</routePartitionName>
+{partition_xml}
       <alertingName>{escape(display_name)}</alertingName>
       <asciiAlertingName>{escape(display_name)}</asciiAlertingName>
-            <display>{escape(display_name)}</display>
-            <displayAscii>{escape(display_name)}</displayAscii>
     </axl:updateLine>
   </soapenv:Body>
+</soapenv:Envelope>"""
+
+
+def _build_update_phone_line_display_soap(phone_name, line_index, pattern, route_partition, display_name):
+        partition_xml = ""
+        if (route_partition or "").strip():
+                partition_xml = f"\n            <routePartitionName>{escape(route_partition)}</routePartitionName>"
+
+        return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+    <soapenv:Body>
+        <axl:updatePhone>
+            <name>{escape(phone_name)}</name>
+            <lines>
+                <line>
+                    <index>{escape(str(line_index))}</index>
+                    <display>{escape(display_name)}</display>
+                    <displayAscii>{escape(display_name)}</displayAscii>
+                    <dirn>
+                        <pattern>{escape(pattern)}</pattern>{partition_xml}
+                    </dirn>
+                </line>
+            </lines>
+        </axl:updatePhone>
+    </soapenv:Body>
 </soapenv:Envelope>"""
 
 
@@ -168,10 +195,11 @@ def _get_phone_details(session, cucm_host, phone_name):
         for line in list(lines_parent):
             if _strip_ns(line.tag) != "line":
                 continue
+            line_index = _find_first_text(line, [["index"]])
             pattern = _find_first_text(line, [["dirn", "pattern"]])
             partition = _find_first_text(line, [["dirn", "routePartitionName"]])
             if pattern:
-                line_entries.append({"pattern": pattern, "partition": partition})
+                line_entries.append({"index": line_index, "pattern": pattern, "partition": partition})
 
     return {"name": phone_name, "lines": line_entries}
 
@@ -306,10 +334,11 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
                     continue
 
                 for line in phone.get("lines", []):
+                    line_index = (line.get("index") or "").strip()
                     pattern = (line.get("pattern") or "").strip()
                     partition = (line.get("partition") or "").strip()
                     line_key = f"{pattern}|{partition}"
-                    if not pattern or not partition or line_key in touched_lines:
+                    if not pattern or line_key in touched_lines:
                         continue
 
                     line_soap = _build_update_line_identity_soap(pattern, partition, display_name)
@@ -317,15 +346,47 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
                     if line_response.status_code == 200:
                         touched_lines.add(line_key)
                         writer.writerow([
-                            "Update Line Display Fields",
+                            "Update Line Alerting Fields",
                             "Success",
-                            f"{pattern}/{partition}: alerting and caller ID fields set to '{display_name}'",
+                            f"{pattern}/{partition or 'NONE'}: alerting fields set to '{display_name}'",
                         ])
                     else:
                         writer.writerow([
-                            "Update Line Display Fields",
+                            "Update Line Alerting Fields",
                             "Failed",
-                            f"{pattern}/{partition}: HTTP {line_response.status_code}: {line_response.text[:600]}",
+                            f"{pattern}/{partition or 'NONE'}: HTTP {line_response.status_code}: {line_response.text[:600]}",
+                        ])
+
+                    if not line_index:
+                        writer.writerow([
+                            "Update Line Caller ID Fields",
+                            "Failed",
+                            f"{device_name} {pattern}/{partition or 'NONE'}: missing line index from getPhone",
+                        ])
+                        continue
+
+                    phone_line_soap = _build_update_phone_line_display_soap(
+                        phone_name=device_name,
+                        line_index=line_index,
+                        pattern=pattern,
+                        route_partition=partition,
+                        display_name=display_name,
+                    )
+                    phone_line_response = _axl_post(session, cucm_host, phone_line_soap)
+                    if phone_line_response.status_code == 200:
+                        writer.writerow([
+                            "Update Line Caller ID Fields",
+                            "Success",
+                            f"{device_name} line {line_index} ({pattern}/{partition or 'NONE'}): display/displayAscii set to '{display_name}'",
+                        ])
+                    else:
+                        writer.writerow([
+                            "Update Line Caller ID Fields",
+                            "Failed",
+                            (
+                                f"{device_name} line {line_index} ({pattern}/{partition or 'NONE'}): "
+                                f"HTTP {phone_line_response.status_code}: {phone_line_response.text[:600]}"
+                            ),
                         ])
             except Exception as exc:
                 writer.writerow(["Update Jabber Device", "Failed", f"{device_name}: {exc}"])
