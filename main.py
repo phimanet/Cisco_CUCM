@@ -3177,7 +3177,7 @@ def menu_admin_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
               html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
               html += '</tr></thead><tbody>';
 
               results.forEach(function (r, i) {
@@ -3191,8 +3191,11 @@ def menu_admin_page(request: Request):
                   return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
                 }).join("<br>") || "\u2014";
 
-                const btnStyle = "display:inline-block;margin:2px 3px 2px 0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;background:#237741;color:#fff;";
-                const actionBtn = `<button type="button" style="${btnStyle}" data-strike-user="${uid}">Strike Mode - Add in Both Jabber iPhone and Android</button>`;
+                const btnStyle = "display:inline-block;margin:2px 3px 2px 0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;color:#fff;";
+                const strikeBtn = `<button type="button" style="${btnStyle}background:#237741;" data-strike-user="${uid}">Strike Mode - Add in Both Jabber iPhone and Android</button>`;
+                const tctBtn = `<button type="button" style="${btnStyle}background:#0e7490;" data-tct-user="${uid}">Add Jabber iPhone</button>`;
+                const botBtn = `<button type="button" style="${btnStyle}background:#7c3aed;" data-bot-user="${uid}">Add Jabber Android</button>`;
+                const actionBtn = strikeBtn + tctBtn + botBtn;
 
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
@@ -3215,6 +3218,53 @@ def menu_admin_page(request: Request):
                     strikeTargetInput.focus();
                   }
                   statusEl.textContent = `Loaded ${uid} into Strike Mode - Add in Both Jabber iPhone and Android.`;
+                });
+              });
+
+              function submitAdminAction(endpoint, uid) {
+                const userField = form.querySelector('input[name="cucm_user"]');
+                const passField = form.querySelector('input[name="cucm_pass"]');
+                const cucmUser = ((userField && userField.value) || "").trim();
+                const cucmPass = (passField && passField.value) || "";
+
+                if (!cucmUser || !cucmPass) {
+                  statusEl.textContent = "Enter CUCM username/password in Strike Use - Person Lookup before running device actions.";
+                  return;
+                }
+
+                const actionForm = document.createElement("form");
+                actionForm.method = "post";
+                actionForm.action = endpoint;
+
+                const fields = {
+                  cucm_user: cucmUser,
+                  cucm_pass: cucmPass,
+                  target_user: uid,
+                };
+
+                Object.entries(fields).forEach(([name, value]) => {
+                  const input = document.createElement("input");
+                  input.type = "hidden";
+                  input.name = name;
+                  input.value = value;
+                  actionForm.appendChild(input);
+                });
+
+                document.body.appendChild(actionForm);
+                actionForm.submit();
+              }
+
+              resultsEl.querySelectorAll("button[data-tct-user]").forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                  const uid = btn.getAttribute("data-tct-user") || "";
+                  submitAdminAction("/add/secondary-tct-device", uid);
+                });
+              });
+
+              resultsEl.querySelectorAll("button[data-bot-user]").forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                  const uid = btn.getAttribute("data-bot-user") || "";
+                  submitAdminAction("/add/secondary-bot-device", uid);
                 });
               });
             } catch (err) {
