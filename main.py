@@ -3221,6 +3221,7 @@ def menu_admin_page(request: Request):
       <section class="panel">
         <h3>Bulk Person Lookup (CSV Upload)</h3>
         <p>Upload CSV with columns like <strong>last_name, first_name</strong> (or first column as last name).</p>
+        <p><a href="/download/bulk-person-template" style="font-weight:700;">Download Bulk Person Template</a></p>
         <form id="admin-bulk-person-form" enctype="multipart/form-data">
           Cisco Callmanager Username:<br>
           <input name="cucm_user" value="__AUTH_USER__" required><br><br>
@@ -3242,6 +3243,7 @@ def menu_admin_page(request: Request):
       <section class="panel">
         <h3>Bulk Extension Reverse Lookup (CSV Upload)</h3>
         <p>Upload CSV with a column like <strong>pattern</strong> or <strong>extension</strong> (or first column as pattern).</p>
+        <p><a href="/download/bulk-extension-template" style="font-weight:700;">Download Bulk Extension Template</a></p>
         <form id="admin-bulk-extension-form" enctype="multipart/form-data">
           Cisco Callmanager Username:<br>
           <input name="cucm_user" value="__AUTH_USER__" required><br><br>
@@ -3561,6 +3563,26 @@ def download_add_directorynumbers_template():
     template_csv.encode("utf-8"),
     media_type="text/csv",
     headers={"Content-Disposition": 'attachment; filename="add_directory_numbers_template.csv"'}
+  )
+
+
+@app.get("/download/bulk-person-template")
+def download_bulk_person_template():
+  template_csv = "last_name,first_name\nBeavers,Sean\nSmith,Jane\n"
+  return Response(
+    template_csv.encode("utf-8"),
+    media_type="text/csv",
+    headers={"Content-Disposition": 'attachment; filename="bulk_person_lookup_template.csv"'}
+  )
+
+
+@app.get("/download/bulk-extension-template")
+def download_bulk_extension_template():
+  template_csv = "pattern\n5551001\n5551002\n"
+  return Response(
+    template_csv.encode("utf-8"),
+    media_type="text/csv",
+    headers={"Content-Disposition": 'attachment; filename="bulk_extension_lookup_template.csv"'}
   )
 
 
