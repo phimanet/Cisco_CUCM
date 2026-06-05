@@ -3,6 +3,7 @@ import datetime
 import io
 import json
 import os
+import re
 import urllib3
 import requests
 import xml.etree.ElementTree as ET
