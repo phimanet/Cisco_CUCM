@@ -1428,6 +1428,7 @@ def menu_page(request: Request):
     <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
     <p><a href="/">Back to Landing Page</a></p>
     <p><a href="/genesys-admin">Open Genesys Admin Placeholder</a></p>
+    <p><a href="/menu-admin">Open Administrative Items</a></p>
     <p>Environment was selected at login and is locked for this session.</p>
     <p>Security mode: passwords are not cached server-side. Enter admin password for each action.</p>
     <p><a href="/download/audit-trail">Download Audit Trail (CSV)</a></p>
@@ -1446,12 +1447,8 @@ def menu_page(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="ad">Update AD Telephone/ipPhone Field Only</button>
           <button type="button" class="portal-nav-btn" data-panel="tct">Add in Jabber iPhone</button>
           <button type="button" class="portal-nav-btn" data-panel="bot">Add in Jabber Android</button>
-          <button type="button" class="portal-nav-btn" data-panel="strike">Strike Mode - Add in both Jabber iPhone and Android</button>
           <button type="button" class="portal-nav-btn" data-panel="linegroup">Update Hunt List Line Group</button>
-          <button type="button" class="portal-nav-btn" data-panel="rpo">Extract RPO Phone information</button>
-          <button type="button" class="portal-nav-btn" data-panel="adddn">Add Directory Numbers</button>
           <button type="button" class="portal-nav-btn" data-panel="exportdn">Export Directory Numbers</button>
-          <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
           <button type="button" class="portal-nav-btn" data-panel="transpattern">Translation Pattern Lookup</button>
         </div>
@@ -2233,40 +2230,6 @@ def menu_page(request: Request):
     </div>
     </section>
 
-    <section class="tool-panel" data-panel="strike">
-
-    <h3>STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)</h3>
-
-    <div class="secondary-layout">
-      <form id="secondary-strike-form" class="target-user-form secondary-form" action="/add/secondary-strike-devices" method="post">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
-
-        User ID for person to add STRIKE MODE devices for:<br>
-        <input name="target_user" placeholder="john.doe" required><br><br>
-
-        <div class="action-row">
-          <button type="submit">Run STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)</button>
-          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
-        </div>
-      </form>
-
-      <section class="secondary-output" aria-live="polite">
-        <h4>Option 5 Output Preview</h4>
-        <p id="secondary-strike-status" class="secondary-status">Run Option 5 to view output here.</p>
-        <p>
-          <a id="secondary-strike-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
-            Download CSV Output
-          </a>
-        </p>
-        <textarea id="secondary-strike-preview" readonly></textarea>
-      </section>
-    </div>
-    </section>
-
     <section class="tool-panel" data-panel="linegroup">
 
     <h3>Edit Line Group Members (Add/Remove DN) (Option 17)</h3>
@@ -2324,63 +2287,6 @@ def menu_page(request: Request):
     </div>
     </section>
 
-    <section class="tool-panel" data-panel="rpo">
-
-    <h3>Extract RPO Phones (CSF Only, Multi-Line by User) (Option 18)</h3>
-
-    <div class="secondary-layout">
-      <form id="rpo-form" class="secondary-form" action="/export/rpo-phones" method="post">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
-
-        User IDs (one per line):<br>
-        <textarea name="rpo_userids" rows="8" placeholder="john.doe&#10;jane.smith" required></textarea><br><br>
-
-        <div class="action-row">
-          <button type="submit">Run Extract RPO Phones (Option 18)</button>
-          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
-        </div>
-      </form>
-
-      <section class="secondary-output" aria-live="polite">
-        <h4>Option 18 Output Preview</h4>
-        <p id="rpo-status" class="secondary-status">Run Option 18 to view output here.</p>
-        <p>
-          <a id="rpo-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
-            Download CSV Output
-          </a>
-        </p>
-        <textarea id="rpo-preview" readonly></textarea>
-      </section>
-    </div>
-    </section>
-
-    <section class="tool-panel" data-panel="adddn">
-
-    <h3>Add Directory Numbers (Upload CSV)</h3>
-
-    <form action="/add/directorynumbers" method="post" enctype="multipart/form-data">
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user" value="__AUTH_USER__" required><br><br>
-
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass" required><br><br>
-
-      CSV File:<br>
-      <input type="file" name="csv_file" required><br><br>
-
-      <a href="/download/add-directorynumbers-template">Download CSV Template</a><br><br>
-
-      <div class="action-row">
-        <button type="submit">Run Add Directory Numbers</button>
-        <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
-      </div>
-    </form>
-    </section>
-
     <section class="tool-panel" data-panel="exportdn">
 
     <h3>Export Directory Numbers</h3>
@@ -2399,24 +2305,6 @@ def menu_page(request: Request):
       <input name="route_partition"><br><br>
 
       <button type="submit">Export Directory Numbers</button>
-    </form>
-    </section>
-
-    <section class="tool-panel" data-panel="exportusers">
-
-    <h3>Export End Users</h3>
-
-    <form action="/export/endusers" method="post">
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user" value="__AUTH_USER__" required><br><br>
-
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass" required><br><br>
-
-      Last Name:<br>
-      <input name="lastname"><br><br>
-
-      <button type="submit">Export End Users</button>
     </form>
     </section>
 
@@ -3089,6 +2977,213 @@ def menu_page(request: Request):
     </script>
       </section>
     </div>
+    </main>
+  </body>
+</html>
+""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
+
+  return HTMLResponse(
+    content=html,
+    headers={
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    },
+  )
+
+
+@app.get("/menu-admin", response_class=HTMLResponse)
+def menu_admin_page(request: Request):
+  session = _get_auth_session(request) or {}
+  auth_user = escape(str(session.get("username", "")))
+  auth_cucm_host = str(session.get("cucm_host", ""))
+  env_text, env_css_class = _get_environment_label(auth_cucm_host)
+
+  html = """
+<html>
+  <head>
+    <title>Administrative Items - Voice Operations Portal</title>
+    <style>
+      :root {
+        --amn-blue: #005eb8;
+        --amn-navy: #002f6c;
+        --amn-sky: #eaf4ff;
+        --amn-text: #12304a;
+        --amn-border: #c8dbee;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        margin: 0;
+        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+        color: var(--amn-text);
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 14px 24px;
+        background: linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
+        color: #fff;
+      }
+
+      .brand-fallback {
+        font-weight: 700;
+        letter-spacing: 0.2px;
+      }
+
+      .content {
+        max-width: 1200px;
+        margin: 18px auto 24px auto;
+        padding: 0 16px;
+      }
+
+      .env-banner {
+        display: inline-block;
+        margin: 8px 0 14px 0;
+        padding: 10px 16px;
+        border-radius: 10px;
+        font-weight: 800;
+        letter-spacing: 0.2px;
+      }
+
+      .env-banner-prod {
+        color: #083252;
+        background: #d8ecff;
+        border: 1px solid #8bb9e2;
+      }
+
+      .env-banner-lab {
+        color: #5c2700;
+        background: #ffe6cc;
+        border: 1px solid #f7b267;
+      }
+
+      .panel {
+        background: #fff;
+        border: 1px solid var(--amn-border);
+        border-radius: 10px;
+        padding: 14px;
+        box-shadow: 0 6px 16px rgba(0, 47, 108, 0.07);
+        margin: 0 0 18px 0;
+      }
+
+      h3 {
+        margin: 6px 0 10px 0;
+        color: var(--amn-navy);
+      }
+
+      input,
+      textarea,
+      button {
+        border-radius: 8px;
+        border: 1px solid var(--amn-border);
+      }
+
+      input,
+      textarea {
+        min-height: 34px;
+        padding: 6px 8px;
+        width: min(700px, 100%);
+      }
+
+      button {
+        background: var(--amn-blue);
+        color: #fff;
+        border: none;
+        padding: 10px 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: #004f9e;
+      }
+
+      a {
+        color: var(--amn-blue);
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="brand-fallback">AMN Healthcare</span>
+      <strong>Voice Operations Portal - Administrative Items</strong>
+    </header>
+
+    <main class="content">
+      <h2>Administrative Items</h2>
+      <p>Authenticated as: <strong>__AUTH_USER__</strong></p>
+      <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
+      <p><a href="/menu">Back to Main Operations Menu</a></p>
+
+      <section class="panel">
+        <h3>Strike Mode - Add in both Jabber iPhone and Android (Option 5)</h3>
+        <form action="/add/secondary-strike-devices" method="post">
+          Cisco Callmanager Username:<br>
+          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+          Cisco Callmanager Password:<br>
+          <input type="password" name="cucm_pass" required><br><br>
+
+          User ID for person to add STRIKE MODE devices for:<br>
+          <input name="target_user" placeholder="john.doe" required><br><br>
+
+          <button type="submit">Run STRIKE MODE</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h3>Extract RPO Phones (Option 18)</h3>
+        <form action="/export/rpo-phones" method="post">
+          Cisco Callmanager Username:<br>
+          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+          Cisco Callmanager Password:<br>
+          <input type="password" name="cucm_pass" required><br><br>
+
+          User IDs (one per line):<br>
+          <textarea name="rpo_userids" rows="8" placeholder="john.doe&#10;jane.smith" required></textarea><br><br>
+
+          <button type="submit">Run Extract RPO Phones</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h3>Add Directory Numbers (Upload CSV)</h3>
+        <form action="/add/directorynumbers" method="post" enctype="multipart/form-data">
+          Cisco Callmanager Username:<br>
+          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+          Cisco Callmanager Password:<br>
+          <input type="password" name="cucm_pass" required><br><br>
+
+          CSV File:<br>
+          <input type="file" name="csv_file" required><br><br>
+
+          <a href="/download/add-directorynumbers-template">Download CSV Template</a><br><br>
+
+          <button type="submit">Run Add Directory Numbers</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h3>Export End Users</h3>
+        <form action="/export/endusers" method="post">
+          Cisco Callmanager Username:<br>
+          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+          Cisco Callmanager Password:<br>
+          <input type="password" name="cucm_pass" required><br><br>
+
+          Last Name:<br>
+          <input name="lastname" required><br><br>
+
+          <button type="submit">Export End Users</button>
+        </form>
+      </section>
     </main>
   </body>
 </html>
