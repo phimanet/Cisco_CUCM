@@ -13,7 +13,11 @@ from requests.auth import HTTPBasicAuth
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TARGET_DEVICE_PREFIXES = ("CSF", "BOT", "TCT")
-DEFAULT_UNITY_RELAY_DOMAIN = (os.getenv("UNITY_RELAY_EMAIL_DOMAIN", "ahs.int") or "ahs.int").strip()
+DEFAULT_UNITY_SMTP_DOMAIN = (
+    os.getenv("UNITY_SMTP_ADDRESS_DOMAIN", "")
+    or os.getenv("UNITY_RELAY_EMAIL_DOMAIN", "")
+    or "amnhealthcare.com"
+).strip()
 
 
 def _axl_post(session, cucm_host, soap_xml):
@@ -239,7 +243,8 @@ def _update_unity_user_profile(session, unity_server, object_id, display_name, s
     url = _make_unity_url(unity_server, f"/vmrest/users/{object_id}")
     payload = {
         "DisplayName": display_name,
-        "EmailAddress": smtp_address,
+        # Update Unity SMTP Address field only; do not modify EmailAddress.
+        "SmtpAddress": smtp_address,
     }
     response = session.put(url, headers=_unity_headers(), json=payload, timeout=120)
     if response.status_code not in {200, 204}:
@@ -266,7 +271,7 @@ def _build_smtp_address(first_name, last_name, userid):
     else:
         local_part = _clean_email_part(userid) or "unknown.user"
 
-    domain = DEFAULT_UNITY_RELAY_DOMAIN.strip().lower().lstrip("@")
+    domain = DEFAULT_UNITY_SMTP_DOMAIN.strip().lower().lstrip("@")
     return f"{local_part}@{domain}" if domain else local_part
 
 
@@ -418,7 +423,7 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
                     writer.writerow([
                         "Update Unity Mailbox",
                         "Success",
-                        f"DisplayName='{display_name}', SMTP='{smtp_address}' on {unity_server}",
+                        f"DisplayName='{display_name}', SmtpAddress='{smtp_address}' on {unity_server}",
                     ])
         except Exception as exc:
             writer.writerow(["Update Unity Mailbox", "Failed", str(exc)])
