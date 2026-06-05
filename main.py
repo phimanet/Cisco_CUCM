@@ -30,6 +30,7 @@ from toolkit.called_name_change import run_called_name_change
 from toolkit.edit_line_group_members import edit_line_group_members, search_line_groups
 from toolkit.extract_rpo_phones import extract_rpo_phones
 from toolkit.person_lookup import search_persons_by_name
+from toolkit.extension_lookup import lookup_extension_owner, check_user_devices
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 JOB_OUTPUTS = {}
@@ -214,7 +215,7 @@ def _wants_json_response(request: Request) -> bool:
     return True
   if inline_flag in {"1", "true", "yes", "on"}:
     return True
-  if request.url.path in {"/line-groups/search", "/audit-trail/stats", "/healthz", "/lookup/person"}:
+  if request.url.path in {"/line-groups/search", "/audit-trail/stats", "/healthz", "/lookup/person", "/lookup/extension", "/check/user-devices"}:
     return True
   return False
 
@@ -1427,6 +1428,7 @@ def menu_page(request: Request):
         <h4>Operations Menu</h4>
         <div class="portal-nav">
           <button type="button" class="portal-nav-btn active" data-panel="personlookup">Person Lookup by Name</button>
+          <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Reverse Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel="precheck">Check for Existing Jabber Configuration</button>
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
           <button type="button" class="portal-nav-btn" data-panel="namechange">Jabber/VM Name Update</button>
@@ -1522,6 +1524,7 @@ def menu_page(request: Request):
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
             html += '</tr></thead><tbody>';
 
             results.forEach(function (r, i) {
@@ -1529,17 +1532,25 @@ def menu_page(request: Request):
               const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
               const ext = r.primary_extension || "\u2014";
               const email = r.email || "\u2014";
+              const uid = r.userid || "";
               const devList = (r.devices || []).map(function (d) {
                 const exts = (d.extensions || []).join(", ") || "\u2014";
                 return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
               }).join("<br>") || "\u2014";
 
+              const btnStyle = "display:inline-block;margin:2px 3px 2px 0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;";
+              const actionBtns =
+                `<button type="button" style="${btnStyle}background:#005eb8;color:#fff;" onclick="prefillPanel('precheck','${uid}')">Check Jabber</button>` +
+                `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build</button>` +
+                `<button type="button" style="${btnStyle}background:#b00020;color:#fff;" onclick="prefillPanel('offboard','${uid}')">Offboard</button>`;
+
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
               html += '<td style="padding:7px 10px;">' + name + '</td>';
-              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + r.userid + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
               html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
               html += '<td style="padding:7px 10px;">' + email + '</td>';
               html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
+              html += '<td style="padding:7px 10px; white-space:nowrap;">' + actionBtns + '</td>';
               html += '</tr>';
             });
 
@@ -1548,6 +1559,120 @@ def menu_page(request: Request):
 
           } catch (err) {
             statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+          }
+        });
+      })();
+    </script>
+    </section>
+
+    <section class="tool-panel" data-panel="extensionlookup">
+
+    <h3>Extension Reverse Lookup</h3>
+    <p>Enter a DN pattern (exact or partial) to find which device and user it is assigned to.</p>
+
+    <div class="jabber-check-layout">
+      <form id="extension-lookup-form" class="jabber-check-form">
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
+        Extension / DN Pattern:<br>
+        <input name="pattern" placeholder="4695551234" required><br><br>
+
+        <div class="action-row">
+          <button id="extension-lookup-btn" type="submit">Look Up Extension</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
+      </form>
+
+      <section class="jabber-check-output" aria-live="polite" style="flex: 1 1 600px; min-width: 320px;">
+        <h4>Lookup Result</h4>
+        <p id="extension-lookup-status" class="jabber-check-status">Enter a DN and click Look Up Extension.</p>
+        <div id="extension-lookup-results" style="overflow-x: auto;"></div>
+      </section>
+    </div>
+
+    <script>
+      (function () {
+        const form = document.getElementById("extension-lookup-form");
+        const statusEl = document.getElementById("extension-lookup-status");
+        const resultsEl = document.getElementById("extension-lookup-results");
+
+        if (!form || !statusEl || !resultsEl) return;
+
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          statusEl.textContent = "Looking up...";
+          resultsEl.innerHTML = "";
+
+          try {
+            const formData = new FormData(form);
+            const response = await fetch("/lookup/extension", {
+              method: "POST",
+              body: formData,
+              credentials: "same-origin",
+            });
+
+            const payload = await response.json();
+
+            if (!response.ok || !payload.ok) {
+              const msg = (payload.error && payload.error.message) || "Lookup failed.";
+              throw new Error(msg);
+            }
+
+            const matches = payload.matches || [];
+            if (!matches.length) {
+              statusEl.textContent = `No results found for "${payload.pattern || ""}"`;
+              return;
+            }
+
+            statusEl.textContent = `Found ${matches.length} result(s) for "${payload.pattern || ""}".`;
+
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Partition</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Device</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Type</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Owner</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">All Lines on Device</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
+            html += '</tr></thead><tbody>';
+
+            matches.forEach(function (m, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const dev = m.device_name || "<em style='color:#888;'>Unassigned</em>";
+              const devType = m.device_type || "\u2014";
+              const uid = (m.user && m.user.userid) || m.owner_userid || "";
+              const ownerName = (m.user && (m.user.display_name || ((m.user.first_name || "") + " " + (m.user.last_name || "")).trim())) || "";
+              const ownerCell = uid ? (ownerName ? ownerName + "<br><span style='font-family:Consolas,monospace;font-size:11px;'>" + uid + "</span>" : uid) : "\u2014";
+              const allLines = (m.all_lines || []).map(function (l) { return l.pattern; }).join(", ") || "\u2014";
+
+              const btnStyle = "display:inline-block;margin:2px 3px 2px 0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;";
+              const actionBtns = uid
+                ? `<button type="button" style="${btnStyle}background:#005eb8;color:#fff;" onclick="prefillPanel('precheck','${uid}')">Check Jabber</button>` +
+                  `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build</button>` +
+                  `<button type="button" style="${btnStyle}background:#b00020;color:#fff;" onclick="prefillPanel('offboard','${uid}')">Offboard</button>`
+                : "\u2014";
+
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c; font-family:Consolas,monospace;">' + m.pattern + '</td>';
+              html += '<td style="padding:7px 10px; font-size:12px;">' + (m.partition || "\u2014") + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + dev + '</td>';
+              html += '<td style="padding:7px 10px; font-size:12px;">' + devType + '</td>';
+              html += '<td style="padding:7px 10px;">' + ownerCell + '</td>';
+              html += '<td style="padding:7px 10px; font-size:12px; color:#355978;">' + allLines + '</td>';
+              html += '<td style="padding:7px 10px; white-space:nowrap;">' + actionBtns + '</td>';
+              html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            resultsEl.innerHTML = html;
+
+          } catch (err) {
+            statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
           }
         });
       })();
@@ -1691,12 +1816,12 @@ def menu_page(request: Request):
 
         form.addEventListener("submit", function (event) {
           event.preventDefault();
-          runBuild();
+          checkForDuplicateDevices(form, ["csf"]).then((proceed) => { if (proceed) runBuild(); });
         });
 
         button.addEventListener("click", function (event) {
           event.preventDefault();
-          runBuild();
+          checkForDuplicateDevices(form, ["csf"]).then((proceed) => { if (proceed) runBuild(); });
         });
 
       })();
@@ -2642,7 +2767,9 @@ def menu_page(request: Request):
 
           if (form.id === "build-user-form") {
             event.preventDefault();
-            submitBuildUserInline(form);
+            checkForDuplicateDevices(form, ["csf"]).then((proceed) => {
+              if (proceed) submitBuildUserInline(form);
+            });
             return;
           }
 
@@ -2692,39 +2819,45 @@ def menu_page(request: Request):
 
           if (form.id === "secondary-tct-form") {
             event.preventDefault();
-            submitSecondaryInline(form, {
-              statusId: "secondary-tct-status",
-              previewId: "secondary-tct-preview",
-              downloadId: "secondary-tct-download",
-              runningText: "Running Option 3...",
-              failedText: "Option 3 failed. Review output and retry.",
-              defaultFilename: "option3_output.csv",
+            checkForDuplicateDevices(form, ["tct"]).then((proceed) => {
+              if (proceed) submitSecondaryInline(form, {
+                statusId: "secondary-tct-status",
+                previewId: "secondary-tct-preview",
+                downloadId: "secondary-tct-download",
+                runningText: "Running Option 3...",
+                failedText: "Option 3 failed. Review output and retry.",
+                defaultFilename: "option3_output.csv",
+              });
             });
             return;
           }
 
           if (form.id === "secondary-bot-form") {
             event.preventDefault();
-            submitSecondaryInline(form, {
-              statusId: "secondary-bot-status",
-              previewId: "secondary-bot-preview",
-              downloadId: "secondary-bot-download",
-              runningText: "Running Option 4...",
-              failedText: "Option 4 failed. Review output and retry.",
-              defaultFilename: "option4_output.csv",
+            checkForDuplicateDevices(form, ["bot"]).then((proceed) => {
+              if (proceed) submitSecondaryInline(form, {
+                statusId: "secondary-bot-status",
+                previewId: "secondary-bot-preview",
+                downloadId: "secondary-bot-download",
+                runningText: "Running Option 4...",
+                failedText: "Option 4 failed. Review output and retry.",
+                defaultFilename: "option4_output.csv",
+              });
             });
             return;
           }
 
           if (form.id === "secondary-strike-form") {
             event.preventDefault();
-            submitSecondaryInline(form, {
-              statusId: "secondary-strike-status",
-              previewId: "secondary-strike-preview",
-              downloadId: "secondary-strike-download",
-              runningText: "Running Option 5...",
-              failedText: "Option 5 failed. Review output and retry.",
-              defaultFilename: "option5_output.csv",
+            checkForDuplicateDevices(form, ["tct", "bot"]).then((proceed) => {
+              if (proceed) submitSecondaryInline(form, {
+                statusId: "secondary-strike-status",
+                previewId: "secondary-strike-preview",
+                downloadId: "secondary-strike-download",
+                runningText: "Running Option 5...",
+                failedText: "Option 5 failed. Review output and retry.",
+                defaultFilename: "option5_output.csv",
+              });
             });
             return;
           }
@@ -2786,11 +2919,70 @@ def menu_page(request: Request):
         });
       }
 
+      // Globally accessible so inline onclick handlers in dynamic tables can call it.
+      window.prefillPanel = function (panelKey, userId) {
+        showPanel(panelKey);
+        const panel = panels.find((p) => p.dataset.panel === panelKey);
+        if (!panel) return;
+        const targetField = panel.querySelector('input[name="target_user"]');
+        if (targetField) {
+          targetField.value = userId || "";
+        }
+        // Scroll panel into view
+        panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      };
+
       navButtons.forEach((btn) => {
         btn.addEventListener("click", () => {
           showPanel(btn.dataset.panel);
         });
       });
+
+      // ── Duplicate device pre-check ──────────────────────────────────────────
+      // Runs before Build CSF, TCT, BOT, and Strike forms submit.
+      // Calls /check/user-devices, warns if the relevant device type already exists.
+
+      async function checkForDuplicateDevices(form, deviceTypes) {
+        const targetField = form.querySelector('input[name="target_user"]');
+        const userField = form.querySelector('input[name="cucm_user"]');
+        const passField = form.querySelector('input[name="cucm_pass"]');
+        if (!targetField || !userField || !passField) return true;
+
+        const targetUser = (targetField.value || "").trim();
+        if (!targetUser) return true;
+
+        const checkData = new FormData();
+        checkData.append("cucm_user", userField.value || "");
+        checkData.append("cucm_pass", passField.value || "");
+        checkData.append("target_user", targetUser);
+
+        let result;
+        try {
+          const resp = await fetch("/check/user-devices", {
+            method: "POST",
+            body: checkData,
+            credentials: "same-origin",
+          });
+          result = await resp.json();
+        } catch (_err) {
+          // Network/auth error — don't block, let the main action surface it.
+          return true;
+        }
+
+        if (!result || !result.ok) return true;
+
+        const found = [];
+        if (deviceTypes.includes("csf") && result.has_csf) found.push("CSF (Jabber Laptop)");
+        if (deviceTypes.includes("tct") && result.has_tct) found.push("TCT (Jabber iPhone)");
+        if (deviceTypes.includes("bot") && result.has_bot) found.push("BOT (Jabber Android)");
+
+        if (!found.length) return true;
+
+        const displayName = result.display_name ? ` (${result.display_name})` : "";
+        return confirm(
+          `Duplicate device warning\\n\\nUser "${targetUser}"${displayName} already has:\\n  • ${found.join("\\n  • ")}\\n\\nDo you want to continue anyway?`
+        );
+      }
 
     </script>
       </section>
@@ -3066,6 +3258,39 @@ async def rebuild_user_csf_phone(
       })
 
     return _render_job_result("Re-Build Cisco Jabber CSF from Offboard Audit", data, filename)
+
+
+@app.post("/check/user-devices")
+def check_user_devices_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    target_user: str = Form(...),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    clean_target = (target_user or "").strip()
+    if not clean_target:
+        raise RuntimeError("target_user is required.")
+    result = check_user_devices(cucm_host, cucm_user, cucm_pass, clean_target)
+    return JSONResponse({"ok": True, **result})
+
+
+@app.post("/lookup/extension")
+def lookup_extension_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    pattern: str = Form(...),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+    clean_pattern = (pattern or "").strip()
+    if not clean_pattern:
+        raise RuntimeError("Extension pattern is required.")
+    result = lookup_extension_owner(cucm_host, cucm_user, cucm_pass, clean_pattern)
+    return JSONResponse({"ok": True, **result})
 
 
 @app.post("/lookup/person")
