@@ -234,6 +234,34 @@ def _get_unity_user_by_alias(session, unity_server, alias):
     return None
 
 
+def _get_unity_user_by_object_id(session, unity_server, object_id):
+    url = _make_unity_url(unity_server, f"/vmrest/users/{object_id}")
+    response = session.get(url, headers=_unity_headers(), timeout=120)
+    if response.status_code != 200:
+        raise RuntimeError(f"Unity user detail lookup failed: {_parse_unity_error_text(response)}")
+
+    try:
+        return response.json()
+    except ValueError:
+        raise RuntimeError("Unity user detail lookup returned non-JSON response")
+
+
+def _resolve_smtp_address_with_existing_domain(local_part, existing_smtp_address):
+    local_part = (local_part or "").strip().lower()
+    existing = (existing_smtp_address or "").strip()
+    if not local_part:
+        return local_part
+
+    if "@" not in existing:
+        return local_part
+
+    _, domain = existing.split("@", 1)
+    domain = (domain or "").strip().lower()
+    if not domain:
+        return local_part
+    return f"{local_part}@{domain}"
+
+
 def _update_unity_user_profile(session, unity_server, object_id, display_name, smtp_address):
     url = _make_unity_url(unity_server, f"/vmrest/users/{object_id}")
     payload = {
@@ -414,11 +442,15 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
                 if not object_id:
                     writer.writerow(["Update Unity Mailbox", "Failed", "Mailbox found but ObjectId missing"]) 
                 else:
-                    _update_unity_user_profile(unity_session, unity_server, object_id, display_name, smtp_address)
+                    mailbox_detail = _get_unity_user_by_object_id(unity_session, unity_server, object_id)
+                    existing_smtp = str(mailbox_detail.get("SmtpAddress") or "").strip()
+                    matched_smtp = _resolve_smtp_address_with_existing_domain(smtp_address, existing_smtp)
+
+                    _update_unity_user_profile(unity_session, unity_server, object_id, display_name, matched_smtp)
                     writer.writerow([
                         "Update Unity Mailbox",
                         "Success",
-                        f"DisplayName='{display_name}', SmtpAddress='{smtp_address}' on {unity_server}",
+                        f"DisplayName='{display_name}', SmtpAddress='{matched_smtp}' on {unity_server}",
                     ])
         except Exception as exc:
             writer.writerow(["Update Unity Mailbox", "Failed", str(exc)])
