@@ -13,11 +13,6 @@ from requests.auth import HTTPBasicAuth
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TARGET_DEVICE_PREFIXES = ("CSF", "BOT", "TCT")
-DEFAULT_UNITY_SMTP_DOMAIN = (
-    os.getenv("UNITY_SMTP_ADDRESS_DOMAIN", "")
-    or os.getenv("UNITY_RELAY_EMAIL_DOMAIN", "")
-    or "amnhealthcare.com"
-).strip()
 
 
 def _axl_post(session, cucm_host, soap_xml):
@@ -259,7 +254,7 @@ def _clean_email_part(value):
 def _build_smtp_address(first_name, last_name, userid):
     userid = (userid or "").strip().lower()
     if "@" in userid:
-        return userid
+        return userid.split("@", 1)[0]
 
     first = _clean_email_part(first_name)
     last = _clean_email_part(last_name)
@@ -271,8 +266,8 @@ def _build_smtp_address(first_name, last_name, userid):
     else:
         local_part = _clean_email_part(userid) or "unknown.user"
 
-    domain = DEFAULT_UNITY_SMTP_DOMAIN.strip().lower().lstrip("@")
-    return f"{local_part}@{domain}" if domain else local_part
+    # Unity SMTP Address UI field in this environment is local-part only.
+    return local_part
 
 
 def _build_device_description(device_name, display_name):
