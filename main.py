@@ -219,7 +219,6 @@ def _wants_json_response(request: Request) -> bool:
   if request.url.path in {
     "/line-groups/search",
     "/audit-trail/stats",
-    "/audit-trail/recent",
     "/healthz",
     "/lookup/person",
     "/lookup/extension",
@@ -508,16 +507,6 @@ def _extract_account_from_audit_target(target_text: str) -> str:
     if match:
       return (match.group(1) or "").strip()
     return text
-
-
-def _parse_audit_timestamp(ts_text: str):
-    value = (ts_text or "").strip()
-    if not value:
-      return None
-    try:
-      return datetime.datetime.strptime(value, AUDIT_TIMESTAMP_FORMAT)
-    except ValueError:
-      return None
 
 
 def _find_latest_rebuild_dn_from_audit(account: str) -> str:
@@ -990,8 +979,6 @@ def menu_page(request: Request):
   auth_user = escape(str(session.get("username", "")))
   auth_cucm_host = str(session.get("cucm_host", ""))
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
-  session_created_at = int(float(session.get("created_at", time.time())))
-  session_expires_at = session_created_at + SESSION_IDLE_TIMEOUT_SECONDS
   html = """
 <html>
   <head>
@@ -1098,24 +1085,6 @@ def menu_page(request: Request):
         color: #5c2700;
         background: #ffe6cc;
         border: 1px solid #f7b267;
-      }
-
-      .session-banner {
-        display: none;
-        margin: 10px 0 8px 0;
-        padding: 10px 14px;
-        border-radius: 8px;
-        font-size: 13px;
-        font-weight: 700;
-        border: 1px solid #f7b267;
-        background: #fff3e0;
-        color: #5c2700;
-      }
-
-      .session-banner.critical {
-        border-color: #ef9a9a;
-        background: #ffebee;
-        color: #8b0000;
       }
 
       h2 {
@@ -1461,7 +1430,6 @@ def menu_page(request: Request):
     <p><a href="/genesys-admin">Open Genesys Admin Placeholder</a></p>
     <p>Environment was selected at login and is locked for this session.</p>
     <p>Security mode: passwords are not cached server-side. Enter admin password for each action.</p>
-    <div id="session-expiry-banner" class="session-banner" aria-live="polite"></div>
     <p><a href="/download/audit-trail">Download Audit Trail (CSV)</a></p>
 
     <div class="portal-shell">
@@ -1485,7 +1453,6 @@ def menu_page(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="exportdn">Export Directory Numbers</button>
           <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
-          <button type="button" class="portal-nav-btn" data-panel="auditviewer">Audit Trail Viewer</button>
           <button type="button" class="portal-nav-btn" data-panel="transpattern">Translation Pattern Lookup</button>
         </div>
       </aside>
@@ -1520,9 +1487,6 @@ def menu_page(request: Request):
       <section class="jabber-check-output" aria-live="polite" style="flex: 1 1 600px; min-width: 320px;">
         <h4>Search Results</h4>
         <p id="person-lookup-status" class="jabber-check-status">Enter a last name and click Search.</p>
-        <p>
-          <button type="button" id="person-export-btn" style="display:none;">Export Results to CSV</button>
-        </p>
         <div id="person-lookup-results" style="overflow-x: auto;"></div>
       </section>
     </div>
@@ -1532,21 +1496,13 @@ def menu_page(request: Request):
         const form = document.getElementById("person-lookup-form");
         const statusEl = document.getElementById("person-lookup-status");
         const resultsEl = document.getElementById("person-lookup-results");
-        const exportBtn = document.getElementById("person-export-btn");
 
         if (!form || !statusEl || !resultsEl) return;
-
-        if (exportBtn) {
-          exportBtn.addEventListener("click", function () {
-            exportTableToCsv("person-lookup-table", "person_lookup_results.csv");
-          });
-        }
 
         form.addEventListener("submit", async function (event) {
           event.preventDefault();
           statusEl.textContent = "Searching...";
           resultsEl.innerHTML = "";
-          if (exportBtn) exportBtn.style.display = "none";
 
           try {
             const formData = new FormData(form);
@@ -1571,7 +1527,7 @@ def menu_page(request: Request):
 
             statusEl.textContent = `Found ${results.length} user(s).`;
 
-            let html = '<table id="person-lookup-table" style="width:100%; border-collapse:collapse; font-size:13px;">';
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
             html += '<thead><tr style="background:#005eb8; color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
@@ -1612,7 +1568,6 @@ def menu_page(request: Request):
 
             html += '</tbody></table>';
             resultsEl.innerHTML = html;
-            if (exportBtn) exportBtn.style.display = "inline-block";
 
           } catch (err) {
             statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
@@ -1647,9 +1602,6 @@ def menu_page(request: Request):
       <section class="jabber-check-output" aria-live="polite" style="flex: 1 1 600px; min-width: 320px;">
         <h4>Lookup Result</h4>
         <p id="extension-lookup-status" class="jabber-check-status">Enter a DN and click Look Up Extension.</p>
-        <p>
-          <button type="button" id="extension-export-btn" style="display:none;">Export Results to CSV</button>
-        </p>
         <div id="extension-lookup-results" style="overflow-x: auto;"></div>
       </section>
     </div>
@@ -1659,21 +1611,13 @@ def menu_page(request: Request):
         const form = document.getElementById("extension-lookup-form");
         const statusEl = document.getElementById("extension-lookup-status");
         const resultsEl = document.getElementById("extension-lookup-results");
-        const exportBtn = document.getElementById("extension-export-btn");
 
         if (!form || !statusEl || !resultsEl) return;
-
-        if (exportBtn) {
-          exportBtn.addEventListener("click", function () {
-            exportTableToCsv("extension-lookup-table", "extension_lookup_results.csv");
-          });
-        }
 
         form.addEventListener("submit", async function (event) {
           event.preventDefault();
           statusEl.textContent = "Looking up...";
           resultsEl.innerHTML = "";
-          if (exportBtn) exportBtn.style.display = "none";
 
           try {
             const formData = new FormData(form);
@@ -1698,7 +1642,7 @@ def menu_page(request: Request):
 
             statusEl.textContent = `Found ${matches.length} result(s) for "${payload.pattern || ""}".`;
 
-            let html = '<table id="extension-lookup-table" style="width:100%; border-collapse:collapse; font-size:13px;">';
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
             html += '<thead><tr style="background:#005eb8; color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Partition</th>';
@@ -1738,7 +1682,6 @@ def menu_page(request: Request):
 
             html += '</tbody></table>';
             resultsEl.innerHTML = html;
-            if (exportBtn) exportBtn.style.display = "inline-block";
 
           } catch (err) {
             statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
@@ -1803,9 +1746,6 @@ def menu_page(request: Request):
       <section class="jabber-check-output" aria-live="polite" style="flex: 1 1 600px; min-width: 320px;">
         <h4>Translation Pattern Results</h4>
         <p id="trans-pattern-status" class="jabber-check-status">Enter a pattern and click Search.</p>
-        <p>
-          <button type="button" id="trans-pattern-export-btn" style="display:none;">Export Results to CSV</button>
-        </p>
         <div id="trans-pattern-results" style="overflow-x: auto;"></div>
       </section>
     </div>
@@ -1815,21 +1755,13 @@ def menu_page(request: Request):
         const form = document.getElementById("trans-pattern-form");
         const statusEl = document.getElementById("trans-pattern-status");
         const resultsEl = document.getElementById("trans-pattern-results");
-        const exportBtn = document.getElementById("trans-pattern-export-btn");
 
         if (!form || !statusEl || !resultsEl) return;
-
-        if (exportBtn) {
-          exportBtn.addEventListener("click", function () {
-            exportTableToCsv("trans-pattern-table", "translation_pattern_results.csv");
-          });
-        }
 
         form.addEventListener("submit", async function (event) {
           event.preventDefault();
           statusEl.textContent = "Searching translation patterns...";
           resultsEl.innerHTML = "";
-          if (exportBtn) exportBtn.style.display = "none";
 
           try {
             const formData = new FormData(form);
@@ -1853,7 +1785,7 @@ def menu_page(request: Request):
 
             statusEl.textContent = `Found ${results.length} translation pattern(s).`;
 
-            let html = '<table id="trans-pattern-table" style="width:100%; border-collapse:collapse; font-size:13px;">';
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
             html += '<thead><tr style="background:#005eb8; color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Pattern</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Description</th>';
@@ -1871,125 +1803,8 @@ def menu_page(request: Request):
 
             html += '</tbody></table>';
             resultsEl.innerHTML = html;
-            if (exportBtn) exportBtn.style.display = "inline-block";
           } catch (err) {
             statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
-          }
-        });
-      })();
-    </script>
-    </section>
-
-    <section class="tool-panel" data-panel="auditviewer">
-
-    <h3>Audit Trail Viewer</h3>
-    <p>View recent audit events with filters for operator, action, and date range.</p>
-
-    <div class="jabber-check-layout">
-      <form id="audit-viewer-form" class="jabber-check-form">
-        Operator (optional):<br>
-        <input name="operator" placeholder="jdoe"><br><br>
-
-        Action (optional):<br>
-        <input name="action" placeholder="build_user_csf_phone"><br><br>
-
-        Date From (YYYY-MM-DD, optional):<br>
-        <input name="date_from" placeholder="2026-06-01"><br><br>
-
-        Date To (YYYY-MM-DD, optional):<br>
-        <input name="date_to" placeholder="2026-06-05"><br><br>
-
-        Max Rows:<br>
-        <input name="limit" type="number" min="1" max="1000" value="200"><br><br>
-
-        <div class="action-row">
-          <button type="submit">Load Audit Events</button>
-        </div>
-      </form>
-
-      <section class="jabber-check-output" aria-live="polite" style="flex: 1 1 700px; min-width: 320px;">
-        <h4>Audit Events</h4>
-        <p id="audit-viewer-status" class="jabber-check-status">Load events to view results.</p>
-        <p>
-          <button type="button" id="audit-viewer-export-btn" style="display:none;">Export Results to CSV</button>
-        </p>
-        <div id="audit-viewer-results" style="overflow-x: auto;"></div>
-      </section>
-    </div>
-
-    <script>
-      (function () {
-        const form = document.getElementById("audit-viewer-form");
-        const statusEl = document.getElementById("audit-viewer-status");
-        const resultsEl = document.getElementById("audit-viewer-results");
-        const exportBtn = document.getElementById("audit-viewer-export-btn");
-
-        if (!form || !statusEl || !resultsEl) return;
-
-        if (exportBtn) {
-          exportBtn.addEventListener("click", function () {
-            exportTableToCsv("audit-viewer-table", "audit_viewer_results.csv");
-          });
-        }
-
-        form.addEventListener("submit", async function (event) {
-          event.preventDefault();
-          statusEl.textContent = "Loading audit events...";
-          resultsEl.innerHTML = "";
-          if (exportBtn) exportBtn.style.display = "none";
-
-          try {
-            const formData = new FormData(form);
-            const params = new URLSearchParams();
-            ["operator", "action", "date_from", "date_to", "limit"].forEach((name) => {
-              const value = (formData.get(name) || "").toString().trim();
-              if (value) params.set(name, value);
-            });
-
-            const response = await fetch(`/audit-trail/recent?${params.toString()}`, {
-              method: "GET",
-              credentials: "same-origin",
-            });
-
-            const payload = await response.json();
-            if (!response.ok) {
-              const msg = (payload.error && payload.error.message) || "Failed to load audit events.";
-              throw new Error(msg);
-            }
-
-            const rows = payload.rows || [];
-            if (!rows.length) {
-              statusEl.textContent = "No audit events found for the selected filters.";
-              return;
-            }
-
-            statusEl.textContent = `Showing ${rows.length} event(s).`;
-
-            let html = '<table id="audit-viewer-table" style="width:100%; border-collapse:collapse; font-size:13px;">';
-            html += '<thead><tr style="background:#005eb8; color:#fff;">';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Timestamp</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Operator</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Target</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">CUCM Host</th>';
-            html += '</tr></thead><tbody>';
-
-            rows.forEach(function (row, i) {
-              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
-              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
-              html += '<td style="padding:7px 10px; white-space:nowrap;">' + (row.timestamp || "") + '</td>';
-              html += '<td style="padding:7px 10px;">' + (row.action || "") + '</td>';
-              html += '<td style="padding:7px 10px;">' + (row.operator || "") + '</td>';
-              html += '<td style="padding:7px 10px; max-width:360px; overflow-wrap:anywhere;">' + (row.target || "") + '</td>';
-              html += '<td style="padding:7px 10px; white-space:nowrap;">' + (row.cucm_host || "") + '</td>';
-              html += '</tr>';
-            });
-
-            html += '</tbody></table>';
-            resultsEl.innerHTML = html;
-            if (exportBtn) exportBtn.style.display = "inline-block";
-          } catch (err) {
-            statusEl.textContent = "Audit load failed: " + ((err && err.message) || "Unknown error.");
           }
         });
       })();
@@ -3195,74 +3010,6 @@ def menu_page(request: Request):
       const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
       const panels = Array.from(document.querySelectorAll(".tool-panel"));
 
-      function csvEscape(value) {
-        const text = (value == null ? "" : String(value)).replace(/\r?\n/g, " ").trim();
-        if (text.includes('"') || text.includes(',') || text.includes('\n')) {
-          return '"' + text.replace(/"/g, '""') + '"';
-        }
-        return text;
-      }
-
-      function exportTableToCsv(tableId, filename) {
-        const table = document.getElementById(tableId);
-        if (!table) return;
-
-        const rows = Array.from(table.querySelectorAll("tr"));
-        if (!rows.length) return;
-
-        const csvRows = rows.map((row) => {
-          const cells = Array.from(row.querySelectorAll("th,td"));
-          return cells.map((cell) => csvEscape(cell.innerText)).join(",");
-        });
-
-        const blob = new Blob([csvRows.join("\n")], { type: "text/csv;charset=utf-8;" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }
-
-      const sessionExpiryBanner = document.getElementById("session-expiry-banner");
-      const sessionExpiresAt = Number("__SESSION_EXPIRES_EPOCH__");
-      const warningWindowSeconds = 15 * 60;
-
-      function formatRemaining(seconds) {
-        const s = Math.max(0, Number(seconds) || 0);
-        const hh = Math.floor(s / 3600);
-        const mm = Math.floor((s % 3600) / 60);
-        const ss = s % 60;
-        if (hh > 0) {
-          return `${hh}h ${String(mm).padStart(2, "0")}m`;
-        }
-        return `${mm}m ${String(ss).padStart(2, "0")}s`;
-      }
-
-      function refreshSessionExpiryBanner() {
-        if (!sessionExpiryBanner || !Number.isFinite(sessionExpiresAt)) return;
-        const now = Math.floor(Date.now() / 1000);
-        const remaining = sessionExpiresAt - now;
-
-        if (remaining <= warningWindowSeconds) {
-          sessionExpiryBanner.style.display = "block";
-          sessionExpiryBanner.classList.toggle("critical", remaining <= 5 * 60);
-          if (remaining > 0) {
-            sessionExpiryBanner.textContent = `Session expires in ${formatRemaining(remaining)}. Save or run tasks soon.`;
-          } else {
-            sessionExpiryBanner.textContent = "Session has expired. Refresh and log in again.";
-          }
-        } else {
-          sessionExpiryBanner.style.display = "none";
-          sessionExpiryBanner.classList.remove("critical");
-        }
-      }
-
-      refreshSessionExpiryBanner();
-      setInterval(refreshSessionExpiryBanner, 1000);
-
       function showPanel(panelKey) {
         panels.forEach((panel) => {
           const isActive = panel.dataset.panel === panelKey;
@@ -3345,7 +3092,7 @@ def menu_page(request: Request):
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__SESSION_EXPIRES_EPOCH__", str(session_expires_at))
+""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
 
   return HTMLResponse(
     content=html,
@@ -3430,78 +3177,6 @@ def audit_trail_stats():
     "audit_log_path": AUDIT_LOG_PATH,
     "retention_days": AUDIT_RETENTION_DAYS,
     "record_count": record_count,
-  })
-
-
-@app.get("/audit-trail/recent")
-def audit_trail_recent(
-    operator: str = Query(""),
-    action: str = Query(""),
-    date_from: str = Query(""),
-    date_to: str = Query(""),
-    limit: int = Query(200),
-):
-  clean_operator = (operator or "").strip().lower()
-  clean_action = (action or "").strip().lower()
-  clean_date_from = (date_from or "").strip()
-  clean_date_to = (date_to or "").strip()
-  safe_limit = max(1, min(int(limit or 200), 1000))
-
-  parsed_from = None
-  parsed_to = None
-  if clean_date_from:
-    try:
-      parsed_from = datetime.datetime.strptime(clean_date_from, "%Y-%m-%d")
-    except ValueError:
-      raise RuntimeError("date_from must be YYYY-MM-DD")
-  if clean_date_to:
-    try:
-      parsed_to = datetime.datetime.strptime(clean_date_to, "%Y-%m-%d") + datetime.timedelta(days=1)
-    except ValueError:
-      raise RuntimeError("date_to must be YYYY-MM-DD")
-
-  with AUDIT_LOG_LOCK:
-    _ensure_audit_log()
-    _prune_audit_log_locked()
-    with open(AUDIT_LOG_PATH, "r", newline="", encoding="utf-8") as handle:
-      rows = list(csv.DictReader(handle))
-
-  filtered = []
-  for row in reversed(rows):
-    row_operator = (row.get("operator") or "").strip()
-    row_action = (row.get("action") or "").strip()
-    row_timestamp = (row.get("timestamp") or "").strip()
-    ts = _parse_audit_timestamp(row_timestamp)
-
-    if clean_operator and clean_operator not in row_operator.lower():
-      continue
-    if clean_action and clean_action not in row_action.lower():
-      continue
-    if parsed_from and (ts is None or ts < parsed_from):
-      continue
-    if parsed_to and (ts is None or ts >= parsed_to):
-      continue
-
-    filtered.append({
-      "timestamp": row_timestamp,
-      "action": row_action,
-      "operator": row_operator,
-      "target": (row.get("target") or "").strip(),
-      "cucm_host": (row.get("cucm_host") or "").strip(),
-    })
-    if len(filtered) >= safe_limit:
-      break
-
-  return JSONResponse({
-    "rows": filtered,
-    "count": len(filtered),
-    "filters": {
-      "operator": operator,
-      "action": action,
-      "date_from": date_from,
-      "date_to": date_to,
-      "limit": safe_limit,
-    },
   })
     
 
