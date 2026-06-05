@@ -1448,7 +1448,6 @@ def menu_page(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="tct">Add in Jabber iPhone</button>
           <button type="button" class="portal-nav-btn" data-panel="bot">Add in Jabber Android</button>
           <button type="button" class="portal-nav-btn" data-panel="linegroup">Update Hunt List Line Group</button>
-          <button type="button" class="portal-nav-btn" data-panel="exportdn">Export Directory Numbers</button>
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
         </div>
       </aside>
@@ -2194,27 +2193,6 @@ def menu_page(request: Request):
         <textarea id="line-group-preview" readonly></textarea>
       </section>
     </div>
-    </section>
-
-    <section class="tool-panel" data-panel="exportdn">
-
-    <h3>Export Directory Numbers</h3>
-
-    <form action="/export/directorynumbers" method="post">
-      Cisco Callmanager Username:<br>
-      <input name="cucm_user" value="__AUTH_USER__" required><br><br>
-
-      Cisco Callmanager Password:<br>
-      <input type="password" name="cucm_pass" required><br><br>
-
-      DN Pattern (supports %):<br>
-      <input name="dn_contains"><br><br>
-
-      Route Partition (optional):<br>
-      <input name="route_partition"><br><br>
-
-      <button type="submit">Export Directory Numbers</button>
-    </form>
     </section>
 
     <section class="tool-panel" data-panel="rebuild">
@@ -3098,6 +3076,25 @@ def menu_admin_page(request: Request):
           <a href="/download/add-directorynumbers-template">Download CSV Template</a><br><br>
 
           <button type="submit">Run Add Directory Numbers</button>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h3>Export Directory Numbers</h3>
+        <form action="/export/directorynumbers" method="post">
+          Cisco Callmanager Username:<br>
+          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+          Cisco Callmanager Password:<br>
+          <input type="password" name="cucm_pass" required><br><br>
+
+          DN Pattern (supports %):<br>
+          <input name="dn_contains"><br><br>
+
+          Route Partition (optional):<br>
+          <input name="route_partition"><br><br>
+
+          <button type="submit">Export Directory Numbers</button>
         </form>
       </section>
 
