@@ -223,6 +223,8 @@ def _wants_json_response(request: Request) -> bool:
     "/lookup/person",
     "/lookup/extension",
     "/lookup/translation-pattern",
+    "/bulk/lookup/person",
+    "/bulk/lookup/extension",
     "/check/user-devices",
   }:
     return True
@@ -444,6 +446,88 @@ def _prepare_job_output(csv_data, filename: str) -> dict:
         "filename": filename,
         "output_text": csv_bytes.decode("utf-8", errors="replace"),
     }
+
+
+def _pick_column(fieldnames: list[str], candidates: list[str]) -> str:
+    normalized = {name.strip().lower(): name for name in fieldnames if name}
+    for candidate in candidates:
+      match = normalized.get(candidate)
+      if match:
+        return match
+    return ""
+
+
+def _parse_bulk_person_inputs(csv_text: str) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    stream = io.StringIO(csv_text or "")
+    reader = csv.DictReader(stream)
+
+    if reader.fieldnames:
+      last_col = _pick_column(
+        reader.fieldnames,
+        ["last_name", "lastname", "last", "lname", "surname"],
+      )
+      first_col = _pick_column(
+        reader.fieldnames,
+        ["first_name", "firstname", "first", "fname", "givenname"],
+      )
+
+      if not last_col and reader.fieldnames:
+        last_col = reader.fieldnames[0]
+
+      for row in reader:
+        last_name = (row.get(last_col, "") if last_col else "").strip()
+        first_name = (row.get(first_col, "") if first_col else "").strip()
+        if last_name:
+          rows.append((last_name, first_name))
+
+      return rows
+
+    # Fallback for CSV with no header: first column = last name, second = first name (optional)
+    stream.seek(0)
+    plain_reader = csv.reader(stream)
+    for values in plain_reader:
+      if not values:
+        continue
+      last_name = (values[0] or "").strip()
+      first_name = (values[1] or "").strip() if len(values) > 1 else ""
+      if last_name:
+        rows.append((last_name, first_name))
+
+    return rows
+
+
+def _parse_bulk_extension_inputs(csv_text: str) -> list[str]:
+    values: list[str] = []
+    stream = io.StringIO(csv_text or "")
+    reader = csv.DictReader(stream)
+
+    if reader.fieldnames:
+      pattern_col = _pick_column(
+        reader.fieldnames,
+        ["pattern", "extension", "dn", "directory_number", "number"],
+      )
+      if not pattern_col and reader.fieldnames:
+        pattern_col = reader.fieldnames[0]
+
+      for row in reader:
+        pattern = (row.get(pattern_col, "") if pattern_col else "").strip()
+        if pattern:
+          values.append(pattern)
+
+      return values
+
+    # Fallback for CSV with no header: first column = pattern
+    stream.seek(0)
+    plain_reader = csv.reader(stream)
+    for row in plain_reader:
+      if not row:
+        continue
+      pattern = (row[0] or "").strip()
+      if pattern:
+        values.append(pattern)
+
+    return values
 
 
 def _extract_added_dn_from_build_output(csv_data) -> str:
@@ -3134,6 +3218,48 @@ def menu_admin_page(request: Request):
         <div id="admin-trans-pattern-results" style="overflow-x:auto;"></div>
       </section>
 
+      <section class="panel">
+        <h3>Bulk Person Lookup (CSV Upload)</h3>
+        <p>Upload CSV with columns like <strong>last_name, first_name</strong> (or first column as last name).</p>
+        <form id="admin-bulk-person-form" enctype="multipart/form-data">
+          Cisco Callmanager Username:<br>
+          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+          Cisco Callmanager Password:<br>
+          <input type="password" name="cucm_pass" required><br><br>
+
+          CSV File:<br>
+          <input type="file" name="csv_file" accept=".csv" required><br><br>
+
+          <button type="submit">Run Bulk Person Lookup</button>
+        </form>
+        <p id="admin-bulk-person-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Upload a CSV to run bulk lookup.</p>
+        <p id="admin-bulk-person-summary" style="color:#355978; min-height:18px;"></p>
+        <p><a id="admin-bulk-person-download" href="#" style="display:none; font-weight:700;">Download CSV Output</a></p>
+        <textarea id="admin-bulk-person-preview" rows="10" readonly style="width:100%;"></textarea>
+      </section>
+
+      <section class="panel">
+        <h3>Bulk Extension Reverse Lookup (CSV Upload)</h3>
+        <p>Upload CSV with a column like <strong>pattern</strong> or <strong>extension</strong> (or first column as pattern).</p>
+        <form id="admin-bulk-extension-form" enctype="multipart/form-data">
+          Cisco Callmanager Username:<br>
+          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+          Cisco Callmanager Password:<br>
+          <input type="password" name="cucm_pass" required><br><br>
+
+          CSV File:<br>
+          <input type="file" name="csv_file" accept=".csv" required><br><br>
+
+          <button type="submit">Run Bulk Extension Lookup</button>
+        </form>
+        <p id="admin-bulk-extension-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Upload a CSV to run bulk lookup.</p>
+        <p id="admin-bulk-extension-summary" style="color:#355978; min-height:18px;"></p>
+        <p><a id="admin-bulk-extension-download" href="#" style="display:none; font-weight:700;">Download CSV Output</a></p>
+        <textarea id="admin-bulk-extension-preview" rows="10" readonly style="width:100%;"></textarea>
+      </section>
+
       <script>
         (function () {
           const form = document.getElementById("admin-person-lookup-form");
@@ -3330,6 +3456,86 @@ def menu_admin_page(request: Request):
             } catch (err) {
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
             }
+          });
+        })();
+      </script>
+
+      <script>
+        (function () {
+          function renderSummary(summary) {
+            if (!summary) return "";
+            return `Input rows: ${summary.input_rows || 0} | Matched: ${summary.matched_inputs || 0} | No results: ${summary.no_result_inputs || 0} | Errors: ${summary.error_inputs || 0} | Output rows: ${summary.output_rows || 0}`;
+          }
+
+          async function runBulkLookup(config) {
+            const form = document.getElementById(config.formId);
+            const statusEl = document.getElementById(config.statusId);
+            const summaryEl = document.getElementById(config.summaryId);
+            const previewEl = document.getElementById(config.previewId);
+            const downloadEl = document.getElementById(config.downloadId);
+            if (!form || !statusEl || !summaryEl || !previewEl || !downloadEl) {
+              return;
+            }
+
+            form.addEventListener("submit", async function (event) {
+              event.preventDefault();
+              statusEl.textContent = config.runningText;
+              summaryEl.textContent = "";
+              previewEl.value = "";
+              downloadEl.style.display = "none";
+              downloadEl.removeAttribute("href");
+
+              try {
+                const formData = new FormData(form);
+                const response = await fetch(config.endpoint, {
+                  method: "POST",
+                  body: formData,
+                  credentials: "same-origin",
+                });
+
+                const payload = await response.json();
+                if (!response.ok || !payload.ok) {
+                  const msg = (payload.error && payload.error.message) || "Bulk lookup failed.";
+                  throw new Error(msg);
+                }
+
+                statusEl.textContent = `Completed: ${payload.filename || config.defaultFilename}`;
+                summaryEl.textContent = renderSummary(payload.summary);
+                previewEl.value = payload.output_text || "";
+                if (payload.download_url) {
+                  downloadEl.href = payload.download_url;
+                  downloadEl.style.display = "inline";
+                }
+              } catch (err) {
+                statusEl.textContent = config.failedText;
+                summaryEl.textContent = "";
+                previewEl.value = (err && err.message) ? err.message : "Unknown error.";
+              }
+            });
+          }
+
+          runBulkLookup({
+            formId: "admin-bulk-person-form",
+            statusId: "admin-bulk-person-status",
+            summaryId: "admin-bulk-person-summary",
+            previewId: "admin-bulk-person-preview",
+            downloadId: "admin-bulk-person-download",
+            endpoint: "/bulk/lookup/person",
+            runningText: "Running bulk person lookup...",
+            failedText: "Bulk person lookup failed.",
+            defaultFilename: "bulk_person_lookup.csv",
+          });
+
+          runBulkLookup({
+            formId: "admin-bulk-extension-form",
+            statusId: "admin-bulk-extension-status",
+            summaryId: "admin-bulk-extension-summary",
+            previewId: "admin-bulk-extension-preview",
+            downloadId: "admin-bulk-extension-download",
+            endpoint: "/bulk/lookup/extension",
+            runningText: "Running bulk extension lookup...",
+            failedText: "Bulk extension lookup failed.",
+            defaultFilename: "bulk_extension_lookup.csv",
           });
         })();
       </script>
@@ -3655,6 +3861,205 @@ def lookup_translation_pattern_route(
 
     results = lookup_translation_patterns(cucm_host, cucm_user, cucm_pass, clean_pattern)
     return JSONResponse({"ok": True, "query": clean_pattern, "results": results})
+
+
+@app.post("/bulk/lookup/person")
+async def bulk_lookup_person_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    csv_file: UploadFile = File(...),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+    raw = await csv_file.read()
+    text = raw.decode("utf-8-sig", errors="replace")
+    inputs = _parse_bulk_person_inputs(text)
+    if not inputs:
+      raise RuntimeError("No usable rows found in CSV. Include a last name column or first column with last names.")
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+      "input_last_name",
+      "input_first_name",
+      "status",
+      "userid",
+      "display_name",
+      "email",
+      "primary_extension",
+      "devices",
+      "details",
+    ])
+
+    matched_inputs = 0
+    no_result_inputs = 0
+    error_inputs = 0
+    result_rows = 0
+
+    for last_name, first_name in inputs:
+      try:
+        results = search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_name)
+      except Exception as exc:
+        error_inputs += 1
+        writer.writerow([last_name, first_name, "ERROR", "", "", "", "", "", str(exc)])
+        result_rows += 1
+        continue
+
+      if not results:
+        no_result_inputs += 1
+        writer.writerow([last_name, first_name, "NO_RESULTS", "", "", "", "", "", "No users matched"])
+        result_rows += 1
+        continue
+
+      matched_inputs += 1
+      for person in results:
+        devices = person.get("devices") or []
+        device_text = " | ".join(
+          f"{d.get('name', '')}:{','.join(d.get('extensions') or []) or '-'}"
+          for d in devices
+        )
+        writer.writerow([
+          last_name,
+          first_name,
+          "FOUND",
+          person.get("userid", ""),
+          person.get("display_name", ""),
+          person.get("email", ""),
+          person.get("primary_extension", ""),
+          device_text,
+          "",
+        ])
+        result_rows += 1
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"bulk_person_lookup_{timestamp}.csv"
+    job_output = _prepare_job_output(output.getvalue().encode("utf-8"), filename)
+
+    _append_audit_event(
+      action="bulk_lookup_person",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=f"rows={len(inputs)}",
+      output_filename=filename,
+      inline_mode=True,
+    )
+
+    return JSONResponse({
+      "ok": True,
+      "summary": {
+        "input_rows": len(inputs),
+        "matched_inputs": matched_inputs,
+        "no_result_inputs": no_result_inputs,
+        "error_inputs": error_inputs,
+        "output_rows": result_rows,
+      },
+      "job_id": job_output["job_id"],
+      "filename": job_output["filename"],
+      "output_text": job_output["output_text"],
+      "download_url": f"/download/job-output/{job_output['job_id']}",
+    })
+
+
+@app.post("/bulk/lookup/extension")
+async def bulk_lookup_extension_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    csv_file: UploadFile = File(...),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+    raw = await csv_file.read()
+    text = raw.decode("utf-8-sig", errors="replace")
+    patterns = _parse_bulk_extension_inputs(text)
+    if not patterns:
+      raise RuntimeError("No usable rows found in CSV. Include a pattern/extension column or first column with patterns.")
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+      "input_pattern",
+      "status",
+      "matched_pattern",
+      "partition",
+      "device_name",
+      "device_type",
+      "owner_userid",
+      "owner_display_name",
+      "owner_email",
+      "details",
+    ])
+
+    matched_inputs = 0
+    no_result_inputs = 0
+    error_inputs = 0
+    result_rows = 0
+
+    for pattern in patterns:
+      try:
+        result = lookup_extension_owner(cucm_host, cucm_user, cucm_pass, pattern)
+        matches = result.get("matches") or []
+      except Exception as exc:
+        error_inputs += 1
+        writer.writerow([pattern, "ERROR", "", "", "", "", "", "", "", str(exc)])
+        result_rows += 1
+        continue
+
+      if not matches:
+        no_result_inputs += 1
+        writer.writerow([pattern, "NO_RESULTS", "", "", "", "", "", "", "", "No matches found"])
+        result_rows += 1
+        continue
+
+      matched_inputs += 1
+      for match in matches:
+        user = match.get("user") or {}
+        writer.writerow([
+          pattern,
+          "FOUND",
+          match.get("pattern", ""),
+          match.get("partition", ""),
+          match.get("device_name", ""),
+          match.get("device_type", ""),
+          match.get("owner_userid", ""),
+          user.get("display_name", ""),
+          user.get("email", ""),
+          "",
+        ])
+        result_rows += 1
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"bulk_extension_lookup_{timestamp}.csv"
+    job_output = _prepare_job_output(output.getvalue().encode("utf-8"), filename)
+
+    _append_audit_event(
+      action="bulk_lookup_extension",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=f"rows={len(patterns)}",
+      output_filename=filename,
+      inline_mode=True,
+    )
+
+    return JSONResponse({
+      "ok": True,
+      "summary": {
+        "input_rows": len(patterns),
+        "matched_inputs": matched_inputs,
+        "no_result_inputs": no_result_inputs,
+        "error_inputs": error_inputs,
+        "output_rows": result_rows,
+      },
+      "job_id": job_output["job_id"],
+      "filename": job_output["filename"],
+      "output_text": job_output["output_text"],
+      "download_url": f"/download/job-output/{job_output['job_id']}",
+    })
 
 
 @app.post("/lookup/person")
