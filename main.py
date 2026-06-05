@@ -1633,6 +1633,7 @@ def menu_page(request: Request):
                 `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build CSF</button>` +
                 `<button type="button" style="${btnStyle}background:#0e7490;color:#fff;" onclick="prefillPanel('tct','${uid}')">Build iPhone</button>` +
                 `<button type="button" style="${btnStyle}background:#7c3aed;color:#fff;" onclick="prefillPanel('bot','${uid}')">Build Android</button>` +
+                `<button type="button" style="${btnStyle}background:#8a5a00;color:#fff;" onclick="prefillPanel('namechange','${uid}')">Name Update</button>` +
                 `<button type="button" style="${btnStyle}background:#b00020;color:#fff;" onclick="prefillPanel('offboard','${uid}')">Offboard</button>`;
 
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
