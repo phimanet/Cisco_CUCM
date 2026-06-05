@@ -3266,7 +3266,7 @@ def menu_admin_page(request: Request):
                 }).join("<br>") || "\u2014";
 
                 const btnStyle = "display:inline-block;margin:2px 3px 2px 0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;background:#237741;color:#fff;";
-                const actionBtn = `<button type="button" style="${btnStyle}" data-strike-user="${uid}">Use for Strike</button>`;
+                const actionBtn = `<button type="button" style="${btnStyle}" data-strike-user="${uid}">Strike Mode - Add in Both Jabber iPhone and Android</button>`;
 
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
@@ -3288,7 +3288,7 @@ def menu_admin_page(request: Request):
                     strikeTargetInput.value = uid;
                     strikeTargetInput.focus();
                   }
-                  statusEl.textContent = `Loaded ${uid} into Strike Mode.`;
+                  statusEl.textContent = `Loaded ${uid} into Strike Mode - Add in Both Jabber iPhone and Android.`;
                 });
               });
             } catch (err) {
