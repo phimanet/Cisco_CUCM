@@ -55,10 +55,9 @@ def _case_variants(value):
     ordered = []
     seen = set()
     for candidate in [clean, clean.lower(), clean.upper(), clean.title()]:
-        key = candidate.casefold()
-        if key in seen:
+        if candidate in seen:
             continue
-        seen.add(key)
+        seen.add(candidate)
         ordered.append(candidate)
     return ordered
 
