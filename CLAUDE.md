@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-05-21
+- Date: 2026-06-05
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -108,6 +108,11 @@ Priority keys:
 - Option 10 LAB Test: ✓ PASS - AD phone fields cleared successfully for test user
 - CSV output rows confirmed working for both workflows ("Update AD Phone Fields" / "Clear AD Phone Fields" with Success/Failed status)
 - Production Requirement: TCP 636 (LDAPS) must be open from lascrtmp01.ahs.int (10.241.18.15) to lasdc01.ahs.int for LDAP operations
+
+### 2026-06-05
+- Restored Called Name Change workflow from previously fixed revision (`fad817a`) after full revert sequence.
+- Reinstated UI panel + inline execution path in `main.py` and backend route `/called-name-change`.
+- Reinstated toolkit module `toolkit/called_name_change.py` with CSF/BOT/TCT phone description updates, line alerting/caller-ID updates, and Unity mailbox DisplayName/SMTP updates.
 
 ### 2026-04-30
 - Initialized project tracker format.
