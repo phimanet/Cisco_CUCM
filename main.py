@@ -3120,8 +3120,31 @@ def menu_admin_page(request: Request):
       <p><a href="/menu">Back to Main Operations Menu</a></p>
 
       <section class="panel">
+        <h3>Strike Use - Person Lookup</h3>
+        <p>Search by last name (optional first name), then use the result to prefill Strike Mode.</p>
+        <form id="admin-person-lookup-form">
+          Cisco Callmanager Username:<br>
+          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+          Cisco Callmanager Password:<br>
+          <input type="password" name="cucm_pass" required><br><br>
+
+          Last Name:<br>
+          <input name="last_name" placeholder="Smith" required><br><br>
+
+          First Name (optional):<br>
+          <input name="first_name" placeholder="John"><br><br>
+
+          <button type="submit">Search</button>
+        </form>
+
+        <p id="admin-person-lookup-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
+        <div id="admin-person-lookup-results" style="overflow-x:auto;"></div>
+      </section>
+
+      <section class="panel">
         <h3>Strike Mode - Add in both Jabber iPhone and Android (Option 5)</h3>
-        <form action="/add/secondary-strike-devices" method="post">
+        <form id="admin-strike-form" action="/add/secondary-strike-devices" method="post">
           Cisco Callmanager Username:<br>
           <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -3129,7 +3152,7 @@ def menu_admin_page(request: Request):
           <input type="password" name="cucm_pass" required><br><br>
 
           User ID for person to add STRIKE MODE devices for:<br>
-          <input name="target_user" placeholder="john.doe" required><br><br>
+          <input id="admin-strike-target-user" name="target_user" placeholder="john.doe" required><br><br>
 
           <button type="submit">Run STRIKE MODE</button>
         </form>
@@ -3184,6 +3207,96 @@ def menu_admin_page(request: Request):
           <button type="submit">Export End Users</button>
         </form>
       </section>
+
+      <script>
+        (function () {
+          const form = document.getElementById("admin-person-lookup-form");
+          const statusEl = document.getElementById("admin-person-lookup-status");
+          const resultsEl = document.getElementById("admin-person-lookup-results");
+          const strikeTargetInput = document.getElementById("admin-strike-target-user");
+
+          if (!form || !statusEl || !resultsEl) return;
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Searching...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(form);
+              const response = await fetch("/lookup/person", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                const msg = (payload.error && payload.error.message) || "Search failed.";
+                throw new Error(msg);
+              }
+
+              const results = payload.results || [];
+              if (!results.length) {
+                statusEl.textContent = "No users found matching that name.";
+                return;
+              }
+
+              statusEl.textContent = `Found ${results.length} user(s).`;
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
+              html += '</tr></thead><tbody>';
+
+              results.forEach(function (r, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+                const ext = r.primary_extension || "\u2014";
+                const email = r.email || "\u2014";
+                const uid = r.userid || "";
+                const devList = (r.devices || []).map(function (d) {
+                  const exts = (d.extensions || []).join(", ") || "\u2014";
+                  return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
+                }).join("<br>") || "\u2014";
+
+                const btnStyle = "display:inline-block;margin:2px 3px 2px 0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;background:#237741;color:#fff;";
+                const actionBtn = `<button type="button" style="${btnStyle}" data-strike-user="${uid}">Use for Strike</button>`;
+
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px;">' + name + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+                html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
+                html += '<td style="padding:7px 10px;">' + email + '</td>';
+                html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
+                html += '<td style="padding:7px 10px; white-space:nowrap;">' + actionBtn + '</td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+
+              resultsEl.querySelectorAll("button[data-strike-user]").forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                  const uid = btn.getAttribute("data-strike-user") || "";
+                  if (strikeTargetInput) {
+                    strikeTargetInput.value = uid;
+                    strikeTargetInput.focus();
+                  }
+                  statusEl.textContent = `Loaded ${uid} into Strike Mode.`;
+                });
+              });
+            } catch (err) {
+              statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        })();
+      </script>
     </main>
   </body>
 </html>
