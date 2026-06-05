@@ -1450,7 +1450,6 @@ def menu_page(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="linegroup">Update Hunt List Line Group</button>
           <button type="button" class="portal-nav-btn" data-panel="exportdn">Export Directory Numbers</button>
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
-          <button type="button" class="portal-nav-btn" data-panel="transpattern">Translation Pattern Lookup</button>
         </div>
       </aside>
 
@@ -1716,96 +1715,6 @@ def menu_page(request: Request):
         <iframe id="jabber-check-frame" name="jabber-check-frame" class="jabber-check-frame" title="Jabber Lookup Result"></iframe>
       </section>
     </div>
-    </section>
-
-    <section class="tool-panel" data-panel="transpattern">
-
-    <h3>Translation Pattern Lookup</h3>
-    <p>Search translation patterns and return pattern, description, and called party transform mask.</p>
-
-    <div class="jabber-check-layout">
-      <form id="trans-pattern-form" class="jabber-check-form">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
-
-        Pattern contains:<br>
-        <input name="pattern_query" placeholder="55512" required><br><br>
-
-        <div class="action-row">
-          <button type="submit">Search Translation Patterns</button>
-          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
-        </div>
-      </form>
-
-      <section class="jabber-check-output" aria-live="polite" style="flex: 1 1 600px; min-width: 320px;">
-        <h4>Translation Pattern Results</h4>
-        <p id="trans-pattern-status" class="jabber-check-status">Enter a pattern and click Search.</p>
-        <div id="trans-pattern-results" style="overflow-x: auto;"></div>
-      </section>
-    </div>
-
-    <script>
-      (function () {
-        const form = document.getElementById("trans-pattern-form");
-        const statusEl = document.getElementById("trans-pattern-status");
-        const resultsEl = document.getElementById("trans-pattern-results");
-
-        if (!form || !statusEl || !resultsEl) return;
-
-        form.addEventListener("submit", async function (event) {
-          event.preventDefault();
-          statusEl.textContent = "Searching translation patterns...";
-          resultsEl.innerHTML = "";
-
-          try {
-            const formData = new FormData(form);
-            const response = await fetch("/lookup/translation-pattern", {
-              method: "POST",
-              body: formData,
-              credentials: "same-origin",
-            });
-
-            const payload = await response.json();
-            if (!response.ok || !payload.ok) {
-              const msg = (payload.error && payload.error.message) || "Lookup failed.";
-              throw new Error(msg);
-            }
-
-            const results = payload.results || [];
-            if (!results.length) {
-              statusEl.textContent = "No translation patterns found.";
-              return;
-            }
-
-            statusEl.textContent = `Found ${results.length} translation pattern(s).`;
-
-            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
-            html += '<thead><tr style="background:#005eb8; color:#fff;">';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Pattern</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Description</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Called Party Transform Mask</th>';
-            html += '</tr></thead><tbody>';
-
-            results.forEach(function (item, i) {
-              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
-              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
-              html += '<td style="padding:7px 10px; font-family:Consolas,monospace; color:#002f6c; font-weight:700;">' + (item.pattern || "\u2014") + '</td>';
-              html += '<td style="padding:7px 10px;">' + (item.description || "\u2014") + '</td>';
-              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (item.called_party_transform_mask || "\u2014") + '</td>';
-              html += '</tr>';
-            });
-
-            html += '</tbody></table>';
-            resultsEl.innerHTML = html;
-          } catch (err) {
-            statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
-          }
-        });
-      })();
-    </script>
     </section>
 
     <section class="tool-panel" data-panel="build">
@@ -3208,6 +3117,26 @@ def menu_admin_page(request: Request):
         </form>
       </section>
 
+      <section class="panel">
+        <h3>Translation Pattern Lookup</h3>
+        <p>Search translation patterns and return pattern, description, and called party transform mask.</p>
+        <form id="admin-trans-pattern-form">
+          Cisco Callmanager Username:<br>
+          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+          Cisco Callmanager Password:<br>
+          <input type="password" name="cucm_pass" required><br><br>
+
+          Pattern contains:<br>
+          <input name="pattern_query" placeholder="55512" required><br><br>
+
+          <button type="submit">Search Translation Patterns</button>
+        </form>
+
+        <p id="admin-trans-pattern-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a pattern and click Search.</p>
+        <div id="admin-trans-pattern-results" style="overflow-x:auto;"></div>
+      </section>
+
       <script>
         (function () {
           const form = document.getElementById("admin-person-lookup-form");
@@ -3293,6 +3222,66 @@ def menu_admin_page(request: Request):
               });
             } catch (err) {
               statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        })();
+      </script>
+
+      <script>
+        (function () {
+          const form = document.getElementById("admin-trans-pattern-form");
+          const statusEl = document.getElementById("admin-trans-pattern-status");
+          const resultsEl = document.getElementById("admin-trans-pattern-results");
+
+          if (!form || !statusEl || !resultsEl) return;
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Searching translation patterns...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(form);
+              const response = await fetch("/lookup/translation-pattern", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                const msg = (payload.error && payload.error.message) || "Lookup failed.";
+                throw new Error(msg);
+              }
+
+              const results = payload.results || [];
+              if (!results.length) {
+                statusEl.textContent = "No translation patterns found.";
+                return;
+              }
+
+              statusEl.textContent = `Found ${results.length} translation pattern(s).`;
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Pattern</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Description</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Called Party Transform Mask</th>';
+              html += '</tr></thead><tbody>';
+
+              results.forEach(function (item, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace; color:#002f6c; font-weight:700;">' + (item.pattern || "\u2014") + '</td>';
+                html += '<td style="padding:7px 10px;">' + (item.description || "\u2014") + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (item.called_party_transform_mask || "\u2014") + '</td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+            } catch (err) {
+              statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
             }
           });
         })();
