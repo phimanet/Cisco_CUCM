@@ -29,6 +29,7 @@ from toolkit.add_secondary_devices import (
 from toolkit.called_name_change import run_called_name_change
 from toolkit.edit_line_group_members import edit_line_group_members, search_line_groups
 from toolkit.extract_rpo_phones import extract_rpo_phones
+from toolkit.person_lookup import search_persons_by_name
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 JOB_OUTPUTS = {}
@@ -213,7 +214,7 @@ def _wants_json_response(request: Request) -> bool:
     return True
   if inline_flag in {"1", "true", "yes", "on"}:
     return True
-  if request.url.path in {"/line-groups/search", "/audit-trail/stats", "/healthz"}:
+  if request.url.path in {"/line-groups/search", "/audit-trail/stats", "/healthz", "/lookup/person"}:
     return True
   return False
 
@@ -1425,7 +1426,8 @@ def menu_page(request: Request):
       <aside class="portal-sidebar">
         <h4>Operations Menu</h4>
         <div class="portal-nav">
-          <button type="button" class="portal-nav-btn active" data-panel="precheck">Check for Existing Jabber Configuration</button>
+          <button type="button" class="portal-nav-btn active" data-panel="personlookup">Person Lookup by Name</button>
+          <button type="button" class="portal-nav-btn" data-panel="precheck">Check for Existing Jabber Configuration</button>
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
           <button type="button" class="portal-nav-btn" data-panel="namechange">Jabber/VM Name Update</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
@@ -1445,7 +1447,114 @@ def menu_page(request: Request):
 
       <section class="portal-main">
 
-    <section class="tool-panel active" data-panel="precheck">
+    <section class="tool-panel active" data-panel="personlookup">
+
+    <h3>Person Lookup - Search by Name</h3>
+    <p>Search for a user by last name (and optional first name) to view their extension, email, and associated Jabber devices.</p>
+
+    <div class="jabber-check-layout">
+      <form id="person-lookup-form" class="jabber-check-form">
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
+        Last Name:<br>
+        <input name="last_name" placeholder="Smith" required><br><br>
+
+        First Name (optional):<br>
+        <input name="first_name" placeholder="John"><br><br>
+
+        <div class="action-row">
+          <button id="person-lookup-btn" type="submit">Search</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
+      </form>
+
+      <section class="jabber-check-output" aria-live="polite" style="flex: 1 1 600px; min-width: 320px;">
+        <h4>Search Results</h4>
+        <p id="person-lookup-status" class="jabber-check-status">Enter a last name and click Search.</p>
+        <div id="person-lookup-results" style="overflow-x: auto;"></div>
+      </section>
+    </div>
+
+    <script>
+      (function () {
+        const form = document.getElementById("person-lookup-form");
+        const statusEl = document.getElementById("person-lookup-status");
+        const resultsEl = document.getElementById("person-lookup-results");
+
+        if (!form || !statusEl || !resultsEl) return;
+
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          statusEl.textContent = "Searching...";
+          resultsEl.innerHTML = "";
+
+          try {
+            const formData = new FormData(form);
+            const response = await fetch("/lookup/person", {
+              method: "POST",
+              body: formData,
+              credentials: "same-origin",
+            });
+
+            const payload = await response.json();
+
+            if (!response.ok || !payload.ok) {
+              const msg = (payload.error && payload.error.message) || "Search failed.";
+              throw new Error(msg);
+            }
+
+            const results = payload.results || [];
+            if (!results.length) {
+              statusEl.textContent = "No users found matching that name.";
+              return;
+            }
+
+            statusEl.textContent = `Found ${results.length} user(s).`;
+
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
+            html += '</tr></thead><tbody>';
+
+            results.forEach(function (r, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+              const ext = r.primary_extension || "\u2014";
+              const email = r.email || "\u2014";
+              const devList = (r.devices || []).map(function (d) {
+                const exts = (d.extensions || []).join(", ") || "\u2014";
+                return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
+              }).join("<br>") || "\u2014";
+
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px;">' + name + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + r.userid + '</td>';
+              html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
+              html += '<td style="padding:7px 10px;">' + email + '</td>';
+              html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
+              html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            resultsEl.innerHTML = html;
+
+          } catch (err) {
+            statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+          }
+        });
+      })();
+    </script>
+    </section>
+
+    <section class="tool-panel" data-panel="precheck">
 
     <h3>Pre-Check: Is Jabber Already Built?</h3>
     <p>Use this quick lookup before building or offboarding. It returns device name, Jabber extension, and voicemail extension.</p>
@@ -2957,6 +3066,30 @@ async def rebuild_user_csf_phone(
       })
 
     return _render_job_result("Re-Build Cisco Jabber CSF from Offboard Audit", data, filename)
+
+
+@app.post("/lookup/person")
+def lookup_person_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    last_name: str = Form(...),
+    first_name: str = Form(""),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+    clean_last = (last_name or "").strip()
+    clean_first = (first_name or "").strip()
+    if not clean_last:
+        raise RuntimeError("Last Name is required.")
+    results = search_persons_by_name(cucm_host, cucm_user, cucm_pass, clean_last, clean_first)
+    return JSONResponse({
+        "ok": True,
+        "count": len(results),
+        "results": results,
+        "query": {"last_name": clean_last, "first_name": clean_first},
+    })
 
 
 @app.post("/check/jabber-status")
