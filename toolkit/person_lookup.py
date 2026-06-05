@@ -47,6 +47,22 @@ def _axl_post(session, cucm_host, soap_xml):
     return resp.text
 
 
+def _case_variants(value):
+    clean = (value or "").strip()
+    if not clean:
+        return [""]
+
+    ordered = []
+    seen = set()
+    for candidate in [clean, clean.lower(), clean.upper(), clean.title()]:
+        key = candidate.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(candidate)
+    return ordered
+
+
 def _soap_list_users(last_name, first_name=""):
     first_name_block = ""
     if (first_name or "").strip():
@@ -145,22 +161,38 @@ def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_nam
     session.verify = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
-    # 1. List users matching the name
-    list_xml = _soap_list_users(last_name, first_name)
-    list_resp = _axl_post(session, cucm_host, list_xml)
-    list_root = ET.fromstring(list_resp)
-
     userids = []
     seen = set()
-    for elem in list_root.iter():
-        if _strip_ns(elem.tag) == "user":
-            uid_elem = _find_child(elem, "userid")
-            uid = (uid_elem.text or "").strip() if uid_elem is not None else ""
-            if uid and uid not in seen:
-                seen.add(uid)
+
+    # 1. List users matching the name, probing case variants to avoid case-sensitive misses.
+    first_name_variants = _case_variants(first_name)
+    for last_variant in _case_variants(last_name):
+        for first_variant in first_name_variants:
+            list_xml = _soap_list_users(last_variant, first_variant)
+            list_resp = _axl_post(session, cucm_host, list_xml)
+            list_root = ET.fromstring(list_resp)
+
+            for elem in list_root.iter():
+                if _strip_ns(elem.tag) != "user":
+                    continue
+                uid_elem = _find_child(elem, "userid")
+                uid = (uid_elem.text or "").strip() if uid_elem is not None else ""
+                if not uid:
+                    continue
+
+                uid_key = uid.casefold()
+                if uid_key in seen:
+                    continue
+
+                seen.add(uid_key)
                 userids.append(uid)
                 if len(userids) >= MAX_RESULTS:
                     break
+
+            if len(userids) >= MAX_RESULTS:
+                break
+        if len(userids) >= MAX_RESULTS:
+            break
 
     if not userids:
         return []
