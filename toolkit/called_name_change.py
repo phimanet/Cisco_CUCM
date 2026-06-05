@@ -349,25 +349,28 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
                     pattern = (line.get("pattern") or "").strip()
                     partition = (line.get("partition") or "").strip()
                     line_key = f"{pattern}|{partition}"
-                    if not pattern or line_key in touched_lines:
+                    if not pattern:
                         continue
 
-                    line_soap = _build_update_line_identity_soap(pattern, partition, display_name)
-                    line_response = _axl_post(session, cucm_host, line_soap)
-                    if line_response.status_code == 200:
-                        touched_lines.add(line_key)
-                        writer.writerow([
-                            "Update Line Alerting Fields",
-                            "Success",
-                            f"{pattern}/{partition or 'NONE'}: alerting fields set to '{display_name}'",
-                        ])
-                    else:
-                        writer.writerow([
-                            "Update Line Alerting Fields",
-                            "Failed",
-                            f"{pattern}/{partition or 'NONE'}: HTTP {line_response.status_code}: {line_response.text[:600]}",
-                        ])
+                    # Update line alerting fields globally (deduplicate if already touched)
+                    if line_key not in touched_lines:
+                        line_soap = _build_update_line_identity_soap(pattern, partition, display_name)
+                        line_response = _axl_post(session, cucm_host, line_soap)
+                        if line_response.status_code == 200:
+                            touched_lines.add(line_key)
+                            writer.writerow([
+                                "Update Line Alerting Fields",
+                                "Success",
+                                f"{pattern}/{partition or 'NONE'}: alerting fields set to '{display_name}'",
+                            ])
+                        else:
+                            writer.writerow([
+                                "Update Line Alerting Fields",
+                                "Failed",
+                                f"{pattern}/{partition or 'NONE'}: HTTP {line_response.status_code}: {line_response.text[:600]}",
+                            ])
 
+                    # Always update this device's line appearance (not deduplicated, per-device)
                     if not line_index:
                         writer.writerow([
                             "Update Line Caller ID Fields",
