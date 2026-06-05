@@ -3395,14 +3395,14 @@ def lookup_extension_route(
     return JSONResponse({"ok": True, **result})
 
 
-  @app.post("/lookup/translation-pattern")
-  def lookup_translation_pattern_route(
+@app.post("/lookup/translation-pattern")
+def lookup_translation_pattern_route(
     request: Request,
     cucm_host: str = Form(""),
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
     pattern_query: str = Form(...),
-  ):
+):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
     _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
     clean_pattern = (pattern_query or "").strip()
