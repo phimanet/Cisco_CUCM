@@ -539,6 +539,38 @@ def _is_dn_unassigned(session, cucm_ip, pattern, route_partition):
     return True
 
 
+def _is_dn_inactive(session, cucm_ip, pattern, route_partition):
+    soap = f"""<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+   <soapenv:Body>
+      <axl:getLine>
+         <pattern>{escape(pattern)}</pattern>
+         <routePartitionName>{escape(route_partition)}</routePartitionName>
+         <returnedTags>
+            <active/>
+         </returnedTags>
+      </axl:getLine>
+   </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = _axl_post(session, cucm_ip, soap)
+    if response.status_code != 200:
+        return False
+
+    try:
+        root = ET.fromstring(response.text)
+    except Exception:
+        return False
+
+    active_text = ""
+    for elem in root.iter():
+        if _strip_ns(elem.tag) == "active":
+            active_text = (elem.text or "").strip().lower()
+            break
+
+    return active_text not in {"true", "t", "1", "yes"}
+
+
 def _choose_available_dn(session, cucm_ip, prefix):
     candidates = _list_available_dns(session, cucm_ip, prefix)
     for candidate in candidates:
@@ -684,6 +716,7 @@ def build_user_csf_phone_from_template(
     dn_type,
     ad_username="",
     ad_password="",
+    preferred_dn="",
 ):
     dn_map = {
         "recruiter": ("469", "Recruiter"),
@@ -792,7 +825,41 @@ def build_user_csf_phone_from_template(
             ])
             return out.getvalue().encode("utf-8"), filename
 
-        new_dn = _choose_available_dn(session, cucm_host, dn_prefix)
+        preferred_dn_clean = (preferred_dn or "").strip()
+        if preferred_dn_clean:
+            if not re.fullmatch(r"\d{4,}", preferred_dn_clean):
+                log_writer.writerow([
+                    "Select DN",
+                    "Failed",
+                    f"Preferred DN from audit is invalid: {preferred_dn_clean}",
+                ])
+                return out.getvalue().encode("utf-8"), filename
+
+            if not _is_dn_unassigned(session, cucm_host, preferred_dn_clean, ROUTE_PARTITION):
+                log_writer.writerow([
+                    "Select DN",
+                    "Failed",
+                    (
+                        f"Preferred DN {preferred_dn_clean}/{ROUTE_PARTITION} is not available "
+                        "(assigned or not found)."
+                    ),
+                ])
+                return out.getvalue().encode("utf-8"), filename
+
+            if not _is_dn_inactive(session, cucm_host, preferred_dn_clean, ROUTE_PARTITION):
+                log_writer.writerow([
+                    "Select DN",
+                    "Failed",
+                    (
+                        f"Preferred DN {preferred_dn_clean}/{ROUTE_PARTITION} is Active. "
+                        "Only NOT Active DNs can be reused for rebuild."
+                    ),
+                ])
+                return out.getvalue().encode("utf-8"), filename
+
+            new_dn = preferred_dn_clean
+        else:
+            new_dn = _choose_available_dn(session, cucm_host, dn_prefix)
         phone_name = f"{template['deviceNamePrefix']}{new_dn}"
         description = f"CSF {display_name}".strip()
 
@@ -807,7 +874,10 @@ def build_user_csf_phone_from_template(
         ])
         log_writer.writerow(["DN Type", "Success", f"{dn_type_name} ({dn_prefix})"])
         log_writer.writerow(["Lookup User", "Success", f"Found user {user_details['userid']} ({display_name})"])
-        log_writer.writerow(["Select DN", "Success", f"Using available DN {new_dn}"])
+        if preferred_dn_clean:
+            log_writer.writerow(["Select DN", "Success", f"Using preferred DN {new_dn} from audit trail"])
+        else:
+            log_writer.writerow(["Select DN", "Success", f"Using available DN {new_dn}"])
 
         add_phone_soap = _build_add_phone_soap(template, user_details, phone_name, description, new_dn, display_name)
         update_line_soap = _build_update_line_soap(new_dn, template["routePartitionName"], display_name)

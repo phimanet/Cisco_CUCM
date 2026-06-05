@@ -490,6 +490,53 @@ def _extract_deleted_dns_from_offboard_output(csv_data) -> list[str]:
     return deleted_dns
 
 
+def _extract_account_from_audit_target(target_text: str) -> str:
+    text = (target_text or "").strip()
+    match = re.search(r"(?:^|;)account=([^;]+)", text, re.IGNORECASE)
+    if match:
+      return (match.group(1) or "").strip()
+    return text
+
+
+def _find_latest_rebuild_dn_from_audit(account: str) -> str:
+    account_clean = (account or "").strip().lower()
+    if not account_clean:
+      return ""
+
+    with AUDIT_LOG_LOCK:
+      _ensure_audit_log()
+      _prune_audit_log_locked()
+      with open(AUDIT_LOG_PATH, "r", newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+
+    for row in reversed(rows):
+      if (row.get("action") or "").strip() != "offboard_user_option_10":
+        continue
+
+      row_account = (row.get("account") or "").strip()
+      if not row_account:
+        row_account = _extract_account_from_audit_target(row.get("target", ""))
+      if row_account.lower() != account_clean:
+        continue
+
+      deleted = (row.get("extension_deleted") or "").strip()
+      if not deleted:
+        target_text = (row.get("target") or "").strip()
+        match = re.search(r"(?:^|;)dn_deleted=([^;]+)", target_text, re.IGNORECASE)
+        if match:
+          deleted = (match.group(1) or "").strip()
+
+      if not deleted or deleted.lower() == "none":
+        continue
+
+      for candidate in re.split(r"[|,\s]+", deleted):
+        dn = (candidate or "").strip()
+        if re.fullmatch(r"\d{4,}", dn):
+          return dn
+
+    return ""
+
+
 def _render_job_result(title: str, csv_data, filename: str) -> HTMLResponse:
     job_output = _prepare_job_output(csv_data, filename)
     job_id = job_output["job_id"]
@@ -1392,6 +1439,7 @@ def menu_page(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="adddn">Add Directory Numbers</button>
           <button type="button" class="portal-nav-btn" data-panel="exportdn">Export Directory Numbers</button>
           <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
+          <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
         </div>
       </aside>
 
@@ -2036,6 +2084,44 @@ def menu_page(request: Request):
     </form>
     </section>
 
+    <section class="tool-panel" data-panel="rebuild">
+
+    <h3>Re-Build Cisco Jabber CSF from Latest Offboard Audit</h3>
+    <p>
+      This action finds the user's most recent offboard entry in the audit trail and reuses that same extension.
+      Rebuild only succeeds when the extension is unassigned and in NOT Active state.
+    </p>
+
+    <div class="build-user-layout">
+      <form id="rebuild-user-form" class="target-user-form build-user-form" action="/rebuild/user-csf-phone" method="post">
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
+        User ID for person to Re-Build Jabber for:<br>
+        <input name="target_user" placeholder="john.doe" required><br><br>
+
+        <div class="action-row">
+          <button type="submit">Run Re-Build from Offboard Audit</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
+      </form>
+
+      <section class="build-user-output" aria-live="polite">
+        <h4>Re-Build Output Preview</h4>
+        <p id="rebuild-user-status" class="build-user-status">Run Re-Build to view output here.</p>
+        <p>
+          <a id="rebuild-user-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
+            Download CSV Output
+          </a>
+        </p>
+        <textarea id="rebuild-user-preview" readonly></textarea>
+      </section>
+    </div>
+    </section>
+
     <script>
       const fieldRules = {
         cucm_user: {
@@ -2482,6 +2568,19 @@ def menu_page(request: Request):
             return;
           }
 
+          if (form.id === "rebuild-user-form") {
+            event.preventDefault();
+            submitSecondaryInline(form, {
+              statusId: "rebuild-user-status",
+              previewId: "rebuild-user-preview",
+              downloadId: "rebuild-user-download",
+              runningText: "Running Re-Build from Offboard Audit...",
+              failedText: "Re-Build failed. Review output and retry.",
+              defaultFilename: "rebuild_user_csf_phone_output.csv",
+            });
+            return;
+          }
+
           if (form.id === "secondary-tct-form") {
             event.preventDefault();
             submitSecondaryInline(form, {
@@ -2801,6 +2900,63 @@ async def build_user_csf_phone(
         })
 
     return _render_job_result("Build User CSF Phone", data, filename)
+
+
+@app.post("/rebuild/user-csf-phone")
+async def rebuild_user_csf_phone(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    target_user: str = Form(...),
+    inline: bool = Query(False),
+  ):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+    clean_target_user = (target_user or "").strip()
+
+    rebuild_dn = _find_latest_rebuild_dn_from_audit(clean_target_user)
+    if not rebuild_dn:
+      data = b"Step,Status,Details\nAudit Lookup,Failed,No offboard extension found for this user in audit trail\n"
+      filename = f"rebuild_user_csf_phone_{clean_target_user or 'unknown'}_no_audit_match.csv"
+    else:
+      data, filename = build_user_csf_phone_from_template(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        target_user=clean_target_user,
+        dn_type="general",
+        ad_username=cucm_user,
+        ad_password=cucm_pass,
+        preferred_dn=rebuild_dn,
+      )
+
+    added_dn = _extract_added_dn_from_build_output(data)
+    audit_target = (
+      f"account={clean_target_user};dn_from_audit={rebuild_dn or 'none'};dn_added={added_dn or 'none'}"
+    )
+    _append_audit_event(
+      action="rebuild_user_csf_phone_from_audit",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=audit_target,
+      account=clean_target_user,
+      extension_added=added_dn,
+      extension_deleted=rebuild_dn,
+      output_filename=filename,
+      inline_mode=inline,
+    )
+
+    if inline:
+      job_output = _prepare_job_output(data, filename)
+      return JSONResponse({
+        "job_id": job_output["job_id"],
+        "filename": job_output["filename"],
+        "output_text": job_output["output_text"],
+        "download_url": f"/download/job-output/{job_output['job_id']}",
+      })
+
+    return _render_job_result("Re-Build Cisco Jabber CSF from Offboard Audit", data, filename)
 
 
 @app.post("/check/jabber-status")
