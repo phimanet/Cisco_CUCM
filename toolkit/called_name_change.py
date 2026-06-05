@@ -1,6 +1,7 @@
 import csv
 import datetime
 import io
+import os
 import re
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
@@ -12,6 +13,7 @@ from requests.auth import HTTPBasicAuth
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 TARGET_DEVICE_PREFIXES = ("CSF", "BOT", "TCT")
+DEFAULT_UNITY_RELAY_DOMAIN = (os.getenv("UNITY_RELAY_EMAIL_DOMAIN", "ahs.int") or "ahs.int").strip()
 
 
 def _axl_post(session, cucm_host, soap_xml):
@@ -250,13 +252,22 @@ def _clean_email_part(value):
 
 
 def _build_smtp_address(first_name, last_name, userid):
+    userid = (userid or "").strip().lower()
+    if "@" in userid:
+        return userid
+
     first = _clean_email_part(first_name)
     last = _clean_email_part(last_name)
+    local_part = ""
     if first and last:
-        return f"{first}.{last}"
+        local_part = f"{first}.{last}"
     elif first or last:
-        return first or last
-    return _clean_email_part(userid) or "unknown.user"
+        local_part = first or last
+    else:
+        local_part = _clean_email_part(userid) or "unknown.user"
+
+    domain = DEFAULT_UNITY_RELAY_DOMAIN.strip().lower().lstrip("@")
+    return f"{local_part}@{domain}" if domain else local_part
 
 
 def _build_device_description(device_name, display_name):
