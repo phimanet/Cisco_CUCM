@@ -1543,8 +1543,8 @@ def menu_page(request: Request):
     <h3>Person Lookup - Search by Name</h3>
     <p>Search for a user by last name (and optional first name) to view their extension, email, and associated Jabber devices.</p>
 
-    <div class="jabber-check-layout">
-      <form id="person-lookup-form" class="jabber-check-form">
+    <div class="jabber-check-layout" style="display:block;">
+      <form id="person-lookup-form" class="jabber-check-form" style="margin-bottom:14px;">
         Cisco Callmanager Username:<br>
         <input name="cucm_user" value="__AUTH_USER__" required><br><br>
 
@@ -1563,7 +1563,7 @@ def menu_page(request: Request):
         </div>
       </form>
 
-      <section class="jabber-check-output" aria-live="polite" style="flex: 1 1 600px; min-width: 320px;">
+      <section class="jabber-check-output" aria-live="polite" style="margin-top:0;">
         <h4>Search Results</h4>
         <p id="person-lookup-status" class="jabber-check-status">Enter a last name and click Search.</p>
         <div id="person-lookup-results" style="overflow-x: auto;"></div>
