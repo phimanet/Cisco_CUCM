@@ -305,11 +305,20 @@ def _resolve_admin_email(operator_username):
     user = (operator_username or "").strip()
     if not user:
         return ""
-    if "@" in user:
-        return user
-    if "." in user:
-        return f"{user}@{ADMIN_EMAIL_DOMAIN}"
-    return ""
+
+    # If username is email-like, use local part only and enforce AMN domain.
+    alias = user.split("@", 1)[0].strip()
+    lower_alias = alias.lower()
+    if lower_alias.endswith(".adm"):
+        alias = alias[:-4]
+    elif lower_alias.endswith(".ad"):
+        alias = alias[:-3]
+
+    alias = alias.strip(".")
+    if not alias or "." not in alias:
+        return ""
+
+    return f"{alias}@{ADMIN_EMAIL_DOMAIN}"
 
 
 def _send_handoff_email_to_admin(operator_username, target_userid, target_email, dn, ps_commands):
