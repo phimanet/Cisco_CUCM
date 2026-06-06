@@ -931,14 +931,23 @@ def genesys_admin_placeholder():
         --amn-blue: #005eb8;
         --amn-navy: #002f6c;
         --amn-sky: #eaf4ff;
+        --amn-ice: #f6fbff;
+        --amn-mist: #dbeaf7;
+        --amn-gold: #c68a12;
         --amn-text: #12304a;
+        --amn-text-soft: #4e6a84;
         --amn-border: #c8dbee;
+        --amn-panel-border: rgba(0, 47, 108, 0.12);
+        --amn-shadow: 0 18px 40px rgba(0, 47, 108, 0.12);
       }
 
       body {
         font-family: "Segoe UI", Tahoma, Arial, sans-serif;
         margin: 0;
-        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+        background:
+          radial-gradient(circle at top left, rgba(0, 94, 184, 0.18), transparent 26%),
+          radial-gradient(circle at top right, rgba(198, 138, 18, 0.16), transparent 22%),
+          linear-gradient(180deg, #f4f9fe 0%, #e8f1f9 42%, #edf5fc 100%);
         color: var(--amn-text);
       }
 
@@ -1088,16 +1097,24 @@ def menu_page(request: Request):
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        padding: 14px 24px;
-        background: linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
+        padding: 16px 28px;
+        background:
+          linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)),
+          linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
         color: #fff;
-        box-shadow: 0 2px 12px rgba(0, 47, 108, 0.25);
+        box-shadow: 0 12px 28px rgba(0, 47, 108, 0.22);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.16);
       }
 
       .topbar-brand {
         display: flex;
         align-items: center;
         gap: 12px;
+      }
+
+      .topbar-brand strong {
+        font-size: 18px;
+        letter-spacing: 0.2px;
       }
 
       .topbar-actions {
@@ -1114,21 +1131,24 @@ def menu_page(request: Request):
         font-weight: 700;
         text-decoration: none;
         border: 1px solid rgba(255, 255, 255, 0.65);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
       }
 
       .topbar-btn-login {
         color: #fff;
-        background: rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(8px);
       }
 
       .topbar-btn-logout {
         color: #fff;
-        background: #b42318;
-        border-color: #fda29b;
+        background: linear-gradient(180deg, #cb3b2f, #9f2018);
+        border-color: #f0a79c;
       }
 
       .topbar-btn:hover {
-        filter: brightness(1.06);
+        transform: translateY(-1px);
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
       }
 
       .logo {
@@ -1141,22 +1161,162 @@ def menu_page(request: Request):
 
       .brand-fallback {
         font-weight: 700;
-        letter-spacing: 0.2px;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+        font-size: 12px;
+        opacity: 0.86;
       }
 
       .content {
         max-width: 1400px;
-        margin: 18px auto 24px auto;
-        padding: 0 16px;
+        margin: 24px auto 30px auto;
+        padding: 0 18px 24px 18px;
+      }
+
+      .page-hero {
+        position: relative;
+        overflow: hidden;
+        padding: 26px 28px;
+        margin-bottom: 18px;
+        border-radius: 22px;
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95)),
+          linear-gradient(180deg, #ffffff, #eef6ff);
+        border: 1px solid rgba(0, 47, 108, 0.1);
+        box-shadow: var(--amn-shadow);
+      }
+
+      .page-hero::after {
+        content: "";
+        position: absolute;
+        right: -80px;
+        top: -60px;
+        width: 280px;
+        height: 280px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(0, 94, 184, 0.18), transparent 68%);
+        pointer-events: none;
+      }
+
+      .page-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 12px;
+        border-radius: 999px;
+        background: rgba(0, 94, 184, 0.08);
+        color: var(--amn-blue);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+      }
+
+      .page-title-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 18px;
+        flex-wrap: wrap;
+        margin-top: 14px;
+      }
+
+      .page-title-block {
+        max-width: 780px;
+      }
+
+      .page-title {
+        margin: 0;
+        color: var(--amn-navy);
+        font-size: 32px;
+        line-height: 1.1;
+      }
+
+      .page-subtitle {
+        margin: 10px 0 0 0;
+        color: var(--amn-text-soft);
+        font-size: 15px;
+        line-height: 1.65;
+      }
+
+      .page-meta-card {
+        min-width: 250px;
+        padding: 16px 18px;
+        border-radius: 16px;
+        background: linear-gradient(180deg, rgba(0, 47, 108, 0.96), rgba(0, 94, 184, 0.92));
+        color: #fff;
+        box-shadow: 0 14px 28px rgba(0, 47, 108, 0.22);
+      }
+
+      .page-meta-label {
+        display: block;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+        opacity: 0.76;
+        text-transform: uppercase;
+      }
+
+      .page-meta-value {
+        display: block;
+        margin-top: 6px;
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .page-meta-note {
+        margin: 10px 0 0 0;
+        font-size: 13px;
+        line-height: 1.5;
+        color: rgba(255, 255, 255, 0.86);
+      }
+
+      .hero-link-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+        margin-top: 18px;
+      }
+
+      .hero-link-card {
+        display: block;
+        padding: 14px 16px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid rgba(0, 47, 108, 0.1);
+        color: inherit;
+        text-decoration: none;
+        box-shadow: 0 10px 20px rgba(0, 47, 108, 0.06);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+      }
+
+      .hero-link-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(0, 94, 184, 0.3);
+        box-shadow: 0 14px 28px rgba(0, 47, 108, 0.11);
+      }
+
+      .hero-link-card strong {
+        display: block;
+        color: var(--amn-navy);
+        margin-bottom: 5px;
+      }
+
+      .hero-link-card span {
+        display: block;
+        font-size: 13px;
+        color: var(--amn-text-soft);
+        line-height: 1.5;
       }
 
       .env-banner {
         display: inline-block;
-        margin: 8px 0 14px 0;
+        margin: 8px 0 0 0;
         padding: 10px 16px;
         border-radius: 10px;
         font-weight: 800;
         letter-spacing: 0.2px;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
       }
 
       .env-banner-prod {
@@ -1178,29 +1338,32 @@ def menu_page(request: Request):
       h3 {
         margin: 18px 0 10px 0;
         color: var(--amn-navy);
+        font-size: 22px;
       }
 
       .portal-shell {
         display: grid;
-        grid-template-columns: 280px minmax(0, 1fr);
-        gap: 16px;
+        grid-template-columns: 295px minmax(0, 1fr);
+        gap: 18px;
         align-items: start;
-        margin-top: 12px;
+        margin-top: 18px;
       }
 
       .portal-sidebar {
         position: sticky;
-        top: 76px;
-        background: #fff;
-        border: 1px solid var(--amn-border);
-        border-radius: 12px;
-        padding: 10px;
-        box-shadow: 0 6px 16px rgba(0, 47, 108, 0.07);
+        top: 86px;
+        background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 20px;
+        padding: 14px;
+        box-shadow: 0 18px 36px rgba(0, 47, 108, 0.18);
       }
 
       .portal-sidebar h4 {
-        margin: 6px 8px 10px 8px;
-        color: var(--amn-navy);
+        margin: 6px 8px 12px 8px;
+        color: #fff;
+        font-size: 14px;
+        letter-spacing: 0.3px;
       }
 
       .portal-nav {
@@ -1212,38 +1375,43 @@ def menu_page(request: Request):
       .portal-nav-btn {
         width: 100%;
         text-align: left;
-        background: #eef5fb;
-        color: #10324f;
-        border: 1px solid #c7d9ea;
-        border-radius: 8px;
-        padding: 9px 10px;
+        background: rgba(255, 255, 255, 0.09);
+        color: rgba(255, 255, 255, 0.94);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        padding: 11px 12px;
         font-size: 13px;
+        font-weight: 600;
+        transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
       }
 
       .portal-nav-btn:hover {
-        background: #dcecff;
+        background: rgba(255, 255, 255, 0.16);
+        border-color: rgba(255, 255, 255, 0.24);
+        transform: translateX(2px);
       }
 
       .portal-nav-btn.active {
-        background: var(--amn-blue);
-        color: #fff;
-        border-color: var(--amn-blue);
+        background: linear-gradient(90deg, #ffffff, #ecf6ff);
+        color: var(--amn-navy);
+        border-color: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
       }
 
       .portal-nav-btn-danger {
-        background: #fbe9ea;
-        color: #8e1f28;
-        border-color: #e8b6bc;
+        background: rgba(203, 59, 47, 0.16);
+        color: #ffd9d5;
+        border-color: rgba(255, 167, 158, 0.26);
       }
 
       .portal-nav-btn-danger:hover {
-        background: #f8d9dc;
+        background: rgba(203, 59, 47, 0.24);
       }
 
       .portal-nav-btn-danger.active {
-        background: #b4232d;
+        background: linear-gradient(180deg, #d64e41, #a4221b);
         color: #fff;
-        border-color: #b4232d;
+        border-color: rgba(255, 255, 255, 0.2);
       }
 
       .portal-main {
@@ -1262,43 +1430,58 @@ def menu_page(request: Request):
       .build-user-output,
       .offboard-output,
       .secondary-output {
-        background: #fff;
-        border: 1px solid var(--amn-border);
-        border-radius: 10px;
-        padding: 14px;
-        box-shadow: 0 6px 16px rgba(0, 47, 108, 0.07);
+        background: rgba(255, 255, 255, 0.93);
+        border: 1px solid var(--amn-panel-border);
+        border-radius: 18px;
+        padding: 16px;
+        box-shadow: var(--amn-shadow);
+        backdrop-filter: blur(6px);
       }
 
       input,
       select,
       button,
       textarea {
-        border-radius: 8px;
+        border-radius: 10px;
         border: 1px solid var(--amn-border);
       }
 
       input,
       select {
-        min-height: 34px;
-        padding: 6px 8px;
+        min-height: 38px;
+        padding: 8px 10px;
         width: min(520px, 100%);
+        background: rgba(255, 255, 255, 0.96);
+      }
+
+      input:focus,
+      select:focus,
+      textarea:focus {
+        outline: none;
+        border-color: rgba(0, 94, 184, 0.55);
+        box-shadow: 0 0 0 4px rgba(0, 94, 184, 0.12);
       }
 
       button {
-        background: var(--amn-blue);
+        background: linear-gradient(180deg, #0c77d8, #005eb8);
         color: #fff;
         border: none;
-        padding: 10px 14px;
-        font-weight: 600;
+        padding: 11px 15px;
+        font-weight: 700;
         cursor: pointer;
+        box-shadow: 0 12px 24px rgba(0, 94, 184, 0.18);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
       }
 
       button:hover {
-        background: #004f9e;
+        filter: brightness(1.04);
+        transform: translateY(-1px);
+        box-shadow: 0 16px 28px rgba(0, 94, 184, 0.22);
       }
 
       a {
         color: var(--amn-blue);
+        font-weight: 700;
       }
 
       hr {
@@ -1329,7 +1512,11 @@ def menu_page(request: Request):
       .jabber-check-output {
         flex: 1 1 480px;
         min-width: 320px;
-        padding: 12px;
+        padding: 14px 16px;
+        background: rgba(255, 255, 255, 0.88);
+        border: 1px solid var(--amn-panel-border);
+        border-radius: 18px;
+        box-shadow: var(--amn-shadow);
       }
 
       .jabber-check-output h4 {
@@ -1340,7 +1527,7 @@ def menu_page(request: Request):
         width: 100%;
         min-height: 240px;
         border: 1px solid var(--amn-border);
-        border-radius: 8px;
+        border-radius: 12px;
         background: var(--amn-sky);
       }
 
@@ -1368,7 +1555,7 @@ def menu_page(request: Request):
         width: 100%;
         height: 380px;
         font-family: Consolas, monospace;
-        background: var(--amn-sky);
+        background: linear-gradient(180deg, #f4faff, #eaf4ff);
         color: #0f2940;
       }
 
@@ -1422,7 +1609,7 @@ def menu_page(request: Request):
         width: 100%;
         height: 380px;
         font-family: Consolas, monospace;
-        background: var(--amn-sky);
+        background: linear-gradient(180deg, #f4faff, #eaf4ff);
         color: #0f2940;
       }
 
@@ -1457,7 +1644,7 @@ def menu_page(request: Request):
         width: 100%;
         height: 380px;
         font-family: Consolas, monospace;
-        background: var(--amn-sky);
+        background: linear-gradient(180deg, #f4faff, #eaf4ff);
         color: #0f2940;
       }
 
@@ -1467,12 +1654,24 @@ def menu_page(request: Request):
       }
 
       @media (max-width: 980px) {
+        .topbar {
+          padding: 14px 16px;
+        }
+
         .portal-shell {
           grid-template-columns: 1fr;
         }
 
         .portal-sidebar {
           position: static;
+        }
+
+        .page-hero {
+          padding: 20px 18px;
+        }
+
+        .page-title {
+          font-size: 28px;
         }
 
         .portal-nav {
@@ -1507,15 +1706,39 @@ def menu_page(request: Request):
     </header>
 
     <main class="content">
-    <h2>Cisco Voice Server Automation Site - Restricted Access</h2>
-    <p>Authenticated as: <strong>__AUTH_USER__</strong></p>
-    <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
-    <p><a href="/">Back to Landing Page</a></p>
-    <p><a href="/genesys-admin">Open Genesys Admin Placeholder</a></p>
-    <p><a href="/menu-admin">Open Administrative Items</a></p>
-    <p>Environment was selected at login and is locked for this session.</p>
-    <p>Security mode: passwords are not cached server-side. Enter admin password for each action.</p>
-    <p><a href="/download/audit-trail">Download Audit Trail (CSV)</a></p>
+    <section class="page-hero">
+      <span class="page-kicker">Internal Operations Portal</span>
+      <div class="page-title-row">
+        <div class="page-title-block">
+          <h2 class="page-title">Cisco Voice Server Automation</h2>
+          <p class="page-subtitle">Operational shortcuts for CUCM and Unity workflows with clearer navigation, direct output review, and environment-aware execution for internal voice support.</p>
+          <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
+        </div>
+        <aside class="page-meta-card">
+          <span class="page-meta-label">Authenticated Operator</span>
+          <span class="page-meta-value">__AUTH_USER__</span>
+          <p class="page-meta-note">Environment selection is locked for this session. Passwords are not cached server-side and must be entered for each action.</p>
+        </aside>
+      </div>
+      <div class="hero-link-grid">
+        <a class="hero-link-card" href="/">
+          <strong>Landing Page</strong>
+          <span>Return to login and environment selection.</span>
+        </a>
+        <a class="hero-link-card" href="/menu-admin">
+          <strong>Administrative Items</strong>
+          <span>Open bulk tools, strike workflows, exports, and translation lookups.</span>
+        </a>
+        <a class="hero-link-card" href="/download/audit-trail">
+          <strong>Audit Trail CSV</strong>
+          <span>Download recorded portal activity for review and traceability.</span>
+        </a>
+        <a class="hero-link-card" href="/genesys-admin">
+          <strong>Genesys Placeholder</strong>
+          <span>Reserved path for the separate Genesys administration workflow.</span>
+        </a>
+      </div>
+    </section>
 
     <div class="portal-shell">
       <aside class="portal-sidebar">
@@ -2980,14 +3203,22 @@ def menu_admin_page(request: Request):
         --amn-blue: #005eb8;
         --amn-navy: #002f6c;
         --amn-sky: #eaf4ff;
+        --amn-ice: #f6fbff;
+        --amn-gold: #c68a12;
         --amn-text: #12304a;
+        --amn-text-soft: #4e6a84;
         --amn-border: #c8dbee;
+        --amn-panel-border: rgba(0, 47, 108, 0.12);
+        --amn-shadow: 0 18px 40px rgba(0, 47, 108, 0.12);
       }
 
       body {
         font-family: "Segoe UI", Tahoma, Arial, sans-serif;
         margin: 0;
-        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+        background:
+          radial-gradient(circle at top left, rgba(0, 94, 184, 0.18), transparent 26%),
+          radial-gradient(circle at top right, rgba(198, 138, 18, 0.16), transparent 22%),
+          linear-gradient(180deg, #f4f9fe 0%, #e8f1f9 42%, #edf5fc 100%);
         color: var(--amn-text);
       }
 
@@ -2996,29 +3227,166 @@ def menu_admin_page(request: Request):
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        padding: 14px 24px;
-        background: linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
+        padding: 16px 28px;
+        background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94));
         color: #fff;
+        box-shadow: 0 12px 28px rgba(0, 47, 108, 0.2);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.16);
       }
 
       .brand-fallback {
         font-weight: 700;
-        letter-spacing: 0.2px;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+        font-size: 12px;
+        opacity: 0.86;
       }
 
       .content {
         max-width: 1200px;
-        margin: 18px auto 24px auto;
-        padding: 0 16px;
+        margin: 24px auto 30px auto;
+        padding: 0 18px 24px 18px;
+      }
+
+      .page-hero {
+        position: relative;
+        overflow: hidden;
+        padding: 24px 26px;
+        margin-bottom: 18px;
+        border-radius: 22px;
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95));
+        border: 1px solid rgba(0, 47, 108, 0.1);
+        box-shadow: var(--amn-shadow);
+      }
+
+      .page-hero::after {
+        content: "";
+        position: absolute;
+        right: -60px;
+        top: -50px;
+        width: 240px;
+        height: 240px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(0, 94, 184, 0.18), transparent 68%);
+        pointer-events: none;
+      }
+
+      .page-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 12px;
+        border-radius: 999px;
+        background: rgba(0, 94, 184, 0.08);
+        color: var(--amn-blue);
+        font-size: 12px;
+        font-weight: 800;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+      }
+
+      .page-title-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 18px;
+        flex-wrap: wrap;
+        margin-top: 14px;
+      }
+
+      .page-title {
+        margin: 0;
+        color: var(--amn-navy);
+        font-size: 30px;
+        line-height: 1.1;
+      }
+
+      .page-subtitle {
+        margin: 10px 0 0 0;
+        color: var(--amn-text-soft);
+        font-size: 15px;
+        line-height: 1.65;
+        max-width: 720px;
+      }
+
+      .page-meta-card {
+        min-width: 250px;
+        padding: 16px 18px;
+        border-radius: 16px;
+        background: linear-gradient(180deg, rgba(0, 47, 108, 0.96), rgba(0, 94, 184, 0.92));
+        color: #fff;
+        box-shadow: 0 14px 28px rgba(0, 47, 108, 0.22);
+      }
+
+      .page-meta-label {
+        display: block;
+        font-size: 11px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+        opacity: 0.76;
+        text-transform: uppercase;
+      }
+
+      .page-meta-value {
+        display: block;
+        margin-top: 6px;
+        font-size: 18px;
+        font-weight: 700;
+      }
+
+      .page-meta-note {
+        margin: 10px 0 0 0;
+        font-size: 13px;
+        line-height: 1.5;
+        color: rgba(255, 255, 255, 0.86);
+      }
+
+      .hero-link-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 12px;
+        margin-top: 18px;
+      }
+
+      .hero-link-card {
+        display: block;
+        padding: 14px 16px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid rgba(0, 47, 108, 0.1);
+        color: inherit;
+        text-decoration: none;
+        box-shadow: 0 10px 20px rgba(0, 47, 108, 0.06);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+      }
+
+      .hero-link-card:hover {
+        transform: translateY(-2px);
+        border-color: rgba(0, 94, 184, 0.3);
+        box-shadow: 0 14px 28px rgba(0, 47, 108, 0.11);
+      }
+
+      .hero-link-card strong {
+        display: block;
+        color: var(--amn-navy);
+        margin-bottom: 5px;
+      }
+
+      .hero-link-card span {
+        display: block;
+        font-size: 13px;
+        color: var(--amn-text-soft);
+        line-height: 1.5;
       }
 
       .env-banner {
         display: inline-block;
-        margin: 8px 0 14px 0;
+        margin: 8px 0 0 0;
         padding: 10px 16px;
         border-radius: 10px;
         font-weight: 800;
         letter-spacing: 0.2px;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
       }
 
       .env-banner-prod {
@@ -3034,48 +3402,77 @@ def menu_admin_page(request: Request):
       }
 
       .panel {
-        background: #fff;
-        border: 1px solid var(--amn-border);
-        border-radius: 10px;
-        padding: 14px;
-        box-shadow: 0 6px 16px rgba(0, 47, 108, 0.07);
+        background: rgba(255, 255, 255, 0.93);
+        border: 1px solid var(--amn-panel-border);
+        border-radius: 18px;
+        padding: 16px;
+        box-shadow: var(--amn-shadow);
+        backdrop-filter: blur(6px);
         margin: 0 0 18px 0;
       }
 
       h3 {
         margin: 6px 0 10px 0;
         color: var(--amn-navy);
+        font-size: 22px;
       }
 
       input,
       textarea,
       button {
-        border-radius: 8px;
+        border-radius: 10px;
         border: 1px solid var(--amn-border);
       }
 
       input,
       textarea {
-        min-height: 34px;
-        padding: 6px 8px;
+        min-height: 38px;
+        padding: 8px 10px;
         width: min(700px, 100%);
+        background: rgba(255, 255, 255, 0.96);
+      }
+
+      input:focus,
+      textarea:focus {
+        outline: none;
+        border-color: rgba(0, 94, 184, 0.55);
+        box-shadow: 0 0 0 4px rgba(0, 94, 184, 0.12);
       }
 
       button {
-        background: var(--amn-blue);
+        background: linear-gradient(180deg, #0c77d8, #005eb8);
         color: #fff;
         border: none;
-        padding: 10px 14px;
-        font-weight: 600;
+        padding: 11px 15px;
+        font-weight: 700;
         cursor: pointer;
+        box-shadow: 0 12px 24px rgba(0, 94, 184, 0.18);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
       }
 
       button:hover {
-        background: #004f9e;
+        filter: brightness(1.04);
+        transform: translateY(-1px);
+        box-shadow: 0 16px 28px rgba(0, 94, 184, 0.22);
       }
 
       a {
         color: var(--amn-blue);
+        font-weight: 700;
+      }
+
+      @media (max-width: 980px) {
+        .topbar {
+          padding: 14px 16px;
+        }
+
+        .page-hero {
+          padding: 20px 18px;
+        }
+
+        .page-title {
+          font-size: 27px;
+        }
       }
     </style>
   </head>
@@ -3086,10 +3483,31 @@ def menu_admin_page(request: Request):
     </header>
 
     <main class="content">
-      <h2>Administrative Items</h2>
-      <p>Authenticated as: <strong>__AUTH_USER__</strong></p>
-      <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
-      <p><a href="/menu">Back to Main Operations Menu</a></p>
+      <section class="page-hero">
+        <span class="page-kicker">Administrative Workbench</span>
+        <div class="page-title-row">
+          <div>
+            <h2 class="page-title">Administrative Items</h2>
+            <p class="page-subtitle">Bulk operations, strike workflows, export utilities, and translation lookups in a single workspace for higher-volume admin work.</p>
+            <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
+          </div>
+          <aside class="page-meta-card">
+            <span class="page-meta-label">Authenticated Operator</span>
+            <span class="page-meta-value">__AUTH_USER__</span>
+            <p class="page-meta-note">Use the main operations menu for day-to-day actions. This page is focused on advanced and bulk administration.</p>
+          </aside>
+        </div>
+        <div class="hero-link-grid">
+          <a class="hero-link-card" href="/menu">
+            <strong>Main Operations</strong>
+            <span>Return to standard user-facing voice operations workflows.</span>
+          </a>
+          <a class="hero-link-card" href="/download/audit-trail">
+            <strong>Audit Trail CSV</strong>
+            <span>Download logged portal activity and execution history.</span>
+          </a>
+        </div>
+      </section>
 
       <section class="panel">
         <h3>Strike Use - Person Lookup</h3>

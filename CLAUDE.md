@@ -21,6 +21,9 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [ ] Add minimal regression tests for toolkit functions that generate CSV outputs.
 
 ## Enhancement Backlog
+- [x] [P1][Done] Person Lookup by name — search CUCM end users by last name + optional first name; returns extension, email, and all associated devices with type labels (CSF/TCT/BOT). First item on the menu, inline table results.
+
+
 - [x] [P1][Done] Convert HTTP to HTTPS using internally signed enterprise certificate, with Nginx TLS termination and HTTP -> HTTPS redirect.
 - [x] [P1][Done] Add input validation and user-friendly error display on all web forms.
 - [ ] [P1][Idea] Add reusable environment/config file for CUCM/Unity hosts, partitions, and defaults.
@@ -31,7 +34,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
   - [ ] CVE-2025-61984 (CVSSv3 3.6) — Not started
 - [ ] [P1][Idea] Before creating Jabber devices or voicemail, always verify whether the target resource already exists to prevent duplicate provisioning and resource waste.
 - [x] [P2][Done] After job submission, clear the "User ID for person..." input field to prevent accidental repeat Jabber creation.
-- [ ] [P2][Idea] Refresh the web portal theme to align with AMN Healthcare visual style (brand colors, typography, spacing, and overall look/feel).
+- [x] [P2][Done] Refresh the web portal theme to align with AMN Healthcare visual style (brand colors, typography, spacing, and overall look/feel).
 - [x] [P2][Done] Add per-option success/failure summary panel in the UI after CSV generation.
 - [ ] [P2][Idea] Add a lightweight audit trail (who ran what option and when) for internal operations.
 - [ ] [P3][Idea] Add optional dry-run mode for high-impact actions before execution.
@@ -113,6 +116,7 @@ Priority keys:
 - Restored Called Name Change workflow from previously fixed revision (`fad817a`) after full revert sequence.
 - Reinstated UI panel + inline execution path in `main.py` and backend route `/called-name-change`.
 - Reinstated toolkit module `toolkit/called_name_change.py` with CSF/BOT/TCT phone description updates, line alerting/caller-ID updates, and Unity mailbox DisplayName/SMTP updates.
+- Completed AMN visual refresh for Main Operations and Administrative Items pages (enhanced topbar, hero section, navigation cards, panel styling, and spacing) while preserving existing workflows.
 
 ### 2026-04-30
 - Initialized project tracker format.
