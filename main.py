@@ -3752,6 +3752,70 @@ def menu_admin_page(request: Request):
         border: 1px solid #f7b267;
       }
 
+      .portal-shell {
+        display: grid;
+        grid-template-columns: 300px minmax(0, 1fr);
+        gap: 18px;
+        align-items: start;
+      }
+
+      .portal-sidebar {
+        position: sticky;
+        top: 18px;
+        background: rgba(255, 255, 255, 0.94);
+        border: 1px solid rgba(0, 47, 108, 0.12);
+        border-radius: 14px;
+        box-shadow: var(--amn-shadow);
+        padding: 12px;
+      }
+
+      .portal-sidebar h4 {
+        margin: 4px 0 10px 2px;
+        color: var(--amn-navy);
+      }
+
+      .portal-nav {
+        display: grid;
+        gap: 8px;
+      }
+
+      .portal-nav-btn {
+        text-align: left;
+        width: 100%;
+        border-radius: 10px;
+        border: 1px solid rgba(0, 47, 108, 0.14);
+        background: rgba(255, 255, 255, 0.92);
+        color: #0d3150;
+        padding: 10px 11px;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: none;
+      }
+
+      .portal-nav-btn:hover {
+        background: #f3f9ff;
+        border-color: rgba(0, 94, 184, 0.3);
+        transform: translateY(-1px);
+      }
+
+      .portal-nav-btn.active {
+        background: linear-gradient(180deg, #0c77d8, #005eb8);
+        color: #fff;
+        border-color: rgba(0, 94, 184, 0.45);
+      }
+
+      .portal-main {
+        min-width: 0;
+      }
+
+      .tool-panel {
+        display: none;
+      }
+
+      .tool-panel.active {
+        display: block;
+      }
+
       .panel {
         background: rgba(255, 255, 255, 0.93);
         border: 1px solid var(--amn-panel-border);
@@ -3846,6 +3910,14 @@ def menu_admin_page(request: Request):
         .page-title {
           font-size: 23px;
         }
+
+        .portal-shell {
+          grid-template-columns: 1fr;
+        }
+
+        .portal-sidebar {
+          position: static;
+        }
       }
     </style>
   </head>
@@ -3882,7 +3954,27 @@ def menu_admin_page(request: Request):
         </div>
       </section>
 
-      <section class="panel">
+      <div class="portal-shell">
+        <aside class="portal-sidebar">
+          <h4>Administrative Menu</h4>
+          <div class="portal-nav">
+            <button type="button" class="portal-nav-btn active" data-panel="personlookup">Strike Use - Person Lookup</button>
+            <button type="button" class="portal-nav-btn" data-panel="strike">Strike Mode - Add iPhone and Android</button>
+            <button type="button" class="portal-nav-btn" data-panel="mobiledelete">Remove only Jabber Mobile</button>
+            <button type="button" class="portal-nav-btn" data-panel="rpo">Extract RPO Phones</button>
+            <button type="button" class="portal-nav-btn" data-panel="adddn">Add Directory Numbers (CSV)</button>
+            <button type="button" class="portal-nav-btn" data-panel="exportdn">Export Directory Numbers</button>
+            <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
+            <button type="button" class="portal-nav-btn" data-panel="translookup">Translation Pattern Lookup</button>
+            <button type="button" class="portal-nav-btn" data-panel="transtemplate">Translation Pattern Template</button>
+            <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
+            <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
+          </div>
+        </aside>
+
+        <section class="portal-main">
+
+      <section class="panel tool-panel active" data-panel="personlookup">
         <h3>Strike Use - Person Lookup</h3>
         <p>Search by last name (optional first name), then use the result to prefill Strike Mode.</p>
         <form id="admin-person-lookup-form">
@@ -3909,7 +4001,7 @@ def menu_admin_page(request: Request):
         <div id="admin-person-lookup-results" style="overflow-x:auto;"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel tool-panel" data-panel="strike">
         <h3>Strike Mode - Add in both Jabber iPhone and Android (Option 5)</h3>
         <form id="admin-strike-form" action="/add/secondary-strike-devices" method="post">
           <div class="compact-inline-row">
@@ -3929,7 +4021,7 @@ def menu_admin_page(request: Request):
         </form>
       </section>
 
-      <section class="panel">
+      <section class="panel tool-panel" data-panel="mobiledelete">
         <h3>Remove only Jabber Mobile - iPhone or Android</h3>
         <p>Lookup by last name, then remove Jabber iPhone (TCT), Jabber Android (BOT), or both. This does not delete CSF or voicemail.</p>
         <form id="admin-mobile-delete-lookup-form">
@@ -3956,7 +4048,7 @@ def menu_admin_page(request: Request):
         <div id="admin-mobile-delete-results" style="overflow-x:auto;"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel tool-panel" data-panel="rpo">
         <h3>Extract RPO Phones (Option 18)</h3>
         <form action="/export/rpo-phones" method="post">
           <div class="compact-inline-row">
@@ -3976,7 +4068,7 @@ def menu_admin_page(request: Request):
         </form>
       </section>
 
-      <section class="panel">
+      <section class="panel tool-panel" data-panel="adddn">
         <h3>Add Directory Numbers (Upload CSV)</h3>
         <form action="/add/directorynumbers" method="post" enctype="multipart/form-data">
           <div class="compact-inline-row">
@@ -3998,7 +4090,7 @@ def menu_admin_page(request: Request):
         </form>
       </section>
 
-      <section class="panel">
+      <section class="panel tool-panel" data-panel="exportdn">
         <h3>Export Directory Numbers</h3>
         <form action="/export/directorynumbers" method="post">
           <div class="compact-inline-row">
@@ -4021,7 +4113,7 @@ def menu_admin_page(request: Request):
         </form>
       </section>
 
-      <section class="panel">
+      <section class="panel tool-panel" data-panel="exportusers">
         <h3>Export End Users</h3>
         <form action="/export/endusers" method="post">
           <div class="compact-inline-row">
@@ -4041,7 +4133,7 @@ def menu_admin_page(request: Request):
         </form>
       </section>
 
-      <section class="panel">
+      <section class="panel tool-panel" data-panel="translookup">
         <h3>Translation Pattern Lookup</h3>
         <p>Search translation patterns and return pattern, description, and called party transform mask.</p>
         <form id="admin-trans-pattern-form">
@@ -4065,7 +4157,7 @@ def menu_admin_page(request: Request):
         <div id="admin-trans-pattern-results" style="overflow-x:auto;"></div>
       </section>
 
-      <section class="panel">
+      <section class="panel tool-panel" data-panel="transtemplate">
         <h3>Translation Pattern Template From Example</h3>
         <p>Start with the example that begins with <strong>3148984689</strong>. The template keeps everything the same except the Translation Pattern and Description.</p>
         <form id="admin-trans-template-form">
@@ -4091,7 +4183,7 @@ def menu_admin_page(request: Request):
         <textarea id="admin-trans-template-preview" rows="8" readonly style="width:100%;"></textarea>
       </section>
 
-      <section class="panel">
+      <section class="panel tool-panel" data-panel="bulkperson">
         <h3>Bulk Person Lookup (CSV Upload)</h3>
         <p>Upload CSV with columns like <strong>last_name, first_name</strong> (or first column as last name).</p>
         <p><a href="/download/bulk-person-template" style="font-weight:700;">Download Bulk Person Template</a></p>
@@ -4117,7 +4209,7 @@ def menu_admin_page(request: Request):
         <textarea id="admin-bulk-person-preview" rows="10" readonly style="width:100%;"></textarea>
       </section>
 
-      <section class="panel">
+      <section class="panel tool-panel" data-panel="bulkextension">
         <h3>Bulk Extension Reverse Lookup (CSV Upload)</h3>
         <p>Upload CSV with a column like <strong>pattern</strong> or <strong>extension</strong> (or first column as pattern).</p>
         <p><a href="/download/bulk-extension-template" style="font-weight:700;">Download Bulk Extension Template</a></p>
@@ -4142,6 +4234,28 @@ def menu_admin_page(request: Request):
         <p><a id="admin-bulk-extension-download" href="#" style="display:none; font-weight:700;">Download CSV Output</a></p>
         <textarea id="admin-bulk-extension-preview" rows="10" readonly style="width:100%;"></textarea>
       </section>
+
+      <script>
+        (function () {
+          const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
+          const panels = Array.from(document.querySelectorAll(".tool-panel"));
+
+          function showPanel(panelKey) {
+            panels.forEach((panel) => {
+              panel.classList.toggle("active", panel.dataset.panel === panelKey);
+            });
+            navButtons.forEach((btn) => {
+              btn.classList.toggle("active", btn.dataset.panel === panelKey);
+            });
+          }
+
+          navButtons.forEach((btn) => {
+            btn.addEventListener("click", () => {
+              showPanel(btn.dataset.panel);
+            });
+          });
+        })();
+      </script>
 
       <script>
         (function () {
@@ -4601,6 +4715,8 @@ def menu_admin_page(request: Request):
           });
         })();
       </script>
+        </section>
+      </div>
     </main>
   </body>
 </html>
