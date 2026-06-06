@@ -2046,6 +2046,7 @@ def menu_page(request: Request):
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
             html += '</tr></thead><tbody>';
@@ -2055,6 +2056,7 @@ def menu_page(request: Request):
               const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
               const ext = r.primary_extension || "\u2014";
               const email = r.email || "\u2014";
+              const telephone = r.telephone || "\u2014";
               const uid = r.userid || "";
               const devList = (r.devices || []).map(function (d) {
                 const exts = (d.extensions || []).join(", ") || "\u2014";
@@ -2075,6 +2077,7 @@ def menu_page(request: Request):
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
               html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
               html += '<td style="padding:7px 10px;">' + email + '</td>';
+              html += '<td style="padding:7px 10px;">' + telephone + '</td>';
               html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
               html += '<td style="padding:7px 10px; white-space:nowrap;">' + actionBtns + '</td>';
               html += '</tr>';
@@ -2545,6 +2548,7 @@ def menu_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
               html += '</tr></thead><tbody>';
 
@@ -2553,11 +2557,13 @@ def menu_page(request: Request):
                 const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
                 const uid = r.userid || "";
                 const email = r.email || "\u2014";
+                const telephone = r.telephone || "\u2014";
 
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
+                html += '<td style="padding:7px 10px;">' + telephone + '</td>';
                 html += '<td style="padding:7px 10px;">';
                 html += '<button type="button" data-teams-user="' + uid + '" style="background:#237741; color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Create Teams Telephony</button>';
                 html += '</td>';
@@ -4406,6 +4412,7 @@ def menu_admin_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
               html += '</tr></thead><tbody>';
@@ -4415,6 +4422,7 @@ def menu_admin_page(request: Request):
                 const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
                 const ext = r.primary_extension || "\u2014";
                 const email = r.email || "\u2014";
+                const telephone = r.telephone || "\u2014";
                 const uid = r.userid || "";
                 const devList = (r.devices || []).map(function (d) {
                   const exts = (d.extensions || []).join(", ") || "\u2014";
@@ -4432,6 +4440,7 @@ def menu_admin_page(request: Request):
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
                 html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
+                html += '<td style="padding:7px 10px;">' + telephone + '</td>';
                 html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
                 html += '<td style="padding:7px 10px; white-space:nowrap;">' + actionBtn + '</td>';
                 html += '</tr>';
@@ -4591,6 +4600,7 @@ def menu_admin_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Delete Actions</th>';
               html += '</tr></thead><tbody>';
@@ -4599,6 +4609,7 @@ def menu_admin_page(request: Request):
                 const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
                 const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
                 const email = r.email || "\u2014";
+                const telephone = r.telephone || "\u2014";
                 const uid = r.userid || "";
                 const devList = (r.devices || []).map(function (d) {
                   const exts = (d.extensions || []).join(", ") || "\u2014";
@@ -4614,6 +4625,7 @@ def menu_admin_page(request: Request):
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
+                html += '<td style="padding:7px 10px;">' + telephone + '</td>';
                 html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
                 html += '<td style="padding:7px 10px; white-space:nowrap;">' + tctBtn + botBtn + bothBtn + '</td>';
                 html += '</tr>';
@@ -5292,6 +5304,7 @@ async def bulk_lookup_person_route(
       "userid",
       "display_name",
       "email",
+      "telephone",
       "primary_extension",
       "devices",
       "details",
@@ -5307,13 +5320,13 @@ async def bulk_lookup_person_route(
         results = search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_name)
       except Exception as exc:
         error_inputs += 1
-        writer.writerow([last_name, first_name, "ERROR", "", "", "", "", "", str(exc)])
+        writer.writerow([last_name, first_name, "ERROR", "", "", "", "", "", "", str(exc)])
         result_rows += 1
         continue
 
       if not results:
         no_result_inputs += 1
-        writer.writerow([last_name, first_name, "NO_RESULTS", "", "", "", "", "", "No users matched"])
+        writer.writerow([last_name, first_name, "NO_RESULTS", "", "", "", "", "", "", "No users matched"])
         result_rows += 1
         continue
 
@@ -5331,6 +5344,7 @@ async def bulk_lookup_person_route(
           person.get("userid", ""),
           person.get("display_name", ""),
           person.get("email", ""),
+          person.get("telephone", ""),
           person.get("primary_extension", ""),
           device_text,
           "",
