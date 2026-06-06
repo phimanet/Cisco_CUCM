@@ -34,6 +34,57 @@ def _find_localname_text(elem, localnames):
     return ""
 
 
+def _normalize_text(s):
+    if s is None:
+        return ""
+    return str(s).strip()
+
+
+def _flatten_element(elem, prefix="", out=None):
+    """Flatten XML to dot-notation keys for full template generation."""
+    if out is None:
+        out = {}
+
+    tag = _strip_ns(elem.tag)
+    key_base = f"{prefix}.{tag}" if prefix else tag
+
+    for ak, av in elem.attrib.items():
+        out[f"{key_base}.@{ak}"] = _normalize_text(av)
+
+    children = list(elem)
+    text = _normalize_text(elem.text)
+
+    if not children:
+        if text != "":
+            out[key_base] = text
+        return out
+
+    if text != "":
+        out[key_base] = text
+
+    groups = {}
+    for child in children:
+        groups.setdefault(_strip_ns(child.tag), []).append(child)
+
+    for child_tag, items in groups.items():
+        if len(items) == 1:
+            _flatten_element(items[0], key_base, out)
+        else:
+            for i, item in enumerate(items):
+                indexed_prefix = f"{key_base}.{child_tag}[{i}]"
+                for ak, av in item.attrib.items():
+                    out[f"{indexed_prefix}.@{ak}"] = _normalize_text(av)
+
+                item_text = _normalize_text(item.text)
+                if item_text and not list(item):
+                    out[indexed_prefix] = item_text
+
+                for sub in list(item):
+                    _flatten_element(sub, indexed_prefix, out)
+
+    return out
+
+
 def _axl_post(session, cucm_host, soap_xml):
     url = f"https://{cucm_host}:8443/axl/"
     headers = {"Content-Type": "text/xml"}
@@ -149,6 +200,35 @@ def lookup_translation_patterns(cucm_host, cucm_user, cucm_pass, pattern_query):
     return results
 
 
+def get_translation_pattern_full(cucm_host, cucm_user, cucm_pass, pattern, route_partition):
+    pattern = (pattern or "").strip()
+    route_partition = (route_partition or "").strip()
+    if not pattern or not route_partition:
+        raise ValueError("pattern and route_partition are required")
+
+    session = requests.Session()
+    session.verify = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    get_xml = _axl_post(
+        session,
+        cucm_host,
+        _soap_get_trans_pattern(pattern, route_partition),
+    )
+    root = ET.fromstring(get_xml)
+    tp = _find_first_by_localname(root, "transPattern")
+    if tp is None:
+        raise RuntimeError("Could not locate transPattern node in getTransPattern response")
+
+    detail = _parse_trans_pattern_node(tp)
+    full_fields = {}
+    for child in list(tp):
+        _flatten_element(child, prefix="transPattern", out=full_fields)
+
+    detail["full_fields"] = full_fields
+    return detail
+
+
 def build_translation_pattern_template(cucm_host, cucm_user, cucm_pass, pattern_prefix):
     pattern_prefix = (pattern_prefix or "").strip()
     if not pattern_prefix:
@@ -164,22 +244,33 @@ def build_translation_pattern_template(cucm_host, cucm_user, cucm_pass, pattern_
     if example is None:
         raise RuntimeError(f"No translation pattern found beginning with {pattern_prefix}")
 
+    detail = get_translation_pattern_full(
+        cucm_host,
+        cucm_user,
+        cucm_pass,
+        example.get("pattern", ""),
+        example.get("route_partition", ""),
+    )
+
+    full_fields = dict(detail.get("full_fields") or {})
+    # Keep the template strict: only these two are intended to change.
+    full_fields["transPattern.pattern"] = "CHANGE_ME_TRANSLATION_PATTERN"
+    full_fields["transPattern.description"] = "CHANGE_ME_DESCRIPTION"
+    full_fields["template.source_pattern"] = example.get("pattern", "")
+    full_fields["template.source_route_partition"] = example.get("route_partition", "")
+
+    preferred = [
+        "transPattern.pattern",
+        "transPattern.description",
+        "template.source_pattern",
+        "template.source_route_partition",
+    ]
+    keys = preferred + sorted(k for k in full_fields.keys() if k not in set(preferred))
+
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow([
-        "translation_pattern",
-        "description",
-        "route_partition",
-        "called_party_transform_mask",
-        "example_source_pattern",
-    ])
-    writer.writerow([
-        "CHANGE_ME",
-        "CHANGE_ME",
-        example.get("route_partition", ""),
-        example.get("called_party_transform_mask", ""),
-        example.get("pattern", ""),
-    ])
+    writer.writerow(keys)
+    writer.writerow([full_fields.get(k, "") for k in keys])
 
     filename = f"translation_pattern_template_{pattern_prefix}.csv"
-    return output.getvalue().encode("utf-8"), filename, example
+    return output.getvalue().encode("utf-8"), filename, detail

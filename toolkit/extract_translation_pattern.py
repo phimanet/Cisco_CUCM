@@ -6,10 +6,18 @@ from getpass import getpass
 
 try:
     # When running from toolkit directory.
-    from translation_pattern_lookup import lookup_translation_patterns
+    from translation_pattern_lookup import (
+        lookup_translation_patterns,
+        get_translation_pattern_full,
+        build_translation_pattern_template,
+    )
 except ImportError:
     # When running from repository root.
-    from toolkit.translation_pattern_lookup import lookup_translation_patterns
+    from toolkit.translation_pattern_lookup import (
+        lookup_translation_patterns,
+        get_translation_pattern_full,
+        build_translation_pattern_template,
+    )
 
 
 def _write_csv(path, rows):
@@ -48,8 +56,17 @@ def main():
         help="Return only the first result",
     )
     parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Fetch full fields from getTransPattern for each result",
+    )
+    parser.add_argument(
         "--csv-out",
         help="Optional CSV output path",
+    )
+    parser.add_argument(
+        "--template-csv-out",
+        help="Optional full-field template CSV output path using the first match",
     )
 
     args = parser.parse_args()
@@ -67,11 +84,49 @@ def main():
 
     output_rows = results[:1] if args.first_only else results
 
+    if args.full:
+        full_rows = []
+        for item in output_rows:
+            pattern = (item.get("pattern") or "").strip()
+            route_partition = (item.get("route_partition") or "").strip()
+            if not pattern or not route_partition:
+                continue
+            full_rows.append(
+                get_translation_pattern_full(
+                    args.host,
+                    args.user,
+                    password,
+                    pattern,
+                    route_partition,
+                )
+            )
+        output_rows = full_rows
+
     print(json.dumps(output_rows, indent=2))
 
     if args.csv_out:
         _write_csv(args.csv_out, output_rows)
         print(f"Wrote CSV: {args.csv_out}")
+
+    if args.template_csv_out:
+        csv_bytes, filename, example = build_translation_pattern_template(
+            args.host,
+            args.user,
+            password,
+            args.pattern,
+        )
+        with open(args.template_csv_out, "wb") as handle:
+            handle.write(csv_bytes)
+        print(f"Wrote full template CSV: {args.template_csv_out}")
+        print(
+            json.dumps(
+                {
+                    "source_pattern": example.get("pattern", ""),
+                    "source_route_partition": example.get("route_partition", ""),
+                },
+                indent=2,
+            )
+        )
 
     return 0
 
