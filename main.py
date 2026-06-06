@@ -1518,10 +1518,20 @@ def menu_page(request: Request):
       }
 
       #person-lookup-form input[name="cucm_user"],
-      #person-lookup-form input[name="cucm_pass"],
+      #person-lookup-form input[name="cucm_pass"] {
+        width: min(130px, 100%);
+      }
+
       #person-lookup-form input[name="last_name"],
       #person-lookup-form input[name="first_name"] {
         width: min(260px, 100%);
+      }
+
+      .compact-inline-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
       }
 
       .jabber-check-output {
@@ -1783,8 +1793,10 @@ def menu_page(request: Request):
 
     <div class="jabber-check-layout" style="display:block;">
       <form id="person-lookup-form" class="jabber-check-form" style="margin-bottom:14px;">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+        <div class="compact-inline-row">
+          <span>Cisco Callmanager Username:</span>
+          <input name="cucm_user" value="__AUTH_USER__" required>
+        </div><br>
 
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
