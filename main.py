@@ -1081,8 +1081,11 @@ def menu_page(request: Request):
         --amn-blue: #005eb8;
         --amn-navy: #002f6c;
         --amn-sky: #eaf4ff;
+        --amn-text-soft: #4e6a84;
         --amn-text: #12304a;
         --amn-border: #c8dbee;
+        --amn-panel-border: rgba(0, 47, 108, 0.12);
+        --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
       }
 
       body {
@@ -1169,16 +1172,16 @@ def menu_page(request: Request):
 
       .content {
         max-width: 1400px;
-        margin: 24px auto 30px auto;
-        padding: 0 18px 24px 18px;
+        margin: 16px auto 22px auto;
+        padding: 0 16px 16px 16px;
       }
 
       .page-hero {
         position: relative;
         overflow: hidden;
-        padding: 26px 28px;
-        margin-bottom: 18px;
-        border-radius: 22px;
+        padding: 20px 22px;
+        margin-bottom: 14px;
+        border-radius: 18px;
         background:
           linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95)),
           linear-gradient(180deg, #ffffff, #eef6ff);
@@ -1228,21 +1231,21 @@ def menu_page(request: Request):
       .page-title {
         margin: 0;
         color: var(--amn-navy);
-        font-size: 32px;
+        font-size: 28px;
         line-height: 1.1;
       }
 
       .page-subtitle {
         margin: 10px 0 0 0;
         color: var(--amn-text-soft);
-        font-size: 15px;
-        line-height: 1.65;
+        font-size: 14px;
+        line-height: 1.55;
       }
 
       .page-meta-card {
-        min-width: 250px;
-        padding: 16px 18px;
-        border-radius: 16px;
+        min-width: 230px;
+        padding: 14px 16px;
+        border-radius: 14px;
         background: linear-gradient(180deg, rgba(0, 47, 108, 0.96), rgba(0, 94, 184, 0.92));
         color: #fff;
         box-shadow: 0 14px 28px rgba(0, 47, 108, 0.22);
@@ -1274,14 +1277,14 @@ def menu_page(request: Request):
       .hero-link-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 12px;
-        margin-top: 18px;
+        gap: 10px;
+        margin-top: 14px;
       }
 
       .hero-link-card {
         display: block;
-        padding: 14px 16px;
-        border-radius: 14px;
+        padding: 12px 14px;
+        border-radius: 12px;
         background: rgba(255, 255, 255, 0.9);
         border: 1px solid rgba(0, 47, 108, 0.1);
         color: inherit;
@@ -1336,26 +1339,26 @@ def menu_page(request: Request):
       }
 
       h3 {
-        margin: 18px 0 10px 0;
+        margin: 14px 0 8px 0;
         color: var(--amn-navy);
-        font-size: 22px;
+        font-size: 20px;
       }
 
       .portal-shell {
         display: grid;
-        grid-template-columns: 295px minmax(0, 1fr);
-        gap: 18px;
+        grid-template-columns: 280px minmax(0, 1fr);
+        gap: 14px;
         align-items: start;
-        margin-top: 18px;
+        margin-top: 14px;
       }
 
       .portal-sidebar {
         position: sticky;
-        top: 86px;
+        top: 80px;
         background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
         border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 20px;
-        padding: 14px;
+        border-radius: 16px;
+        padding: 12px;
         box-shadow: 0 18px 36px rgba(0, 47, 108, 0.18);
       }
 
@@ -1378,8 +1381,8 @@ def menu_page(request: Request):
         background: rgba(255, 255, 255, 0.09);
         color: rgba(255, 255, 255, 0.94);
         border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 12px;
-        padding: 11px 12px;
+        border-radius: 10px;
+        padding: 9px 10px;
         font-size: 13px;
         font-weight: 600;
         transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
@@ -1432,8 +1435,8 @@ def menu_page(request: Request):
       .secondary-output {
         background: rgba(255, 255, 255, 0.93);
         border: 1px solid var(--amn-panel-border);
-        border-radius: 18px;
-        padding: 16px;
+        border-radius: 14px;
+        padding: 14px;
         box-shadow: var(--amn-shadow);
         backdrop-filter: blur(6px);
       }
@@ -1448,8 +1451,8 @@ def menu_page(request: Request):
 
       input,
       select {
-        min-height: 38px;
-        padding: 8px 10px;
+        min-height: 36px;
+        padding: 7px 10px;
         width: min(520px, 100%);
         background: rgba(255, 255, 255, 0.96);
       }
@@ -1466,17 +1469,17 @@ def menu_page(request: Request):
         background: linear-gradient(180deg, #0c77d8, #005eb8);
         color: #fff;
         border: none;
-        padding: 11px 15px;
+        padding: 9px 13px;
         font-weight: 700;
         cursor: pointer;
-        box-shadow: 0 12px 24px rgba(0, 94, 184, 0.18);
+        box-shadow: 0 8px 18px rgba(0, 94, 184, 0.16);
         transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
       }
 
       button:hover {
         filter: brightness(1.04);
         transform: translateY(-1px);
-        box-shadow: 0 16px 28px rgba(0, 94, 184, 0.22);
+        box-shadow: 0 12px 22px rgba(0, 94, 184, 0.2);
       }
 
       a {
@@ -1512,10 +1515,10 @@ def menu_page(request: Request):
       .jabber-check-output {
         flex: 1 1 480px;
         min-width: 320px;
-        padding: 14px 16px;
+        padding: 12px 14px;
         background: rgba(255, 255, 255, 0.88);
         border: 1px solid var(--amn-panel-border);
-        border-radius: 18px;
+        border-radius: 14px;
         box-shadow: var(--amn-shadow);
       }
 
@@ -1667,11 +1670,11 @@ def menu_page(request: Request):
         }
 
         .page-hero {
-          padding: 20px 18px;
+          padding: 16px 14px;
         }
 
         .page-title {
-          font-size: 28px;
+          font-size: 24px;
         }
 
         .portal-nav {
@@ -3209,7 +3212,7 @@ def menu_admin_page(request: Request):
         --amn-text-soft: #4e6a84;
         --amn-border: #c8dbee;
         --amn-panel-border: rgba(0, 47, 108, 0.12);
-        --amn-shadow: 0 18px 40px rgba(0, 47, 108, 0.12);
+        --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
       }
 
       body {
@@ -3244,16 +3247,16 @@ def menu_admin_page(request: Request):
 
       .content {
         max-width: 1200px;
-        margin: 24px auto 30px auto;
-        padding: 0 18px 24px 18px;
+        margin: 16px auto 22px auto;
+        padding: 0 16px 16px 16px;
       }
 
       .page-hero {
         position: relative;
         overflow: hidden;
-        padding: 24px 26px;
-        margin-bottom: 18px;
-        border-radius: 22px;
+        padding: 20px 22px;
+        margin-bottom: 14px;
+        border-radius: 18px;
         background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95));
         border: 1px solid rgba(0, 47, 108, 0.1);
         box-shadow: var(--amn-shadow);
@@ -3297,22 +3300,22 @@ def menu_admin_page(request: Request):
       .page-title {
         margin: 0;
         color: var(--amn-navy);
-        font-size: 30px;
+        font-size: 27px;
         line-height: 1.1;
       }
 
       .page-subtitle {
         margin: 10px 0 0 0;
         color: var(--amn-text-soft);
-        font-size: 15px;
-        line-height: 1.65;
+        font-size: 14px;
+        line-height: 1.55;
         max-width: 720px;
       }
 
       .page-meta-card {
-        min-width: 250px;
-        padding: 16px 18px;
-        border-radius: 16px;
+        min-width: 230px;
+        padding: 14px 16px;
+        border-radius: 14px;
         background: linear-gradient(180deg, rgba(0, 47, 108, 0.96), rgba(0, 94, 184, 0.92));
         color: #fff;
         box-shadow: 0 14px 28px rgba(0, 47, 108, 0.22);
@@ -3344,14 +3347,14 @@ def menu_admin_page(request: Request):
       .hero-link-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 12px;
-        margin-top: 18px;
+        gap: 10px;
+        margin-top: 14px;
       }
 
       .hero-link-card {
         display: block;
-        padding: 14px 16px;
-        border-radius: 14px;
+        padding: 12px 14px;
+        border-radius: 12px;
         background: rgba(255, 255, 255, 0.9);
         border: 1px solid rgba(0, 47, 108, 0.1);
         color: inherit;
@@ -3404,8 +3407,8 @@ def menu_admin_page(request: Request):
       .panel {
         background: rgba(255, 255, 255, 0.93);
         border: 1px solid var(--amn-panel-border);
-        border-radius: 18px;
-        padding: 16px;
+        border-radius: 14px;
+        padding: 14px;
         box-shadow: var(--amn-shadow);
         backdrop-filter: blur(6px);
         margin: 0 0 18px 0;
@@ -3414,7 +3417,7 @@ def menu_admin_page(request: Request):
       h3 {
         margin: 6px 0 10px 0;
         color: var(--amn-navy);
-        font-size: 22px;
+        font-size: 20px;
       }
 
       input,
@@ -3426,8 +3429,8 @@ def menu_admin_page(request: Request):
 
       input,
       textarea {
-        min-height: 38px;
-        padding: 8px 10px;
+        min-height: 36px;
+        padding: 7px 10px;
         width: min(700px, 100%);
         background: rgba(255, 255, 255, 0.96);
       }
@@ -3443,17 +3446,17 @@ def menu_admin_page(request: Request):
         background: linear-gradient(180deg, #0c77d8, #005eb8);
         color: #fff;
         border: none;
-        padding: 11px 15px;
+        padding: 9px 13px;
         font-weight: 700;
         cursor: pointer;
-        box-shadow: 0 12px 24px rgba(0, 94, 184, 0.18);
+        box-shadow: 0 8px 18px rgba(0, 94, 184, 0.16);
         transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
       }
 
       button:hover {
         filter: brightness(1.04);
         transform: translateY(-1px);
-        box-shadow: 0 16px 28px rgba(0, 94, 184, 0.22);
+        box-shadow: 0 12px 22px rgba(0, 94, 184, 0.2);
       }
 
       a {
@@ -3467,11 +3470,11 @@ def menu_admin_page(request: Request):
         }
 
         .page-hero {
-          padding: 20px 18px;
+          padding: 16px 14px;
         }
 
         .page-title {
-          font-size: 27px;
+          font-size: 23px;
         }
       }
     </style>
