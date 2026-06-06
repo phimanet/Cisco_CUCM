@@ -804,7 +804,7 @@ def _find_latest_rebuild_dn_from_audit(account: str) -> str:
     return ""
 
 
-def _render_job_result(title: str, csv_data, filename: str) -> HTMLResponse:
+def _render_job_result(title: str, csv_data, filename: str, back_url: str = "/menu") -> HTMLResponse:
     job_output = _prepare_job_output(csv_data, filename)
     job_id = job_output["job_id"]
     output_text = escape(job_output["output_text"])
@@ -889,7 +889,7 @@ def _render_job_result(title: str, csv_data, filename: str) -> HTMLResponse:
     <main class="content">
       <section class="panel">
         <h2>{escape(title)} - Job Output</h2>
-        <p><a href="/menu">Back to Menu</a></p>
+        <p><a href="{back_url}">Back to Menu</a></p>
         <p>
           <a href="/download/job-output/{job_id}" style="font-weight:bold;">
             Download CSV Output
@@ -4101,6 +4101,7 @@ def menu_admin_page(request: Request):
                   cucm_user: cucmUser,
                   cucm_pass: cucmPass,
                   target_user: uid,
+                  back_url: "/menu-admin",
                 };
 
                 Object.entries(fields).forEach(([name, value]) => {
@@ -4540,7 +4541,7 @@ async def add_directorynumbers(
       output_filename=filename,
       inline_mode=False,
     )
-    return _render_job_result("Add Directory Numbers", log_csv, filename)
+    return _render_job_result("Add Directory Numbers", log_csv, filename, back_url="/menu-admin")
 
 
 @app.post("/export/directorynumbers")
@@ -4566,7 +4567,7 @@ def export_directorynumbers(
       output_filename=filename,
       inline_mode=False,
     )
-    return _render_job_result("Export Directory Numbers", data, filename)
+    return _render_job_result("Export Directory Numbers", data, filename, back_url="/menu-admin")
 
 
 @app.post("/export/endusers")
@@ -4590,7 +4591,7 @@ def export_endusers(
       output_filename=filename,
       inline_mode=False,
     )
-    return _render_job_result("Export End Users", data, filename)
+    return _render_job_result("Export End Users", data, filename, back_url="/menu-admin")
 
 
 @app.post("/build/user-csf-phone")
@@ -5227,6 +5228,7 @@ def add_secondary_tct_device_route(
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
     target_user: str = Form(...),
+    back_url: str = Form("/menu"),
     inline: bool = Query(False),
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
@@ -5267,7 +5269,7 @@ def add_secondary_tct_device_route(
             "download_url": f"/download/job-output/{job_output['job_id']}",
         })
 
-    return _render_job_result("Add Secondary Device - Jabber for iPhone (Option 3)", data, filename)
+    return _render_job_result("Add Secondary Device - Jabber for iPhone (Option 3)", data, filename, back_url=back_url or "/menu")
 
 
 @app.post("/add/secondary-bot-device")
@@ -5277,6 +5279,7 @@ def add_secondary_bot_device_route(
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
     target_user: str = Form(...),
+    back_url: str = Form("/menu"),
     inline: bool = Query(False),
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
@@ -5317,7 +5320,7 @@ def add_secondary_bot_device_route(
             "download_url": f"/download/job-output/{job_output['job_id']}",
         })
 
-    return _render_job_result("Add Secondary Device - Jabber for Android (Option 4)", data, filename)
+    return _render_job_result("Add Secondary Device - Jabber for Android (Option 4)", data, filename, back_url=back_url or "/menu")
 
 
 @app.post("/add/secondary-strike-devices")
@@ -5367,7 +5370,7 @@ def add_secondary_strike_devices_route(
             "download_url": f"/download/job-output/{job_output['job_id']}",
         })
 
-    return _render_job_result("STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)", data, filename)
+    return _render_job_result("STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)", data, filename, back_url="/menu-admin")
 
 
 @app.post("/delete/secondary-mobile-devices")
@@ -5414,7 +5417,7 @@ def delete_secondary_mobile_devices_route(
       "download_url": f"/download/job-output/{job_output['job_id']}",
     })
 
-  return _render_job_result("Remove only Jabber Mobile - iPhone or Android", data, filename)
+  return _render_job_result("Remove only Jabber Mobile - iPhone or Android", data, filename, back_url="/menu-admin")
 
 
 @app.post("/line-groups/edit-members")
@@ -5458,7 +5461,7 @@ def edit_line_group_members_route(
         "download_url": f"/download/job-output/{job_output['job_id']}",
       })
 
-    return _render_job_result("Edit Line Group Members (Option 17)", data, filename)
+    return _render_job_result("Edit Line Group Members (Option 17)", data, filename, back_url="/menu-admin")
 
 
 @app.post("/line-groups/search")
@@ -5516,4 +5519,4 @@ def extract_rpo_phones_route(
         "download_url": f"/download/job-output/{job_output['job_id']}",
       })
 
-    return _render_job_result("Extract RPO Phones (Option 18)", data, filename)
+    return _render_job_result("Extract RPO Phones (Option 18)", data, filename, back_url="/menu-admin")
