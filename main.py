@@ -3577,8 +3577,10 @@ def menu_admin_page(request: Request):
             <input name="cucm_user" value="__AUTH_USER__" required>
           </div><br>
 
-          Cisco Callmanager Password:<br>
-          <input type="password" name="cucm_pass" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Password:</span>
+            <input type="password" name="cucm_pass" required>
+          </div><br>
 
           Last Name:<br>
           <input name="last_name" placeholder="Smith" required><br><br>
@@ -3601,8 +3603,10 @@ def menu_admin_page(request: Request):
             <input name="cucm_user" value="__AUTH_USER__" required>
           </div><br>
 
-          Cisco Callmanager Password:<br>
-          <input type="password" name="cucm_pass" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Password:</span>
+            <input type="password" name="cucm_pass" required>
+          </div><br>
 
           User ID for person to add STRIKE MODE devices for:<br>
           <input id="admin-strike-target-user" name="target_user" placeholder="john.doe" required><br><br>
@@ -3619,8 +3623,10 @@ def menu_admin_page(request: Request):
             <input name="cucm_user" value="__AUTH_USER__" required>
           </div><br>
 
-          Cisco Callmanager Password:<br>
-          <input type="password" name="cucm_pass" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Password:</span>
+            <input type="password" name="cucm_pass" required>
+          </div><br>
 
           User IDs (one per line):<br>
           <textarea name="rpo_userids" rows="8" placeholder="john.doe&#10;jane.smith" required></textarea><br><br>
@@ -3637,8 +3643,10 @@ def menu_admin_page(request: Request):
             <input name="cucm_user" value="__AUTH_USER__" required>
           </div><br>
 
-          Cisco Callmanager Password:<br>
-          <input type="password" name="cucm_pass" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Password:</span>
+            <input type="password" name="cucm_pass" required>
+          </div><br>
 
           CSV File:<br>
           <input type="file" name="csv_file" required><br><br>
@@ -3657,8 +3665,10 @@ def menu_admin_page(request: Request):
             <input name="cucm_user" value="__AUTH_USER__" required>
           </div><br>
 
-          Cisco Callmanager Password:<br>
-          <input type="password" name="cucm_pass" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Password:</span>
+            <input type="password" name="cucm_pass" required>
+          </div><br>
 
           DN Pattern (supports %):<br>
           <input name="dn_contains"><br><br>
@@ -3678,8 +3688,10 @@ def menu_admin_page(request: Request):
             <input name="cucm_user" value="__AUTH_USER__" required>
           </div><br>
 
-          Cisco Callmanager Password:<br>
-          <input type="password" name="cucm_pass" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Password:</span>
+            <input type="password" name="cucm_pass" required>
+          </div><br>
 
           Last Name:<br>
           <input name="lastname" required><br><br>
@@ -3697,8 +3709,10 @@ def menu_admin_page(request: Request):
             <input name="cucm_user" value="__AUTH_USER__" required>
           </div><br>
 
-          Cisco Callmanager Password:<br>
-          <input type="password" name="cucm_pass" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Password:</span>
+            <input type="password" name="cucm_pass" required>
+          </div><br>
 
           Pattern contains:<br>
           <input name="pattern_query" placeholder="55512" required><br><br>
@@ -3720,8 +3734,10 @@ def menu_admin_page(request: Request):
             <input name="cucm_user" value="__AUTH_USER__" required>
           </div><br>
 
-          Cisco Callmanager Password:<br>
-          <input type="password" name="cucm_pass" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Password:</span>
+            <input type="password" name="cucm_pass" required>
+          </div><br>
 
           CSV File:<br>
           <input type="file" name="csv_file" accept=".csv" required><br><br>
@@ -3744,8 +3760,10 @@ def menu_admin_page(request: Request):
             <input name="cucm_user" value="__AUTH_USER__" required>
           </div><br>
 
-          Cisco Callmanager Password:<br>
-          <input type="password" name="cucm_pass" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Password:</span>
+            <input type="password" name="cucm_pass" required>
+          </div><br>
 
           CSV File:<br>
           <input type="file" name="csv_file" accept=".csv" required><br><br>
