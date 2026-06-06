@@ -20,7 +20,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 AXL_NS = "http://www.cisco.com/AXL/API/15.0"
 DN_ROUTE_PARTITION = "ENT_DEVICE_PT"
-DEFAULT_DN_PREFIX = "314"
+AUTO_DN_PREFIXES = ("214", "469", "945")
 TEMPLATE_CSV_PATH = os.path.join(os.path.dirname(__file__), "translation_pattern_full_template.csv")
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp1.ahs.int").strip() or "smtp1.ahs.int"
 SMTP_PORT = int(os.getenv("SMTP_PORT", "25") or "25")
@@ -200,6 +200,19 @@ def _choose_available_dn(session, cucm_host, prefix):
         if _is_dn_unassigned(session, cucm_host, candidate, DN_ROUTE_PARTITION):
             return candidate
     raise RuntimeError(f"No available inactive DN found in {DN_ROUTE_PARTITION} starting with {prefix}.")
+
+
+def _choose_available_dn_auto(session, cucm_host):
+    for prefix in AUTO_DN_PREFIXES:
+        try:
+            chosen = _choose_available_dn(session, cucm_host, prefix)
+            return chosen, prefix
+        except Exception:
+            continue
+    raise RuntimeError(
+        "No available inactive DN found in ENT_DEVICE_PT for auto-selection prefixes: "
+        + ", ".join(AUTO_DN_PREFIXES)
+    )
 
 
 def _remove_line(session, cucm_host, pattern, route_partition):
@@ -398,7 +411,6 @@ def create_teams_telephony_user(
     cucm_user,
     cucm_pass,
     target_user,
-    dn_prefix=DEFAULT_DN_PREFIX,
     ad_username="",
     ad_password="",
 ):
@@ -446,11 +458,11 @@ def create_teams_telephony_user(
             ),
         ])
 
-        new_dn = _choose_available_dn(session, cucm_host, (dn_prefix or DEFAULT_DN_PREFIX).strip())
+        new_dn, selected_prefix = _choose_available_dn_auto(session, cucm_host)
         writer.writerow([
             "Select Available DN",
             "Success",
-            f"Selected {new_dn}/{DN_ROUTE_PARTITION}",
+            f"Selected {new_dn}/{DN_ROUTE_PARTITION} using auto-prefix {selected_prefix}",
         ])
 
         _remove_line(session, cucm_host, new_dn, DN_ROUTE_PARTITION)
