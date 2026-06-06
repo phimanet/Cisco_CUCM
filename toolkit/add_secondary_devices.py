@@ -200,15 +200,15 @@ def _build_add_phone_soap(user_details, new_phone_name, dn_pattern, dn_partition
 
 
 def _build_update_user_devices_soap(userid, associated_devices):
-     device_xml = "\n".join(
-          f"            <device>{escape(device)}</device>" for device in associated_devices
-     )
-     associated_devices_block = ""
-     if associated_devices:
-          associated_devices_block = f"""
-            <associatedDevices>
+    device_xml = "\n".join(
+        f"            <device>{escape(device)}</device>" for device in associated_devices
+    )
+    associated_devices_block = ""
+    if associated_devices:
+        associated_devices_block = f"""
+         <associatedDevices>
 {device_xml}
-            </associatedDevices>"""
+         </associatedDevices>"""
 
     return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
@@ -222,13 +222,13 @@ def _build_update_user_devices_soap(userid, associated_devices):
 
 
 def _build_remove_phone_soap(phone_name):
-     return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+    return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
-    <soapenv:Body>
-        <axl:removePhone>
-            <name>{escape(phone_name)}</name>
-        </axl:removePhone>
-    </soapenv:Body>
+   <soapenv:Body>
+      <axl:removePhone>
+         <name>{escape(phone_name)}</name>
+      </axl:removePhone>
+   </soapenv:Body>
 </soapenv:Envelope>"""
 
 
