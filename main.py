@@ -1956,6 +1956,7 @@ def menu_page(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Reverse Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel="precheck">Check for Existing Jabber Configuration</button>
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
+          <button type="button" class="portal-nav-btn" data-panel="teams-telephony">Create Teams Telephony User</button>
           <button type="button" class="portal-nav-btn" data-panel="namechange">Jabber/VM Name Update</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
           <button type="button" class="portal-nav-btn portal-nav-btn-danger" data-panel="offboard">Offboard Cisco Jabber</button>
