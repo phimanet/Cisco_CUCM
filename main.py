@@ -3,8 +3,11 @@ import datetime
 import io
 import os
 import re
+import smtplib
+import ssl
 import threading
 import time
+from email.message import EmailMessage
 
 import requests
 import urllib3
@@ -43,6 +46,16 @@ PROD_CUCM_HOST = "lascucmpp01.ahs.int"
 LAB_CUCM_HOST = "lascucmpl01.ahs.int"
 PROD_UNITY_HOST = "SANCUTYP01.ahs.int"
 LAB_UNITY_HOST = "lascutypl01.ahs.int"
+SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp1.ahs.int").strip() or "smtp1.ahs.int"
+SMTP_PORT = int(os.getenv("SMTP_PORT", "25"))
+SMTP_TIMEOUT_SECONDS = int(os.getenv("SMTP_TIMEOUT_SECONDS", "20"))
+SMTP_USE_STARTTLS = (os.getenv("SMTP_USE_STARTTLS", "false") or "false").strip().lower() in {
+  "1",
+  "true",
+  "yes",
+  "on",
+}
+SMTP_DEFAULT_FROM = (os.getenv("SMTP_DEFAULT_FROM", "") or "").strip()
 AUDIT_LOG_LOCK = threading.Lock()
 AUDIT_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 AUDIT_RETENTION_DAYS = 365
@@ -424,6 +437,44 @@ def _to_bytes(data):
     if isinstance(data, str):
         return data.encode("utf-8")
     return str(data).encode("utf-8")
+
+
+def _send_smtp_email(
+    sender: str,
+    recipients: list[str],
+    subject: str,
+    body: str,
+    smtp_user: str = "",
+    smtp_pass: str = "",
+    smtp_port: int | None = None,
+    use_starttls: bool | None = None,
+  ):
+    if not sender:
+      raise RuntimeError("Sender email is required.")
+
+    clean_recipients = [r.strip() for r in recipients if (r or "").strip()]
+    if not clean_recipients:
+      raise RuntimeError("At least one recipient email is required.")
+
+    message = EmailMessage()
+    message["From"] = sender
+    message["To"] = ", ".join(clean_recipients)
+    message["Subject"] = subject or "CUCM Web SMTP Test"
+    message.set_content(body or "SMTP test message from CUCM web portal.")
+
+    resolved_port = smtp_port if smtp_port is not None else SMTP_PORT
+    resolved_starttls = SMTP_USE_STARTTLS if use_starttls is None else use_starttls
+
+    with smtplib.SMTP(SMTP_SERVER, resolved_port, timeout=SMTP_TIMEOUT_SECONDS) as server:
+      server.ehlo()
+      if resolved_starttls:
+        server.starttls(context=ssl.create_default_context())
+        server.ehlo()
+
+      if (smtp_user or "").strip() or (smtp_pass or "").strip():
+        server.login((smtp_user or "").strip(), smtp_pass or "")
+
+      server.send_message(message)
 
 
 def _store_job_output(csv_data: bytes, filename: str) -> str:
@@ -3232,7 +3283,7 @@ def menu_page(request: Request):
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
+""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__SMTP_DEFAULT_FROM__", escape(SMTP_DEFAULT_FROM)).replace("__SMTP_STARTTLS_CHECKED__", "checked" if SMTP_USE_STARTTLS else "")
 
   return HTMLResponse(
     content=html,
@@ -3586,6 +3637,43 @@ def menu_admin_page(request: Request):
             <span>Download logged portal activity and execution history.</span>
           </a>
         </div>
+      </section>
+
+      <section class="panel">
+        <h3>SMTP Email Test</h3>
+        <p>Send a test email through <strong>smtp1.ahs.int</strong> to validate SMTP connectivity from this server.</p>
+        <form action="/email/send-test" method="post">
+          SMTP Host:<br>
+          <input value="smtp1.ahs.int" readonly><br><br>
+
+          SMTP Port (optional override):<br>
+          <input name="smtp_port" placeholder="25"><br><br>
+
+          Sender Email:<br>
+          <input name="smtp_from" placeholder="voice-automation@ahs.int" value="__SMTP_DEFAULT_FROM__" required><br><br>
+
+          Recipient Email(s) (comma-separated):<br>
+          <input name="smtp_to" placeholder="first.last@ahs.int" required><br><br>
+
+          Subject:<br>
+          <input name="subject" value="CUCM Web SMTP Test" required><br><br>
+
+          Message:<br>
+          <textarea name="body" rows="5">SMTP test message from CUCM web portal.</textarea><br><br>
+
+          SMTP Username (optional):<br>
+          <input name="smtp_user" placeholder="optional"><br><br>
+
+          SMTP Password (optional):<br>
+          <input type="password" name="smtp_pass" placeholder="optional"><br><br>
+
+          <label style="display:inline-flex; align-items:center; gap:8px;">
+            <input type="checkbox" name="use_starttls" value="on" __SMTP_STARTTLS_CHECKED__>
+            Use STARTTLS
+          </label><br><br>
+
+          <button type="submit">Send Test Email</button>
+        </form>
       </section>
 
       <section class="panel">
@@ -4184,6 +4272,67 @@ def audit_trail_stats():
     "retention_days": AUDIT_RETENTION_DAYS,
     "record_count": record_count,
   })
+
+
+@app.post("/email/send-test")
+def send_test_email(
+    request: Request,
+    smtp_from: str = Form(""),
+    smtp_to: str = Form(...),
+    subject: str = Form("CUCM Web SMTP Test"),
+    body: str = Form("SMTP test message from CUCM web portal."),
+    smtp_user: str = Form(""),
+    smtp_pass: str = Form(""),
+    smtp_port: str = Form(""),
+    use_starttls: str = Form(""),
+):
+    session = _get_auth_session(request) or {}
+    operator = (session.get("username", "") or "").strip()
+    cucm_host = (session.get("cucm_host", "") or "").strip()
+
+    sender = (smtp_from or "").strip() or SMTP_DEFAULT_FROM
+    recipients = [value.strip() for value in (smtp_to or "").split(",") if value.strip()]
+    resolved_port = SMTP_PORT
+    if (smtp_port or "").strip():
+      try:
+        resolved_port = int((smtp_port or "").strip())
+      except ValueError as exc:
+        raise RuntimeError("SMTP Port must be a valid number.") from exc
+
+    starttls_enabled = (use_starttls or "").strip().lower() in {"1", "true", "yes", "on"}
+
+    _send_smtp_email(
+      sender=sender,
+      recipients=recipients,
+      subject=(subject or "").strip() or "CUCM Web SMTP Test",
+      body=(body or "").strip() or "SMTP test message from CUCM web portal.",
+      smtp_user=(smtp_user or "").strip(),
+      smtp_pass=smtp_pass or "",
+      smtp_port=resolved_port,
+      use_starttls=starttls_enabled,
+    )
+
+    details = (
+      f"Sent via {SMTP_SERVER}:{resolved_port}; "
+      f"from={sender}; to={';'.join(recipients)}; "
+      f"starttls={'on' if starttls_enabled else 'off'}"
+    )
+    csv_data = (
+      "Step,Status,Details\n"
+      f"Send SMTP Test,Success,{details}\n"
+    ).encode("utf-8")
+    filename = f"smtp_test_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+
+    _append_audit_event(
+      action="smtp_send_test",
+      cucm_host=cucm_host,
+      operator=operator,
+      target=f"to={';'.join(recipients)};subject={(subject or '').strip()[:80]}",
+      output_filename=filename,
+      inline_mode=False,
+    )
+
+    return _render_job_result("SMTP Email Test", csv_data, filename)
     
 
 @app.post("/add/directorynumbers")
