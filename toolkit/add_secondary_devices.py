@@ -200,20 +200,35 @@ def _build_add_phone_soap(user_details, new_phone_name, dn_pattern, dn_partition
 
 
 def _build_update_user_devices_soap(userid, associated_devices):
-    device_xml = "\n".join(
-        f"            <device>{escape(device)}</device>" for device in associated_devices
-    )
+     device_xml = "\n".join(
+          f"            <device>{escape(device)}</device>" for device in associated_devices
+     )
+     associated_devices_block = ""
+     if associated_devices:
+          associated_devices_block = f"""
+            <associatedDevices>
+{device_xml}
+            </associatedDevices>"""
 
     return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
    <soapenv:Body>
       <axl:updateUser>
          <userid>{escape(userid)}</userid>
-         <associatedDevices>
-{device_xml}
-         </associatedDevices>
+{associated_devices_block}
       </axl:updateUser>
    </soapenv:Body>
+</soapenv:Envelope>"""
+
+
+def _build_remove_phone_soap(phone_name):
+     return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+    <soapenv:Body>
+        <axl:removePhone>
+            <name>{escape(phone_name)}</name>
+        </axl:removePhone>
+    </soapenv:Body>
 </soapenv:Envelope>"""
 
 
@@ -379,3 +394,80 @@ def add_secondary_strike_devices(cucm_host, cucm_user, cucm_pass, target_user):
         ],
         output_prefix="add_secondary_strike",
     )
+
+
+def delete_secondary_mobile_devices(cucm_host, cucm_user, cucm_pass, target_user, remove_tct=True, remove_bot=True):
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    clean_user = (target_user or "").strip()
+    filename = f"delete_secondary_mobile_{clean_user or 'unknown'}_{ts}.csv"
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["Step", "Status", "Details"])
+
+    if not clean_user:
+        writer.writerow(["Validation", "Failed", "target_user is required"])
+        return out.getvalue().encode("utf-8"), filename
+
+    if not remove_tct and not remove_bot:
+        writer.writerow(["Validation", "Failed", "Select at least one device type (TCT or BOT) to delete"])
+        return out.getvalue().encode("utf-8"), filename
+
+    session = requests.Session()
+    session.verify = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    try:
+        user_details = _get_user_details(session, cucm_host, clean_user)
+        writer.writerow(["Lookup User", "Success", f"Found {user_details['userid']}"])
+
+        current_devices = list(user_details.get("associatedDevices", []))
+        selected_prefixes = []
+        if remove_tct:
+            selected_prefixes.append("TCT")
+        if remove_bot:
+            selected_prefixes.append("BOT")
+
+        candidates = [
+            d for d in current_devices
+            if any((d or "").upper().startswith(prefix) for prefix in selected_prefixes)
+        ]
+
+        if not candidates:
+            writer.writerow([
+                "Find Mobile Devices",
+                "Skipped",
+                f"No matching devices found for selected types: {', '.join(selected_prefixes)}",
+            ])
+            writer.writerow(["Update End User", "Skipped", "No mobile devices deleted"])
+            return out.getvalue().encode("utf-8"), filename
+
+        deleted = []
+        for phone_name in candidates:
+            remove_soap = _build_remove_phone_soap(phone_name)
+            remove_resp = _axl_post(session, cucm_host, remove_soap)
+            if remove_resp.status_code != 200:
+                raise RuntimeError(
+                    f"Remove device {phone_name} failed HTTP {remove_resp.status_code}: {remove_resp.text[:1200]}"
+                )
+            writer.writerow(["Delete Mobile Device", "Success", f"Deleted {phone_name}"])
+            deleted.append(phone_name)
+
+        remaining_devices = [d for d in current_devices if d not in deleted]
+        update_user_soap = _build_update_user_devices_soap(user_details["userid"], remaining_devices)
+        update_user_resp = _axl_post(session, cucm_host, update_user_soap)
+        if update_user_resp.status_code != 200:
+            raise RuntimeError(
+                f"Update user association failed HTTP {update_user_resp.status_code}: {update_user_resp.text[:1200]}"
+            )
+
+        writer.writerow([
+            "Update End User",
+            "Success",
+            f"Removed {len(deleted)} device(s) from user association: {', '.join(deleted)}",
+        ])
+
+    except Exception as exc:
+        writer.writerow(["Script", "Error", str(exc)])
+
+    return out.getvalue().encode("utf-8"), filename

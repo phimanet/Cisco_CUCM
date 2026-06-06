@@ -29,6 +29,7 @@ from toolkit.add_secondary_devices import (
   add_secondary_tct_device,
   add_secondary_bot_device,
   add_secondary_strike_devices,
+  delete_secondary_mobile_devices,
 )
 from toolkit.called_name_change import run_called_name_change
 from toolkit.edit_line_group_members import edit_line_group_members, search_line_groups
@@ -3807,6 +3808,33 @@ def menu_admin_page(request: Request):
       </section>
 
       <section class="panel">
+        <h3>More Jabber Mobile - iPhone or Android</h3>
+        <p>Lookup by last name, then remove Jabber iPhone (TCT), Jabber Android (BOT), or both. This does not delete CSF or voicemail.</p>
+        <form id="admin-mobile-delete-lookup-form">
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Username:</span>
+            <input name="cucm_user" value="__AUTH_USER__" required>
+          </div><br>
+
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Password:</span>
+            <input type="password" name="cucm_pass" required>
+          </div><br>
+
+          Last Name:<br>
+          <input name="last_name" placeholder="Smith" required><br><br>
+
+          First Name (optional):<br>
+          <input name="first_name" placeholder="John"><br><br>
+
+          <button type="submit">Search Users for Mobile Delete</button>
+        </form>
+
+        <p id="admin-mobile-delete-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
+        <div id="admin-mobile-delete-results" style="overflow-x:auto;"></div>
+      </section>
+
+      <section class="panel">
         <h3>Extract RPO Phones (Option 18)</h3>
         <form action="/export/rpo-phones" method="post">
           <div class="compact-inline-row">
@@ -4100,6 +4128,138 @@ def menu_admin_page(request: Request):
                   submitAdminAction("/add/secondary-bot-device", uid);
                 });
               });
+            } catch (err) {
+              statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        })();
+      </script>
+
+      <script>
+        (function () {
+          const form = document.getElementById("admin-mobile-delete-lookup-form");
+          const statusEl = document.getElementById("admin-mobile-delete-status");
+          const resultsEl = document.getElementById("admin-mobile-delete-results");
+
+          if (!form || !statusEl || !resultsEl) return;
+
+          function submitDeleteAction(uid, mode) {
+            const userField = form.querySelector('input[name="cucm_user"]');
+            const passField = form.querySelector('input[name="cucm_pass"]');
+            const cucmUser = ((userField && userField.value) || "").trim();
+            const cucmPass = (passField && passField.value) || "";
+
+            if (!cucmUser || !cucmPass) {
+              statusEl.textContent = "Enter CUCM username/password before running mobile device delete.";
+              return;
+            }
+
+            const removeTct = mode === "tct" || mode === "both";
+            const removeBot = mode === "bot" || mode === "both";
+            const label = mode === "tct" ? "TCT only" : (mode === "bot" ? "BOT only" : "TCT and BOT");
+
+            const confirmed = confirm(
+              `Delete mobile Jabber devices for ${uid}?\\n\\nSelection: ${label}\\n\\nThis action will not delete CSF or voicemail.`
+            );
+            if (!confirmed) {
+              return;
+            }
+
+            const actionForm = document.createElement("form");
+            actionForm.method = "post";
+            actionForm.action = "/delete/secondary-mobile-devices";
+
+            const fields = {
+              cucm_user: cucmUser,
+              cucm_pass: cucmPass,
+              target_user: uid,
+              remove_tct: removeTct ? "1" : "0",
+              remove_bot: removeBot ? "1" : "0",
+            };
+
+            Object.entries(fields).forEach(([name, value]) => {
+              const input = document.createElement("input");
+              input.type = "hidden";
+              input.name = name;
+              input.value = value;
+              actionForm.appendChild(input);
+            });
+
+            document.body.appendChild(actionForm);
+            actionForm.submit();
+          }
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Searching...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(form);
+              const response = await fetch("/lookup/person", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                const msg = (payload.error && payload.error.message) || "Search failed.";
+                throw new Error(msg);
+              }
+
+              const results = payload.results || [];
+              if (!results.length) {
+                statusEl.textContent = "No users found matching that name.";
+                return;
+              }
+
+              statusEl.textContent = `Found ${results.length} user(s). Choose delete action.`;
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Delete Actions</th>';
+              html += '</tr></thead><tbody>';
+
+              results.forEach(function (r, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+                const email = r.email || "\u2014";
+                const uid = r.userid || "";
+                const devList = (r.devices || []).map(function (d) {
+                  const exts = (d.extensions || []).join(", ") || "\u2014";
+                  return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
+                }).join("<br>") || "\u2014";
+
+                const btnStyle = "display:inline-block;margin:2px 3px 2px 0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;color:#fff;";
+                const tctBtn = `<button type="button" style="${btnStyle}background:#0e7490;" data-delete-mode="tct" data-delete-user="${uid}">Delete iPhone (TCT)</button>`;
+                const botBtn = `<button type="button" style="${btnStyle}background:#7c3aed;" data-delete-mode="bot" data-delete-user="${uid}">Delete Android (BOT)</button>`;
+                const bothBtn = `<button type="button" style="${btnStyle}background:#b00020;" data-delete-mode="both" data-delete-user="${uid}">Delete Both</button>`;
+
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px;">' + name + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+                html += '<td style="padding:7px 10px;">' + email + '</td>';
+                html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
+                html += '<td style="padding:7px 10px; white-space:nowrap;">' + tctBtn + botBtn + bothBtn + '</td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+
+              resultsEl.querySelectorAll("button[data-delete-mode]").forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                  const uid = btn.getAttribute("data-delete-user") || "";
+                  const mode = btn.getAttribute("data-delete-mode") || "";
+                  submitDeleteAction(uid, mode);
+                });
+              });
+
             } catch (err) {
               statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
             }
@@ -5208,6 +5368,53 @@ def add_secondary_strike_devices_route(
         })
 
     return _render_job_result("STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)", data, filename)
+
+
+@app.post("/delete/secondary-mobile-devices")
+def delete_secondary_mobile_devices_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  target_user: str = Form(...),
+  remove_tct: str = Form("0"),
+  remove_bot: str = Form("0"),
+  inline: bool = Query(False),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+  remove_tct_enabled = (remove_tct or "").strip().lower() in {"1", "true", "yes", "on"}
+  remove_bot_enabled = (remove_bot or "").strip().lower() in {"1", "true", "yes", "on"}
+
+  data, filename = delete_secondary_mobile_devices(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    target_user=target_user,
+    remove_tct=remove_tct_enabled,
+    remove_bot=remove_bot_enabled,
+  )
+
+  _append_audit_event(
+    action="delete_secondary_mobile_devices",
+    cucm_host=cucm_host,
+    operator=cucm_user,
+    target=f"{target_user};remove_tct={str(remove_tct_enabled).lower()};remove_bot={str(remove_bot_enabled).lower()}",
+    output_filename=filename,
+    inline_mode=inline,
+  )
+
+  if inline:
+    job_output = _prepare_job_output(data, filename)
+    return JSONResponse({
+      "job_id": job_output["job_id"],
+      "filename": job_output["filename"],
+      "output_text": job_output["output_text"],
+      "download_url": f"/download/job-output/{job_output['job_id']}",
+    })
+
+  return _render_job_result("More Jabber Mobile - iPhone or Android", data, filename)
 
 
 @app.post("/line-groups/edit-members")
