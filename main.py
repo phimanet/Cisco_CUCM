@@ -2375,6 +2375,19 @@ def menu_page(request: Request):
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
 
+        <div style="margin: 0 0 14px 0; padding: 12px; border: 1px solid #c8dbee; border-radius: 10px; background: #f7fbff;">
+          <strong style="display:block; margin-bottom:10px; color:#002f6c;">Lookup by Name</strong>
+          Last Name:<br>
+          <input id="teams-lookup-last-name" placeholder="Smith" style="width:min(320px,100%);" required><br><br>
+
+          First Name (optional):<br>
+          <input id="teams-lookup-first-name" placeholder="John" style="width:min(320px,100%);"><br><br>
+
+          <button id="teams-lookup-btn" type="button">Search User</button>
+          <p id="teams-lookup-status" style="margin:10px 0 6px 0; color:#2c5c8a; min-height:18px;">Enter last name and click Search User.</p>
+          <div id="teams-lookup-results" style="overflow-x:auto;"></div>
+        </div>
+
         User ID for Teams Telephony user:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
 
@@ -2403,6 +2416,11 @@ def menu_page(request: Request):
         const statusEl = document.getElementById("teams-telephony-status");
         const outputEl = document.getElementById("teams-telephony-preview");
         const downloadEl = document.getElementById("teams-telephony-download");
+        const lookupBtn = document.getElementById("teams-lookup-btn");
+        const lookupStatusEl = document.getElementById("teams-lookup-status");
+        const lookupResultsEl = document.getElementById("teams-lookup-results");
+        const lookupLastNameEl = document.getElementById("teams-lookup-last-name");
+        const lookupFirstNameEl = document.getElementById("teams-lookup-first-name");
 
         if (!form || !button || !statusEl || !outputEl || !downloadEl) {
           return;
@@ -2469,6 +2487,101 @@ def menu_page(request: Request):
           event.preventDefault();
           runCreateTeamsTelephonyUser();
         });
+
+        if (lookupBtn && lookupStatusEl && lookupResultsEl && lookupLastNameEl && lookupFirstNameEl) {
+          lookupBtn.addEventListener("click", async function (event) {
+            event.preventDefault();
+
+            const userField = form.querySelector('input[name="cucm_user"]');
+            const passField = form.querySelector('input[name="cucm_pass"]');
+            const lastName = (lookupLastNameEl.value || "").trim();
+            const firstName = (lookupFirstNameEl.value || "").trim();
+            const cucmUser = ((userField && userField.value) || "").trim();
+            const cucmPass = (passField && passField.value) || "";
+
+            if (!lastName) {
+              lookupStatusEl.textContent = "Last Name is required for lookup.";
+              lookupLastNameEl.focus();
+              return;
+            }
+
+            if (!cucmUser || !cucmPass) {
+              lookupStatusEl.textContent = "Enter CUCM username/password above before searching.";
+              return;
+            }
+
+            lookupStatusEl.textContent = "Searching...";
+            lookupResultsEl.innerHTML = "";
+
+            try {
+              const lookupForm = new FormData();
+              lookupForm.append("cucm_user", cucmUser);
+              lookupForm.append("cucm_pass", cucmPass);
+              lookupForm.append("last_name", lastName);
+              lookupForm.append("first_name", firstName);
+
+              const response = await fetch("/lookup/person", {
+                method: "POST",
+                body: lookupForm,
+                credentials: "same-origin",
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                const msg = (payload.error && payload.error.message) || "Search failed.";
+                throw new Error(msg);
+              }
+
+              const results = payload.results || [];
+              if (!results.length) {
+                lookupStatusEl.textContent = "No users found matching that name.";
+                return;
+              }
+
+              lookupStatusEl.textContent = `Found ${results.length} user(s).`;
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
+              html += '</tr></thead><tbody>';
+
+              results.forEach(function (r, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+                const uid = r.userid || "";
+                const email = r.email || "\u2014";
+
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px;">' + name + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+                html += '<td style="padding:7px 10px;">' + email + '</td>';
+                html += '<td style="padding:7px 10px;">';
+                html += '<button type="button" data-teams-user="' + uid + '" style="background:#237741; color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Create Teams Telephony</button>';
+                html += '</td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              lookupResultsEl.innerHTML = html;
+
+              lookupResultsEl.querySelectorAll('button[data-teams-user]').forEach(function (btnEl) {
+                btnEl.addEventListener('click', function () {
+                  const uid = (btnEl.getAttribute('data-teams-user') || '').trim();
+                  const targetUserField = form.querySelector('input[name="target_user"]');
+                  if (targetUserField) {
+                    targetUserField.value = uid;
+                  }
+                  runCreateTeamsTelephonyUser();
+                });
+              });
+            } catch (err) {
+              lookupStatusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        }
 
       })();
     </script>
