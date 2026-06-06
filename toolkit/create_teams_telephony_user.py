@@ -20,6 +20,32 @@ AXL_NS = "http://www.cisco.com/AXL/API/15.0"
 DN_ROUTE_PARTITION = "ENT_DEVICE_PT"
 DEFAULT_DN_PREFIX = "314"
 TEMPLATE_CSV_PATH = os.path.join(os.path.dirname(__file__), "translation_pattern_full_template.csv")
+FALLBACK_TEMPLATE_FIELDS = {
+    "transPattern.blockEnable": "false",
+    "transPattern.calledPartyNumberType": "Cisco CallManager",
+    "transPattern.calledPartyNumberingPlan": "Cisco CallManager",
+    "transPattern.callingLinePresentationBit": "Default",
+    "transPattern.callingNamePresentationBit": "Default",
+    "transPattern.callingPartyNumberType": "Cisco CallManager",
+    "transPattern.callingPartyNumberingPlan": "Cisco CallManager",
+    "transPattern.callingSearchSpaceName": "Route_MS_TEAMS_CSS",
+    "transPattern.callingSearchSpaceName.@uuid": "{1259CD4F-1527-419E-76FB-53C85F06E937}",
+    "transPattern.connectedLinePresentationBit": "Default",
+    "transPattern.connectedNamePresentationBit": "Default",
+    "transPattern.dontWaitForIDTOnSubsequentHops": "false",
+    "transPattern.isEmergencyServiceNumber": "false",
+    "transPattern.patternPrecedence": "Default",
+    "transPattern.patternUrgency": "false",
+    "transPattern.provideOutsideDialtone": "false",
+    "transPattern.releaseClause": "No Error",
+    "transPattern.routeClass": "Default",
+    "transPattern.routeNextHopByCgpn": "false",
+    "transPattern.routePartitionName": "ENT_TEAMS_DEVICE_PT",
+    "transPattern.routePartitionName.@uuid": "{14477090-D60E-4BDC-CA46-BFCFD33AA983}",
+    "transPattern.usage": "Translation",
+    "transPattern.useCallingPartyPhoneMask": "Off",
+    "transPattern.useOriginatorCss": "false",
+}
 
 
 def _strip_ns(tag):
@@ -270,7 +296,12 @@ def _powershell_handoff_template(email, dn):
 
 def _load_saved_template_fields():
     if not os.path.exists(TEMPLATE_CSV_PATH):
-        raise RuntimeError(f"Template file not found: {TEMPLATE_CSV_PATH}")
+        return {
+            "source_pattern": "3148984689",
+            "source_route_partition": "ENT_TEAMS_DEVICE_PT",
+            "full_fields": dict(FALLBACK_TEMPLATE_FIELDS),
+            "template_origin": "fallback",
+        }
 
     with open(TEMPLATE_CSV_PATH, "r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
@@ -292,12 +323,13 @@ def _load_saved_template_fields():
             full_fields[key] = clean_val
 
     if not full_fields:
-        raise RuntimeError("Template CSV row does not include transPattern.* fields.")
+        full_fields = dict(FALLBACK_TEMPLATE_FIELDS)
 
     return {
         "source_pattern": source_pattern,
         "source_route_partition": source_route_partition,
         "full_fields": full_fields,
+        "template_origin": "csv",
     }
 
 
@@ -342,7 +374,11 @@ def create_teams_telephony_user(
         writer.writerow([
             "Extract Template",
             "Success",
-            f"Using saved template from {os.path.basename(TEMPLATE_CSV_PATH)}"
+            (
+                f"Using saved template from {os.path.basename(TEMPLATE_CSV_PATH)}"
+                if detail.get("template_origin") == "csv"
+                else "Using built-in fallback template (template CSV missing on server)"
+            )
             + (
                 f" ({detail.get('source_pattern', '')}/{detail.get('source_route_partition', '')})"
                 if detail.get("source_pattern") or detail.get("source_route_partition")
