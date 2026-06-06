@@ -1100,7 +1100,7 @@ def menu_page(request: Request):
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        padding: 16px 28px;
+        padding: 10px 16px;
         background:
           linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)),
           linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
@@ -1116,7 +1116,7 @@ def menu_page(request: Request):
       }
 
       .topbar-brand strong {
-        font-size: 18px;
+        font-size: 16px;
         letter-spacing: 0.2px;
       }
 
@@ -1128,9 +1128,9 @@ def menu_page(request: Request):
 
       .topbar-btn {
         display: inline-block;
-        padding: 10px 18px;
+        padding: 7px 12px;
         border-radius: 10px;
-        font-size: 14px;
+        font-size: 12px;
         font-weight: 700;
         text-decoration: none;
         border: 1px solid rgba(255, 255, 255, 0.65);
@@ -1172,16 +1172,16 @@ def menu_page(request: Request):
 
       .content {
         max-width: 1400px;
-        margin: 16px auto 22px auto;
-        padding: 0 16px 16px 16px;
+        margin: 8px auto 14px auto;
+        padding: 0 12px 12px 12px;
       }
 
       .page-hero {
         position: relative;
         overflow: hidden;
-        padding: 20px 22px;
-        margin-bottom: 14px;
-        border-radius: 18px;
+        padding: 12px 14px;
+        margin-bottom: 10px;
+        border-radius: 12px;
         background:
           linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95)),
           linear-gradient(180deg, #ffffff, #eef6ff);
@@ -1190,7 +1190,7 @@ def menu_page(request: Request):
       }
 
       .page-hero::after {
-        content: "";
+        content: none;
         position: absolute;
         right: -80px;
         top: -60px;
@@ -1205,11 +1205,11 @@ def menu_page(request: Request):
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        padding: 7px 12px;
+        padding: 5px 9px;
         border-radius: 999px;
         background: rgba(0, 94, 184, 0.08);
         color: var(--amn-blue);
-        font-size: 12px;
+        font-size: 10px;
         font-weight: 800;
         letter-spacing: 0.4px;
         text-transform: uppercase;
@@ -1218,10 +1218,10 @@ def menu_page(request: Request):
       .page-title-row {
         display: flex;
         justify-content: space-between;
-        align-items: flex-start;
-        gap: 18px;
+        align-items: center;
+        gap: 10px;
         flex-wrap: wrap;
-        margin-top: 14px;
+        margin-top: 6px;
       }
 
       .page-title-block {
@@ -1231,21 +1231,21 @@ def menu_page(request: Request):
       .page-title {
         margin: 0;
         color: var(--amn-navy);
-        font-size: 28px;
+        font-size: 22px;
         line-height: 1.1;
       }
 
       .page-subtitle {
-        margin: 10px 0 0 0;
+        margin: 4px 0 0 0;
         color: var(--amn-text-soft);
-        font-size: 14px;
-        line-height: 1.55;
+        font-size: 12px;
+        line-height: 1.35;
       }
 
       .page-meta-card {
-        min-width: 230px;
-        padding: 14px 16px;
-        border-radius: 14px;
+        min-width: 180px;
+        padding: 8px 10px;
+        border-radius: 10px;
         background: linear-gradient(180deg, rgba(0, 47, 108, 0.96), rgba(0, 94, 184, 0.92));
         color: #fff;
         box-shadow: 0 14px 28px rgba(0, 47, 108, 0.22);
@@ -1253,7 +1253,7 @@ def menu_page(request: Request):
 
       .page-meta-label {
         display: block;
-        font-size: 11px;
+        font-size: 10px;
         font-weight: 800;
         letter-spacing: 0.5px;
         opacity: 0.76;
@@ -1262,29 +1262,29 @@ def menu_page(request: Request):
 
       .page-meta-value {
         display: block;
-        margin-top: 6px;
-        font-size: 18px;
+        margin-top: 2px;
+        font-size: 14px;
         font-weight: 700;
       }
 
       .page-meta-note {
-        margin: 10px 0 0 0;
-        font-size: 13px;
-        line-height: 1.5;
+        margin: 4px 0 0 0;
+        font-size: 11px;
+        line-height: 1.3;
         color: rgba(255, 255, 255, 0.86);
       }
 
       .hero-link-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 10px;
-        margin-top: 14px;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 8px;
+        margin-top: 8px;
       }
 
       .hero-link-card {
         display: block;
-        padding: 12px 14px;
-        border-radius: 12px;
+        padding: 7px 10px;
+        border-radius: 10px;
         background: rgba(255, 255, 255, 0.9);
         border: 1px solid rgba(0, 47, 108, 0.1);
         color: inherit;
@@ -1302,23 +1302,24 @@ def menu_page(request: Request):
       .hero-link-card strong {
         display: block;
         color: var(--amn-navy);
-        margin-bottom: 5px;
+        margin-bottom: 0;
+        font-size: 12px;
       }
 
       .hero-link-card span {
-        display: block;
-        font-size: 13px;
+        display: none;
+        font-size: 12px;
         color: var(--amn-text-soft);
         line-height: 1.5;
       }
 
       .env-banner {
         display: inline-block;
-        margin: 8px 0 0 0;
-        padding: 10px 16px;
+        margin: 4px 0 0 0;
+        padding: 6px 10px;
         border-radius: 10px;
-        font-weight: 800;
-        letter-spacing: 0.2px;
+        font-weight: 700;
+        letter-spacing: 0.1px;
         box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
       }
 
@@ -1349,12 +1350,12 @@ def menu_page(request: Request):
         grid-template-columns: 280px minmax(0, 1fr);
         gap: 14px;
         align-items: start;
-        margin-top: 14px;
+        margin-top: 8px;
       }
 
       .portal-sidebar {
         position: sticky;
-        top: 80px;
+        top: 58px;
         background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 16px;
@@ -1658,7 +1659,7 @@ def menu_page(request: Request):
 
       @media (max-width: 980px) {
         .topbar {
-          padding: 14px 16px;
+          padding: 8px 10px;
         }
 
         .portal-shell {
@@ -1670,11 +1671,11 @@ def menu_page(request: Request):
         }
 
         .page-hero {
-          padding: 16px 14px;
+          padding: 10px 8px;
         }
 
         .page-title {
-          font-size: 24px;
+          font-size: 20px;
         }
 
         .portal-nav {
@@ -1714,13 +1715,13 @@ def menu_page(request: Request):
       <div class="page-title-row">
         <div class="page-title-block">
           <h2 class="page-title">Cisco Voice Server Automation</h2>
-          <p class="page-subtitle">Operational shortcuts for CUCM and Unity workflows with clearer navigation, direct output review, and environment-aware execution for internal voice support.</p>
+          <p class="page-subtitle">CUCM and Unity operations with fast navigation and inline outputs.</p>
           <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
         </div>
         <aside class="page-meta-card">
           <span class="page-meta-label">Authenticated Operator</span>
           <span class="page-meta-value">__AUTH_USER__</span>
-          <p class="page-meta-note">Environment selection is locked for this session. Passwords are not cached server-side and must be entered for each action.</p>
+          <p class="page-meta-note">Session is locked to selected environment.</p>
         </aside>
       </div>
       <div class="hero-link-grid">
