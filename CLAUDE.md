@@ -117,6 +117,7 @@ Priority keys:
 - Reinstated UI panel + inline execution path in `main.py` and backend route `/called-name-change`.
 - Reinstated toolkit module `toolkit/called_name_change.py` with CSF/BOT/TCT phone description updates, line alerting/caller-ID updates, and Unity mailbox DisplayName/SMTP updates.
 - Completed AMN visual refresh for Main Operations and Administrative Items pages (enhanced topbar, hero section, navigation cards, panel styling, and spacing) while preserving existing workflows.
+- Added automatic mobile Jabber notification emails for Option 3/4/5 (TCT/BOT/STRIKE): sends from `noreply@amnhealthcare.com` to target user `mailid` on successful new device creation, with install/login instructions.
 
 ### 2026-04-30
 - Initialized project tracker format.

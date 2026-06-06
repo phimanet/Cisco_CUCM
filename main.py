@@ -7,6 +7,7 @@ import smtplib
 import ssl
 import threading
 import time
+import xml.etree.ElementTree as ET
 from email.message import EmailMessage
 
 import requests
@@ -56,6 +57,19 @@ SMTP_USE_STARTTLS = (os.getenv("SMTP_USE_STARTTLS", "false") or "false").strip()
   "on",
 }
 SMTP_DEFAULT_FROM = (os.getenv("SMTP_DEFAULT_FROM", "") or "").strip()
+MOBILE_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
+MOBILE_JABBER_EMAIL_SUBJECT = "Jabber on iPhone or Android - Ready to install"
+MOBILE_JABBER_EMAIL_BODY = (
+  "Jabber for mobile phones is ready for use. You must delete the app on the iPhone/Android first "
+  "if you have it already.\n\n"
+  "To setup Jabber on your mobile phone:\n\n"
+  "1. Download Cisco Jabber on your mobile phone.\n"
+  "2. Go thru the questions and accept Jabber to use the microphone.\n"
+  "3. Enter in your AMN Email\n"
+  "4. Enter in your AMN password\n"
+  "5. If it balks at an invalid certificate, this is OK. Accept or press OK.\n"
+  "6. You should now be logged in."
+)
 AUDIT_LOG_LOCK = threading.Lock()
 AUDIT_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 AUDIT_RETENTION_DAYS = 365
@@ -634,6 +648,112 @@ def _extract_deleted_dns_from_offboard_output(csv_data) -> list[str]:
                 deleted_dns.append(dn)
 
     return deleted_dns
+
+
+def _csv_has_success_step(csv_data, step_names: set[str]) -> bool:
+    csv_text = _to_bytes(csv_data).decode("utf-8", errors="replace")
+    reader = csv.reader(io.StringIO(csv_text))
+    target_steps = {s.strip().lower() for s in step_names if (s or "").strip()}
+
+    for row in reader:
+      if len(row) < 2:
+        continue
+      step = (row[0] or "").strip().lower()
+      status = (row[1] or "").strip().lower()
+      if step in target_steps and status == "success":
+        return True
+
+    return False
+
+
+def _append_result_row(csv_data, step: str, status: str, details: str) -> bytes:
+    csv_text = _to_bytes(csv_data).decode("utf-8", errors="replace")
+    output = io.StringIO()
+    output.write(csv_text)
+    if not csv_text.endswith("\n"):
+      output.write("\n")
+    writer = csv.writer(output)
+    writer.writerow([step, status, details])
+    return output.getvalue().encode("utf-8")
+
+
+def _lookup_user_contact(cucm_host: str, cucm_user: str, cucm_pass: str, target_user: str) -> tuple[str, str]:
+    clean_target = (target_user or "").strip()
+    if not clean_target:
+      return "", ""
+
+    soap = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getUser>
+      <userid>{escape(clean_target)}</userid>
+    </axl:getUser>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    session = requests.Session()
+    session.verify = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    response = session.post(
+      f"https://{cucm_host}:8443/axl/",
+      data=soap.encode("utf-8"),
+      headers={"Content-Type": "text/xml"},
+      timeout=60,
+    )
+    if response.status_code != 200:
+      raise RuntimeError(f"getUser failed HTTP {response.status_code}")
+
+    root = ET.fromstring(response.text)
+    user_node = None
+    for elem in root.iter():
+      if elem.tag.split("}")[-1] == "user":
+        user_node = elem
+        break
+
+    if user_node is None:
+      raise RuntimeError("Unable to read user details from CUCM response")
+
+    values = {}
+    for child in list(user_node):
+      key = child.tag.split("}")[-1]
+      values[key] = (child.text or "").strip()
+
+    full_name = " ".join(
+      part for part in [values.get("firstName", ""), values.get("lastName", "")] if part
+    ).strip()
+    display_name = full_name or values.get("displayName", "") or values.get("userid", clean_target)
+    return values.get("mailid", ""), display_name
+
+
+def _send_mobile_jabber_ready_email_if_built(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  target_user: str,
+  csv_data,
+  created_steps: set[str],
+) -> tuple[str, str]:
+    if not _csv_has_success_step(csv_data, created_steps):
+      return "Skipped", "No new mobile Jabber device was created; email not sent"
+
+    recipient, display_name = _lookup_user_contact(cucm_host, cucm_user, cucm_pass, target_user)
+    recipient = (recipient or "").strip()
+    if not recipient:
+      return "Failed", "Target user does not have a CUCM mailid; email not sent"
+
+    body = f"Hello {display_name},\n\n{MOBILE_JABBER_EMAIL_BODY}"
+    _send_smtp_email(
+      sender=MOBILE_JABBER_EMAIL_FROM,
+      recipients=[recipient],
+      subject=MOBILE_JABBER_EMAIL_SUBJECT,
+      body=body,
+      smtp_port=SMTP_PORT,
+      use_starttls=SMTP_USE_STARTTLS,
+    )
+
+    return "Success", f"Notification sent to {recipient} via {SMTP_SERVER}:{SMTP_PORT}"
 
 
 def _extract_account_from_audit_target(target_text: str) -> str:
@@ -5055,6 +5175,18 @@ def add_secondary_tct_device_route(
         cucm_pass=cucm_pass,
         target_user=target_user,
     )
+    try:
+      notify_status, notify_details = _send_mobile_jabber_ready_email_if_built(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        target_user=target_user,
+        csv_data=data,
+        created_steps={"Add TCT Device"},
+      )
+    except Exception as exc:
+      notify_status, notify_details = "Failed", f"Email notification failed: {exc}"
+    data = _append_result_row(data, "Notify End User", notify_status, notify_details)
     _append_audit_event(
       action="add_secondary_tct_option_3",
       cucm_host=cucm_host,
@@ -5093,6 +5225,18 @@ def add_secondary_bot_device_route(
         cucm_pass=cucm_pass,
         target_user=target_user,
     )
+    try:
+      notify_status, notify_details = _send_mobile_jabber_ready_email_if_built(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        target_user=target_user,
+        csv_data=data,
+        created_steps={"Add BOT Device"},
+      )
+    except Exception as exc:
+      notify_status, notify_details = "Failed", f"Email notification failed: {exc}"
+    data = _append_result_row(data, "Notify End User", notify_status, notify_details)
     _append_audit_event(
       action="add_secondary_bot_option_4",
       cucm_host=cucm_host,
@@ -5131,6 +5275,18 @@ def add_secondary_strike_devices_route(
         cucm_pass=cucm_pass,
         target_user=target_user,
     )
+    try:
+      notify_status, notify_details = _send_mobile_jabber_ready_email_if_built(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        target_user=target_user,
+        csv_data=data,
+        created_steps={"Add TCT Device", "Add BOT Device"},
+      )
+    except Exception as exc:
+      notify_status, notify_details = "Failed", f"Email notification failed: {exc}"
+    data = _append_result_row(data, "Notify End User", notify_status, notify_details)
     _append_audit_event(
       action="add_secondary_strike_option_5",
       cucm_host=cucm_host,
