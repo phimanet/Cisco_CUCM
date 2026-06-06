@@ -3808,7 +3808,7 @@ def menu_admin_page(request: Request):
       </section>
 
       <section class="panel">
-        <h3>More Jabber Mobile - iPhone or Android</h3>
+        <h3>Remove only Jabber Mobile - iPhone or Android</h3>
         <p>Lookup by last name, then remove Jabber iPhone (TCT), Jabber Android (BOT), or both. This does not delete CSF or voicemail.</p>
         <form id="admin-mobile-delete-lookup-form">
           <div class="compact-inline-row">
@@ -5414,7 +5414,7 @@ def delete_secondary_mobile_devices_route(
       "download_url": f"/download/job-output/{job_output['job_id']}",
     })
 
-  return _render_job_result("More Jabber Mobile - iPhone or Android", data, filename)
+  return _render_job_result("Remove only Jabber Mobile - iPhone or Android", data, filename)
 
 
 @app.post("/line-groups/edit-members")
