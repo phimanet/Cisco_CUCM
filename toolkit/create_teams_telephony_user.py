@@ -343,7 +343,7 @@ def _send_handoff_email_to_admin(operator_username, target_userid, target_email,
     body = "\n".join([
         "1. Go to MS User - assign license manually - Microsoft Teams Phone Standard",
         "",
-        "2. User Power shell - Only Greg and Chris access or office 365 admin besides Roger;s automation - make sure they have most recent Microsoft Teams module - use latest version",
+        "2.User Power shell - Only Greg G. and Chris B. access or office 365 admin - make sure they have most recent Microsoft Teams module - use latest version",
         "",
         "5 commands to run:",
         "Connect-MicrosoftTeams",
