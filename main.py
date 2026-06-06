@@ -1534,6 +1534,12 @@ def menu_page(request: Request):
         flex-wrap: wrap;
       }
 
+      .compact-inline-row span {
+        display: inline-block;
+        width: 220px;
+        font-weight: 600;
+      }
+
       .jabber-check-output {
         flex: 1 1 480px;
         min-width: 320px;
@@ -1681,6 +1687,10 @@ def menu_page(request: Request):
       @media (max-width: 980px) {
         .topbar {
           padding: 8px 10px;
+        }
+
+        .compact-inline-row span {
+          width: auto;
         }
 
         .portal-shell {
@@ -3491,6 +3501,12 @@ def menu_admin_page(request: Request):
         flex-wrap: wrap;
       }
 
+      .compact-inline-row span {
+        display: inline-block;
+        width: 220px;
+        font-weight: 600;
+      }
+
       input:focus,
       textarea:focus {
         outline: none;
@@ -3523,6 +3539,10 @@ def menu_admin_page(request: Request):
       @media (max-width: 980px) {
         .topbar {
           padding: 14px 16px;
+        }
+
+        .compact-inline-row span {
+          width: auto;
         }
 
         .page-hero {
