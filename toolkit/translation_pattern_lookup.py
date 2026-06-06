@@ -1,3 +1,5 @@
+import csv
+import io
 import requests
 import urllib3
 import xml.etree.ElementTree as ET
@@ -145,3 +147,39 @@ def lookup_translation_patterns(cucm_host, cucm_user, cucm_pass, pattern_query):
         results.append(detail)
 
     return results
+
+
+def build_translation_pattern_template(cucm_host, cucm_user, cucm_pass, pattern_prefix):
+    pattern_prefix = (pattern_prefix or "").strip()
+    if not pattern_prefix:
+        raise ValueError("pattern_prefix is required")
+
+    matches = lookup_translation_patterns(cucm_host, cucm_user, cucm_pass, pattern_prefix)
+    example = None
+    for item in matches:
+        if (item.get("pattern") or "").startswith(pattern_prefix):
+            example = item
+            break
+
+    if example is None:
+        raise RuntimeError(f"No translation pattern found beginning with {pattern_prefix}")
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "translation_pattern",
+        "description",
+        "route_partition",
+        "called_party_transform_mask",
+        "example_source_pattern",
+    ])
+    writer.writerow([
+        "CHANGE_ME",
+        "CHANGE_ME",
+        example.get("route_partition", ""),
+        example.get("called_party_transform_mask", ""),
+        example.get("pattern", ""),
+    ])
+
+    filename = f"translation_pattern_template_{pattern_prefix}.csv"
+    return output.getvalue().encode("utf-8"), filename, example

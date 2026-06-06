@@ -36,7 +36,7 @@ from toolkit.edit_line_group_members import edit_line_group_members, search_line
 from toolkit.extract_rpo_phones import extract_rpo_phones
 from toolkit.person_lookup import search_persons_by_name
 from toolkit.extension_lookup import lookup_extension_owner, check_user_devices
-from toolkit.translation_pattern_lookup import lookup_translation_patterns
+from toolkit.translation_pattern_lookup import lookup_translation_patterns, build_translation_pattern_template
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 JOB_OUTPUTS = {}
@@ -4065,6 +4065,32 @@ def menu_admin_page(request: Request):
       </section>
 
       <section class="panel">
+        <h3>Translation Pattern Template From Example</h3>
+        <p>Start with the example that begins with <strong>3148984689</strong>. The template keeps everything the same except the Translation Pattern and Description.</p>
+        <form id="admin-trans-template-form">
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Username:</span>
+            <input name="cucm_user" value="__AUTH_USER__" required>
+          </div><br>
+
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Password:</span>
+            <input type="password" name="cucm_pass" required>
+          </div><br>
+
+          Example starts with:<br>
+          <input name="pattern_prefix" value="3148984689" required><br><br>
+
+          <button type="submit">Build Example Template</button>
+        </form>
+
+        <p id="admin-trans-template-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Click Build Example Template to load the example.</p>
+        <p id="admin-trans-template-summary" style="color:#355978; min-height:18px;"></p>
+        <p><a id="admin-trans-template-download" href="#" style="display:none; font-weight:700;">Download CSV Output</a></p>
+        <textarea id="admin-trans-template-preview" rows="8" readonly style="width:100%;"></textarea>
+      </section>
+
+      <section class="panel">
         <h3>Bulk Person Lookup (CSV Upload)</h3>
         <p>Upload CSV with columns like <strong>last_name, first_name</strong> (or first column as last name).</p>
         <p><a href="/download/bulk-person-template" style="font-weight:700;">Download Bulk Person Template</a></p>
@@ -4444,6 +4470,52 @@ def menu_admin_page(request: Request):
               resultsEl.innerHTML = html;
             } catch (err) {
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        })();
+      </script>
+
+      <script>
+        (function () {
+          const form = document.getElementById("admin-trans-template-form");
+          const statusEl = document.getElementById("admin-trans-template-status");
+          const summaryEl = document.getElementById("admin-trans-template-summary");
+          const previewEl = document.getElementById("admin-trans-template-preview");
+          const downloadEl = document.getElementById("admin-trans-template-download");
+
+          if (!form || !statusEl || !summaryEl || !previewEl || !downloadEl) return;
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Building translation pattern template...";
+            summaryEl.textContent = "";
+            previewEl.value = "";
+            downloadEl.style.display = "none";
+            downloadEl.removeAttribute("href");
+
+            try {
+              const formData = new FormData(form);
+              const response = await fetch("/translation-pattern/template/from-example", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                const msg = (payload.error && payload.error.message) || "Template build failed.";
+                throw new Error(msg);
+              }
+
+              statusEl.textContent = `Loaded example pattern ${payload.example.pattern || ""}.`;
+              summaryEl.textContent = `Route Partition: ${payload.example.route_partition || ""} | Called Party Transform Mask: ${payload.example.called_party_transform_mask || ""}`;
+              previewEl.value = payload.output_text || "";
+              if (payload.download_url) {
+                downloadEl.href = payload.download_url;
+                downloadEl.style.display = "inline";
+              }
+            } catch (err) {
+              statusEl.textContent = "Template build failed: " + ((err && err.message) || "Unknown error.");
             }
           });
         })();
@@ -4919,6 +4991,57 @@ def lookup_translation_pattern_route(
 
     results = lookup_translation_patterns(cucm_host, cucm_user, cucm_pass, clean_pattern)
     return JSONResponse({"ok": True, "query": clean_pattern, "results": results})
+
+
+@app.post("/translation-pattern/template/from-example")
+def translation_pattern_template_from_example_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    pattern_prefix: str = Form("3148984689"),
+    inline: bool = Query(False),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+    clean_prefix = (pattern_prefix or "").strip() or "3148984689"
+
+    data, filename, example = build_translation_pattern_template(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        pattern_prefix=clean_prefix,
+    )
+
+    _append_audit_event(
+      action="translation_pattern_template_from_example",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=clean_prefix,
+      output_filename=filename,
+      inline_mode=inline,
+    )
+
+    if inline:
+      job_output = _prepare_job_output(data, filename)
+      return JSONResponse({
+        "ok": True,
+        "job_id": job_output["job_id"],
+        "filename": job_output["filename"],
+        "output_text": job_output["output_text"],
+        "download_url": f"/download/job-output/{job_output['job_id']}",
+        "example": example,
+      })
+
+    job_output = _prepare_job_output(data, filename)
+    return JSONResponse({
+      "ok": True,
+      "job_id": job_output["job_id"],
+      "filename": job_output["filename"],
+      "output_text": job_output["output_text"],
+      "download_url": f"/download/job-output/{job_output['job_id']}",
+      "example": example,
+    })
 
 
 @app.post("/bulk/lookup/person")
