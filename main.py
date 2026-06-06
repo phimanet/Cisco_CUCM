@@ -38,6 +38,10 @@ from toolkit.person_lookup import search_persons_by_name
 from toolkit.extension_lookup import lookup_extension_owner, check_user_devices
 from toolkit.translation_pattern_lookup import lookup_translation_patterns, build_translation_pattern_template
 from toolkit.create_teams_telephony_user import create_teams_telephony_user
+from toolkit.remove_teams_telephony_user import (
+  lookup_teams_telephony_removal_candidate,
+  remove_teams_telephony_user,
+)
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 JOB_OUTPUTS = {}
@@ -1957,6 +1961,7 @@ def menu_page(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="precheck">Check for Existing Jabber Configuration</button>
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
           <button type="button" class="portal-nav-btn" data-panel="teams-telephony">Create Teams Telephony User</button>
+          <button type="button" class="portal-nav-btn portal-nav-btn-danger" data-panel="teams-telephony-remove">Remove Teams Telephony User</button>
           <button type="button" class="portal-nav-btn" data-panel="namechange">Jabber/VM Name Update</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
           <button type="button" class="portal-nav-btn portal-nav-btn-danger" data-panel="offboard">Offboard Cisco Jabber</button>
@@ -2589,6 +2594,174 @@ def menu_page(request: Request):
           });
         }
 
+      })();
+    </script>
+    </section>
+
+    <section class="tool-panel" data-panel="teams-telephony-remove">
+
+    <h3>Remove Teams Telephony User</h3>
+    <p>Safe removal flow: lookup user name + extension, find strict Teams translation pattern format, then delete translation pattern, rebuild inactive DN, and clear AD phone fields.</p>
+
+    <div class="build-user-layout">
+      <form id="teams-remove-form" class="target-user-form build-user-form" action="javascript:void(0)" method="post" onsubmit="return false;">
+        <div class="compact-inline-row">
+          <span>Cisco Callmanager Username:</span>
+          <input name="cucm_user" value="__AUTH_USER__" required>
+        </div><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
+        User ID for Teams Telephony removal:<br>
+        <input name="target_user" placeholder="john.doe" required><br><br>
+
+        <div class="action-row">
+          <button id="teams-remove-lookup-btn" type="button">Lookup Teams Mapping</button>
+          <button id="teams-remove-delete-btn" type="button" style="background:#b00020;" disabled>Delete + Rebuild Inactive DN</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
+      </form>
+
+      <section class="build-user-output" aria-live="polite">
+        <h4>Teams Removal Output Preview</h4>
+        <p id="teams-remove-status" class="build-user-status">Run Lookup Teams Mapping to validate strict pattern match before delete.</p>
+        <p>
+          <a id="teams-remove-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
+            Download CSV Output
+          </a>
+        </p>
+        <textarea id="teams-remove-preview" readonly></textarea>
+      </section>
+    </div>
+
+    <script>
+      (function () {
+        const form = document.getElementById("teams-remove-form");
+        const lookupBtn = document.getElementById("teams-remove-lookup-btn");
+        const deleteBtn = document.getElementById("teams-remove-delete-btn");
+        const statusEl = document.getElementById("teams-remove-status");
+        const outputEl = document.getElementById("teams-remove-preview");
+        const downloadEl = document.getElementById("teams-remove-download");
+
+        if (!form || !lookupBtn || !deleteBtn || !statusEl || !outputEl || !downloadEl) {
+          return;
+        }
+
+        let lookupState = null;
+
+        async function runLookup() {
+          statusEl.textContent = "Running lookup...";
+          outputEl.value = "";
+          downloadEl.style.display = "none";
+          downloadEl.removeAttribute("href");
+          deleteBtn.disabled = true;
+          lookupState = null;
+
+          try {
+            const formData = new FormData(form);
+            const response = await fetch("/teams-telephony/remove/lookup", {
+              method: "POST",
+              body: formData,
+              credentials: "same-origin",
+            });
+
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              const msg = (payload.error && payload.error.message) || payload.detail || "Lookup failed.";
+              throw new Error(msg);
+            }
+
+            lookupState = payload;
+            const strictText = payload.match_found ? "MATCHED" : "NOT MATCHED";
+            statusEl.textContent = "Lookup completed. " + strictText;
+
+            outputEl.value = [
+              `User: ${payload.target_user}`,
+              `Name: ${payload.first_name || ""} ${payload.last_name || ""}`.trim(),
+              `Extension: ${payload.extension || ""}`,
+              `Expected Description: ${payload.expected_description || ""}`,
+              `Matched Pattern: ${payload.pattern || "(none)"}`,
+              `Matched Partition: ${payload.route_partition || "(none)"}`,
+              `Matched Description: ${payload.description || "(none)"}`,
+            ].join("\n");
+
+            if (payload.match_found) {
+              deleteBtn.disabled = false;
+            }
+          } catch (err) {
+            statusEl.textContent = "Lookup failed.";
+            outputEl.value = (err && err.message) ? err.message : "Unknown error.";
+          }
+        }
+
+        async function runDelete() {
+          if (!lookupState || !lookupState.match_found) {
+            statusEl.textContent = "Run lookup first and confirm strict match.";
+            return;
+          }
+
+          const confirmed = confirm(
+            `Delete Teams translation pattern and rebuild inactive DN for ${lookupState.target_user}?\n\n`
+            + `Pattern: ${lookupState.pattern}/${lookupState.route_partition}\n`
+            + `Expected strict description: ${lookupState.expected_description}\n\n`
+            + "This will also clear AD telephone/ipPhone."
+          );
+          if (!confirmed) {
+            return;
+          }
+
+          statusEl.textContent = "Running remove Teams Telephony workflow...";
+          outputEl.value = "";
+          downloadEl.style.display = "none";
+          downloadEl.removeAttribute("href");
+          deleteBtn.disabled = true;
+
+          try {
+            const formData = new FormData(form);
+            const response = await fetch("/teams-telephony/remove?inline=1", {
+              method: "POST",
+              body: formData,
+              credentials: "same-origin",
+            });
+
+            const responseText = await response.text();
+            let payload = null;
+            try {
+              payload = JSON.parse(responseText || "{}");
+            } catch (_parseErr) {
+              throw new Error(responseText || `Request failed with status ${response.status}`);
+            }
+
+            if (!response.ok) {
+              throw new Error((payload && payload.detail) || `Request failed with status ${response.status}`);
+            }
+
+            outputEl.value = payload.output_text || "";
+            statusEl.textContent = `Completed: ${payload.filename || "remove_teams_telephony_output.csv"}`;
+            if (payload.download_url) {
+              downloadEl.href = payload.download_url;
+              downloadEl.style.display = "inline";
+            }
+          } catch (err) {
+            statusEl.textContent = "Remove Teams Telephony failed.";
+            outputEl.value = (err && err.message) ? err.message : "Unknown error.";
+          } finally {
+            if (lookupState && lookupState.match_found) {
+              deleteBtn.disabled = false;
+            }
+          }
+        }
+
+        lookupBtn.addEventListener("click", function (event) {
+          event.preventDefault();
+          runLookup();
+        });
+
+        deleteBtn.addEventListener("click", function (event) {
+          event.preventDefault();
+          runDelete();
+        });
       })();
     </script>
     </section>
@@ -5117,6 +5290,71 @@ async def build_teams_telephony_user(
     })
 
   return _render_job_result("Create Teams Telephony User", data, filename)
+
+
+@app.post("/teams-telephony/remove/lookup")
+def teams_telephony_remove_lookup(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  target_user: str = Form(...),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+  clean_target_user = (target_user or "").strip()
+  result = lookup_teams_telephony_removal_candidate(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    target_user=clean_target_user,
+  )
+  return JSONResponse({"ok": True, **result})
+
+
+@app.post("/teams-telephony/remove")
+async def teams_telephony_remove_execute(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  target_user: str = Form(...),
+  inline: bool = Query(False),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+  clean_target_user = (target_user or "").strip()
+  data, filename = remove_teams_telephony_user(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    target_user=clean_target_user,
+    ad_username=cucm_user,
+    ad_password=cucm_pass,
+  )
+
+  _append_audit_event(
+    action="remove_teams_telephony_user",
+    cucm_host=cucm_host,
+    operator=cucm_user,
+    target=f"account={clean_target_user}",
+    account=clean_target_user,
+    extension_added="",
+    extension_deleted="",
+    output_filename=filename,
+    inline_mode=inline,
+  )
+
+  if inline:
+    job_output = _prepare_job_output(data, filename)
+    return JSONResponse({
+      "job_id": job_output["job_id"],
+      "filename": job_output["filename"],
+      "output_text": job_output["output_text"],
+      "download_url": f"/download/job-output/{job_output['job_id']}",
+    })
+
+  return _render_job_result("Remove Teams Telephony User", data, filename)
 
 
 @app.post("/rebuild/user-csf-phone")
