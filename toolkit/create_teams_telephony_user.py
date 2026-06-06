@@ -2,7 +2,9 @@ import csv
 import datetime
 import io
 import os
+import smtplib
 import xml.etree.ElementTree as ET
+from email.message import EmailMessage
 
 import requests
 import urllib3
@@ -20,6 +22,11 @@ AXL_NS = "http://www.cisco.com/AXL/API/15.0"
 DN_ROUTE_PARTITION = "ENT_DEVICE_PT"
 DEFAULT_DN_PREFIX = "314"
 TEMPLATE_CSV_PATH = os.path.join(os.path.dirname(__file__), "translation_pattern_full_template.csv")
+SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp1.ahs.int").strip() or "smtp1.ahs.int"
+SMTP_PORT = int(os.getenv("SMTP_PORT", "25") or "25")
+SMTP_TIMEOUT_SECONDS = int(os.getenv("SMTP_TIMEOUT_SECONDS", "12") or "12")
+TEAMS_HANDOFF_EMAIL_FROM = os.getenv("TEAMS_HANDOFF_EMAIL_FROM", "noreply@amnhealthcare.com").strip() or "noreply@amnhealthcare.com"
+ADMIN_EMAIL_DOMAIN = os.getenv("ADMIN_EMAIL_DOMAIN", "amnhealthcare.com").strip() or "amnhealthcare.com"
 FALLBACK_TEMPLATE_FIELDS = {
     "transPattern.blockEnable": "false",
     "transPattern.calledPartyNumberType": "Cisco CallManager",
@@ -294,6 +301,50 @@ def _powershell_handoff_template(email, dn):
     ])
 
 
+def _resolve_admin_email(operator_username):
+    user = (operator_username or "").strip()
+    if not user:
+        return ""
+    if "@" in user:
+        return user
+    if "." in user:
+        return f"{user}@{ADMIN_EMAIL_DOMAIN}"
+    return ""
+
+
+def _send_handoff_email_to_admin(operator_username, target_userid, target_email, dn, ps_commands):
+    admin_email = _resolve_admin_email(operator_username)
+    if not admin_email:
+        return False, "Could not derive admin email from operator username. Use firstname.lastname format."
+
+    subject = f"Teams Telephony Handoff Commands - {target_userid}"
+    body = "\n".join([
+        "Teams Telephony provisioning completed.",
+        "",
+        f"Requested by: {operator_username}",
+        f"Target user: {target_userid}",
+        f"Target email: {target_email}",
+        f"Assigned DN: {dn}",
+        "",
+        "PowerShell command set:",
+        ps_commands,
+    ])
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = TEAMS_HANDOFF_EMAIL_FROM
+    message["To"] = admin_email
+    message.set_content(body)
+
+    try:
+        with smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=SMTP_TIMEOUT_SECONDS) as server:
+            server.send_message(message)
+    except Exception as exc:
+        return False, f"Failed to send handoff email to {admin_email}: {exc}"
+
+    return True, f"Sent handoff commands to {admin_email}"
+
+
 def _load_saved_template_fields():
     if not os.path.exists(TEMPLATE_CSV_PATH):
         return {
@@ -432,6 +483,19 @@ def create_teams_telephony_user(
             "PowerShell Handoff",
             "Success",
             ps_template,
+        ])
+
+        mail_ok, mail_msg = _send_handoff_email_to_admin(
+            operator_username=cucm_user,
+            target_userid=user_details.get("userid", clean_target),
+            target_email=email,
+            dn=new_dn,
+            ps_commands=ps_template,
+        )
+        writer.writerow([
+            "Email Admin Handoff",
+            "Success" if mail_ok else "Failed",
+            mail_msg,
         ])
 
     except Exception as exc:
