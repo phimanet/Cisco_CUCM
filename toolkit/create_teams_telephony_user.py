@@ -1,7 +1,6 @@
 import csv
 import datetime
 import io
-import os
 import smtplib
 import xml.etree.ElementTree as ET
 from email.message import EmailMessage
@@ -21,13 +20,13 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 AXL_NS = "http://www.cisco.com/AXL/API/15.0"
 DN_ROUTE_PARTITION = "ENT_DEVICE_PT"
 AUTO_DN_PREFIXES = ("214", "469", "945")
-TEMPLATE_CSV_PATH = os.path.join(os.path.dirname(__file__), "translation_pattern_full_template.csv")
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp1.ahs.int").strip() or "smtp1.ahs.int"
 SMTP_PORT = int(os.getenv("SMTP_PORT", "25") or "25")
 SMTP_TIMEOUT_SECONDS = int(os.getenv("SMTP_TIMEOUT_SECONDS", "12") or "12")
 TEAMS_HANDOFF_EMAIL_FROM = os.getenv("TEAMS_HANDOFF_EMAIL_FROM", "noreply@amnhealthcare.com").strip() or "noreply@amnhealthcare.com"
 ADMIN_EMAIL_DOMAIN = os.getenv("ADMIN_EMAIL_DOMAIN", "amnhealthcare.com").strip() or "amnhealthcare.com"
-FALLBACK_TEMPLATE_FIELDS = {
+# Permanent Teams translation pattern template.
+PERMANENT_TEMPLATE_FIELDS = {
     "transPattern.blockEnable": "false",
     "transPattern.calledPartyNumberType": "Cisco CallManager",
     "transPattern.calledPartyNumberingPlan": "Cisco CallManager",
@@ -359,41 +358,11 @@ def _send_handoff_email_to_admin(operator_username, target_userid, target_email,
 
 
 def _load_saved_template_fields():
-    if not os.path.exists(TEMPLATE_CSV_PATH):
-        return {
-            "source_pattern": "3148984689",
-            "source_route_partition": "ENT_TEAMS_DEVICE_PT",
-            "full_fields": dict(FALLBACK_TEMPLATE_FIELDS),
-            "template_origin": "fallback",
-        }
-
-    with open(TEMPLATE_CSV_PATH, "r", encoding="utf-8", newline="") as handle:
-        reader = csv.DictReader(handle)
-        row = next(reader, None)
-
-    if not row:
-        raise RuntimeError("Template CSV exists but has no data rows.")
-
-    full_fields = {}
-    source_pattern = ""
-    source_route_partition = ""
-    for key, value in row.items():
-        clean_val = (value or "").strip()
-        if key == "template.source_pattern":
-            source_pattern = clean_val
-        elif key == "template.source_route_partition":
-            source_route_partition = clean_val
-        elif key.startswith("transPattern.") and clean_val:
-            full_fields[key] = clean_val
-
-    if not full_fields:
-        full_fields = dict(FALLBACK_TEMPLATE_FIELDS)
-
     return {
-        "source_pattern": source_pattern,
-        "source_route_partition": source_route_partition,
-        "full_fields": full_fields,
-        "template_origin": "csv",
+        "source_pattern": "",
+        "source_route_partition": "ENT_TEAMS_DEVICE_PT",
+        "full_fields": dict(PERMANENT_TEMPLATE_FIELDS),
+        "template_origin": "permanent",
     }
 
 
@@ -437,16 +406,7 @@ def create_teams_telephony_user(
         writer.writerow([
             "Extract Template",
             "Success",
-            (
-                f"Using saved template from {os.path.basename(TEMPLATE_CSV_PATH)}"
-                if detail.get("template_origin") == "csv"
-                else "Using built-in fallback template (template CSV missing on server)"
-            )
-            + (
-                f" ({detail.get('source_pattern', '')}/{detail.get('source_route_partition', '')})"
-                if detail.get("source_pattern") or detail.get("source_route_partition")
-                else ""
-            ),
+            "Using permanent built-in translation pattern template",
         ])
 
         new_dn, selected_prefix = _choose_available_dn_auto(session, cucm_host)
