@@ -2358,6 +2358,127 @@ def menu_page(request: Request):
     </script>
     </section>
 
+    <section class="tool-panel" data-panel="teams-telephony">
+
+    <h3>Create Teams Telephony User</h3>
+    <p>Creates the CUCM user record and associated telephony provisioning using the standard build workflow.</p>
+
+    <div class="build-user-layout">
+      <form id="teams-telephony-form" class="target-user-form build-user-form" action="javascript:void(0)" method="post" onsubmit="return false;">
+        <div class="compact-inline-row">
+          <span>Cisco Callmanager Username:</span>
+          <input name="cucm_user" value="__AUTH_USER__" required>
+        </div><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
+        User ID for Teams Telephony user:<br>
+        <input name="target_user" placeholder="john.doe" required><br><br>
+
+        DN Type:<br>
+        <select name="dn_type">
+          <option value="recruiter">Recruiter (469)</option>
+          <option value="general" selected>General FTE (214)</option>
+          <option value="strike">Strike (945)</option>
+        </select><br><br>
+
+        <div class="action-row">
+          <button id="teams-telephony-btn" type="button">Run Create Teams Telephony User</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
+      </form>
+
+      <section class="build-user-output" aria-live="polite">
+        <h4>Teams Telephony Output Preview</h4>
+        <p id="teams-telephony-status" class="build-user-status">Run Teams Telephony User to view output here.</p>
+        <p>
+          <a id="teams-telephony-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
+            Download CSV Output
+          </a>
+        </p>
+        <textarea id="teams-telephony-preview" readonly></textarea>
+      </section>
+    </div>
+
+    <script>
+      (function () {
+        const form = document.getElementById("teams-telephony-form");
+        const button = document.getElementById("teams-telephony-btn");
+        const statusEl = document.getElementById("teams-telephony-status");
+        const outputEl = document.getElementById("teams-telephony-preview");
+        const downloadEl = document.getElementById("teams-telephony-download");
+
+        if (!form || !button || !statusEl || !outputEl || !downloadEl) {
+          return;
+        }
+
+        async function runCreateTeamsTelephonyUser() {
+          const targetUserField = form.querySelector('input[name="target_user"]');
+          const targetUser = ((targetUserField && targetUserField.value) || "").trim();
+          if (!targetUser) {
+            statusEl.textContent = "Enter a User ID to create.";
+            if (targetUserField) {
+              targetUserField.focus();
+            }
+            return;
+          }
+
+          statusEl.textContent = "Running Create Teams Telephony User...";
+          outputEl.value = "";
+          downloadEl.style.display = "none";
+          downloadEl.removeAttribute("href");
+
+          try {
+            const formData = new FormData(form);
+            const response = await fetch("/build/teams-telephony-user?inline=1", {
+              method: "POST",
+              body: formData,
+              credentials: "same-origin",
+            });
+
+            const responseText = await response.text();
+            let payload = null;
+            try {
+              payload = JSON.parse(responseText || "{}");
+            } catch (_parseErr) {
+              throw new Error(responseText || `Request failed with status ${response.status}`);
+            }
+
+            if (!response.ok) {
+              throw new Error((payload && payload.detail) || `Request failed with status ${response.status}`);
+            }
+
+            outputEl.value = payload.output_text || "";
+            statusEl.textContent = `Completed: ${payload.filename || "teams_telephony_user_output.csv"}`;
+            if (payload.download_url) {
+              downloadEl.href = payload.download_url;
+              downloadEl.style.display = "inline";
+            }
+
+            if (targetUserField) {
+              targetUserField.value = "";
+            }
+          } catch (err) {
+            statusEl.textContent = "Create Teams Telephony User failed. Review output and retry.";
+            outputEl.value = (err && err.message) ? err.message : "Unknown error.";
+          }
+        }
+
+        form.addEventListener("submit", function (event) {
+          event.preventDefault();
+          runCreateTeamsTelephonyUser();
+        });
+
+        button.addEventListener("click", function (event) {
+          event.preventDefault();
+          runCreateTeamsTelephonyUser();
+        });
+
+      })();
+    </script>
+    </section>
+
     <section class="tool-panel" data-panel="namechange">
 
     <h3>Jabber/VM Name Update (Update CUCM Phone/Line + Unity Display/SMTP)</h3>
@@ -4641,6 +4762,55 @@ async def build_user_csf_phone(
         })
 
     return _render_job_result("Build User CSF Phone", data, filename)
+
+
+@app.post("/build/teams-telephony-user")
+async def build_teams_telephony_user(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  target_user: str = Form(...),
+  dn_type: str = Form("general"),
+  inline: bool = Query(False),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+  clean_target_user = (target_user or "").strip()
+  data, filename = build_user_csf_phone_from_template(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    target_user=clean_target_user,
+    dn_type=dn_type,
+    ad_username=cucm_user,
+    ad_password=cucm_pass,
+  )
+  added_dn = _extract_added_dn_from_build_output(data)
+  added_count = 1 if added_dn else 0
+  audit_target = f"account={clean_target_user};dn_added={added_dn or 'none'};added_count={added_count}"
+  _append_audit_event(
+    action="build_teams_telephony_user",
+    cucm_host=cucm_host,
+    operator=cucm_user,
+    target=audit_target,
+    account=clean_target_user,
+    extension_added=added_dn,
+    extension_deleted="",
+    output_filename=filename,
+    inline_mode=inline,
+  )
+
+  if inline:
+    job_output = _prepare_job_output(data, filename)
+    return JSONResponse({
+      "job_id": job_output["job_id"],
+      "filename": job_output["filename"],
+      "output_text": job_output["output_text"],
+      "download_url": f"/download/job-output/{job_output['job_id']}",
+    })
+
+  return _render_job_result("Create Teams Telephony User", data, filename)
 
 
 @app.post("/rebuild/user-csf-phone")
