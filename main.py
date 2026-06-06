@@ -1517,6 +1517,13 @@ def menu_page(request: Request):
         min-width: 320px;
       }
 
+      #person-lookup-form input[name="cucm_user"],
+      #person-lookup-form input[name="cucm_pass"],
+      #person-lookup-form input[name="last_name"],
+      #person-lookup-form input[name="first_name"] {
+        width: min(260px, 100%);
+      }
+
       .jabber-check-output {
         flex: 1 1 480px;
         min-width: 320px;
