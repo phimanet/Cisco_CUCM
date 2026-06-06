@@ -37,6 +37,7 @@ from toolkit.extract_rpo_phones import extract_rpo_phones
 from toolkit.person_lookup import search_persons_by_name
 from toolkit.extension_lookup import lookup_extension_owner, check_user_devices
 from toolkit.translation_pattern_lookup import lookup_translation_patterns, build_translation_pattern_template
+from toolkit.create_teams_telephony_user import create_teams_telephony_user
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 JOB_OUTPUTS = {}
@@ -2361,7 +2362,7 @@ def menu_page(request: Request):
     <section class="tool-panel" data-panel="teams-telephony">
 
     <h3>Create Teams Telephony User</h3>
-    <p>Creates the CUCM user record and associated telephony provisioning using the standard build workflow.</p>
+    <p>Builds Teams telephony from template: lookup email, choose available DN, delete line, create translation pattern, update AD fields, and print PowerShell handoff commands.</p>
 
     <div class="build-user-layout">
       <form id="teams-telephony-form" class="target-user-form build-user-form" action="javascript:void(0)" method="post" onsubmit="return false;">
@@ -2376,12 +2377,11 @@ def menu_page(request: Request):
         User ID for Teams Telephony user:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
 
-        DN Type:<br>
-        <select name="dn_type">
-          <option value="recruiter">Recruiter (469)</option>
-          <option value="general" selected>General FTE (214)</option>
-          <option value="strike">Strike (945)</option>
-        </select><br><br>
+        DN Prefix:<br>
+        <input name="dn_prefix" value="314" required><br><br>
+
+        Example Translation Pattern Prefix:<br>
+        <input name="example_pattern_prefix" value="3148984689" required><br><br>
 
         <div class="action-row">
           <button id="teams-telephony-btn" type="button">Run Create Teams Telephony User</button>
@@ -4843,18 +4843,20 @@ async def build_teams_telephony_user(
   cucm_user: str = Form(""),
   cucm_pass: str = Form(""),
   target_user: str = Form(...),
-  dn_type: str = Form("general"),
+  dn_prefix: str = Form("314"),
+  example_pattern_prefix: str = Form("3148984689"),
   inline: bool = Query(False),
 ):
   cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
   _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
   clean_target_user = (target_user or "").strip()
-  data, filename = build_user_csf_phone_from_template(
+  data, filename = create_teams_telephony_user(
     cucm_host=cucm_host,
     cucm_user=cucm_user,
     cucm_pass=cucm_pass,
     target_user=clean_target_user,
-    dn_type=dn_type,
+    dn_prefix=dn_prefix,
+    example_pattern_prefix=example_pattern_prefix,
     ad_username=cucm_user,
     ad_password=cucm_pass,
   )

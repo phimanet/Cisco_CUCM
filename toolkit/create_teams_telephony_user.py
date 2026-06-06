@@ -1,0 +1,389 @@
+import csv
+import datetime
+import io
+import xml.etree.ElementTree as ET
+
+import requests
+import urllib3
+from requests.auth import HTTPBasicAuth
+from xml.sax.saxutils import escape
+
+try:
+    from .ad_phone_fields import update_ad_phone_fields
+    from .translation_pattern_lookup import (
+        lookup_translation_patterns,
+        get_translation_pattern_full,
+    )
+except ImportError:
+    from ad_phone_fields import update_ad_phone_fields
+    from translation_pattern_lookup import (
+        lookup_translation_patterns,
+        get_translation_pattern_full,
+    )
+
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+AXL_NS = "http://www.cisco.com/AXL/API/15.0"
+DN_ROUTE_PARTITION = "ENT_DEVICE_PT"
+DEFAULT_DN_PREFIX = "314"
+DEFAULT_EXAMPLE_PREFIX = "3148984689"
+
+
+def _strip_ns(tag):
+    return tag.split("}", 1)[-1] if "}" in tag else tag
+
+
+def _find_child(elem, tag_name):
+    for child in list(elem):
+        if _strip_ns(child.tag) == tag_name:
+            return child
+    return None
+
+
+def _find_first_text(elem, path_candidates):
+    for path in path_candidates:
+        cur = elem
+        found = True
+        for tag_name in path:
+            cur = _find_child(cur, tag_name)
+            if cur is None:
+                found = False
+                break
+        if found and cur is not None and cur.text:
+            value = cur.text.strip()
+            if value:
+                return value
+    return ""
+
+
+def _axl_post(session, cucm_host, soap_xml):
+    response = session.post(
+        f"https://{cucm_host}:8443/axl/",
+        data=soap_xml.encode("utf-8"),
+        headers={"Content-Type": "text/xml"},
+        timeout=120,
+    )
+    return response
+
+
+def _get_user_details(session, cucm_host, username):
+    soap = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"{AXL_NS}\">
+   <soapenv:Header/>
+   <soapenv:Body>
+      <axl:getUser>
+         <userid>{escape(username)}</userid>
+      </axl:getUser>
+   </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = _axl_post(session, cucm_host, soap)
+    if response.status_code != 200:
+        raise RuntimeError(f"getUser failed with HTTP {response.status_code}: {response.text[:1000]}")
+
+    root = ET.fromstring(response.text)
+    user_node = None
+    for elem in root.iter():
+        if _strip_ns(elem.tag) == "user":
+            user_node = elem
+            break
+
+    if user_node is None:
+        raise RuntimeError("Could not locate user node in getUser response.")
+
+    return {
+        "userid": _find_first_text(user_node, [["userid"]]),
+        "firstName": _find_first_text(user_node, [["firstName"]]),
+        "lastName": _find_first_text(user_node, [["lastName"]]),
+        "displayName": _find_first_text(user_node, [["displayName"]]),
+        "mailid": _find_first_text(user_node, [["mailid"]]),
+    }
+
+
+def _list_available_dns(session, cucm_host, prefix):
+    soap = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"{AXL_NS}\">
+   <soapenv:Body>
+      <axl:listLine>
+         <searchCriteria>
+            <pattern>{escape(prefix)}%</pattern>
+         </searchCriteria>
+         <returnedTags>
+            <pattern/>
+            <routePartitionName/>
+            <active/>
+         </returnedTags>
+      </axl:listLine>
+   </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = _axl_post(session, cucm_host, soap)
+    if response.status_code != 200:
+        raise RuntimeError(f"listLine for prefix {prefix} failed with HTTP {response.status_code}: {response.text[:1000]}")
+
+    root = ET.fromstring(response.text)
+    candidates = []
+    for elem in root.iter():
+        if _strip_ns(elem.tag) != "line":
+            continue
+
+        pattern = _find_first_text(elem, [["pattern"]])
+        partition = _find_first_text(elem, [["routePartitionName"]])
+        active = _find_first_text(elem, [["active"]]).strip().lower()
+
+        is_inactive = active not in {"true", "t", "1", "yes"}
+        if pattern and partition == DN_ROUTE_PARTITION and is_inactive:
+            candidates.append(pattern)
+
+    return sorted(set(candidates))
+
+
+def _is_dn_unassigned(session, cucm_host, pattern, route_partition):
+    soap = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"{AXL_NS}\">
+   <soapenv:Body>
+      <axl:getLine>
+         <pattern>{escape(pattern)}</pattern>
+         <routePartitionName>{escape(route_partition)}</routePartitionName>
+         <returnedTags>
+            <pattern/>
+            <routePartitionName/>
+            <associatedDevices>
+               <device/>
+            </associatedDevices>
+         </returnedTags>
+      </axl:getLine>
+   </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = _axl_post(session, cucm_host, soap)
+    if response.status_code != 200:
+        return False
+
+    root = ET.fromstring(response.text)
+    for elem in root.iter():
+        if _strip_ns(elem.tag) == "device" and elem.text and elem.text.strip():
+            return False
+
+    return True
+
+
+def _choose_available_dn(session, cucm_host, prefix):
+    candidates = _list_available_dns(session, cucm_host, prefix)
+    for candidate in candidates:
+        if _is_dn_unassigned(session, cucm_host, candidate, DN_ROUTE_PARTITION):
+            return candidate
+    raise RuntimeError(f"No available inactive DN found in {DN_ROUTE_PARTITION} starting with {prefix}.")
+
+
+def _remove_line(session, cucm_host, pattern, route_partition):
+    soap = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"{AXL_NS}\">
+   <soapenv:Body>
+      <axl:removeLine>
+         <pattern>{escape(pattern)}</pattern>
+         <routePartitionName>{escape(route_partition)}</routePartitionName>
+      </axl:removeLine>
+   </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = _axl_post(session, cucm_host, soap)
+    if response.status_code != 200:
+        raise RuntimeError(f"removeLine failed HTTP {response.status_code}: {response.text[:1200]}")
+
+
+def _build_add_trans_pattern_soap(pattern, description, full_fields):
+    ordered_fields = [
+        "usage",
+        "routePartitionName",
+        "blockEnable",
+        "useCallingPartyPhoneMask",
+        "patternUrgency",
+        "callingLinePresentationBit",
+        "callingNamePresentationBit",
+        "connectedLinePresentationBit",
+        "connectedNamePresentationBit",
+        "patternPrecedence",
+        "provideOutsideDialtone",
+        "callingPartyNumberingPlan",
+        "callingPartyNumberType",
+        "calledPartyNumberingPlan",
+        "calledPartyNumberType",
+        "callingSearchSpaceName",
+        "routeNextHopByCgpn",
+        "routeClass",
+        "releaseClause",
+        "useOriginatorCss",
+        "dontWaitForIDTOnSubsequentHops",
+        "isEmergencyServiceNumber",
+        "calledPartyTransformationMask",
+        "callingPartyTransformationMask",
+    ]
+
+    values = {}
+    for key, value in (full_fields or {}).items():
+        if not key.startswith("transPattern."):
+            continue
+        suffix = key[len("transPattern."):]
+        if ".@" in suffix or "[" in suffix:
+            continue
+        if suffix in {"pattern", "description"}:
+            continue
+        clean_val = str(value or "").strip()
+        if clean_val:
+            values[suffix] = clean_val
+
+    extra_xml = []
+    for field in ordered_fields:
+        if field in values:
+            extra_xml.append(f"            <{field}>{escape(values[field])}</{field}>")
+
+    # Add any additional fields from the template that are not in ordered list.
+    for field in sorted(values.keys()):
+        if field in ordered_fields:
+            continue
+        extra_xml.append(f"            <{field}>{escape(values[field])}</{field}>")
+
+    return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"{AXL_NS}\">
+   <soapenv:Body>
+      <axl:addTransPattern>
+         <transPattern>
+            <pattern>{escape(pattern)}</pattern>
+            <description>{escape(description)}</description>
+{chr(10).join(extra_xml)}
+         </transPattern>
+      </axl:addTransPattern>
+   </soapenv:Body>
+</soapenv:Envelope>"""
+
+
+def _add_translation_pattern(session, cucm_host, pattern, description, full_fields):
+    soap = _build_add_trans_pattern_soap(pattern, description, full_fields)
+    response = _axl_post(session, cucm_host, soap)
+    if response.status_code != 200:
+        raise RuntimeError(f"addTransPattern failed HTTP {response.status_code}: {response.text[:1200]}")
+
+
+def _powershell_handoff_template(email, dn):
+    plus_one_dn = f"+1{dn}"
+    return "\n".join([
+        f"$UserEmail = \"{email}\"",
+        f"$DirectoryNumber = \"{plus_one_dn}\"",
+        "Set-CsPhoneNumberAssignment -Identity $UserEmail -PhoneNumber $DirectoryNumber -PhoneNumberType DirectRouting",
+        "Get-CsOnlineUser -Identity $UserEmail | Select-Object UserPrincipalName, LineURI",
+    ])
+
+
+def create_teams_telephony_user(
+    cucm_host,
+    cucm_user,
+    cucm_pass,
+    target_user,
+    dn_prefix=DEFAULT_DN_PREFIX,
+    example_pattern_prefix=DEFAULT_EXAMPLE_PREFIX,
+    ad_username="",
+    ad_password="",
+):
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    clean_target = (target_user or "").strip()
+    filename = f"create_teams_telephony_user_{clean_target or 'unknown'}_{ts}.csv"
+
+    out = io.StringIO()
+    writer = csv.writer(out)
+    writer.writerow(["Step", "Status", "Details"])
+
+    if not clean_target:
+        writer.writerow(["Validation", "Failed", "target_user is required"])
+        return out.getvalue().encode("utf-8"), filename
+
+    session = requests.Session()
+    session.verify = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    try:
+        user_details = _get_user_details(session, cucm_host, clean_target)
+        email = (user_details.get("mailid") or "").strip()
+        if not email:
+            raise RuntimeError("Target user does not have mailid in CUCM.")
+
+        display_name = " ".join(
+            part for part in [user_details.get("firstName", ""), user_details.get("lastName", "")] if part
+        ).strip() or user_details.get("displayName", "") or user_details.get("userid", clean_target)
+
+        writer.writerow(["Lookup User", "Success", f"Found {user_details.get('userid', clean_target)}; email={email}"])
+
+        matches = lookup_translation_patterns(cucm_host, cucm_user, cucm_pass, example_pattern_prefix)
+        example = None
+        for item in matches:
+            if (item.get("pattern") or "").startswith(example_pattern_prefix):
+                example = item
+                break
+        if example is None:
+            raise RuntimeError(f"No translation pattern found beginning with {example_pattern_prefix}")
+
+        detail = get_translation_pattern_full(
+            cucm_host,
+            cucm_user,
+            cucm_pass,
+            example.get("pattern", ""),
+            example.get("route_partition", ""),
+        )
+        writer.writerow([
+            "Extract Template",
+            "Success",
+            f"Using example {detail.get('pattern', '')} / {detail.get('route_partition', '')}",
+        ])
+
+        new_dn = _choose_available_dn(session, cucm_host, (dn_prefix or DEFAULT_DN_PREFIX).strip())
+        writer.writerow([
+            "Select Available DN",
+            "Success",
+            f"Selected {new_dn}/{DN_ROUTE_PARTITION}",
+        ])
+
+        _remove_line(session, cucm_host, new_dn, DN_ROUTE_PARTITION)
+        writer.writerow([
+            "Delete Line",
+            "Success",
+            f"Deleted {new_dn}/{DN_ROUTE_PARTITION} before translation pattern rebuild",
+        ])
+
+        description = f"TEAMS DID {new_dn} {display_name}".strip()
+        _add_translation_pattern(
+            session,
+            cucm_host,
+            pattern=new_dn,
+            description=description,
+            full_fields=detail.get("full_fields", {}),
+        )
+        writer.writerow([
+            "Add Translation Pattern",
+            "Success",
+            f"Created translation pattern {new_dn} with description '{description}'",
+        ])
+
+        ad_context = None
+        if (ad_username or "").strip() and (ad_password or ""):
+            ad_context = {
+                "username": (ad_username or "").strip(),
+                "password": ad_password,
+            }
+        ad_ok, ad_message = update_ad_phone_fields(user_details.get("userid", clean_target), new_dn, ad_context)
+        writer.writerow([
+            "Update AD Phone Fields",
+            "Success" if ad_ok else "Failed",
+            ad_message,
+        ])
+
+        ps_template = _powershell_handoff_template(email=email, dn=new_dn)
+        writer.writerow([
+            "PowerShell Handoff",
+            "Success",
+            ps_template,
+        ])
+
+    except Exception as exc:
+        writer.writerow(["Script", "Error", str(exc)])
+
+    return out.getvalue().encode("utf-8"), filename
