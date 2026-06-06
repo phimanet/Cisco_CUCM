@@ -340,17 +340,8 @@ def _send_handoff_email_to_admin(operator_username, target_userid, target_email,
         return False, "Could not derive admin email from operator username. Use firstname.lastname format."
 
     subject = f"Teams Telephony Handoff Commands - {target_userid}"
-    body = "\n".join([
-        "Teams Telephony provisioning completed.",
-        "",
-        f"Requested by: {operator_username}",
-        f"Target user: {target_userid}",
-        f"Target email: {target_email}",
-        f"Assigned DN: {dn}",
-        "",
-        "PowerShell command set:",
-        ps_commands,
-    ])
+    # Email template intentionally contains only the required 4 PowerShell lines.
+    body = ps_commands
 
     message = EmailMessage()
     message["Subject"] = subject
