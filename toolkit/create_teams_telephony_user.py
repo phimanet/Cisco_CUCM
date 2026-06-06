@@ -307,10 +307,10 @@ def _add_translation_pattern(session, cucm_host, pattern, description, full_fiel
 def _powershell_handoff_template(email, dn):
     plus_one_dn = f"+1{dn}"
     return "\n".join([
-        f"$UserEmail = \"{email}\"",
-        f"$DirectoryNumber = \"{plus_one_dn}\"",
-        "Set-CsPhoneNumberAssignment -Identity $UserEmail -PhoneNumber $DirectoryNumber -PhoneNumberType DirectRouting",
-        "Get-CsOnlineUser -Identity $UserEmail | Select-Object UserPrincipalName, LineURI",
+        f"Set-CsPhoneNumberAssignment -Identity \"{email}\" -EnterpriseVoiceEnabled $true",
+        f"Set-CsPhoneNumberAssignment -Identity \"{email}\" -PhoneNumber {plus_one_dn} -PhoneNumberType DirectRouting",
+        f"Grant-CsOnlineVoiceRoutingPolicy -Identity \"{email}\" -PolicyName \"Unrestricted\"",
+        f"Grant-CsDialoutPolicy -Identity \"{email}\" -PolicyName \"DialoutCPCDomesticPSTNInternational\"",
     ])
 
 
