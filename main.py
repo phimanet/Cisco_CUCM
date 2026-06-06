@@ -1340,9 +1340,9 @@ def menu_page(request: Request):
       }
 
       h3 {
-        margin: 14px 0 8px 0;
+        margin: 10px 0 6px 0;
         color: var(--amn-navy);
-        font-size: 20px;
+        font-size: 18px;
       }
 
       .portal-shell {
@@ -1437,9 +1437,13 @@ def menu_page(request: Request):
         background: rgba(255, 255, 255, 0.93);
         border: 1px solid var(--amn-panel-border);
         border-radius: 14px;
-        padding: 14px;
+        padding: 10px;
         box-shadow: var(--amn-shadow);
         backdrop-filter: blur(6px);
+      }
+
+      form br + br {
+        display: none;
       }
 
       input,
@@ -1452,8 +1456,8 @@ def menu_page(request: Request):
 
       input,
       select {
-        min-height: 36px;
-        padding: 7px 10px;
+        min-height: 32px;
+        padding: 5px 9px;
         width: min(520px, 100%);
         background: rgba(255, 255, 255, 0.96);
       }
@@ -1470,7 +1474,7 @@ def menu_page(request: Request):
         background: linear-gradient(180deg, #0c77d8, #005eb8);
         color: #fff;
         border: none;
-        padding: 9px 13px;
+        padding: 7px 11px;
         font-weight: 700;
         cursor: pointer;
         box-shadow: 0 8px 18px rgba(0, 94, 184, 0.16);
@@ -1496,14 +1500,14 @@ def menu_page(request: Request):
 
       .build-user-layout {
         display: flex;
-        gap: 24px;
+        gap: 12px;
         align-items: flex-start;
         flex-wrap: wrap;
       }
 
       .jabber-check-layout {
         display: flex;
-        gap: 24px;
+        gap: 12px;
         align-items: flex-start;
         flex-wrap: wrap;
       }
@@ -1516,7 +1520,7 @@ def menu_page(request: Request):
       .jabber-check-output {
         flex: 1 1 480px;
         min-width: 320px;
-        padding: 12px 14px;
+        padding: 10px 12px;
         background: rgba(255, 255, 255, 0.88);
         border: 1px solid var(--amn-panel-border);
         border-radius: 14px;
@@ -1529,7 +1533,7 @@ def menu_page(request: Request):
 
       .jabber-check-frame {
         width: 100%;
-        min-height: 240px;
+        min-height: 170px;
         border: 1px solid var(--amn-border);
         border-radius: 12px;
         background: var(--amn-sky);
@@ -1557,7 +1561,7 @@ def menu_page(request: Request):
 
       .build-user-output textarea {
         width: 100%;
-        height: 380px;
+        height: 300px;
         font-family: Consolas, monospace;
         background: linear-gradient(180deg, #f4faff, #eaf4ff);
         color: #0f2940;
@@ -1570,7 +1574,7 @@ def menu_page(request: Request):
 
       .offboard-layout {
         display: flex;
-        gap: 24px;
+        gap: 12px;
         align-items: flex-start;
         flex-wrap: wrap;
       }
@@ -1611,7 +1615,7 @@ def menu_page(request: Request):
 
       .offboard-output textarea {
         width: 100%;
-        height: 380px;
+        height: 300px;
         font-family: Consolas, monospace;
         background: linear-gradient(180deg, #f4faff, #eaf4ff);
         color: #0f2940;
@@ -1624,7 +1628,7 @@ def menu_page(request: Request):
 
       .secondary-layout {
         display: flex;
-        gap: 24px;
+        gap: 12px;
         align-items: flex-start;
         flex-wrap: wrap;
       }
@@ -1646,7 +1650,7 @@ def menu_page(request: Request):
 
       .secondary-output textarea {
         width: 100%;
-        height: 380px;
+        height: 300px;
         font-family: Consolas, monospace;
         background: linear-gradient(180deg, #f4faff, #eaf4ff);
         color: #0f2940;
@@ -1684,15 +1688,15 @@ def menu_page(request: Request):
         }
 
         .build-user-output textarea {
-          height: 280px;
+          height: 230px;
         }
 
         .offboard-output textarea {
-          height: 280px;
+          height: 230px;
         }
 
         .secondary-output textarea {
-          height: 280px;
+          height: 230px;
         }
       }
     </style>
