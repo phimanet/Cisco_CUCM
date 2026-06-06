@@ -1517,8 +1517,8 @@ def menu_page(request: Request):
         min-width: 320px;
       }
 
-      #person-lookup-form input[name="cucm_user"],
-      #person-lookup-form input[name="cucm_pass"] {
+      .portal-main form input[name="cucm_user"],
+      .portal-main form input[name="cucm_pass"] {
         width: min(130px, 100%);
       }
 
@@ -1914,8 +1914,10 @@ def menu_page(request: Request):
 
     <div class="jabber-check-layout">
       <form id="extension-lookup-form" class="jabber-check-form">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+        <div class="compact-inline-row">
+          <span>Cisco Callmanager Username:</span>
+          <input name="cucm_user" value="__AUTH_USER__" required>
+        </div><br>
 
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
@@ -2028,8 +2030,10 @@ def menu_page(request: Request):
 
     <div class="jabber-check-layout">
       <form id="jabber-check-form" class="target-user-form jabber-check-form" action="/check/jabber-status?embedded=1" method="post" target="jabber-check-frame">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+        <div class="compact-inline-row">
+          <span>Cisco Callmanager Username:</span>
+          <input name="cucm_user" value="__AUTH_USER__" required>
+        </div><br>
 
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
@@ -2058,8 +2062,10 @@ def menu_page(request: Request):
 
     <div class="build-user-layout">
       <form id="build-user-form" class="target-user-form build-user-form" action="javascript:void(0)" method="post" onsubmit="return false;">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+        <div class="compact-inline-row">
+          <span>Cisco Callmanager Username:</span>
+          <input name="cucm_user" value="__AUTH_USER__" required>
+        </div><br>
 
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
@@ -2180,8 +2186,10 @@ def menu_page(request: Request):
 
     <div class="secondary-layout">
       <form id="called-name-form" class="target-user-form secondary-form" action="/called-name-change" method="post">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+        <div class="compact-inline-row">
+          <span>Cisco Callmanager Username:</span>
+          <input name="cucm_user" value="__AUTH_USER__" required>
+        </div><br>
 
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
@@ -2255,8 +2263,10 @@ def menu_page(request: Request):
 
     <div class="offboard-layout">
       <form id="offboard-user-form" class="target-user-form offboard-form" action="javascript:void(0)" method="post" onsubmit="return false;">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+        <div class="compact-inline-row">
+          <span>Cisco Callmanager Username:</span>
+          <input name="cucm_user" value="__AUTH_USER__" required>
+        </div><br>
 
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
@@ -2374,8 +2384,10 @@ def menu_page(request: Request):
 
     <div class="ad-update-layout">
       <form id="ad-update-form" class="target-user-form ad-update-form" action="/update/ad-phone-fields" method="post">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+        <div class="compact-inline-row">
+          <span>Cisco Callmanager Username:</span>
+          <input name="cucm_user" value="__AUTH_USER__" required>
+        </div><br>
 
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
@@ -2411,8 +2423,10 @@ def menu_page(request: Request):
 
     <div class="secondary-layout">
       <form id="secondary-tct-form" class="target-user-form secondary-form" action="/add/secondary-tct-device" method="post">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+        <div class="compact-inline-row">
+          <span>Cisco Callmanager Username:</span>
+          <input name="cucm_user" value="__AUTH_USER__" required>
+        </div><br>
 
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
@@ -2445,8 +2459,10 @@ def menu_page(request: Request):
 
     <div class="secondary-layout">
       <form id="secondary-bot-form" class="target-user-form secondary-form" action="/add/secondary-bot-device" method="post">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+        <div class="compact-inline-row">
+          <span>Cisco Callmanager Username:</span>
+          <input name="cucm_user" value="__AUTH_USER__" required>
+        </div><br>
 
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
@@ -2479,8 +2495,10 @@ def menu_page(request: Request):
 
     <div class="secondary-layout">
       <form id="line-group-form" class="secondary-form" action="/line-groups/edit-members" method="post">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+        <div class="compact-inline-row">
+          <span>Cisco Callmanager Username:</span>
+          <input name="cucm_user" value="__AUTH_USER__" required>
+        </div><br>
 
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
@@ -2540,8 +2558,10 @@ def menu_page(request: Request):
 
     <div class="build-user-layout">
       <form id="rebuild-user-form" class="target-user-form build-user-form" action="/rebuild/user-csf-phone" method="post">
-        Cisco Callmanager Username:<br>
-        <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+        <div class="compact-inline-row">
+          <span>Cisco Callmanager Username:</span>
+          <input name="cucm_user" value="__AUTH_USER__" required>
+        </div><br>
 
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
@@ -3459,6 +3479,18 @@ def menu_admin_page(request: Request):
         background: rgba(255, 255, 255, 0.96);
       }
 
+      form input[name="cucm_user"],
+      form input[name="cucm_pass"] {
+        width: min(130px, 100%);
+      }
+
+      .compact-inline-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
       input:focus,
       textarea:focus {
         outline: none;
@@ -3540,8 +3572,10 @@ def menu_admin_page(request: Request):
         <h3>Strike Use - Person Lookup</h3>
         <p>Search by last name (optional first name), then use the result to prefill Strike Mode.</p>
         <form id="admin-person-lookup-form">
-          Cisco Callmanager Username:<br>
-          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Username:</span>
+            <input name="cucm_user" value="__AUTH_USER__" required>
+          </div><br>
 
           Cisco Callmanager Password:<br>
           <input type="password" name="cucm_pass" required><br><br>
@@ -3562,8 +3596,10 @@ def menu_admin_page(request: Request):
       <section class="panel">
         <h3>Strike Mode - Add in both Jabber iPhone and Android (Option 5)</h3>
         <form id="admin-strike-form" action="/add/secondary-strike-devices" method="post">
-          Cisco Callmanager Username:<br>
-          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Username:</span>
+            <input name="cucm_user" value="__AUTH_USER__" required>
+          </div><br>
 
           Cisco Callmanager Password:<br>
           <input type="password" name="cucm_pass" required><br><br>
@@ -3578,8 +3614,10 @@ def menu_admin_page(request: Request):
       <section class="panel">
         <h3>Extract RPO Phones (Option 18)</h3>
         <form action="/export/rpo-phones" method="post">
-          Cisco Callmanager Username:<br>
-          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Username:</span>
+            <input name="cucm_user" value="__AUTH_USER__" required>
+          </div><br>
 
           Cisco Callmanager Password:<br>
           <input type="password" name="cucm_pass" required><br><br>
@@ -3594,8 +3632,10 @@ def menu_admin_page(request: Request):
       <section class="panel">
         <h3>Add Directory Numbers (Upload CSV)</h3>
         <form action="/add/directorynumbers" method="post" enctype="multipart/form-data">
-          Cisco Callmanager Username:<br>
-          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Username:</span>
+            <input name="cucm_user" value="__AUTH_USER__" required>
+          </div><br>
 
           Cisco Callmanager Password:<br>
           <input type="password" name="cucm_pass" required><br><br>
@@ -3612,8 +3652,10 @@ def menu_admin_page(request: Request):
       <section class="panel">
         <h3>Export Directory Numbers</h3>
         <form action="/export/directorynumbers" method="post">
-          Cisco Callmanager Username:<br>
-          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Username:</span>
+            <input name="cucm_user" value="__AUTH_USER__" required>
+          </div><br>
 
           Cisco Callmanager Password:<br>
           <input type="password" name="cucm_pass" required><br><br>
@@ -3631,8 +3673,10 @@ def menu_admin_page(request: Request):
       <section class="panel">
         <h3>Export End Users</h3>
         <form action="/export/endusers" method="post">
-          Cisco Callmanager Username:<br>
-          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Username:</span>
+            <input name="cucm_user" value="__AUTH_USER__" required>
+          </div><br>
 
           Cisco Callmanager Password:<br>
           <input type="password" name="cucm_pass" required><br><br>
@@ -3648,8 +3692,10 @@ def menu_admin_page(request: Request):
         <h3>Translation Pattern Lookup</h3>
         <p>Search translation patterns and return pattern, description, and called party transform mask.</p>
         <form id="admin-trans-pattern-form">
-          Cisco Callmanager Username:<br>
-          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Username:</span>
+            <input name="cucm_user" value="__AUTH_USER__" required>
+          </div><br>
 
           Cisco Callmanager Password:<br>
           <input type="password" name="cucm_pass" required><br><br>
@@ -3669,8 +3715,10 @@ def menu_admin_page(request: Request):
         <p>Upload CSV with columns like <strong>last_name, first_name</strong> (or first column as last name).</p>
         <p><a href="/download/bulk-person-template" style="font-weight:700;">Download Bulk Person Template</a></p>
         <form id="admin-bulk-person-form" enctype="multipart/form-data">
-          Cisco Callmanager Username:<br>
-          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Username:</span>
+            <input name="cucm_user" value="__AUTH_USER__" required>
+          </div><br>
 
           Cisco Callmanager Password:<br>
           <input type="password" name="cucm_pass" required><br><br>
@@ -3691,8 +3739,10 @@ def menu_admin_page(request: Request):
         <p>Upload CSV with a column like <strong>pattern</strong> or <strong>extension</strong> (or first column as pattern).</p>
         <p><a href="/download/bulk-extension-template" style="font-weight:700;">Download Bulk Extension Template</a></p>
         <form id="admin-bulk-extension-form" enctype="multipart/form-data">
-          Cisco Callmanager Username:<br>
-          <input name="cucm_user" value="__AUTH_USER__" required><br><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Username:</span>
+            <input name="cucm_user" value="__AUTH_USER__" required>
+          </div><br>
 
           Cisco Callmanager Password:<br>
           <input type="password" name="cucm_pass" required><br><br>
