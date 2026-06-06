@@ -1,6 +1,7 @@
 import csv
 import datetime
 import io
+import os
 import xml.etree.ElementTree as ET
 
 import requests
@@ -10,23 +11,15 @@ from xml.sax.saxutils import escape
 
 try:
     from .ad_phone_fields import update_ad_phone_fields
-    from .translation_pattern_lookup import (
-        lookup_translation_patterns,
-        get_translation_pattern_full,
-    )
 except ImportError:
     from ad_phone_fields import update_ad_phone_fields
-    from translation_pattern_lookup import (
-        lookup_translation_patterns,
-        get_translation_pattern_full,
-    )
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 AXL_NS = "http://www.cisco.com/AXL/API/15.0"
 DN_ROUTE_PARTITION = "ENT_DEVICE_PT"
 DEFAULT_DN_PREFIX = "314"
-DEFAULT_EXAMPLE_PREFIX = "3148984689"
+TEMPLATE_CSV_PATH = os.path.join(os.path.dirname(__file__), "translation_pattern_full_template.csv")
 
 
 def _strip_ns(tag):
@@ -275,13 +268,45 @@ def _powershell_handoff_template(email, dn):
     ])
 
 
+def _load_saved_template_fields():
+    if not os.path.exists(TEMPLATE_CSV_PATH):
+        raise RuntimeError(f"Template file not found: {TEMPLATE_CSV_PATH}")
+
+    with open(TEMPLATE_CSV_PATH, "r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        row = next(reader, None)
+
+    if not row:
+        raise RuntimeError("Template CSV exists but has no data rows.")
+
+    full_fields = {}
+    source_pattern = ""
+    source_route_partition = ""
+    for key, value in row.items():
+        clean_val = (value or "").strip()
+        if key == "template.source_pattern":
+            source_pattern = clean_val
+        elif key == "template.source_route_partition":
+            source_route_partition = clean_val
+        elif key.startswith("transPattern.") and clean_val:
+            full_fields[key] = clean_val
+
+    if not full_fields:
+        raise RuntimeError("Template CSV row does not include transPattern.* fields.")
+
+    return {
+        "source_pattern": source_pattern,
+        "source_route_partition": source_route_partition,
+        "full_fields": full_fields,
+    }
+
+
 def create_teams_telephony_user(
     cucm_host,
     cucm_user,
     cucm_pass,
     target_user,
     dn_prefix=DEFAULT_DN_PREFIX,
-    example_pattern_prefix=DEFAULT_EXAMPLE_PREFIX,
     ad_username="",
     ad_password="",
 ):
@@ -313,26 +338,16 @@ def create_teams_telephony_user(
 
         writer.writerow(["Lookup User", "Success", f"Found {user_details.get('userid', clean_target)}; email={email}"])
 
-        matches = lookup_translation_patterns(cucm_host, cucm_user, cucm_pass, example_pattern_prefix)
-        example = None
-        for item in matches:
-            if (item.get("pattern") or "").startswith(example_pattern_prefix):
-                example = item
-                break
-        if example is None:
-            raise RuntimeError(f"No translation pattern found beginning with {example_pattern_prefix}")
-
-        detail = get_translation_pattern_full(
-            cucm_host,
-            cucm_user,
-            cucm_pass,
-            example.get("pattern", ""),
-            example.get("route_partition", ""),
-        )
+        detail = _load_saved_template_fields()
         writer.writerow([
             "Extract Template",
             "Success",
-            f"Using example {detail.get('pattern', '')} / {detail.get('route_partition', '')}",
+            f"Using saved template from {os.path.basename(TEMPLATE_CSV_PATH)}"
+            + (
+                f" ({detail.get('source_pattern', '')}/{detail.get('source_route_partition', '')})"
+                if detail.get("source_pattern") or detail.get("source_route_partition")
+                else ""
+            ),
         ])
 
         new_dn = _choose_available_dn(session, cucm_host, (dn_prefix or DEFAULT_DN_PREFIX).strip())

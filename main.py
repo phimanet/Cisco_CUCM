@@ -2378,12 +2378,6 @@ def menu_page(request: Request):
         User ID for Teams Telephony user:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
 
-        DN Prefix:<br>
-        <input name="dn_prefix" value="314" required><br><br>
-
-        Example Translation Pattern Prefix:<br>
-        <input name="example_pattern_prefix" value="3148984689" required><br><br>
-
         <div class="action-row">
           <button id="teams-telephony-btn" type="button">Run Create Teams Telephony User</button>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
@@ -4960,8 +4954,6 @@ async def build_teams_telephony_user(
   cucm_user: str = Form(""),
   cucm_pass: str = Form(""),
   target_user: str = Form(...),
-  dn_prefix: str = Form("314"),
-  example_pattern_prefix: str = Form("3148984689"),
   inline: bool = Query(False),
 ):
   cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
@@ -4972,8 +4964,6 @@ async def build_teams_telephony_user(
     cucm_user=cucm_user,
     cucm_pass=cucm_pass,
     target_user=clean_target_user,
-    dn_prefix=dn_prefix,
-    example_pattern_prefix=example_pattern_prefix,
     ad_username=cucm_user,
     ad_password=cucm_pass,
   )
