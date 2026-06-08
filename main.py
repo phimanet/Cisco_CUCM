@@ -2781,9 +2781,14 @@ def menu_page(request: Request):
           runDelete();
         });
 
-        if (searchBtn && searchStatusEl && searchResultsEl && searchLastNameEl && searchFirstNameEl) {
+        if (searchBtn) {
           searchBtn.addEventListener("click", async function (event) {
             event.preventDefault();
+
+            if (!searchStatusEl || !searchResultsEl || !searchLastNameEl || !searchFirstNameEl) {
+              console.warn("Remove Teams search: Missing required DOM elements");
+              return;
+            }
 
             const userField = form.querySelector('input[name="cucm_user"]');
             const passField = form.querySelector('input[name="cucm_pass"]');
@@ -2877,7 +2882,9 @@ def menu_page(request: Request):
                 });
               });
             } catch (err) {
-              searchStatusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+              if (searchStatusEl) {
+                searchStatusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+              }
             }
           });
         }
