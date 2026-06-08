@@ -1972,7 +1972,7 @@ def menu_page(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
           <button type="button" class="portal-nav-btn" data-panel="teams-telephony">Create Teams Telephony User</button>
           <button type="button" class="portal-nav-btn portal-nav-btn-danger" data-panel="teams-telephony-remove">Remove Teams Telephony User</button>
-          <button type="button" class="portal-nav-btn" data-panel="namechange">Jabber/VM Name Update</button>
+          <button type="button" class="portal-nav-btn" data-panel="namechange">Employee Name Change-Update Jabber/VM</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
           <button type="button" class="portal-nav-btn portal-nav-btn-danger" data-panel="offboard">Separate Employeed-Delete Jabber/VM</button>
           <button type="button" class="portal-nav-btn" data-panel="ad">Update AD Telephone/ipPhone Field Only</button>
@@ -2908,7 +2908,7 @@ def menu_page(request: Request):
 
     <section class="tool-panel" data-panel="namechange">
 
-    <h3>Jabber/VM Name Update (Update CUCM Phone/Line + Unity Display/SMTP)</h3>
+    <h3>Employee Name Change-Update Jabber/VM (Update CUCM Phone/Line + Unity Display/SMTP)</h3>
     <p>
       This option reads Display Name from CUCM End User, updates all Jabber phone descriptions,
       updates line alerting/caller ID fields, and updates Unity voicemail Display Name and SMTP.
@@ -2928,14 +2928,14 @@ def menu_page(request: Request):
         <input name="target_user" placeholder="john.doe" required><br><br>
 
         <div class="action-row">
-          <button type="submit">Run Jabber/VM Name Update</button>
+          <button type="submit">Run Employee Name Change-Update Jabber/VM</button>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
       </form>
 
       <section class="secondary-output" aria-live="polite">
-        <h4>Jabber/VM Name Update Output Preview</h4>
-        <p id="called-name-status" class="secondary-status">Run Jabber/VM Name Update to view output here.</p>
+        <h4>Employee Name Change-Update Jabber/VM Output Preview</h4>
+        <p id="called-name-status" class="secondary-status">Run Employee Name Change-Update Jabber/VM to view output here.</p>
         <p>
           <a id="called-name-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
             Download CSV Output
@@ -3759,8 +3759,8 @@ def menu_page(request: Request):
               statusId: "called-name-status",
               previewId: "called-name-preview",
               downloadId: "called-name-download",
-              runningText: "Running Jabber/VM Name Update...",
-              failedText: "Jabber/VM Name Update failed. Review output and retry.",
+              runningText: "Running Employee Name Change-Update Jabber/VM...",
+              failedText: "Employee Name Change-Update Jabber/VM failed. Review output and retry.",
               defaultFilename: "called_name_change_output.csv",
             });
             return;
@@ -6176,7 +6176,7 @@ def called_name_change_route(
         "download_url": f"/download/job-output/{job_output['job_id']}",
       })
 
-    return _render_job_result("Jabber/VM Name Update", data, filename)
+    return _render_job_result("Employee Name Change-Update Jabber/VM", data, filename)
 
 
 @app.post("/add/secondary-tct-device")
