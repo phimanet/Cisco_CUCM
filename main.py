@@ -2795,16 +2795,15 @@ def menu_page(request: Request):
         const cleanTargetUser = ((targetUserField && targetUserField.value) || "").trim();
         if (!cleanTargetUser) {
           statusEl.textContent = "Enter User ID for Teams Telephony removal or select one from Search results.";
-          outputEl.value = "Lookup precheck failed: target user is blank.";
+          outputEl.value = "";
           if (targetUserField) {
             targetUserField.focus();
           }
           return;
         }
 
-        const startedAt = new Date().toISOString();
         statusEl.textContent = "Running lookup...";
-        outputEl.value = "Lookup click received at " + startedAt + "\\nTarget user: " + cleanTargetUser;
+        outputEl.value = "";
         deleteBtn.disabled = true;
         window.teamsRemoveLookupState = null;
 
@@ -2835,7 +2834,6 @@ def menu_page(request: Request):
           window.teamsRemoveLookupState = payload;
           statusEl.textContent = payload.match_found ? "Lookup completed. MATCHED" : "Lookup completed. NOT MATCHED";
           outputEl.value = [
-            "Lookup started: " + startedAt,
             "User: " + (payload.target_user || ""),
             "Name: " + (((payload.first_name || "") + " " + (payload.last_name || "")).trim()),
             "Extension: " + (payload.extension || ""),
@@ -2850,11 +2848,7 @@ def menu_page(request: Request):
           }
         } catch (err) {
           statusEl.textContent = "Lookup failed.";
-          outputEl.value = [
-            "Lookup started: " + startedAt,
-            "Target user: " + cleanTargetUser,
-            "Error: " + (((err || {}).message) || "Unknown error."),
-          ].join("\\n");
+          outputEl.value = ((err && err.message) || "Unknown error.");
           if (window.console && typeof window.console.error === "function") {
             console.error("Remove Teams lookup failed", err);
           }
