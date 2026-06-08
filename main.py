@@ -1974,7 +1974,7 @@ def menu_page(request: Request):
           <button type="button" class="portal-nav-btn portal-nav-btn-danger" data-panel="teams-telephony-remove">Remove Teams Telephony User</button>
           <button type="button" class="portal-nav-btn" data-panel="namechange">Jabber/VM Name Update</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
-          <button type="button" class="portal-nav-btn portal-nav-btn-danger" data-panel="offboard">Offboard Cisco Jabber</button>
+          <button type="button" class="portal-nav-btn portal-nav-btn-danger" data-panel="offboard">Separate Employeed-Delete Jabber/VM</button>
           <button type="button" class="portal-nav-btn" data-panel="ad">Update AD Telephone/ipPhone Field Only</button>
           <button type="button" class="portal-nav-btn" data-panel="tct">Add in Jabber iPhone</button>
           <button type="button" class="portal-nav-btn" data-panel="bot">Add in Jabber Android</button>
