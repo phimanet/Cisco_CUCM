@@ -2631,8 +2631,8 @@ def menu_page(request: Request):
         <input name="target_user" placeholder="john.doe" required><br><br>
 
         <div class="action-row">
-          <button id="teams-remove-lookup-btn" type="button">Lookup Teams Mapping</button>
-          <button id="teams-remove-delete-btn" type="button" style="background:#b00020;" disabled>Delete + Rebuild Inactive DN</button>
+          <button id="teams-remove-lookup-btn" type="button" onclick="if (window.runTeamsRemoveLookup) { window.runTeamsRemoveLookup(); } return false;">Lookup Teams Mapping</button>
+          <button id="teams-remove-delete-btn" type="button" style="background:#b00020;" disabled onclick="if (window.runTeamsRemoveDelete) { window.runTeamsRemoveDelete(); } return false;">Delete + Rebuild Inactive DN</button>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
       </form>
@@ -2818,6 +2818,8 @@ def menu_page(request: Request):
           }
         }
 
+        window.runTeamsRemoveLookup = runLookup;
+
         async function runDelete() {
           if (!lookupState || !lookupState.match_found) {
             statusEl.textContent = "Run lookup first and confirm strict match.";
@@ -2875,6 +2877,8 @@ def menu_page(request: Request):
             }
           }
         }
+
+        window.runTeamsRemoveDelete = runDelete;
 
         lookupBtn.addEventListener("click", function (event) {
           event.preventDefault();
@@ -3889,6 +3893,50 @@ def menu_page(request: Request):
           showPanel(btn.dataset.panel);
         });
       });
+
+      function bindRemoveTeamsControlsSafe() {
+        const form = document.getElementById("teams-remove-form");
+        const searchBtn = document.getElementById("teams-remove-search-btn");
+        const lookupBtn = document.getElementById("teams-remove-lookup-btn");
+        const deleteBtn = document.getElementById("teams-remove-delete-btn");
+        if (!form || !searchBtn || !lookupBtn || !deleteBtn) {
+          return;
+        }
+
+        if (searchBtn.dataset.safeBound === "1") {
+          return;
+        }
+
+        searchBtn.dataset.safeBound = "1";
+        lookupBtn.dataset.safeBound = "1";
+        deleteBtn.dataset.safeBound = "1";
+
+        searchBtn.addEventListener("click", function (event) {
+          if (event.defaultPrevented) return;
+          event.preventDefault();
+          if (typeof window.runTeamsRemoveSearch === "function") {
+            window.runTeamsRemoveSearch();
+          }
+        });
+
+        lookupBtn.addEventListener("click", function (event) {
+          if (event.defaultPrevented) return;
+          event.preventDefault();
+          if (typeof window.runTeamsRemoveLookup === "function") {
+            window.runTeamsRemoveLookup();
+          }
+        });
+
+        deleteBtn.addEventListener("click", function (event) {
+          if (event.defaultPrevented) return;
+          event.preventDefault();
+          if (typeof window.runTeamsRemoveDelete === "function") {
+            window.runTeamsRemoveDelete();
+          }
+        });
+      }
+
+      bindRemoveTeamsControlsSafe();
 
       // ── Duplicate device pre-check ──────────────────────────────────────────
       // Runs before Build CSF, TCT, BOT, and Strike forms submit.
