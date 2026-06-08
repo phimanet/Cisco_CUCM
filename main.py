@@ -9,6 +9,7 @@ import threading
 import time
 import xml.etree.ElementTree as ET
 from email.message import EmailMessage
+from zoneinfo import ZoneInfo
 
 import requests
 import urllib3
@@ -78,6 +79,7 @@ MOBILE_JABBER_EMAIL_BODY = (
 )
 AUDIT_LOG_LOCK = threading.Lock()
 AUDIT_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
+AUDIT_TIMEZONE = (os.getenv("AUDIT_TIMEZONE", "America/Los_Angeles") or "America/Los_Angeles").strip()
 AUDIT_RETENTION_DAYS = 365
 AUDIT_FIELDS = [
   "timestamp",
@@ -395,7 +397,7 @@ def _prune_audit_log_locked():
     reader = csv.DictReader(handle)
     rows = list(reader)
 
-  cutoff = datetime.datetime.now() - datetime.timedelta(days=AUDIT_RETENTION_DAYS)
+  cutoff = _audit_now() - datetime.timedelta(days=AUDIT_RETENTION_DAYS)
   kept_rows = []
   for row in rows:
     ts_text = (row.get("timestamp") or "").strip()
@@ -431,7 +433,7 @@ def _append_audit_event(
   extension_deleted: str = "",
 ):
   row = [
-    datetime.datetime.now().strftime(AUDIT_TIMESTAMP_FORMAT),
+    _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
     action,
     cucm_host,
     operator,
@@ -449,6 +451,14 @@ def _append_audit_event(
     with open(AUDIT_LOG_PATH, "a", newline="", encoding="utf-8") as handle:
       writer = csv.writer(handle)
       writer.writerow(row)
+
+
+def _audit_now() -> datetime.datetime:
+  try:
+    return datetime.datetime.now(ZoneInfo(AUDIT_TIMEZONE)).replace(tzinfo=None)
+  except Exception:
+    # Fall back to server local time if timezone configuration is invalid.
+    return datetime.datetime.now()
 
 
 def _to_bytes(data):
@@ -2622,7 +2632,7 @@ def menu_page(request: Request):
           First Name (optional):<br>
           <input id="teams-remove-first-name" placeholder="John" style="width:min(320px,100%);"><br><br>
 
-          <button id="teams-remove-search-btn" type="button" onclick="if (window.runTeamsRemoveSearch) { window.runTeamsRemoveSearch(); } return false;">Search User</button>
+          <button id="teams-remove-search-btn" type="button" onclick="if (window.runTeamsRemoveSearch) { window.runTeamsRemoveSearch(); } else { var s=document.getElementById('teams-remove-search-status'); if (s) { s.textContent='Search handler missing (JS did not load).'; } } return false;">Search User</button>
           <p id="teams-remove-search-status" style="margin:10px 0 6px 0; color:#7a1020; min-height:18px;">Enter last name and click Search User.</p>
           <div id="teams-remove-search-results" style="overflow-x:auto;"></div>
         </div>
@@ -2631,7 +2641,7 @@ def menu_page(request: Request):
         <input name="target_user" placeholder="john.doe" required><br><br>
 
         <div class="action-row">
-          <button id="teams-remove-lookup-btn" type="button" onclick="if (window.runTeamsRemoveLookup) { window.runTeamsRemoveLookup(); } return false;">Lookup Teams Mapping</button>
+          <button id="teams-remove-lookup-btn" type="button" onclick="if (window.runTeamsRemoveLookup) { window.runTeamsRemoveLookup(); } else { var st=document.getElementById('teams-remove-status'); var out=document.getElementById('teams-remove-preview'); if (st) { st.textContent='Lookup handler missing (JS did not load).'; } if (out) { out.value='Lookup handler missing (JS did not load).'; } } return false;">Lookup Teams Mapping</button>
           <button id="teams-remove-delete-btn" type="button" style="background:#b00020;" disabled onclick="if (window.runTeamsRemoveDelete) { window.runTeamsRemoveDelete(); } return false;">Delete + Rebuild Inactive DN</button>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
