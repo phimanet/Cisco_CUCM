@@ -48,6 +48,13 @@ def _find_first_text(elem, path_candidates):
     return ""
 
 
+def _normalize_did(value):
+    digits = re.sub(r"\D", "", value or "")
+    if len(digits) == 11 and digits.startswith("1"):
+        return digits[1:]
+    return digits
+
+
 def _axl_post(session, cucm_host, soap_xml):
     response = session.post(
         f"https://{cucm_host}:8443/axl/",
@@ -89,6 +96,7 @@ def _get_user_details(session, cucm_host, username):
         "last_name": _find_first_text(user_node, [["lastName"]]),
         "mailid": _find_first_text(user_node, [["mailid"]]),
         "extension": _find_first_text(user_node, [["primaryExtension", "pattern"]]),
+        "telephone": _find_first_text(user_node, [["telephoneNumber"]]),
     }
 
 
@@ -137,21 +145,21 @@ def _list_translation_patterns(session, cucm_host, pattern_query):
     return results
 
 
-def _find_strict_teams_pattern_match(session, cucm_host, extension, first_name, last_name):
-    ext_digits = re.sub(r"\D", "", extension or "")
+def _find_strict_teams_pattern_match(session, cucm_host, extension_or_telephone, first_name, last_name):
+    ext_digits = _normalize_did(extension_or_telephone)
     if not ext_digits:
-        raise RuntimeError("User has no primary extension to match Teams translation pattern.")
+        raise RuntimeError("User has no primary extension or telephone number to match Teams translation pattern.")
 
     expected_description = f"TEAMS DID {ext_digits} {first_name} {last_name}".strip()
     candidates = _list_translation_patterns(session, cucm_host, ext_digits)
 
     for item in candidates:
-        pattern_digits = re.sub(r"\D", "", item.get("pattern") or "")
+        pattern_digits = _normalize_did(item.get("pattern") or "")
         if pattern_digits != ext_digits:
             continue
         if (item.get("description") or "").strip() != expected_description:
             continue
-        if (item.get("route_partition") or "").strip() != TEAMS_ROUTE_PARTITION:
+        if (item.get("route_partition") or "").strip().lower() != TEAMS_ROUTE_PARTITION.lower():
             continue
         return {
             "pattern": item.get("pattern") or ext_digits,
@@ -180,10 +188,11 @@ def lookup_teams_telephony_removal_candidate(cucm_host, cucm_user, cucm_pass, ta
         raise RuntimeError("target_user is required")
 
     user = _get_user_details(session, cucm_host, clean_target)
+    match_source = user.get("extension", "") or user.get("telephone", "")
     match = _find_strict_teams_pattern_match(
         session,
         cucm_host,
-        user.get("extension", ""),
+        match_source,
         user.get("first_name", ""),
         user.get("last_name", ""),
     )
@@ -192,12 +201,13 @@ def lookup_teams_telephony_removal_candidate(cucm_host, cucm_user, cucm_pass, ta
         "target_user": user.get("userid", clean_target),
         "first_name": user.get("first_name", ""),
         "last_name": user.get("last_name", ""),
-        "extension": match.get("extension", "") or user.get("extension", ""),
+        "extension": match.get("extension", "") or _normalize_did(match_source),
         "expected_description": match.get("expected_description", ""),
         "match_found": bool(match.get("pattern")),
         "pattern": match.get("pattern", ""),
         "route_partition": match.get("route_partition", ""),
         "description": match.get("description", ""),
+        "match_source": "primaryExtension" if user.get("extension", "") else "telephoneNumber",
     }
 
 
