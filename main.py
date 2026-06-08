@@ -2674,8 +2674,12 @@ def menu_page(request: Request):
 
         if (!lastName) {
           statusEl.textContent = "Last Name is required for lookup.";
+          if (lastNameEl) {
+            lastNameEl.focus();
+          }
           return;
         }
+
         if (!cucmUser || !cucmPass) {
           statusEl.textContent = "Enter CUCM username/password above before searching.";
           return;
@@ -2695,10 +2699,23 @@ def menu_page(request: Request):
             method: "POST",
             body: lookupForm,
             credentials: "same-origin",
+            headers: {
+              "Accept": "application/json",
+              "X-Requested-With": "XMLHttpRequest",
+            },
           });
-          const payload = await response.json();
+
+          const responseText = await response.text();
+          let payload = null;
+          try {
+            payload = JSON.parse(responseText || "{}");
+          } catch (_parseErr) {
+            throw new Error(responseText || ("Request failed with status " + response.status));
+          }
+
           if (!response.ok || !payload.ok) {
-            throw new Error((payload && payload.detail) || "Search failed.");
+            const msg = (payload.error && payload.error.message) || payload.detail || "Search failed.";
+            throw new Error(msg);
           }
 
           const results = payload.results || [];
@@ -2708,39 +2725,50 @@ def menu_page(request: Request):
           }
 
           statusEl.textContent = "Found " + results.length + " user(s).";
+
           let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
           html += '<thead><tr style="background:#b00020; color:#fff;">';
-          html += '<th style="padding:8px 10px; text-align:left;">Name</th>';
-          html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
-          html += '<th style="padding:8px 10px; text-align:left;">Action</th>';
+          html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+          html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+          html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+          html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
+          html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
           html += '</tr></thead><tbody>';
 
-          for (let i = 0; i < results.length; i += 1) {
-            const r = results[i] || {};
+          results.forEach(function (r, i) {
             const bg = i % 2 === 0 ? "#fff7f8" : "#ffffff";
+            const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
             const uid = r.userid || "";
-            const name = r.display_name || uid;
+            const email = r.email || "-";
+            const telephone = r.telephone || "-";
+
             html += '<tr style="background:' + bg + '; border-bottom:1px solid #f0c8cf;">';
             html += '<td style="padding:7px 10px;">' + name + '</td>';
             html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+            html += '<td style="padding:7px 10px;">' + email + '</td>';
+            html += '<td style="padding:7px 10px;">' + telephone + '</td>';
             html += '<td style="padding:7px 10px;">';
             html += '<button type="button" data-remove-user="' + uid + '" style="background:#b00020; color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Use for Remove Teams</button>';
-            html += '</td></tr>';
-          }
+            html += '</td>';
+            html += '</tr>';
+          });
 
           html += '</tbody></table>';
           resultsEl.innerHTML = html;
-          const useButtons = resultsEl.querySelectorAll('button[data-remove-user]');
-          useButtons.forEach(function (btnEl) {
-            btnEl.addEventListener("click", function () {
-              const uid = (btnEl.getAttribute("data-remove-user") || "").trim();
+
+          resultsEl.querySelectorAll('button[data-remove-user]').forEach(function (btnEl) {
+            btnEl.addEventListener('click', function () {
+              const uid = (btnEl.getAttribute('data-remove-user') || '').trim();
               if (targetUserField) {
                 targetUserField.value = uid;
               }
             });
           });
         } catch (err) {
-          statusEl.textContent = "Search failed: " + (((err || {}).message) || "Unknown error.");
+          statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+          if (window.console && typeof window.console.error === "function") {
+            console.error("Remove Teams search failed", err);
+          }
         }
       };
 
