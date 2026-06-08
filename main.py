@@ -2097,6 +2097,125 @@ def menu_page(request: Request):
         });
       })();
     </script>
+
+        <script>
+          (function () {
+            const searchBtn = document.getElementById("teams-remove-search-btn");
+            const searchStatusEl = document.getElementById("teams-remove-search-status");
+            const searchResultsEl = document.getElementById("teams-remove-search-results");
+            const searchLastNameEl = document.getElementById("teams-remove-last-name");
+            const searchFirstNameEl = document.getElementById("teams-remove-first-name");
+            const form = document.getElementById("teams-remove-form");
+
+            if (!searchBtn || !searchStatusEl || !searchResultsEl || !searchLastNameEl || !searchFirstNameEl) {
+              console.warn("Remove Teams search: Missing required DOM elements", {
+                searchBtn: !!searchBtn,
+                searchStatusEl: !!searchStatusEl,
+                searchResultsEl: !!searchResultsEl,
+                searchLastNameEl: !!searchLastNameEl,
+                searchFirstNameEl: !!searchFirstNameEl
+              });
+              return;
+            }
+
+            searchBtn.addEventListener("click", async function (event) {
+              event.preventDefault();
+              const userField = form ? form.querySelector('input[name="cucm_user"]') : null;
+              const passField = form ? form.querySelector('input[name="cucm_pass"]') : null;
+              const targetUserField = form ? form.querySelector('input[name="target_user"]') : null;
+              const lastName = (searchLastNameEl.value || "").trim();
+              const firstName = (searchFirstNameEl.value || "").trim();
+              const cucmUser = ((userField && userField.value) || "").trim();
+              const cucmPass = (passField && passField.value) || "";
+
+              if (!lastName) {
+                searchStatusEl.textContent = "Last Name is required for lookup.";
+                searchLastNameEl.focus();
+                return;
+              }
+
+              if (!cucmUser || !cucmPass) {
+                searchStatusEl.textContent = "Enter CUCM username/password above before searching.";
+                return;
+              }
+
+              searchStatusEl.textContent = "Searching...";
+              searchResultsEl.innerHTML = "";
+
+              try {
+                const lookupForm = new FormData();
+                lookupForm.append("cucm_user", cucmUser);
+                lookupForm.append("cucm_pass", cucmPass);
+                lookupForm.append("last_name", lastName);
+                lookupForm.append("first_name", firstName);
+
+                const response = await fetch("/lookup/person", {
+                  method: "POST",
+                  body: lookupForm,
+                  credentials: "same-origin",
+                });
+
+                const payload = await response.json();
+                if (!response.ok || !payload.ok) {
+                  const msg = (payload.error && payload.error.message) || "Search failed.";
+                  throw new Error(msg);
+                }
+
+                const results = payload.results || [];
+                if (!results.length) {
+                  searchStatusEl.textContent = "No users found matching that name.";
+                  return;
+                }
+
+                searchStatusEl.textContent = `Found ${results.length} user(s).`;
+
+                let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+                html += '<thead><tr style="background:#b00020; color:#fff;">';
+                html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+                html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+                html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
+                html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+                html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
+                html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
+                html += '</tr></thead><tbody>';
+
+                results.forEach(function (r, i) {
+                  const bg = i % 2 === 0 ? "#fff7f8" : "#ffffff";
+                  const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+                  const uid = r.userid || "";
+                  const ext = r.primary_extension || "\u2014";
+                  const email = r.email || "\u2014";
+                  const telephone = r.telephone || "\u2014";
+
+                  html += '<tr style="background:' + bg + '; border-bottom:1px solid #f0c8cf;">';
+                  html += '<td style="padding:7px 10px;">' + name + '</td>';
+                  html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+                  html += '<td style="padding:7px 10px;">' + ext + '</td>';
+                  html += '<td style="padding:7px 10px;">' + email + '</td>';
+                  html += '<td style="padding:7px 10px;">' + telephone + '</td>';
+                  html += '<td style="padding:7px 10px;">';
+                  html += '<button type="button" data-remove-user="' + uid + '" style="background:#b00020; color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Use for Remove Teams</button>';
+                  html += '</td>';
+                  html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+                searchResultsEl.innerHTML = html;
+
+                searchResultsEl.querySelectorAll('button[data-remove-user]').forEach(function (btnEl) {
+                  btnEl.addEventListener('click', function () {
+                    const uid = (btnEl.getAttribute('data-remove-user') || '').trim();
+                    if (targetUserField) {
+                      targetUserField.value = uid;
+                    }
+                  });
+                });
+              } catch (err) {
+                searchStatusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+              }
+            });
+          })();
+        </script>
     </section>
 
     <section class="tool-panel" data-panel="extensionlookup">
@@ -2780,114 +2899,6 @@ def menu_page(request: Request):
           event.preventDefault();
           runDelete();
         });
-
-        if (searchBtn) {
-          searchBtn.addEventListener("click", async function (event) {
-            event.preventDefault();
-
-            if (!searchStatusEl || !searchResultsEl || !searchLastNameEl || !searchFirstNameEl) {
-              console.warn("Remove Teams search: Missing required DOM elements");
-              return;
-            }
-
-            const userField = form.querySelector('input[name="cucm_user"]');
-            const passField = form.querySelector('input[name="cucm_pass"]');
-            const targetUserField = form.querySelector('input[name="target_user"]');
-            const lastName = (searchLastNameEl.value || "").trim();
-            const firstName = (searchFirstNameEl.value || "").trim();
-            const cucmUser = ((userField && userField.value) || "").trim();
-            const cucmPass = (passField && passField.value) || "";
-
-            if (!lastName) {
-              searchStatusEl.textContent = "Last Name is required for lookup.";
-              searchLastNameEl.focus();
-              return;
-            }
-
-            if (!cucmUser || !cucmPass) {
-              searchStatusEl.textContent = "Enter CUCM username/password above before searching.";
-              return;
-            }
-
-            searchStatusEl.textContent = "Searching...";
-            searchResultsEl.innerHTML = "";
-
-            try {
-              const lookupForm = new FormData();
-              lookupForm.append("cucm_user", cucmUser);
-              lookupForm.append("cucm_pass", cucmPass);
-              lookupForm.append("last_name", lastName);
-              lookupForm.append("first_name", firstName);
-
-              const response = await fetch("/lookup/person", {
-                method: "POST",
-                body: lookupForm,
-                credentials: "same-origin",
-              });
-
-              const payload = await response.json();
-              if (!response.ok || !payload.ok) {
-                const msg = (payload.error && payload.error.message) || "Search failed.";
-                throw new Error(msg);
-              }
-
-              const results = payload.results || [];
-              if (!results.length) {
-                searchStatusEl.textContent = "No users found matching that name.";
-                return;
-              }
-
-              searchStatusEl.textContent = `Found ${results.length} user(s).`;
-
-              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
-              html += '<thead><tr style="background:#b00020; color:#fff;">';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
-              html += '</tr></thead><tbody>';
-
-              results.forEach(function (r, i) {
-                const bg = i % 2 === 0 ? "#fff7f8" : "#ffffff";
-                const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
-                const uid = r.userid || "";
-                const ext = r.primary_extension || "\u2014";
-                const email = r.email || "\u2014";
-                const telephone = r.telephone || "\u2014";
-
-                html += '<tr style="background:' + bg + '; border-bottom:1px solid #f0c8cf;">';
-                html += '<td style="padding:7px 10px;">' + name + '</td>';
-                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
-                html += '<td style="padding:7px 10px;">' + ext + '</td>';
-                html += '<td style="padding:7px 10px;">' + email + '</td>';
-                html += '<td style="padding:7px 10px;">' + telephone + '</td>';
-                html += '<td style="padding:7px 10px;">';
-                html += '<button type="button" data-remove-user="' + uid + '" style="background:#b00020; color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Use for Remove Teams</button>';
-                html += '</td>';
-                html += '</tr>';
-              });
-
-              html += '</tbody></table>';
-              searchResultsEl.innerHTML = html;
-
-              searchResultsEl.querySelectorAll('button[data-remove-user]').forEach(function (btnEl) {
-                btnEl.addEventListener('click', function () {
-                  const uid = (btnEl.getAttribute('data-remove-user') || '').trim();
-                  if (targetUserField) {
-                    targetUserField.value = uid;
-                  }
-                  runLookup();
-                });
-              });
-            } catch (err) {
-              if (searchStatusEl) {
-                searchStatusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
-              }
-            }
-          });
-        }
       })();
     </script>
     </section>
