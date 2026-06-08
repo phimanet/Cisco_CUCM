@@ -3906,6 +3906,224 @@ def menu_page(request: Request):
         });
       });
 
+      function ensureRemoveTeamsFallbackHandlers() {
+        if (typeof window.runTeamsRemoveSearch !== "function") {
+          window.runTeamsRemoveSearch = async function () {
+            const form = document.getElementById("teams-remove-form");
+            const statusEl = document.getElementById("teams-remove-search-status");
+            const resultsEl = document.getElementById("teams-remove-search-results");
+            const lookupOutputEl = document.getElementById("teams-remove-preview");
+            if (!form || !statusEl || !resultsEl) {
+              return;
+            }
+
+            const userField = form.querySelector('input[name="cucm_user"]');
+            const passField = form.querySelector('input[name="cucm_pass"]');
+            const lastNameEl = document.getElementById("teams-remove-last-name");
+            const firstNameEl = document.getElementById("teams-remove-first-name");
+            const targetUserField = form.querySelector('input[name="target_user"]');
+
+            const lastName = ((lastNameEl && lastNameEl.value) || "").trim();
+            const firstName = ((firstNameEl && firstNameEl.value) || "").trim();
+            const cucmUser = ((userField && userField.value) || "").trim();
+            const cucmPass = (passField && passField.value) || "";
+            const startedAt = new Date().toISOString();
+
+            if (lookupOutputEl) {
+              lookupOutputEl.value = [
+                "[Fallback Search] click received",
+                "timestamp=" + startedAt,
+                "last_name=" + lastName,
+                "first_name=" + firstName,
+                "has_cucm_user=" + (cucmUser ? "yes" : "no"),
+                "has_cucm_pass=" + (cucmPass ? "yes" : "no"),
+              ].join("\n");
+            }
+
+            if (!lastName) {
+              statusEl.textContent = "Last Name is required for lookup.";
+              if (lastNameEl) lastNameEl.focus();
+              return;
+            }
+            if (!cucmUser || !cucmPass) {
+              statusEl.textContent = "Enter CUCM username/password above before searching.";
+              return;
+            }
+
+            statusEl.textContent = "Searching...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const lookupForm = new FormData();
+              lookupForm.append("cucm_user", cucmUser);
+              lookupForm.append("cucm_pass", cucmPass);
+              lookupForm.append("last_name", lastName);
+              lookupForm.append("first_name", firstName);
+
+              const response = await fetch("/lookup/person", {
+                method: "POST",
+                body: lookupForm,
+                credentials: "same-origin",
+                headers: {
+                  "Accept": "application/json",
+                  "X-Requested-With": "XMLHttpRequest",
+                },
+              });
+
+              const responseText = await response.text();
+              let payload = null;
+              try {
+                payload = JSON.parse(responseText || "{}");
+              } catch (_parseErr) {
+                throw new Error(responseText || ("Request failed with status " + response.status));
+              }
+
+              if (!response.ok || !payload.ok) {
+                const msg = (payload.error && payload.error.message) || payload.detail || "Search failed.";
+                throw new Error(msg);
+              }
+
+              const results = payload.results || [];
+              if (!results.length) {
+                statusEl.textContent = "No users found matching that name.";
+                if (lookupOutputEl) {
+                  lookupOutputEl.value = lookupOutputEl.value + "\nresult_count=0";
+                }
+                return;
+              }
+
+              statusEl.textContent = "Found " + results.length + " user(s).";
+              if (lookupOutputEl) {
+                lookupOutputEl.value = lookupOutputEl.value + "\nresult_count=" + results.length;
+              }
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#b00020; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
+              html += '</tr></thead><tbody>';
+
+              results.forEach(function (r, i) {
+                const bg = i % 2 === 0 ? "#fff7f8" : "#ffffff";
+                const uid = r.userid || "";
+                const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || uid;
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #f0c8cf;">';
+                html += '<td style="padding:7px 10px;">' + name + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+                html += '<td style="padding:7px 10px;">';
+                html += '<button type="button" data-remove-user="' + uid + '" style="background:#b00020; color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Use for Remove Teams</button>';
+                html += '</td></tr>';
+              });
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+
+              resultsEl.querySelectorAll('button[data-remove-user]').forEach(function (btnEl) {
+                btnEl.addEventListener("click", function () {
+                  const uid = (btnEl.getAttribute("data-remove-user") || "").trim();
+                  if (targetUserField) {
+                    targetUserField.value = uid;
+                  }
+                  if (lookupOutputEl) {
+                    lookupOutputEl.value = lookupOutputEl.value + "\nselected_user=" + uid;
+                  }
+                });
+              });
+            } catch (err) {
+              statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+              if (lookupOutputEl) {
+                lookupOutputEl.value = lookupOutputEl.value + "\nsearch_error=" + (((err || {}).message) || "unknown");
+              }
+            }
+          };
+        }
+
+        if (typeof window.runTeamsRemoveLookup !== "function") {
+          window.runTeamsRemoveLookup = async function () {
+            const form = document.getElementById("teams-remove-form");
+            const statusEl = document.getElementById("teams-remove-status");
+            const outputEl = document.getElementById("teams-remove-preview");
+            const deleteBtn = document.getElementById("teams-remove-delete-btn");
+            const targetUserField = form ? form.querySelector('input[name="target_user"]') : null;
+            if (!form || !statusEl || !outputEl || !deleteBtn) {
+              return;
+            }
+
+            const cleanTargetUser = ((targetUserField && targetUserField.value) || "").trim();
+            const startedAt = new Date().toISOString();
+            outputEl.value = [
+              "[Fallback Lookup] click received",
+              "timestamp=" + startedAt,
+              "target_user=" + cleanTargetUser,
+            ].join("\n");
+
+            if (!cleanTargetUser) {
+              statusEl.textContent = "Enter User ID for Teams Telephony removal or select one from Search results.";
+              outputEl.value = outputEl.value + "\nprecheck=target_user_blank";
+              if (targetUserField) targetUserField.focus();
+              return;
+            }
+
+            statusEl.textContent = "Running lookup...";
+            deleteBtn.disabled = true;
+            window.teamsRemoveLookupState = null;
+
+            try {
+              const response = await fetch("/teams-telephony/remove/lookup", {
+                method: "POST",
+                body: new FormData(form),
+                credentials: "same-origin",
+                headers: {
+                  "Accept": "application/json",
+                  "X-Requested-With": "XMLHttpRequest",
+                },
+              });
+
+              outputEl.value = outputEl.value + "\nhttp_status=" + response.status;
+
+              const responseText = await response.text();
+              outputEl.value = outputEl.value + "\nresponse_text_len=" + (responseText || "").length;
+
+              let payload = null;
+              try {
+                payload = JSON.parse(responseText || "{}");
+              } catch (_parseErr) {
+                throw new Error(responseText || ("Request failed with status " + response.status));
+              }
+
+              if (!response.ok || !payload.ok) {
+                const msg = (payload.error && payload.error.message) || payload.detail || "Lookup failed.";
+                throw new Error(msg);
+              }
+
+              window.teamsRemoveLookupState = payload;
+              statusEl.textContent = payload.match_found ? "Lookup completed. MATCHED" : "Lookup completed. NOT MATCHED";
+              outputEl.value = [
+                outputEl.value,
+                "match_found=" + (payload.match_found ? "true" : "false"),
+                "match_source=" + (payload.match_source || ""),
+                "User: " + (payload.target_user || ""),
+                "Name: " + (((payload.first_name || "") + " " + (payload.last_name || "")).trim()),
+                "Extension: " + (payload.extension || ""),
+                "Expected Description: " + (payload.expected_description || ""),
+                "Matched Pattern: " + (payload.pattern || "(none)"),
+                "Matched Partition: " + (payload.route_partition || "(none)"),
+                "Matched Description: " + (payload.description || "(none)"),
+              ].join("\n");
+
+              if (payload.match_found) {
+                deleteBtn.disabled = false;
+              }
+            } catch (err) {
+              statusEl.textContent = "Lookup failed.";
+              outputEl.value = outputEl.value + "\nlookup_error=" + (((err || {}).message) || "Unknown error.");
+            }
+          };
+        }
+      }
+
+      ensureRemoveTeamsFallbackHandlers();
+
       // ── Duplicate device pre-check ──────────────────────────────────────────
       // Runs before Build CSF, TCT, BOT, and Strike forms submit.
       // Calls /check/user-devices, warns if the relevant device type already exists.
