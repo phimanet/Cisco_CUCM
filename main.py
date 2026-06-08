@@ -80,6 +80,11 @@ MOBILE_JABBER_EMAIL_BODY = (
 AUDIT_LOG_LOCK = threading.Lock()
 AUDIT_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 AUDIT_TIMEZONE = (os.getenv("AUDIT_TIMEZONE", "America/Los_Angeles") or "America/Los_Angeles").strip()
+ADMIN_USERS = {
+  (u or "").strip().lower()
+  for u in (os.getenv("ADMIN_USERS", "") or "").split(",")
+  if (u or "").strip()
+}
 AUDIT_RETENTION_DAYS = 365
 AUDIT_FIELDS = [
   "timestamp",
@@ -138,6 +143,27 @@ def _get_auth_session(request: Request):
 
   session["last_seen"] = now_epoch
   return session
+
+
+def _normalize_username(username: str) -> str:
+  user = (username or "").strip().lower()
+  if not user:
+    return ""
+  if "@" in user:
+    user = user.split("@", 1)[0].strip()
+  return user
+
+
+def _is_admin_user(username: str) -> bool:
+  # Backward-compatible default: if allowlist is not configured, do not restrict.
+  if not ADMIN_USERS:
+    return True
+
+  normalized = _normalize_username(username)
+  if not normalized:
+    return False
+
+  return normalized in ADMIN_USERS
 
 
 def _update_cached_credentials(
@@ -1256,9 +1282,16 @@ def logout(request: Request):
 @app.get("/menu", response_class=HTMLResponse)
 def menu_page(request: Request):
   session = _get_auth_session(request) or {}
-  auth_user = escape(str(session.get("username", "")))
+  session_username = str(session.get("username", ""))
+  auth_user = escape(session_username)
   auth_cucm_host = str(session.get("cucm_host", ""))
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
+  admin_card_html = "" if not _is_admin_user(session_username) else """
+        <a class=\"hero-link-card\" href=\"/menu-admin\">
+          <strong>Administrative Items</strong>
+          <span>Open bulk tools, strike workflows, exports, and translation lookups.</span>
+        </a>
+"""
   html = """
 <html>
   <head>
@@ -1947,10 +1980,7 @@ def menu_page(request: Request):
           <strong>Landing Page</strong>
           <span>Return to login and environment selection.</span>
         </a>
-        <a class="hero-link-card" href="/menu-admin">
-          <strong>Administrative Items</strong>
-          <span>Open bulk tools, strike workflows, exports, and translation lookups.</span>
-        </a>
+__ADMIN_CARD__
         <a class="hero-link-card" href="/download/audit-trail">
           <strong>Audit Trail CSV</strong>
           <span>Download recorded portal activity for review and traceability.</span>
@@ -3968,7 +3998,7 @@ def menu_page(request: Request):
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
+""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__ADMIN_CARD__", admin_card_html)
 
   return HTMLResponse(
     content=html,
@@ -3983,7 +4013,14 @@ def menu_page(request: Request):
 @app.get("/menu-admin", response_class=HTMLResponse)
 def menu_admin_page(request: Request):
   session = _get_auth_session(request) or {}
-  auth_user = escape(str(session.get("username", "")))
+  session_username = str(session.get("username", ""))
+  if not _is_admin_user(session_username):
+    return HTMLResponse(
+      content="<h3>403 Forbidden</h3><p>You are not authorized to access Administrative Items.</p>",
+      status_code=403,
+    )
+
+  auth_user = escape(session_username)
   auth_cucm_host = str(session.get("cucm_host", ""))
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
 
