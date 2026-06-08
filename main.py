@@ -2777,7 +2777,18 @@ def menu_page(request: Request):
         const statusEl = document.getElementById("teams-remove-status");
         const outputEl = document.getElementById("teams-remove-preview");
         const deleteBtn = document.getElementById("teams-remove-delete-btn");
+        const targetUserField = form ? form.querySelector('input[name="target_user"]') : null;
         if (!form || !statusEl || !outputEl || !deleteBtn) {
+          return;
+        }
+
+        const cleanTargetUser = ((targetUserField && targetUserField.value) || "").trim();
+        if (!cleanTargetUser) {
+          statusEl.textContent = "Enter User ID for Teams Telephony removal or select one from Search results.";
+          outputEl.value = "";
+          if (targetUserField) {
+            targetUserField.focus();
+          }
           return;
         }
 
@@ -2791,10 +2802,23 @@ def menu_page(request: Request):
             method: "POST",
             body: new FormData(form),
             credentials: "same-origin",
+            headers: {
+              "Accept": "application/json",
+              "X-Requested-With": "XMLHttpRequest",
+            },
           });
-          const payload = await response.json();
+
+          const responseText = await response.text();
+          let payload = null;
+          try {
+            payload = JSON.parse(responseText || "{}");
+          } catch (_parseErr) {
+            throw new Error(responseText || ("Request failed with status " + response.status));
+          }
+
           if (!response.ok || !payload.ok) {
-            throw new Error((payload && payload.detail) || "Lookup failed.");
+            const msg = (payload.error && payload.error.message) || payload.detail || "Lookup failed.";
+            throw new Error(msg);
           }
 
           window.teamsRemoveLookupState = payload;
@@ -2815,6 +2839,9 @@ def menu_page(request: Request):
         } catch (err) {
           statusEl.textContent = "Lookup failed.";
           outputEl.value = ((err || {}).message) || "Unknown error.";
+          if (window.console && typeof window.console.error === "function") {
+            console.error("Remove Teams lookup failed", err);
+          }
         }
       };
 
@@ -5406,13 +5433,29 @@ def teams_telephony_remove_lookup(
   cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
   _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
   clean_target_user = (target_user or "").strip()
-  result = lookup_teams_telephony_removal_candidate(
-    cucm_host=cucm_host,
-    cucm_user=cucm_user,
-    cucm_pass=cucm_pass,
-    target_user=clean_target_user,
-  )
-  return JSONResponse({"ok": True, **result})
+  if not clean_target_user:
+    return JSONResponse({
+      "ok": False,
+      "error": {
+        "message": "Target user is required.",
+      },
+    })
+
+  try:
+    result = lookup_teams_telephony_removal_candidate(
+      cucm_host=cucm_host,
+      cucm_user=cucm_user,
+      cucm_pass=cucm_pass,
+      target_user=clean_target_user,
+    )
+    return JSONResponse({"ok": True, **result})
+  except Exception as exc:
+    return JSONResponse({
+      "ok": False,
+      "error": {
+        "message": str(exc) or "Lookup failed.",
+      },
+    })
 
 
 @app.post("/teams-telephony/remove")
