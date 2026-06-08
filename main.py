@@ -2785,15 +2785,16 @@ def menu_page(request: Request):
         const cleanTargetUser = ((targetUserField && targetUserField.value) || "").trim();
         if (!cleanTargetUser) {
           statusEl.textContent = "Enter User ID for Teams Telephony removal or select one from Search results.";
-          outputEl.value = "";
+          outputEl.value = "Lookup precheck failed: target user is blank.";
           if (targetUserField) {
             targetUserField.focus();
           }
           return;
         }
 
+        const startedAt = new Date().toISOString();
         statusEl.textContent = "Running lookup...";
-        outputEl.value = "";
+        outputEl.value = "Lookup click received at " + startedAt + "\nTarget user: " + cleanTargetUser;
         deleteBtn.disabled = true;
         window.teamsRemoveLookupState = null;
 
@@ -2824,6 +2825,7 @@ def menu_page(request: Request):
           window.teamsRemoveLookupState = payload;
           statusEl.textContent = payload.match_found ? "Lookup completed. MATCHED" : "Lookup completed. NOT MATCHED";
           outputEl.value = [
+            "Lookup started: " + startedAt,
             "User: " + (payload.target_user || ""),
             "Name: " + (((payload.first_name || "") + " " + (payload.last_name || "")).trim()),
             "Extension: " + (payload.extension || ""),
@@ -2838,7 +2840,11 @@ def menu_page(request: Request):
           }
         } catch (err) {
           statusEl.textContent = "Lookup failed.";
-          outputEl.value = ((err || {}).message) || "Unknown error.";
+          outputEl.value = [
+            "Lookup started: " + startedAt,
+            "Target user: " + cleanTargetUser,
+            "Error: " + (((err || {}).message) || "Unknown error."),
+          ].join("\n");
           if (window.console && typeof window.console.error === "function") {
             console.error("Remove Teams lookup failed", err);
           }
@@ -5434,6 +5440,17 @@ def teams_telephony_remove_lookup(
   _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
   clean_target_user = (target_user or "").strip()
   if not clean_target_user:
+    _append_audit_event(
+      action="lookup_remove_teams_mapping",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target="account=(blank)",
+      account="",
+      extension_added="",
+      extension_deleted="",
+      output_filename="inline_json_error",
+      inline_mode=True,
+    )
     return JSONResponse({
       "ok": False,
       "error": {
@@ -5448,8 +5465,30 @@ def teams_telephony_remove_lookup(
       cucm_pass=cucm_pass,
       target_user=clean_target_user,
     )
+    _append_audit_event(
+      action="lookup_remove_teams_mapping",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=f"account={clean_target_user}",
+      account=clean_target_user,
+      extension_added="",
+      extension_deleted="",
+      output_filename="inline_json_ok",
+      inline_mode=True,
+    )
     return JSONResponse({"ok": True, **result})
   except Exception as exc:
+    _append_audit_event(
+      action="lookup_remove_teams_mapping",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=f"account={clean_target_user}",
+      account=clean_target_user,
+      extension_added="",
+      extension_deleted="",
+      output_filename="inline_json_error",
+      inline_mode=True,
+    )
     return JSONResponse({
       "ok": False,
       "error": {
