@@ -150,24 +150,46 @@ def _find_strict_teams_pattern_match(session, cucm_host, extension_or_telephone,
     if not ext_digits:
         raise RuntimeError("User has no primary extension or telephone number to match Teams translation pattern.")
 
+    # Primary expectation: TEAMS DID <digits> <First Last>
     expected_description = f"TEAMS DID {ext_digits} {first_name} {last_name}".strip()
+    expected_prefix = f"TEAMS DID {ext_digits}".strip().lower()
+    expected_name = f"{first_name} {last_name}".strip().lower()
     candidates = _list_translation_patterns(session, cucm_host, ext_digits)
+
+    best_prefix_only_match = None
 
     for item in candidates:
         pattern_digits = _normalize_did(item.get("pattern") or "")
         if pattern_digits != ext_digits:
             continue
-        if (item.get("description") or "").strip() != expected_description:
-            continue
         if (item.get("route_partition") or "").strip().lower() != TEAMS_ROUTE_PARTITION.lower():
             continue
-        return {
-            "pattern": item.get("pattern") or ext_digits,
-            "route_partition": item.get("route_partition") or TEAMS_ROUTE_PARTITION,
-            "description": item.get("description") or "",
-            "expected_description": expected_description,
-            "extension": ext_digits,
-        }
+
+        description = (item.get("description") or "").strip()
+        desc_lc = description.lower()
+
+        # Perfect match: prefix + full name present in description.
+        if expected_prefix in desc_lc and (not expected_name or expected_name in desc_lc):
+            return {
+                "pattern": item.get("pattern") or ext_digits,
+                "route_partition": item.get("route_partition") or TEAMS_ROUTE_PARTITION,
+                "description": description,
+                "expected_description": expected_description,
+                "extension": ext_digits,
+            }
+
+        # Fallback candidate when name text differs slightly but DID marker matches.
+        if expected_prefix in desc_lc and best_prefix_only_match is None:
+            best_prefix_only_match = {
+                "pattern": item.get("pattern") or ext_digits,
+                "route_partition": item.get("route_partition") or TEAMS_ROUTE_PARTITION,
+                "description": description,
+                "expected_description": expected_description,
+                "extension": ext_digits,
+            }
+
+    if best_prefix_only_match is not None:
+        return best_prefix_only_match
 
     return {
         "pattern": "",
@@ -188,7 +210,8 @@ def lookup_teams_telephony_removal_candidate(cucm_host, cucm_user, cucm_pass, ta
         raise RuntimeError("target_user is required")
 
     user = _get_user_details(session, cucm_host, clean_target)
-    match_source = user.get("extension", "") or user.get("telephone", "")
+    # For Teams DID mappings, telephone is the preferred match source.
+    match_source = user.get("telephone", "") or user.get("extension", "")
     match = _find_strict_teams_pattern_match(
         session,
         cucm_host,
@@ -207,7 +230,7 @@ def lookup_teams_telephony_removal_candidate(cucm_host, cucm_user, cucm_pass, ta
         "pattern": match.get("pattern", ""),
         "route_partition": match.get("route_partition", ""),
         "description": match.get("description", ""),
-        "match_source": "primaryExtension" if user.get("extension", "") else "telephoneNumber",
+        "match_source": "telephoneNumber" if user.get("telephone", "") else "primaryExtension",
     }
 
 
