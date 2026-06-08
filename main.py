@@ -2804,7 +2804,7 @@ def menu_page(request: Request):
 
         const startedAt = new Date().toISOString();
         statusEl.textContent = "Running lookup...";
-        outputEl.value = "Lookup click received at " + startedAt + "\nTarget user: " + cleanTargetUser;
+        outputEl.value = "Lookup click received at " + startedAt + "\\nTarget user: " + cleanTargetUser;
         deleteBtn.disabled = true;
         window.teamsRemoveLookupState = null;
 
@@ -2843,7 +2843,7 @@ def menu_page(request: Request):
             "Matched Pattern: " + (payload.pattern || "(none)"),
             "Matched Partition: " + (payload.route_partition || "(none)"),
             "Matched Description: " + (payload.description || "(none)"),
-          ].join("\n");
+          ].join("\\n");
 
           if (payload.match_found) {
             deleteBtn.disabled = false;
@@ -2854,7 +2854,7 @@ def menu_page(request: Request):
             "Lookup started: " + startedAt,
             "Target user: " + cleanTargetUser,
             "Error: " + (((err || {}).message) || "Unknown error."),
-          ].join("\n");
+          ].join("\\n");
           if (window.console && typeof window.console.error === "function") {
             console.error("Remove Teams lookup failed", err);
           }
