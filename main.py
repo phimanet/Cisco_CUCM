@@ -3897,9 +3897,23 @@ def menu_page(request: Request):
       });
 
       // Allow deep-linking from /menu-admin menu buttons into specific /menu panels.
-      const initialPanel = (new URLSearchParams(window.location.search).get("panel") || "").trim();
+      const qs = new URLSearchParams(window.location.search);
+      const initialPanel = (qs.get("panel") || "").trim();
       if (initialPanel && panels.some((panel) => panel.dataset.panel === initialPanel)) {
         showPanel(initialPanel);
+      }
+
+      const initialTargetUser = (qs.get("target_user") || "").trim();
+      if (initialTargetUser) {
+        const targetPanel = initialPanel
+          ? panels.find((panel) => panel.dataset.panel === initialPanel)
+          : null;
+        if (targetPanel) {
+          const targetField = targetPanel.querySelector('input[name="target_user"]');
+          if (targetField) {
+            targetField.value = initialTargetUser;
+          }
+        }
       }
 
 
@@ -4388,7 +4402,7 @@ def menu_admin_page(request: Request):
         <aside class="portal-sidebar">
           <h4>Administrative Menu</h4>
           <div class="portal-nav">
-            <button type="button" class="portal-nav-btn active" data-panel="personlookup">Strike Use - Person Lookup</button>
+            <button type="button" class="portal-nav-btn active" data-panel="personlookup">Employee Lookup by Name</button>
             <button type="button" class="portal-nav-btn" data-panel="strike">Strike Mode - Add iPhone and Android</button>
             <button type="button" class="portal-nav-btn" data-panel="mobiledelete">Remove only Jabber Mobile</button>
             <button type="button" class="portal-nav-btn" data-panel="rpo">Extract RPO Phones</button>
@@ -4408,7 +4422,7 @@ def menu_admin_page(request: Request):
         <section class="portal-main">
 
       <section class="panel tool-panel active" data-panel="personlookup">
-        <h3>Strike Use - Person Lookup</h3>
+        <h3>Employee Lookup by Name</h3>
         <p>Search by last name (optional first name), then use the result to prefill Strike Mode.</p>
         <form id="admin-person-lookup-form">
           <div class="compact-inline-row">
@@ -4753,7 +4767,8 @@ def menu_admin_page(request: Request):
                 const strikeBtn = `<button type="button" style="${btnStyle}background:#237741;" data-strike-user="${uid}">Strike Mode - Add in Both Jabber iPhone and Android</button>`;
                 const tctBtn = `<button type="button" style="${btnStyle}background:#0e7490;" data-tct-user="${uid}">Add Jabber iPhone</button>`;
                 const botBtn = `<button type="button" style="${btnStyle}background:#7c3aed;" data-bot-user="${uid}">Add Jabber Android</button>`;
-                const actionBtn = strikeBtn + tctBtn + botBtn;
+                const offboardBtn = `<button type="button" style="${btnStyle}background:#b00020;" data-offboard-user="${uid}">Separate Employee-Delete Jabber/VM</button>`;
+                const actionBtn = strikeBtn + tctBtn + botBtn + offboardBtn;
 
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
@@ -4787,7 +4802,7 @@ def menu_admin_page(request: Request):
                 const cucmPass = (passField && passField.value) || "";
 
                 if (!cucmUser || !cucmPass) {
-                  statusEl.textContent = "Enter CUCM username/password in Strike Use - Person Lookup before running device actions.";
+                  statusEl.textContent = "Enter CUCM username/password in Employee Lookup by Name before running device actions.";
                   return;
                 }
 
@@ -4825,6 +4840,14 @@ def menu_admin_page(request: Request):
                 btn.addEventListener("click", function () {
                   const uid = btn.getAttribute("data-bot-user") || "";
                   submitAdminAction("/add/secondary-bot-device", uid);
+                });
+              });
+
+              resultsEl.querySelectorAll("button[data-offboard-user]").forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                  const uid = btn.getAttribute("data-offboard-user") || "";
+                  const qs = new URLSearchParams({ panel: "offboard", target_user: uid });
+                  window.location.href = "/menu?" + qs.toString();
                 });
               });
             } catch (err) {
