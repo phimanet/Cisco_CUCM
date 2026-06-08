@@ -3899,14 +3899,6 @@ def menu_page(request: Request):
         const searchBtn = document.getElementById("teams-remove-search-btn");
         const lookupBtn = document.getElementById("teams-remove-lookup-btn");
         const deleteBtn = document.getElementById("teams-remove-delete-btn");
-        const searchStatusEl = document.getElementById("teams-remove-search-status");
-        const searchResultsEl = document.getElementById("teams-remove-search-results");
-        const searchLastNameEl = document.getElementById("teams-remove-last-name");
-        const searchFirstNameEl = document.getElementById("teams-remove-first-name");
-        const statusEl = document.getElementById("teams-remove-status");
-        const outputEl = document.getElementById("teams-remove-preview");
-        const targetUserEl = form ? form.querySelector('input[name="target_user"]') : null;
-
         if (!form || !searchBtn || !lookupBtn || !deleteBtn) {
           return;
         }
@@ -3919,183 +3911,20 @@ def menu_page(request: Request):
         lookupBtn.dataset.safeBound = "1";
         deleteBtn.dataset.safeBound = "1";
 
-        async function parseJsonOrThrow(response) {
-          const text = await response.text();
-          try {
-            return JSON.parse(text || "{}");
-          } catch (_err) {
-            throw new Error(text || `Request failed with status ${response.status}`);
-          }
-        }
-
-        async function fallbackSearch() {
-          if (!searchStatusEl || !searchResultsEl) {
-            return;
-          }
-
-          const userField = form.querySelector('input[name="cucm_user"]');
-          const passField = form.querySelector('input[name="cucm_pass"]');
-          const lastName = ((searchLastNameEl && searchLastNameEl.value) || "").trim();
-          const firstName = ((searchFirstNameEl && searchFirstNameEl.value) || "").trim();
-          const cucmUser = ((userField && userField.value) || "").trim();
-          const cucmPass = (passField && passField.value) || "";
-
-          if (!lastName) {
-            searchStatusEl.textContent = "Last Name is required for lookup.";
-            if (searchLastNameEl) {
-              searchLastNameEl.focus();
-            }
-            return;
-          }
-
-          if (!cucmUser || !cucmPass) {
-            searchStatusEl.textContent = "Enter CUCM username/password above before searching.";
-            return;
-          }
-
-          searchStatusEl.textContent = "Searching...";
-          searchResultsEl.innerHTML = "";
-
-          try {
-            const lookupForm = new FormData();
-            lookupForm.append("cucm_user", cucmUser);
-            lookupForm.append("cucm_pass", cucmPass);
-            lookupForm.append("last_name", lastName);
-            lookupForm.append("first_name", firstName);
-
-            const response = await fetch("/lookup/person", {
-              method: "POST",
-              body: lookupForm,
-              credentials: "same-origin",
-              headers: {
-                "Accept": "application/json",
-                "X-Requested-With": "XMLHttpRequest",
-              },
-            });
-
-            const payload = await parseJsonOrThrow(response);
-            if (!response.ok || !payload.ok) {
-              const msg = (payload.error && payload.error.message) || payload.detail || "Search failed.";
-              throw new Error(msg);
-            }
-
-            const results = payload.results || [];
-            if (!results.length) {
-              searchStatusEl.textContent = "No users found matching that name.";
-              return;
-            }
-
-            searchStatusEl.textContent = `Found ${results.length} user(s).`;
-
-            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
-            html += '<thead><tr style="background:#b00020; color:#fff;">';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
-            html += '</tr></thead><tbody>';
-
-            results.forEach(function (r, i) {
-              const bg = i % 2 === 0 ? "#fff7f8" : "#ffffff";
-              const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
-              const uid = r.userid || "";
-              const ext = r.primary_extension || "-";
-              const email = r.email || "-";
-
-              html += '<tr style="background:' + bg + '; border-bottom:1px solid #f0c8cf;">';
-              html += '<td style="padding:7px 10px;">' + name + '</td>';
-              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
-              html += '<td style="padding:7px 10px;">' + ext + '</td>';
-              html += '<td style="padding:7px 10px;">' + email + '</td>';
-              html += '<td style="padding:7px 10px;">';
-              html += '<button type="button" data-remove-user="' + uid + '" style="background:#b00020; color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Use for Remove Teams</button>';
-              html += '</td>';
-              html += '</tr>';
-            });
-
-            html += '</tbody></table>';
-            searchResultsEl.innerHTML = html;
-
-            searchResultsEl.querySelectorAll('button[data-remove-user]').forEach(function (btnEl) {
-              btnEl.addEventListener("click", function () {
-                const uid = (btnEl.getAttribute("data-remove-user") || "").trim();
-                if (targetUserEl) {
-                  targetUserEl.value = uid;
-                }
-              });
-            });
-          } catch (err) {
-            searchStatusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
-          }
-        }
-
-        async function fallbackLookup() {
-          if (!statusEl || !outputEl) {
-            return;
-          }
-
-          statusEl.textContent = "Running lookup...";
-          outputEl.value = "";
-          deleteBtn.disabled = true;
-
-          try {
-            const response = await fetch("/teams-telephony/remove/lookup", {
-              method: "POST",
-              body: new FormData(form),
-              credentials: "same-origin",
-              headers: {
-                "Accept": "application/json",
-                "X-Requested-With": "XMLHttpRequest",
-              },
-            });
-
-            const payload = await parseJsonOrThrow(response);
-            if (!response.ok || !payload.ok) {
-              const msg = (payload.error && payload.error.message) || payload.detail || "Lookup failed.";
-              throw new Error(msg);
-            }
-
-            form.dataset.lookupState = JSON.stringify(payload);
-            const strictText = payload.match_found ? "MATCHED" : "NOT MATCHED";
-            statusEl.textContent = "Lookup completed. " + strictText;
-
-            outputEl.value = [
-              `User: ${payload.target_user || ""}`,
-              `Name: ${(payload.first_name || "")} ${(payload.last_name || "")}`.trim(),
-              `Extension: ${payload.extension || ""}`,
-              `Expected Description: ${payload.expected_description || ""}`,
-              `Matched Pattern: ${payload.pattern || "(none)"}`,
-              `Matched Partition: ${payload.route_partition || "(none)"}`,
-              `Matched Description: ${payload.description || "(none)"}`,
-            ].join("\n");
-
-            if (payload.match_found) {
-              deleteBtn.disabled = false;
-            }
-          } catch (err) {
-            statusEl.textContent = "Lookup failed.";
-            outputEl.value = (err && err.message) ? err.message : "Unknown error.";
-          }
-        }
-
-        if (typeof window.runTeamsRemoveSearch !== "function") {
-          window.runTeamsRemoveSearch = fallbackSearch;
-        }
-        if (typeof window.runTeamsRemoveLookup !== "function") {
-          window.runTeamsRemoveLookup = fallbackLookup;
-        }
-
         searchBtn.addEventListener("click", function (event) {
           if (event.defaultPrevented) return;
           event.preventDefault();
-          window.runTeamsRemoveSearch();
+          if (typeof window.runTeamsRemoveSearch === "function") {
+            window.runTeamsRemoveSearch();
+          }
         });
 
         lookupBtn.addEventListener("click", function (event) {
           if (event.defaultPrevented) return;
           event.preventDefault();
-          window.runTeamsRemoveLookup();
+          if (typeof window.runTeamsRemoveLookup === "function") {
+            window.runTeamsRemoveLookup();
+          }
         });
 
         deleteBtn.addEventListener("click", function (event) {
