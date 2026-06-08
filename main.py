@@ -2622,7 +2622,7 @@ def menu_page(request: Request):
           First Name (optional):<br>
           <input id="teams-remove-first-name" placeholder="John" style="width:min(320px,100%);"><br><br>
 
-          <button id="teams-remove-search-btn" type="button">Search User</button>
+          <button id="teams-remove-search-btn" type="button" onclick="if (window.runTeamsRemoveSearch) { window.runTeamsRemoveSearch(); } return false;">Search User</button>
           <p id="teams-remove-search-status" style="margin:10px 0 6px 0; color:#7a1020; min-height:18px;">Enter last name and click Search User.</p>
           <div id="teams-remove-search-results" style="overflow-x:auto;"></div>
         </div>
@@ -2770,6 +2770,8 @@ def menu_page(request: Request):
             searchStatusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
           }
         }
+
+        window.runTeamsRemoveSearch = runSearch;
 
         async function runLookup() {
           statusEl.textContent = "Running lookup...";
