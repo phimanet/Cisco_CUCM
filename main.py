@@ -3890,6 +3890,252 @@ def menu_page(request: Request):
         });
       });
 
+      function initTeamsRemoveFallback() {
+        const form = document.getElementById("teams-remove-form");
+        const searchBtn = document.getElementById("teams-remove-search-btn");
+        const lookupBtn = document.getElementById("teams-remove-lookup-btn");
+        const deleteBtn = document.getElementById("teams-remove-delete-btn");
+        const searchStatusEl = document.getElementById("teams-remove-search-status");
+        const searchResultsEl = document.getElementById("teams-remove-search-results");
+        const statusEl = document.getElementById("teams-remove-status");
+        const outputEl = document.getElementById("teams-remove-preview");
+        const downloadEl = document.getElementById("teams-remove-download");
+        const lastNameEl = document.getElementById("teams-remove-last-name");
+        const firstNameEl = document.getElementById("teams-remove-first-name");
+        const targetUserEl = form ? form.querySelector('input[name="target_user"]') : null;
+
+        if (!form || !searchBtn || !lookupBtn || !deleteBtn) {
+          return;
+        }
+
+        async function parseJsonOrThrow(response) {
+          const text = await response.text();
+          try {
+            return JSON.parse(text || "{}");
+          } catch (_err) {
+            throw new Error(text || `Request failed with status ${response.status}`);
+          }
+        }
+
+        if (!searchBtn.dataset.fallbackBound) {
+          searchBtn.dataset.fallbackBound = "1";
+          searchBtn.addEventListener("click", async function (event) {
+            if (event.defaultPrevented) return;
+            event.preventDefault();
+
+            const userField = form.querySelector('input[name="cucm_user"]');
+            const passField = form.querySelector('input[name="cucm_pass"]');
+            const lastName = ((lastNameEl && lastNameEl.value) || "").trim();
+            const firstName = ((firstNameEl && firstNameEl.value) || "").trim();
+            const cucmUser = ((userField && userField.value) || "").trim();
+            const cucmPass = (passField && passField.value) || "";
+
+            if (!searchStatusEl || !searchResultsEl) {
+              return;
+            }
+            if (!lastName) {
+              searchStatusEl.textContent = "Last Name is required for lookup.";
+              if (lastNameEl) lastNameEl.focus();
+              return;
+            }
+            if (!cucmUser || !cucmPass) {
+              searchStatusEl.textContent = "Enter CUCM username/password above before searching.";
+              return;
+            }
+
+            searchStatusEl.textContent = "Searching...";
+            searchResultsEl.innerHTML = "";
+
+            try {
+              const lookupForm = new FormData();
+              lookupForm.append("cucm_user", cucmUser);
+              lookupForm.append("cucm_pass", cucmPass);
+              lookupForm.append("last_name", lastName);
+              lookupForm.append("first_name", firstName);
+
+              const response = await fetch("/lookup/person", {
+                method: "POST",
+                body: lookupForm,
+                credentials: "same-origin",
+                headers: {
+                  "Accept": "application/json",
+                  "X-Requested-With": "XMLHttpRequest",
+                },
+              });
+
+              const payload = await parseJsonOrThrow(response);
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload.error && payload.error.message) || "Search failed.");
+              }
+
+              const results = payload.results || [];
+              if (!results.length) {
+                searchStatusEl.textContent = "No users found matching that name.";
+                return;
+              }
+
+              searchStatusEl.textContent = `Found ${results.length} user(s).`;
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#b00020; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
+              html += '</tr></thead><tbody>';
+
+              results.forEach(function (r, i) {
+                const bg = i % 2 === 0 ? "#fff7f8" : "#ffffff";
+                const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+                const uid = r.userid || "";
+                const ext = r.primary_extension || "-";
+                const email = r.email || "-";
+
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #f0c8cf;">';
+                html += '<td style="padding:7px 10px;">' + name + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+                html += '<td style="padding:7px 10px;">' + ext + '</td>';
+                html += '<td style="padding:7px 10px;">' + email + '</td>';
+                html += '<td style="padding:7px 10px;"><button type="button" data-remove-user="' + uid + '" style="background:#b00020; color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Use for Remove Teams</button></td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              searchResultsEl.innerHTML = html;
+              searchResultsEl.querySelectorAll('button[data-remove-user]').forEach(function (btnEl) {
+                btnEl.addEventListener("click", function () {
+                  const uid = (btnEl.getAttribute("data-remove-user") || "").trim();
+                  if (targetUserEl) targetUserEl.value = uid;
+                });
+              });
+            } catch (err) {
+              searchStatusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        }
+
+        if (!lookupBtn.dataset.fallbackBound) {
+          lookupBtn.dataset.fallbackBound = "1";
+          lookupBtn.addEventListener("click", async function (event) {
+            if (event.defaultPrevented) return;
+            event.preventDefault();
+            if (!statusEl || !outputEl) return;
+
+            statusEl.textContent = "Running lookup...";
+            outputEl.value = "";
+            if (downloadEl) {
+              downloadEl.style.display = "none";
+              downloadEl.removeAttribute("href");
+            }
+            deleteBtn.disabled = true;
+
+            try {
+              const response = await fetch("/teams-telephony/remove/lookup", {
+                method: "POST",
+                body: new FormData(form),
+                credentials: "same-origin",
+                headers: {
+                  "Accept": "application/json",
+                  "X-Requested-With": "XMLHttpRequest",
+                },
+              });
+
+              const payload = await parseJsonOrThrow(response);
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload.error && payload.error.message) || payload.detail || "Lookup failed.");
+              }
+
+              form.dataset.lookupState = JSON.stringify(payload);
+              statusEl.textContent = "Lookup completed. " + (payload.match_found ? "MATCHED" : "NOT MATCHED");
+              outputEl.value = [
+                `User: ${payload.target_user || ""}`,
+                `Name: ${(payload.first_name || "")} ${(payload.last_name || "")}`.trim(),
+                `Extension: ${payload.extension || ""}`,
+                `Expected Description: ${payload.expected_description || ""}`,
+                `Matched Pattern: ${payload.pattern || "(none)"}`,
+                `Matched Partition: ${payload.route_partition || "(none)"}`,
+                `Matched Description: ${payload.description || "(none)"}`,
+              ].join("\n");
+
+              if (payload.match_found) {
+                deleteBtn.disabled = false;
+              }
+            } catch (err) {
+              statusEl.textContent = "Lookup failed.";
+              outputEl.value = (err && err.message) ? err.message : "Unknown error.";
+            }
+          });
+        }
+
+        if (!deleteBtn.dataset.fallbackBound) {
+          deleteBtn.dataset.fallbackBound = "1";
+          deleteBtn.addEventListener("click", async function (event) {
+            if (event.defaultPrevented) return;
+            event.preventDefault();
+            if (!statusEl || !outputEl) return;
+
+            let lookupState = null;
+            try {
+              lookupState = JSON.parse(form.dataset.lookupState || "null");
+            } catch (_err) {
+              lookupState = null;
+            }
+
+            if (!lookupState || !lookupState.match_found) {
+              statusEl.textContent = "Run lookup first and confirm strict match.";
+              return;
+            }
+
+            const confirmed = confirm(
+              `Delete Teams translation pattern and rebuild inactive DN for ${lookupState.target_user}?\n\n`
+              + `Pattern: ${lookupState.pattern}/${lookupState.route_partition}\n`
+              + `Expected strict description: ${lookupState.expected_description}\n\n`
+              + "This will also clear AD telephone/ipPhone."
+            );
+            if (!confirmed) return;
+
+            statusEl.textContent = "Running remove Teams Telephony workflow...";
+            outputEl.value = "";
+            if (downloadEl) {
+              downloadEl.style.display = "none";
+              downloadEl.removeAttribute("href");
+            }
+            deleteBtn.disabled = true;
+
+            try {
+              const response = await fetch("/teams-telephony/remove?inline=1", {
+                method: "POST",
+                body: new FormData(form),
+                credentials: "same-origin",
+                headers: {
+                  "Accept": "application/json",
+                  "X-Requested-With": "XMLHttpRequest",
+                },
+              });
+
+              const payload = await parseJsonOrThrow(response);
+              if (!response.ok) {
+                throw new Error((payload && payload.detail) || `Request failed with status ${response.status}`);
+              }
+
+              outputEl.value = payload.output_text || "";
+              statusEl.textContent = `Completed: ${payload.filename || "remove_teams_telephony_output.csv"}`;
+              if (payload.download_url && downloadEl) {
+                downloadEl.href = payload.download_url;
+                downloadEl.style.display = "inline";
+              }
+            } catch (err) {
+              statusEl.textContent = "Remove Teams Telephony failed.";
+              outputEl.value = (err && err.message) ? err.message : "Unknown error.";
+            } finally {
+              deleteBtn.disabled = false;
+            }
+          });
+        }
+      }
+
+      initTeamsRemoveFallback();
+
       // ── Duplicate device pre-check ──────────────────────────────────────────
       // Runs before Build CSF, TCT, BOT, and Strike forms submit.
       // Calls /check/user-devices, warns if the relevant device type already exists.
