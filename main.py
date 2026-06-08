@@ -1970,11 +1970,8 @@ def menu_page(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Reverse Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel="precheck">Check for Existing Jabber Configuration</button>
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
-          <button type="button" class="portal-nav-btn" data-panel="teams-telephony">Create Teams Telephony User</button>
-          <button type="button" class="portal-nav-btn portal-nav-btn-danger" data-panel="teams-telephony-remove">Remove Teams Telephony User</button>
           <button type="button" class="portal-nav-btn" data-panel="namechange">Employee Name Change-Update Jabber/VM</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
-          <button type="button" class="portal-nav-btn portal-nav-btn-danger" data-panel="offboard">Separate Employeed-Delete Jabber/VM</button>
           <button type="button" class="portal-nav-btn" data-panel="ad">Update AD Telephone/ipPhone Field Only</button>
           <button type="button" class="portal-nav-btn" data-panel="tct">Add in Jabber iPhone</button>
           <button type="button" class="portal-nav-btn" data-panel="bot">Add in Jabber Android</button>
@@ -3900,6 +3897,12 @@ def menu_page(request: Request):
         });
       });
 
+      // Allow deep-linking from /menu-admin menu buttons into specific /menu panels.
+      const initialPanel = (new URLSearchParams(window.location.search).get("panel") || "").trim();
+      if (initialPanel && panels.some((panel) => panel.dataset.panel === initialPanel)) {
+        showPanel(initialPanel);
+      }
+
 
 
       // ── Duplicate device pre-check ──────────────────────────────────────────
@@ -4395,6 +4398,9 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
             <button type="button" class="portal-nav-btn" data-panel="translookup">Translation Pattern Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="transtemplate">Translation Pattern Template</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=teams-telephony'">Create Teams Telephony User (Main Ops)</button>
+            <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=teams-telephony-remove'">Remove Teams Telephony User (Main Ops)</button>
+            <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM (Main Ops)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
           </div>
