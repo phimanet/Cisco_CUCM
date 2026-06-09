@@ -1534,6 +1534,14 @@ def menu_page(request: Request):
         gap: 10px;
       }
 
+      .topbar-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+
       .topbar-btn {
         display: inline-block;
         padding: 7px 12px;
@@ -2192,6 +2200,13 @@ def menu_page(request: Request):
         <span class="brand-fallback">AMN Healthcare</span>
         <strong>Voice Operations Portal</strong>
       </div>
+      <div class="topbar-status">
+        <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
+        <div id="session-timer-banner" class="session-timer" aria-live="polite">
+          <span class="timer-label">Credentials cached. Auto logout in:</span>
+          <span id="session-timer-remaining" class="timer-value"></span>
+        </div>
+      </div>
       <div class="topbar-actions">
         <a class="topbar-btn topbar-btn-login" href="/">Log In</a>
         <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
@@ -2204,13 +2219,6 @@ def menu_page(request: Request):
         <div class="page-title-block">
           <h2 class="page-title">Cisco Voice Server Automation</h2>
           <p class="page-subtitle">CUCM and Unity operations with fast navigation and inline outputs.</p>
-          <div class="hero-status-row">
-            <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
-            <div id="session-timer-banner" class="session-timer" aria-live="polite">
-              <span class="timer-label">Credentials cached. Auto logout in:</span>
-              <span id="session-timer-remaining" class="timer-value"></span>
-            </div>
-          </div>
         </div>
         <aside class="page-meta-card">
           <span class="page-meta-label">Authenticated Operator</span>
@@ -4872,6 +4880,20 @@ def menu_admin_page(request: Request):
         opacity: 0.86;
       }
 
+      .topbar-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .topbar-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+
       .content {
         max-width: 1200px;
         margin: 16px auto 22px auto;
@@ -5251,8 +5273,17 @@ def menu_admin_page(request: Request):
   </head>
   <body>
     <header class="topbar">
-      <span class="brand-fallback">AMN Healthcare</span>
-      <strong>Voice Operations Portal - Administrative Items</strong>
+      <div class="topbar-brand">
+        <span class="brand-fallback">AMN Healthcare</span>
+        <strong>Voice Operations Portal - Administrative Items</strong>
+      </div>
+      <div class="topbar-status">
+        <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
+        <div id="session-timer-banner" class="session-timer" aria-live="polite">
+          <span class="timer-label">Credentials cached. Auto logout in:</span>
+          <span id="session-timer-remaining" class="timer-value"></span>
+        </div>
+      </div>
     </header>
 
     <main class="content">
@@ -5262,13 +5293,6 @@ def menu_admin_page(request: Request):
           <div>
             <h2 class="page-title">Administrative Items</h2>
             <p class="page-subtitle">Bulk operations, strike workflows, export utilities, and translation lookups in a single workspace for higher-volume admin work.</p>
-            <div class="hero-status-row">
-              <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
-              <div id="session-timer-banner" class="session-timer" aria-live="polite">
-                <span class="timer-label">Credentials cached. Auto logout in:</span>
-                <span id="session-timer-remaining" class="timer-value"></span>
-              </div>
-            </div>
           </div>
           <aside class="page-meta-card">
             <span class="page-meta-label">Authenticated Operator</span>
