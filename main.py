@@ -2237,7 +2237,7 @@ __ADMIN_CARD__
                 `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build Jabber</button>` +
                 `<button type="button" style="${btnStyle}background:#0e7490;color:#fff;" onclick="prefillPanel('tct','${uid}')">Build iPhone</button>` +
                 `<button type="button" style="${btnStyle}background:#7c3aed;color:#fff;" onclick="prefillPanel('bot','${uid}')">Build Android</button>` +
-                `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" onclick="prefillPanel('mobilejabbernotify','${uid}','${telephone}')">Re-send Mobile Email</button>` +
+                `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" onclick="prefillMobileJabberNotify('${uid}','')">Re-send Mobile Email</button>` +
                 `<button type="button" style="${btnStyle}background:#1f7a3d;color:#fff;" data-lookup-notify-uid="${uid}" data-lookup-notify-tel="${(r.telephone || "")}">Send Notification</button>` +
                 `<button type="button" style="${btnStyle}background:#8a5a00;color:#fff;" onclick="prefillPanel('namechange','${uid}')">Name Update</button>`;
 
@@ -2396,7 +2396,7 @@ __ADMIN_CARD__
               const actionBtns = uid
                 ? `<button type="button" style="${btnStyle}background:#005eb8;color:#fff;" onclick="prefillPanel('precheck','${uid}')">Check Jabber</button>` +
                   `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build</button>` +
-                  `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" onclick="prefillPanel('mobilejabbernotify','${uid}','${m.pattern || ""}')">Re-send Mobile Email</button>`
+                  `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" onclick="prefillMobileJabberNotify('${uid}','${m.pattern || ""}')">Re-send Mobile Email</button>`
                 : "\u2014";
 
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
@@ -3521,6 +3521,29 @@ __ADMIN_CARD__
       </div>
     </form>
     <p id="mobile-jabber-notify-status" style="margin-top:14px; font-weight:700; min-height:18px;"></p>
+
+    <hr style="margin:16px 0; border:none; border-top:1px solid #d6e4f3;">
+    <p style="margin:0 0 10px 0; color:#355978;">Or lookup by name and send from the results:</p>
+    <form id="mobile-jabber-lookup-form" class="jabber-check-form" style="max-width:520px;">
+      <div class="compact-inline-row">
+        <span>Cisco Callmanager Username:</span>
+        <input name="cucm_user" value="__AUTH_USER__" required>
+      </div><br>
+      <div class="compact-inline-row">
+        <span>Cisco Callmanager Password:</span>
+        <input type="password" name="cucm_pass" required>
+      </div><br>
+      Last Name:<br>
+      <input id="mobile-jabber-last-name" name="last_name" placeholder="Smith" required style="width:min(280px,100%);"><br><br>
+      First Name (optional):<br>
+      <input id="mobile-jabber-first-name" name="first_name" placeholder="John" style="width:min(280px,100%);"><br><br>
+      <div class="action-row">
+        <button type="submit">Search</button>
+        <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+      </div>
+    </form>
+    <p id="mobile-jabber-lookup-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
+    <div id="mobile-jabber-lookup-results" style="overflow-x:auto; margin-top:8px;"></div>
     </section>
 
     <section class="tool-panel" data-panel="rebuild">
@@ -4191,6 +4214,9 @@ __ADMIN_CARD__
       (function () {
         var form = document.getElementById("mobile-jabber-notify-form");
         var statusEl = document.getElementById("mobile-jabber-notify-status");
+        var lookupForm = document.getElementById("mobile-jabber-lookup-form");
+        var lookupStatusEl = document.getElementById("mobile-jabber-lookup-status");
+        var lookupResultsEl = document.getElementById("mobile-jabber-lookup-results");
         if (!form || !statusEl) return;
         form.addEventListener("submit", async function (event) {
           event.preventDefault();
@@ -4234,6 +4260,114 @@ __ADMIN_CARD__
             statusEl.textContent = "Failed: " + ((err && err.message) || "Unknown error.");
           }
         });
+
+        if (lookupForm && lookupStatusEl && lookupResultsEl) {
+          lookupForm.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            lookupStatusEl.textContent = "Searching...";
+            lookupResultsEl.innerHTML = "";
+
+            var userField = lookupForm.querySelector('input[name="cucm_user"]');
+            var passField = lookupForm.querySelector('input[name="cucm_pass"]');
+            var lastNameField = lookupForm.querySelector('input[name="last_name"]');
+            var firstNameField = lookupForm.querySelector('input[name="first_name"]');
+            var cucmUser = ((userField && userField.value) || "").trim();
+            var cucmPass = (passField && passField.value) || "";
+            var lastName = ((lastNameField && lastNameField.value) || "").trim();
+            var firstName = ((firstNameField && firstNameField.value) || "").trim();
+
+            if (!cucmUser || !cucmPass) {
+              lookupStatusEl.textContent = "Enter CUCM credentials first.";
+              return;
+            }
+            if (!lastName) {
+              lookupStatusEl.textContent = "Last Name is required.";
+              return;
+            }
+
+            try {
+              var fd = new FormData();
+              fd.append("cucm_user", cucmUser);
+              fd.append("cucm_pass", cucmPass);
+              fd.append("last_name", lastName);
+              fd.append("first_name", firstName);
+              var resp = await fetch("/lookup/person", {
+                method: "POST",
+                body: fd,
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+              });
+              var payload = await resp.json();
+              if (!resp.ok || !payload.ok) {
+                throw new Error((payload && payload.detail) || "Search failed.");
+              }
+
+              var results = payload.results || [];
+              if (!results.length) {
+                lookupStatusEl.textContent = "No users found.";
+                return;
+              }
+
+              lookupStatusEl.textContent = "Found " + results.length + " user(s). Click Send Mobile Email.";
+              var html = '<table style="width:100%; border-collapse:collapse; font-size:13px;"><thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left;">Name</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Telephone</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Email</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Action</th>';
+              html += '</tr></thead><tbody>';
+
+              results.forEach(function (r, i) {
+                var bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                var uid = r.userid || "";
+                var name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || uid;
+                var tel = r.telephone || "\u2014";
+                var email = r.email || "\u2014";
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px;">' + name + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+                html += '<td style="padding:7px 10px;">' + tel + '</td>';
+                html += '<td style="padding:7px 10px;">' + email + '</td>';
+                html += '<td style="padding:7px 10px;"><button type="button" data-mobile-notify-uid="' + uid + '" data-mobile-notify-tel="' + (r.telephone || "") + '" style="background:#0f766e;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer;">Send Mobile Email</button></td>';
+                html += '</tr>';
+              });
+              html += '</tbody></table>';
+              lookupResultsEl.innerHTML = html;
+
+              lookupResultsEl.querySelectorAll('button[data-mobile-notify-uid]').forEach(function (btn) {
+                btn.addEventListener("click", async function () {
+                  var uid = btn.getAttribute("data-mobile-notify-uid") || "";
+                  var tel = btn.getAttribute("data-mobile-notify-tel") || "";
+                  btn.disabled = true;
+                  lookupStatusEl.textContent = "Sending...";
+                  try {
+                    var sf = new FormData();
+                    sf.append("cucm_user", cucmUser);
+                    sf.append("cucm_pass", cucmPass);
+                    sf.append("target_user", uid);
+                    sf.append("telephone", tel);
+                    var sr = await fetch("/send/mobile-jabber-email", {
+                      method: "POST",
+                      body: sf,
+                      credentials: "same-origin",
+                      headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                    });
+                    var sp = await sr.json();
+                    if (!sr.ok || !sp.ok) {
+                      throw new Error((sp && sp.detail) || "Send failed.");
+                    }
+                    lookupStatusEl.textContent = "Sent: " + (sp.detail || "Mobile email sent successfully.");
+                  } catch (err) {
+                    lookupStatusEl.textContent = "Failed: " + ((err && err.message) || "Unknown error.");
+                    btn.disabled = false;
+                  }
+                });
+              });
+            } catch (err) {
+              lookupStatusEl.textContent = "Search error: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        }
       })();
       // ── End Mobile Jabber Notify panel ───────────────────────────────
 
@@ -4266,6 +4400,18 @@ __ADMIN_CARD__
         }
         // Scroll panel into view
         panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      };
+
+      window.prefillMobileJabberNotify = function (userId, telephone) {
+        showPanel("mobilejabbernotify");
+        var userField = document.getElementById("mobile-jabber-target-user");
+        var telField = document.getElementById("mobile-jabber-telephone");
+        if (userField) userField.value = userId || "";
+        if (telField) telField.value = telephone || "";
+        var panel = panels.find((p) => p.dataset.panel === "mobilejabbernotify");
+        if (panel) {
+          panel.scrollIntoView({ behavior: "smooth", block: "start" });
+        }
       };
 
       navButtons.forEach((btn) => {
