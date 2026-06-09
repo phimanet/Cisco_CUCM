@@ -1545,13 +1545,29 @@ def menu_page(request: Request):
       .topbar-auth-pill {
         display: inline-flex;
         align-items: center;
-        padding: 5px 9px;
+        min-height: 32px;
+        padding: 6px 10px;
         border-radius: 999px;
         border: 1px solid rgba(255, 255, 255, 0.35);
         background: rgba(255, 255, 255, 0.12);
         color: #fff;
         font-size: 11px;
         font-weight: 700;
+        box-sizing: border-box;
+      }
+
+      .topbar-status .env-banner {
+        display: inline-flex;
+        align-items: center;
+        min-height: 32px;
+        padding: 6px 10px;
+        box-sizing: border-box;
+      }
+
+      .topbar-status .session-timer {
+        min-height: 32px;
+        padding: 6px 10px;
+        box-sizing: border-box;
       }
 
       .topbar-btn {
@@ -4905,13 +4921,29 @@ def menu_admin_page(request: Request):
       .topbar-auth-pill {
         display: inline-flex;
         align-items: center;
-        padding: 5px 9px;
+        min-height: 32px;
+        padding: 6px 10px;
         border-radius: 999px;
         border: 1px solid rgba(255, 255, 255, 0.35);
         background: rgba(255, 255, 255, 0.12);
         color: #fff;
         font-size: 11px;
         font-weight: 700;
+        box-sizing: border-box;
+      }
+
+      .topbar-status .env-banner {
+        display: inline-flex;
+        align-items: center;
+        min-height: 32px;
+        padding: 6px 10px;
+        box-sizing: border-box;
+      }
+
+      .topbar-status .session-timer {
+        min-height: 32px;
+        padding: 6px 10px;
+        box-sizing: border-box;
       }
 
       .content {
