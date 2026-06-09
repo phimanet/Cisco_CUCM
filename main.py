@@ -13,7 +13,13 @@ from zoneinfo import ZoneInfo
 
 import requests
 import urllib3
-from cryptography.fernet import Fernet, InvalidToken
+try:
+  from cryptography.fernet import Fernet, InvalidToken
+  _FERNET_AVAILABLE = True
+except Exception:
+  Fernet = None
+  InvalidToken = Exception
+  _FERNET_AVAILABLE = False
 from fastapi import FastAPI, Form, UploadFile, File, Query, Request
 from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse
 from html import escape
@@ -53,10 +59,15 @@ SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
 CREDENTIAL_CACHE_TTL_SECONDS = 60 * 60
 APP_START_EPOCH = time.time()
 CREDENTIAL_ENCRYPTION_KEY = (os.getenv("CUCM_CREDENTIAL_ENCRYPTION_KEY", "") or "").strip()
-if not CREDENTIAL_ENCRYPTION_KEY:
+if _FERNET_AVAILABLE and not CREDENTIAL_ENCRYPTION_KEY:
   # Generate an in-memory key when env key is absent so caching is still encrypted.
   CREDENTIAL_ENCRYPTION_KEY = Fernet.generate_key().decode("utf-8")
-_CREDENTIAL_CIPHER = Fernet(CREDENTIAL_ENCRYPTION_KEY.encode("utf-8"))
+_CREDENTIAL_CIPHER = None
+if _FERNET_AVAILABLE and CREDENTIAL_ENCRYPTION_KEY:
+  try:
+    _CREDENTIAL_CIPHER = Fernet(CREDENTIAL_ENCRYPTION_KEY.encode("utf-8"))
+  except Exception:
+    _CREDENTIAL_CIPHER = None
 PROD_CUCM_HOST = "lascucmpp01.ahs.int"
 LAB_CUCM_HOST = "lascucmpl01.ahs.int"
 PROD_UNITY_HOST = "SANCUTYP01.ahs.int"
@@ -138,9 +149,14 @@ def _cache_secret(session: dict, key: str, value: str, now_epoch: float | None =
   if not cleaned:
     return
   now = now_epoch if now_epoch is not None else time.time()
-  token = _CREDENTIAL_CIPHER.encrypt(cleaned.encode("utf-8")).decode("utf-8")
-  session[f"{key}_enc"] = token
-  session.pop(key, None)
+  if _CREDENTIAL_CIPHER:
+    token = _CREDENTIAL_CIPHER.encrypt(cleaned.encode("utf-8")).decode("utf-8")
+    session[f"{key}_enc"] = token
+    session.pop(key, None)
+  else:
+    # Compatibility fallback: keep service running if cryptography is unavailable.
+    session[key] = cleaned
+    session.pop(f"{key}_enc", None)
   session[f"{key}_cached_at"] = now
   session["credential_expires_at"] = now + CREDENTIAL_CACHE_TTL_SECONDS
 
@@ -165,6 +181,10 @@ def _get_cached_secret(session: dict, key: str, now_epoch: float | None = None) 
     return ""
 
   if encrypted_value:
+    if not _CREDENTIAL_CIPHER:
+      session.pop(f"{key}_enc", None)
+      session.pop(f"{key}_cached_at", None)
+      return ""
     try:
       return _CREDENTIAL_CIPHER.decrypt(encrypted_value.encode("utf-8")).decode("utf-8").strip()
     except (InvalidToken, ValueError, TypeError):
