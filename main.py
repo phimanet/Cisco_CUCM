@@ -67,8 +67,8 @@ SMTP_DEFAULT_FROM = (os.getenv("SMTP_DEFAULT_FROM", "") or "").strip()
 MOBILE_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 MOBILE_JABBER_EMAIL_SUBJECT = "Jabber on iPhone or Android - Ready to install"
 MOBILE_JABBER_EMAIL_BODY = (
-  "Jabber for mobile phones is ready for use. You must delete the app on the iPhone/Android first "
-  "if you have it already installed.\n\n"
+  "Jabber for mobile phones is ready for use.\n\n"
+  "You must delete the app on the iPhone/Android first if you have it already installed.\n\n"
   "To setup Jabber on your mobile phone:\n\n"
   "1. Download Cisco Jabber on your mobile phone.\n"
   "2. Go thru the questions and accept Jabber to use the microphone.\n"
