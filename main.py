@@ -2574,7 +2574,7 @@ __ADMIN_CARD__
               const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;";
               const actionBtns = uid
                 ? `<button type="button" style="${btnStyle}background:#005eb8;color:#fff;" onclick="prefillPanel('precheck','${uid}')">Check Jabber</button>` +
-                  `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build</button>` +
+                  `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build Jabber</button>` +
                   `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" onclick="prefillMobileJabberNotify('${uid}','${m.pattern || ""}')">Re-send Mobile Email</button>`
                 : "\u2014";
 
