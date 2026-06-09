@@ -716,6 +716,24 @@ def _csv_has_success_step(csv_data, step_names: set[str]) -> bool:
     return False
 
 
+def _extract_mobile_shared_dn_from_output(csv_data) -> str:
+  csv_text = _to_bytes(csv_data).decode("utf-8", errors="replace")
+  reader = csv.reader(io.StringIO(csv_text))
+
+  for row in reader:
+    if len(row) < 3:
+      continue
+    step = (row[0] or "").strip()
+    status = (row[1] or "").strip().lower()
+    details = (row[2] or "").strip()
+    if step == "Resolve DN" and status == "success":
+      match = re.search(r"\b(\d{4,})\b", details)
+      if match:
+        return match.group(1)
+
+  return ""
+
+
 def _append_result_row(csv_data, step: str, status: str, details: str) -> bytes:
     csv_text = _to_bytes(csv_data).decode("utf-8", errors="replace")
     output = io.StringIO()
@@ -793,7 +811,18 @@ def _send_mobile_jabber_ready_email_if_built(
     if not recipient:
       return "Failed", "Target user does not have a CUCM mailid; email not sent"
 
-    body = f"Hello {display_name},\n\n{MOBILE_JABBER_EMAIL_BODY}"
+    phone_number = _extract_mobile_shared_dn_from_output(csv_data)
+    phone_text = _format_notification_phone(phone_number) or "XXX-XXX-XXXX"
+    second_sentence = (
+      "Jabber mobile has the uses the same telephone number as Jabber on your laptop. "
+      f"Your Jabber telephone number is {phone_text}."
+    )
+    base_body = MOBILE_JABBER_EMAIL_BODY.replace(
+      "Jabber for mobile phones is ready for use. ",
+      f"Jabber for mobile phones is ready for use. {second_sentence} ",
+      1,
+    )
+    body = f"Hello {display_name},\n\n{base_body}"
     _send_smtp_email(
       sender=MOBILE_JABBER_EMAIL_FROM,
       recipients=[recipient],
