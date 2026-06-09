@@ -821,6 +821,7 @@ def _send_csf_jabber_ready_email_if_created(
   cucm_pass: str,
   target_user: str,
   added_dn: str,
+  new_build: bool = False,
 ) -> tuple[str, str]:
     number = (added_dn or "").strip()
     if not number:
@@ -833,11 +834,19 @@ def _send_csf_jabber_ready_email_if_created(
 
     phone_text = _format_notification_phone(number)
     subject = f"Cisco Jabber is ready for use - telephone number {phone_text} assigned"
-    body = (
-      f"Cisco Jabber has been created, and ready for your use. Telephone number {phone_text} has been assigned to you.\n\n"
-      "Please click on the link here for the video training for the use of Cisco Jabber.\n"
-      f"{CSF_JABBER_TRAINING_URL}"
-    )
+    if new_build:
+      body = (
+        f"Cisco Jabber has been created, and ready for your use. Telephone number {phone_text} has been assigned to you.\n\n"
+        "Your new voicemail box PIN number is 56219#.\n\n"
+        "Please click on the link here for the video training for the use of Cisco Jabber.\n"
+        f"{CSF_JABBER_TRAINING_URL}"
+      )
+    else:
+      body = (
+        f"Cisco Jabber has been created, and ready for your use. Telephone number {phone_text} has been assigned to you.\n\n"
+        "Please click on the link here for the video training for the use of Cisco Jabber.\n"
+        f"{CSF_JABBER_TRAINING_URL}"
+      )
 
     _send_smtp_email(
       sender=CSF_JABBER_EMAIL_FROM,
@@ -2058,6 +2067,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="ad">Update AD Telephone/ipPhone Field Only</button>
           <button type="button" class="portal-nav-btn" data-panel="tct">Add in Jabber iPhone</button>
           <button type="button" class="portal-nav-btn" data-panel="bot">Add in Jabber Android</button>
+          <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
         </div>
       </aside>
@@ -3355,6 +3365,32 @@ __ADMIN_CARD__
     </div>
     </section>
 
+    <section class="tool-panel" data-panel="jabbernotify">
+    <h3>Send Jabber Number/Training Notification</h3>
+    <p>Search for an employee by last name, then send them the Cisco Jabber ready email with their telephone number and training link. Use this to test the email or resend it to any user.</p>
+    <form id="jabbernotify-form" class="jabber-check-form" style="max-width:520px;">
+      <div class="compact-inline-row">
+        <span>Cisco Callmanager Username:</span>
+        <input name="cucm_user" value="__AUTH_USER__" required>
+      </div><br>
+      <div class="compact-inline-row">
+        <span>Cisco Callmanager Password:</span>
+        <input type="password" name="cucm_pass" required>
+      </div><br>
+      Last Name:<br>
+      <input id="jabbernotify-last-name" placeholder="Smith" required style="width:min(280px,100%);"><br><br>
+      First Name (optional):<br>
+      <input id="jabbernotify-first-name" placeholder="John" style="width:min(280px,100%);"><br><br>
+      <div class="action-row">
+        <button type="submit">Search</button>
+        <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+      </div>
+    </form>
+    <p id="jabbernotify-search-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
+    <div id="jabbernotify-results" style="overflow-x:auto; margin-top:8px;"></div>
+    <p id="jabbernotify-send-status" style="margin-top:14px; font-weight:700; min-height:18px;"></p>
+    </section>
+
     <section class="tool-panel" data-panel="rebuild">
 
     <h3>Re-Build Cisco Jabber CSF from Latest Offboard Audit</h3>
@@ -3944,6 +3980,81 @@ __ADMIN_CARD__
         });
       }
 
+      // ── Jabber Notify panel (Page 1) ──────────────────────────────────────
+      (function () {
+        var jnForm = document.getElementById("jabbernotify-form");
+        var jnStatus = document.getElementById("jabbernotify-search-status");
+        var jnResults = document.getElementById("jabbernotify-results");
+        var jnSendStatus = document.getElementById("jabbernotify-send-status");
+        if (!jnForm || !jnStatus || !jnResults) return;
+        jnForm.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          jnStatus.textContent = "Searching...";
+          jnResults.innerHTML = "";
+          if (jnSendStatus) jnSendStatus.textContent = "";
+          var userField = jnForm.querySelector('input[name="cucm_user"]');
+          var passField = jnForm.querySelector('input[name="cucm_pass"]');
+          var lastNameEl = document.getElementById("jabbernotify-last-name");
+          var firstNameEl = document.getElementById("jabbernotify-first-name");
+          var lastName = ((lastNameEl && lastNameEl.value) || "").trim();
+          var firstName = ((firstNameEl && firstNameEl.value) || "").trim();
+          var cucmUser = ((userField && userField.value) || "").trim();
+          var cucmPass = (passField && passField.value) || "";
+          if (!lastName) { jnStatus.textContent = "Last Name is required."; return; }
+          if (!cucmUser || !cucmPass) { jnStatus.textContent = "Enter CUCM credentials first."; return; }
+          try {
+            var fd = new FormData();
+            fd.append("cucm_user", cucmUser);
+            fd.append("cucm_pass", cucmPass);
+            fd.append("last_name", lastName);
+            fd.append("first_name", firstName);
+            var resp = await fetch("/lookup/person", { method: "POST", body: fd, credentials: "same-origin", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
+            var payload = await resp.json();
+            if (!resp.ok || !payload.ok) throw new Error((payload && payload.detail) || "Search failed.");
+            var results = payload.results || [];
+            if (!results.length) { jnStatus.textContent = "No users found."; return; }
+            jnStatus.textContent = "Found " + results.length + " user(s). Click Send Notification to email a user.";
+            var html = '<table style="width:100%; border-collapse:collapse; font-size:13px;"><thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left;">Name</th><th style="padding:8px 10px; text-align:left;">User ID</th><th style="padding:8px 10px; text-align:left;">Telephone</th><th style="padding:8px 10px; text-align:left;">Email</th><th style="padding:8px 10px; text-align:left;">Action</th></tr></thead><tbody>';
+            results.forEach(function (r, i) {
+              var bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              var uid = r.userid || "";
+              var name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || uid;
+              var tel = r.telephone || "\u2014";
+              var email = r.email || "\u2014";
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;"><td style="padding:7px 10px;">' + name + '</td><td style="padding:7px 10px;">' + uid + '</td><td style="padding:7px 10px;">' + tel + '</td><td style="padding:7px 10px;">' + email + '</td><td style="padding:7px 10px;"><button type="button" data-nuid="' + uid + '" data-ntel="' + (r.telephone || "") + '" style="background:#237741;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer;">Send Notification</button></td></tr>';
+            });
+            html += '</tbody></table>';
+            jnResults.innerHTML = html;
+            jnResults.querySelectorAll('button[data-nuid]').forEach(function (btn) {
+              btn.addEventListener("click", async function () {
+                var uid = btn.getAttribute("data-nuid") || "";
+                var tel = btn.getAttribute("data-ntel") || "";
+                if (jnSendStatus) jnSendStatus.textContent = "Sending...";
+                btn.disabled = true;
+                try {
+                  var sf = new FormData();
+                  sf.append("cucm_user", cucmUser);
+                  sf.append("cucm_pass", cucmPass);
+                  sf.append("target_user", uid);
+                  sf.append("telephone", tel);
+                  var sr = await fetch("/send/jabber-ready-email", { method: "POST", body: sf, credentials: "same-origin", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
+                  var sp = await sr.json();
+                  if (!sr.ok || !sp.ok) throw new Error((sp && sp.detail) || "Send failed.");
+                  if (jnSendStatus) jnSendStatus.textContent = "Sent: " + (sp.detail || "Email sent successfully.");
+                } catch (err) {
+                  if (jnSendStatus) jnSendStatus.textContent = "Failed: " + ((err && err.message) || "Unknown error.");
+                  btn.disabled = false;
+                }
+              });
+            });
+          } catch (err) {
+            jnStatus.textContent = "Search error: " + ((err && err.message) || "Unknown.");
+          }
+        });
+      })();
+      // ── End Jabber Notify panel ──────────────────────────────────────
+
       const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
       const panels = Array.from(document.querySelectorAll(".tool-panel"));
 
@@ -4503,7 +4614,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=teams-telephony-remove'">Remove Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM (Main Ops)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=linegroup'">Update Hunt List Line Group (Main Ops)</button>
-            <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Training Notification</button>
+            <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
           </div>
@@ -5641,6 +5752,7 @@ async def build_user_csf_phone(
       cucm_pass=cucm_pass,
       target_user=clean_target_user,
       added_dn=added_dn,
+      new_build=True,
     )
     data = _append_result_row(data, "Send Jabber Ready Email", notify_status, notify_details)
 
