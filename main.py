@@ -2308,7 +2308,7 @@ __ADMIN_CARD__
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
-            html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Jabber Devices</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
             html += '</tr></thead><tbody>';
 
@@ -5785,7 +5785,7 @@ def menu_admin_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
-              html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Jabber Devices</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
               html += '</tr></thead><tbody>';
 
