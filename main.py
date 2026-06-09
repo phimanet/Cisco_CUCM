@@ -1750,10 +1750,10 @@ def menu_page(request: Request):
         padding: 9px 12px;
         margin: 0 0 14px 0;
         border-radius: 12px;
-        border: 1px solid #b9d7f5;
-        background: linear-gradient(180deg, #f7fbff, #e9f3fe);
-        color: #1a4468;
-        box-shadow: 0 10px 18px rgba(0, 94, 184, 0.08);
+        border: 1px solid #f0b44a;
+        background: linear-gradient(180deg, #fff4df, #ffe4b8);
+        color: #6a3c00;
+        box-shadow: 0 10px 18px rgba(198, 138, 18, 0.2);
       }
 
       .session-timer .timer-label {
@@ -5025,10 +5025,10 @@ def menu_admin_page(request: Request):
         padding: 9px 12px;
         margin: 0 0 14px 0;
         border-radius: 12px;
-        border: 1px solid #b9d7f5;
-        background: linear-gradient(180deg, #f7fbff, #e9f3fe);
-        color: #1a4468;
-        box-shadow: 0 10px 18px rgba(0, 94, 184, 0.08);
+        border: 1px solid #f0b44a;
+        background: linear-gradient(180deg, #fff4df, #ffe4b8);
+        color: #6a3c00;
+        box-shadow: 0 10px 18px rgba(198, 138, 18, 0.2);
       }
 
       .session-timer .timer-label {
