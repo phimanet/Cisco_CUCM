@@ -6754,8 +6754,9 @@ def send_mobile_jabber_email_route(
       cucm_host=cucm_host,
       operator=cucm_user,
       target=clean_target,
-      notes=f"status={notify_status}; detail={notify_details}",
+      output_filename="",
       inline_mode=True,
+      account=notify_status,
     )
 
     if notify_status == "Success":
