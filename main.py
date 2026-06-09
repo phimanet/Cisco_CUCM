@@ -812,27 +812,61 @@ def _send_mobile_jabber_ready_email_if_built(
       return "Failed", "Target user does not have a CUCM mailid; email not sent"
 
     phone_number = _extract_mobile_shared_dn_from_output(csv_data)
+    return _send_mobile_jabber_ready_email(
+      cucm_host=cucm_host,
+      cucm_user=cucm_user,
+      cucm_pass=cucm_pass,
+      target_user=target_user,
+      phone_number=phone_number,
+      recipient=recipient,
+      display_name=display_name,
+    )
+
+
+def _compose_mobile_jabber_email_body(display_name: str, phone_number: str) -> str:
     phone_text = _format_notification_phone(phone_number) or "XXX-XXX-XXXX"
     second_sentence = (
       "Jabber mobile has the uses the same telephone number as Jabber on your laptop. "
       f"Your Jabber telephone number is {phone_text}."
     )
-    base_body = MOBILE_JABBER_EMAIL_BODY.replace(
-      "Jabber for mobile phones is ready for use. ",
-      f"Jabber for mobile phones is ready for use. {second_sentence} ",
-      1,
-    )
-    body = f"Hello {display_name},\n\n{base_body}"
+    base_body = MOBILE_JABBER_EMAIL_BODY
+    lead_text = "Jabber for mobile phones is ready for use."
+    if lead_text in base_body:
+      base_body = base_body.replace(lead_text, f"{lead_text} {second_sentence}", 1)
+    else:
+      base_body = f"{lead_text} {second_sentence}\n\n{base_body}"
+    return f"Hello {display_name},\n\n{base_body}"
+
+
+def _send_mobile_jabber_ready_email(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  target_user: str,
+  phone_number: str,
+  recipient: str = "",
+  display_name: str = "",
+) -> tuple[str, str]:
+    resolved_recipient = (recipient or "").strip()
+    resolved_display_name = (display_name or "").strip()
+    if not resolved_recipient or not resolved_display_name:
+      resolved_recipient, resolved_display_name = _lookup_user_contact(cucm_host, cucm_user, cucm_pass, target_user)
+      resolved_recipient = (resolved_recipient or "").strip()
+      resolved_display_name = (resolved_display_name or "").strip()
+    if not resolved_recipient:
+      return "Failed", "Target user does not have a CUCM mailid; email not sent"
+
+    body = _compose_mobile_jabber_email_body(resolved_display_name, phone_number)
     _send_smtp_email(
       sender=MOBILE_JABBER_EMAIL_FROM,
-      recipients=[recipient],
+      recipients=[resolved_recipient],
       subject=MOBILE_JABBER_EMAIL_SUBJECT,
       body=body,
       smtp_port=SMTP_PORT,
       use_starttls=SMTP_USE_STARTTLS,
     )
 
-    return "Success", f"Notification sent to {recipient} via {SMTP_SERVER}:{SMTP_PORT}"
+    return "Success", f"Notification sent to {resolved_recipient} via {SMTP_SERVER}:{SMTP_PORT}"
 
 
 def _format_notification_phone(value: str) -> str:
@@ -2097,6 +2131,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="tct">Add in Jabber iPhone</button>
           <button type="button" class="portal-nav-btn" data-panel="bot">Add in Jabber Android</button>
           <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
+          <button type="button" class="portal-nav-btn" data-panel="mobilejabbernotify">Re-send Jabber Mobile Email Instructions</button>
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
         </div>
       </aside>
@@ -2202,6 +2237,7 @@ __ADMIN_CARD__
                 `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build Jabber</button>` +
                 `<button type="button" style="${btnStyle}background:#0e7490;color:#fff;" onclick="prefillPanel('tct','${uid}')">Build iPhone</button>` +
                 `<button type="button" style="${btnStyle}background:#7c3aed;color:#fff;" onclick="prefillPanel('bot','${uid}')">Build Android</button>` +
+                `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" onclick="prefillPanel('mobilejabbernotify','${uid}','${telephone}')">Re-send Mobile Email</button>` +
                 `<button type="button" style="${btnStyle}background:#1f7a3d;color:#fff;" data-lookup-notify-uid="${uid}" data-lookup-notify-tel="${(r.telephone || "")}">Send Notification</button>` +
                 `<button type="button" style="${btnStyle}background:#8a5a00;color:#fff;" onclick="prefillPanel('namechange','${uid}')">Name Update</button>`;
 
@@ -2359,7 +2395,8 @@ __ADMIN_CARD__
               const btnStyle = "display:inline-block;margin:2px 3px 2px 0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;";
               const actionBtns = uid
                 ? `<button type="button" style="${btnStyle}background:#005eb8;color:#fff;" onclick="prefillPanel('precheck','${uid}')">Check Jabber</button>` +
-                  `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build</button>`
+                  `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build</button>` +
+                  `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" onclick="prefillPanel('mobilejabbernotify','${uid}','${m.pattern || ""}')">Re-send Mobile Email</button>`
                 : "\u2014";
 
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
@@ -3462,6 +3499,30 @@ __ADMIN_CARD__
     <p id="jabbernotify-send-status" style="margin-top:14px; font-weight:700; min-height:18px;"></p>
     </section>
 
+    <section class="tool-panel" data-panel="mobilejabbernotify">
+    <h3>Re-send Jabber Mobile Email Instructions</h3>
+    <p>Send the same mobile Jabber instruction email that is sent after Jabber iPhone or Jabber Android is created.</p>
+    <form id="mobile-jabber-notify-form" class="jabber-check-form" style="max-width:520px;">
+      <div class="compact-inline-row">
+        <span>Cisco Callmanager Username:</span>
+        <input name="cucm_user" value="__AUTH_USER__" required>
+      </div><br>
+      <div class="compact-inline-row">
+        <span>Cisco Callmanager Password:</span>
+        <input type="password" name="cucm_pass" required>
+      </div><br>
+      User ID:<br>
+      <input id="mobile-jabber-target-user" name="target_user" placeholder="john.doe" required style="width:min(280px,100%);"><br><br>
+      Telephone Number (optional):<br>
+      <input id="mobile-jabber-telephone" name="telephone" placeholder="8585236620" style="width:min(280px,100%);"><br><br>
+      <div class="action-row">
+        <button type="submit">Send Mobile Instructions</button>
+        <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+      </div>
+    </form>
+    <p id="mobile-jabber-notify-status" style="margin-top:14px; font-weight:700; min-height:18px;"></p>
+    </section>
+
     <section class="tool-panel" data-panel="rebuild">
 
     <h3>Re-Build Cisco Jabber CSF from Latest Offboard Audit</h3>
@@ -4126,6 +4187,56 @@ __ADMIN_CARD__
       })();
       // ── End Jabber Notify panel ──────────────────────────────────────
 
+      // ── Mobile Jabber Notify panel (Page 1) ──────────────────────────
+      (function () {
+        var form = document.getElementById("mobile-jabber-notify-form");
+        var statusEl = document.getElementById("mobile-jabber-notify-status");
+        if (!form || !statusEl) return;
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          var userField = form.querySelector('input[name="cucm_user"]');
+          var passField = form.querySelector('input[name="cucm_pass"]');
+          var targetField = form.querySelector('input[name="target_user"]');
+          var phoneField = form.querySelector('input[name="telephone"]');
+          var cucmUser = ((userField && userField.value) || "").trim();
+          var cucmPass = (passField && passField.value) || "";
+          var targetUser = ((targetField && targetField.value) || "").trim();
+          var telephone = ((phoneField && phoneField.value) || "").trim();
+
+          if (!cucmUser || !cucmPass) {
+            statusEl.textContent = "Enter CUCM credentials first.";
+            return;
+          }
+          if (!targetUser) {
+            statusEl.textContent = "User ID is required.";
+            return;
+          }
+
+          statusEl.textContent = "Sending...";
+          try {
+            var fd = new FormData();
+            fd.append("cucm_user", cucmUser);
+            fd.append("cucm_pass", cucmPass);
+            fd.append("target_user", targetUser);
+            fd.append("telephone", telephone);
+            var resp = await fetch("/send/mobile-jabber-email", {
+              method: "POST",
+              body: fd,
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+            });
+            var payload = await resp.json();
+            if (!resp.ok || !payload.ok) {
+              throw new Error((payload && payload.detail) || "Send failed.");
+            }
+            statusEl.textContent = "Sent: " + (payload.detail || "Mobile email sent successfully.");
+          } catch (err) {
+            statusEl.textContent = "Failed: " + ((err && err.message) || "Unknown error.");
+          }
+        });
+      })();
+      // ── End Mobile Jabber Notify panel ───────────────────────────────
+
       const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
       const panels = Array.from(document.querySelectorAll(".tool-panel"));
 
@@ -4141,13 +4252,17 @@ __ADMIN_CARD__
       }
 
       // Globally accessible so inline onclick handlers in dynamic tables can call it.
-      window.prefillPanel = function (panelKey, userId) {
+      window.prefillPanel = function (panelKey, userId, telephone) {
         showPanel(panelKey);
         const panel = panels.find((p) => p.dataset.panel === panelKey);
         if (!panel) return;
         const targetField = panel.querySelector('input[name="target_user"]');
         if (targetField) {
           targetField.value = userId || "";
+        }
+        const telephoneField = panel.querySelector('input[name="telephone"]');
+        if (telephoneField) {
+          telephoneField.value = telephone || "";
         }
         // Scroll panel into view
         panel.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -6447,6 +6562,42 @@ def send_jabber_ready_email_route(
         cucm_pass=cucm_pass,
         target_user=clean_target,
         added_dn=phone,
+    )
+
+    if notify_status == "Success":
+        return JSONResponse({"ok": True, "detail": notify_details})
+    else:
+        return JSONResponse({"ok": False, "detail": notify_details}, status_code=400)
+
+
+@app.post("/send/mobile-jabber-email")
+def send_mobile_jabber_email_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    target_user: str = Form(...),
+    telephone: str = Form(""),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    clean_target = (target_user or "").strip()
+    phone = (telephone or "").strip()
+
+    notify_status, notify_details = _send_mobile_jabber_ready_email(
+      cucm_host=cucm_host,
+      cucm_user=cucm_user,
+      cucm_pass=cucm_pass,
+      target_user=clean_target,
+      phone_number=phone,
+    )
+
+    _append_audit_event(
+      action="send_mobile_jabber_email",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=clean_target,
+      notes=f"status={notify_status}; detail={notify_details}",
+      inline_mode=True,
     )
 
     if notify_status == "Success":
