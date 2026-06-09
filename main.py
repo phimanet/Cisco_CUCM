@@ -1471,6 +1471,8 @@ def menu_page(request: Request):
   auth_cucm_host = str(session.get("cucm_host", ""))
   has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
   has_cached_unity_pass = _has_valid_cached_secret(session, "unity_pass", now_epoch) or has_cached_cucm_pass
+  credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
+  credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
   admin_card_html = "" if not _is_admin_user(session_username) else """
         <a class=\"hero-link-card\" href=\"/menu-admin\">
@@ -1739,6 +1741,28 @@ def menu_page(request: Request):
         color: #5c2700;
         background: #ffe6cc;
         border: 1px solid #f7b267;
+      }
+
+      .session-timer {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 12px;
+        margin: 0 0 14px 0;
+        border-radius: 12px;
+        border: 1px solid #b9d7f5;
+        background: linear-gradient(180deg, #f7fbff, #e9f3fe);
+        color: #1a4468;
+        box-shadow: 0 10px 18px rgba(0, 94, 184, 0.08);
+      }
+
+      .session-timer .timer-label {
+        font-weight: 700;
+      }
+
+      .session-timer .timer-value {
+        font-family: Consolas, monospace;
+        font-weight: 700;
       }
 
       h2 {
@@ -2177,6 +2201,11 @@ __ADMIN_CARD__
         </a>
       </div>
     </section>
+
+    <div id="session-timer-banner" class="session-timer" aria-live="polite">
+      <span class="timer-label">Credentials cached. Auto logout in:</span>
+      <span id="session-timer-remaining" class="timer-value"></span>
+    </div>
 
     <div class="portal-shell">
       <aside class="portal-sidebar">
@@ -3675,6 +3704,41 @@ __ADMIN_CARD__
     <script>
       const hasCachedCucmPassword = __HAS_CACHED_CUCM_PASS__;
       const hasCachedUnityPassword = __HAS_CACHED_UNITY_PASS__;
+      const credentialExpiresAtMs = __CREDENTIAL_EXPIRES_AT_MS__;
+
+      const sessionTimerBanner = document.getElementById("session-timer-banner");
+      const sessionTimerRemaining = document.getElementById("session-timer-remaining");
+
+      function formatTimerValue(totalSeconds) {
+        const safe = Math.max(0, Math.floor(totalSeconds));
+        const hours = Math.floor(safe / 3600);
+        const minutes = Math.floor((safe % 3600) / 60);
+        const seconds = safe % 60;
+        return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+      }
+
+      function startCredentialTimer() {
+        if (!hasCachedCucmPassword || !sessionTimerBanner || !sessionTimerRemaining || !credentialExpiresAtMs) {
+          return;
+        }
+
+        sessionTimerBanner.style.display = "flex";
+
+        const updateTimer = () => {
+          const remainingMs = credentialExpiresAtMs - Date.now();
+          if (remainingMs <= 0) {
+            sessionTimerRemaining.textContent = "Expired";
+            window.location.href = "/logout";
+            return;
+          }
+          sessionTimerRemaining.textContent = formatTimerValue(remainingMs / 1000);
+        };
+
+        updateTimer();
+        window.setInterval(updateTimer, 1000);
+      }
+
+      startCredentialTimer();
 
       function hideCachedCredentialFields() {
         if (!hasCachedCucmPassword) {
@@ -3709,10 +3773,31 @@ __ADMIN_CARD__
         });
 
         if (hasCachedUnityPassword) {
-          document.querySelectorAll('input[name="unity_pass"]').forEach((inputEl) => {
+          document.querySelectorAll('input[name="unity_user"], input[name="unity_pass"]').forEach((inputEl) => {
             inputEl.required = false;
-            inputEl.value = "";
-            inputEl.placeholder = "Using cached password (expires in 4 hours)";
+            if (inputEl.name === "unity_pass") {
+              inputEl.value = "";
+              inputEl.placeholder = "Using cached password (expires in 4 hours)";
+            }
+
+            const row = inputEl.closest(".compact-inline-row");
+            if (row) {
+              row.style.display = "none";
+            }
+
+            if (inputEl.name === "unity_pass") {
+              inputEl.style.display = "none";
+              let prev = inputEl.previousSibling;
+              while (prev) {
+                if (prev.nodeType === Node.TEXT_NODE && (prev.textContent || "").toLowerCase().includes("unity admin password")) {
+                  prev.textContent = "";
+                }
+                if (prev.nodeType === Node.ELEMENT_NODE && prev.tagName === "BR") {
+                  prev.style.display = "none";
+                }
+                prev = prev.previousSibling;
+              }
+            }
           });
         }
       }
@@ -3776,6 +3861,7 @@ __ADMIN_CARD__
         fieldRules.cucm_pass.required = false;
       }
       if (hasCachedUnityPassword) {
+        fieldRules.unity_user.required = false;
         fieldRules.unity_pass.required = false;
       }
 
@@ -4654,7 +4740,7 @@ __ADMIN_CARD__
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false")
+""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
 
   return HTMLResponse(
     content=html,
@@ -4680,6 +4766,8 @@ def menu_admin_page(request: Request):
   auth_user = escape(session_username)
   auth_cucm_host = str(session.get("cucm_host", ""))
   has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
+  credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
+  credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
 
   html = """
@@ -4889,6 +4977,28 @@ def menu_admin_page(request: Request):
         border: 1px solid #f7b267;
       }
 
+      .session-timer {
+        display: none;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 12px;
+        margin: 0 0 14px 0;
+        border-radius: 12px;
+        border: 1px solid #b9d7f5;
+        background: linear-gradient(180deg, #f7fbff, #e9f3fe);
+        color: #1a4468;
+        box-shadow: 0 10px 18px rgba(0, 94, 184, 0.08);
+      }
+
+      .session-timer .timer-label {
+        font-weight: 700;
+      }
+
+      .session-timer .timer-value {
+        font-family: Consolas, monospace;
+        font-weight: 700;
+      }
+
       .portal-shell {
         display: grid;
         grid-template-columns: 300px minmax(0, 1fr);
@@ -5090,6 +5200,11 @@ def menu_admin_page(request: Request):
           </a>
         </div>
       </section>
+
+      <div id="session-timer-banner" class="session-timer" aria-live="polite">
+        <span class="timer-label">Credentials cached. Auto logout in:</span>
+        <span id="session-timer-remaining" class="timer-value"></span>
+      </div>
 
       <div class="portal-shell">
         <aside class="portal-sidebar">
@@ -5403,6 +5518,40 @@ def menu_admin_page(request: Request):
       <script>
         (function () {
           const hasCachedCucmPassword = __HAS_CACHED_CUCM_PASS__;
+          const credentialExpiresAtMs = __CREDENTIAL_EXPIRES_AT_MS__;
+          const sessionTimerBanner = document.getElementById("session-timer-banner");
+          const sessionTimerRemaining = document.getElementById("session-timer-remaining");
+
+          function formatTimerValue(totalSeconds) {
+            const safe = Math.max(0, Math.floor(totalSeconds));
+            const hours = Math.floor(safe / 3600);
+            const minutes = Math.floor((safe % 3600) / 60);
+            const seconds = safe % 60;
+            return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+          }
+
+          function startCredentialTimer() {
+            if (!hasCachedCucmPassword || !sessionTimerBanner || !sessionTimerRemaining || !credentialExpiresAtMs) {
+              return;
+            }
+
+            sessionTimerBanner.style.display = "flex";
+
+            const updateTimer = () => {
+              const remainingMs = credentialExpiresAtMs - Date.now();
+              if (remainingMs <= 0) {
+                sessionTimerRemaining.textContent = "Expired";
+                window.location.href = "/logout";
+                return;
+              }
+              sessionTimerRemaining.textContent = formatTimerValue(remainingMs / 1000);
+            };
+
+            updateTimer();
+            window.setInterval(updateTimer, 1000);
+          }
+
+          startCredentialTimer();
 
           function hideCachedCredentialFields() {
             if (!hasCachedCucmPassword) {
@@ -6099,7 +6248,7 @@ def menu_admin_page(request: Request):
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false")
+""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
 
   return HTMLResponse(
     content=html,
