@@ -49,7 +49,7 @@ JOB_OUTPUTS = {}
 AUTH_SESSIONS = {}
 SESSION_COOKIE_NAME = "cucm_web_session"
 SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
-CREDENTIAL_CACHE_TTL_SECONDS = 4 * 60 * 60
+CREDENTIAL_CACHE_TTL_SECONDS = 2 * 60 * 60
 APP_START_EPOCH = time.time()
 PROD_CUCM_HOST = "lascucmpp01.ahs.int"
 LAB_CUCM_HOST = "lascucmpl01.ahs.int"
@@ -3776,7 +3776,7 @@ __ADMIN_CARD__
           inputEl.required = false;
           if (inputEl.name === "cucm_pass") {
             inputEl.value = "";
-            inputEl.placeholder = "Using cached password (expires in 4 hours)";
+            inputEl.placeholder = "Using cached password (expires in 2 hours)";
           }
 
           const row = inputEl.closest(".compact-inline-row");
@@ -3804,7 +3804,7 @@ __ADMIN_CARD__
             inputEl.required = false;
             if (inputEl.name === "unity_pass") {
               inputEl.value = "";
-              inputEl.placeholder = "Using cached password (expires in 4 hours)";
+              inputEl.placeholder = "Using cached password (expires in 2 hours)";
             }
 
             const row = inputEl.closest(".compact-inline-row");
@@ -5619,7 +5619,7 @@ def menu_admin_page(request: Request):
               inputEl.required = false;
               if (inputEl.name === "cucm_pass") {
                 inputEl.value = "";
-                inputEl.placeholder = "Using cached password (expires in 4 hours)";
+                inputEl.placeholder = "Using cached password (expires in 2 hours)";
                 inputEl.style.display = "none";
                 let prev = inputEl.previousSibling;
                 while (prev) {
