@@ -1542,32 +1542,41 @@ def menu_page(request: Request):
         justify-content: center;
       }
 
-      .topbar-auth-pill {
+      .topbar-status > * {
         display: inline-flex;
         align-items: center;
         min-height: 32px;
         padding: 6px 10px;
-        border-radius: 999px;
+        border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.35);
-        background: rgba(255, 255, 255, 0.12);
-        color: #fff;
+        box-sizing: border-box;
         font-size: 11px;
         font-weight: 700;
-        box-sizing: border-box;
+        line-height: 1.1;
+      }
+
+      .topbar-auth-pill {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
       }
 
       .topbar-status .env-banner {
-        display: inline-flex;
-        align-items: center;
-        min-height: 32px;
-        padding: 6px 10px;
-        box-sizing: border-box;
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+        box-shadow: none;
       }
 
       .topbar-status .session-timer {
-        min-height: 32px;
-        padding: 6px 10px;
-        box-sizing: border-box;
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+        box-shadow: none;
+      }
+
+      .topbar-status .env-banner.env-banner-prod,
+      .topbar-status .env-banner.env-banner-lab {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+        border-color: rgba(255, 255, 255, 0.35);
       }
 
       .topbar-btn {
@@ -4918,32 +4927,41 @@ def menu_admin_page(request: Request):
         justify-content: center;
       }
 
-      .topbar-auth-pill {
+      .topbar-status > * {
         display: inline-flex;
         align-items: center;
         min-height: 32px;
         padding: 6px 10px;
-        border-radius: 999px;
+        border-radius: 10px;
         border: 1px solid rgba(255, 255, 255, 0.35);
-        background: rgba(255, 255, 255, 0.12);
-        color: #fff;
+        box-sizing: border-box;
         font-size: 11px;
         font-weight: 700;
-        box-sizing: border-box;
+        line-height: 1.1;
+      }
+
+      .topbar-auth-pill {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
       }
 
       .topbar-status .env-banner {
-        display: inline-flex;
-        align-items: center;
-        min-height: 32px;
-        padding: 6px 10px;
-        box-sizing: border-box;
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+        box-shadow: none;
       }
 
       .topbar-status .session-timer {
-        min-height: 32px;
-        padding: 6px 10px;
-        box-sizing: border-box;
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+        box-shadow: none;
+      }
+
+      .topbar-status .env-banner.env-banner-prod,
+      .topbar-status .env-banner.env-banner-lab {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+        border-color: rgba(255, 255, 255, 0.35);
       }
 
       .content {
