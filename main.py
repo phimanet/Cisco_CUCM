@@ -1789,33 +1789,33 @@ def menu_page(request: Request):
 
       .portal-shell {
         display: grid;
-        grid-template-columns: 280px minmax(0, 1fr);
-        gap: 14px;
+        grid-template-columns: 244px minmax(0, 1fr);
+        gap: 10px;
         align-items: start;
         margin-top: 8px;
       }
 
       .portal-sidebar {
         position: sticky;
-        top: 58px;
+        top: 54px;
         background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
         border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 16px;
-        padding: 12px;
+        border-radius: 12px;
+        padding: 8px;
         box-shadow: 0 18px 36px rgba(0, 47, 108, 0.18);
       }
 
       .portal-sidebar h4 {
-        margin: 6px 8px 12px 8px;
+        margin: 4px 6px 8px 6px;
         color: #fff;
-        font-size: 14px;
+        font-size: 13px;
         letter-spacing: 0.3px;
       }
 
       .portal-nav {
         display: flex;
         flex-direction: column;
-        gap: 8px;
+        gap: 6px;
       }
 
       .portal-nav-btn {
@@ -1824,9 +1824,10 @@ def menu_page(request: Request):
         background: rgba(255, 255, 255, 0.09);
         color: rgba(255, 255, 255, 0.94);
         border: 1px solid rgba(255, 255, 255, 0.12);
-        border-radius: 10px;
-        padding: 9px 10px;
-        font-size: 13px;
+        border-radius: 8px;
+        padding: 7px 8px;
+        font-size: 12px;
+        line-height: 1.25;
         font-weight: 600;
         transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
       }
