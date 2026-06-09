@@ -1567,9 +1567,10 @@ def menu_page(request: Request):
       }
 
       .topbar-status .session-timer {
-        background: rgba(255, 255, 255, 0.12);
-        color: #fff;
-        box-shadow: none;
+        background: linear-gradient(180deg, #fff4df, #ffdca3);
+        color: #6a3c00;
+        border-color: #f0b44a;
+        box-shadow: 0 6px 12px rgba(198, 138, 18, 0.22);
       }
 
       .topbar-status .env-banner.env-banner-prod,
@@ -4952,9 +4953,10 @@ def menu_admin_page(request: Request):
       }
 
       .topbar-status .session-timer {
-        background: rgba(255, 255, 255, 0.12);
-        color: #fff;
-        box-shadow: none;
+        background: linear-gradient(180deg, #fff4df, #ffdca3);
+        color: #6a3c00;
+        border-color: #f0b44a;
+        box-shadow: 0 6px 12px rgba(198, 138, 18, 0.22);
       }
 
       .topbar-status .env-banner.env-banner-prod,
