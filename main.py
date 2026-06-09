@@ -2211,7 +2211,7 @@ __ADMIN_CARD__
       <aside class="portal-sidebar">
         <h4>Operations Menu</h4>
         <div class="portal-nav">
-          <button type="button" class="portal-nav-btn active" data-panel="personlookup">Employee Lookup by Name</button>
+          <button type="button" class="portal-nav-btn active" data-panel="personlookup">Start Here!<br>Employee Lookup By Name</button>
           <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Reverse Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel="precheck">Check for Existing Jabber Configuration</button>
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
@@ -5236,7 +5236,7 @@ def menu_admin_page(request: Request):
         <aside class="portal-sidebar">
           <h4>Administrative Menu</h4>
           <div class="portal-nav">
-            <button type="button" class="portal-nav-btn active" data-panel="personlookup">Employee Lookup by Name</button>
+            <button type="button" class="portal-nav-btn active" data-panel="personlookup">Start Here!<br>Employee Lookup By Name</button>
             <button type="button" class="portal-nav-btn" data-panel="strike">Strike Mode - Add iPhone and Android</button>
             <button type="button" class="portal-nav-btn" data-panel="mobiledelete">Remove only Jabber Mobile</button>
             <button type="button" class="portal-nav-btn" data-panel="rpo">Extract RPO Phones</button>
