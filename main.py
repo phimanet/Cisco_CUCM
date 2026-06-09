@@ -2199,7 +2199,6 @@ def menu_page(request: Request):
 
     <main class="content">
     <section class="page-hero">
-      <span class="page-kicker">Internal Operations Portal</span>
       <div class="page-title-row">
         <div class="page-title-block">
           <h2 class="page-title">Cisco Voice Server Automation</h2>
