@@ -3797,6 +3797,20 @@ __ADMIN_CARD__
               row.style.display = "none";
             }
 
+            if (inputEl.name === "unity_user") {
+              inputEl.style.display = "none";
+              let prev = inputEl.previousSibling;
+              while (prev) {
+                if (prev.nodeType === Node.TEXT_NODE && (prev.textContent || "").toLowerCase().includes("unity admin username")) {
+                  prev.textContent = "";
+                }
+                if (prev.nodeType === Node.ELEMENT_NODE && prev.tagName === "BR") {
+                  prev.style.display = "none";
+                }
+                prev = prev.previousSibling;
+              }
+            }
+
             if (inputEl.name === "unity_pass") {
               inputEl.style.display = "none";
               let prev = inputEl.previousSibling;
