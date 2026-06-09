@@ -1508,7 +1508,7 @@ def menu_page(request: Request):
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        padding: 10px 16px;
+        padding: 8px 14px;
         background:
           linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)),
           linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
@@ -1532,6 +1532,26 @@ def menu_page(request: Request):
         display: flex;
         align-items: center;
         gap: 10px;
+      }
+
+      .topbar-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+
+      .topbar-auth-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 5px 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        background: rgba(255, 255, 255, 0.12);
+        font-size: 11px;
+        font-weight: 700;
+        color: #fff;
       }
 
       .topbar-btn {
@@ -1723,8 +1743,8 @@ def menu_page(request: Request):
 
       .env-banner {
         display: inline-block;
-        margin: 4px 0 0 0;
-        padding: 6px 10px;
+        margin: 0;
+        padding: 5px 9px;
         border-radius: 10px;
         font-weight: 700;
         letter-spacing: 0.1px;
@@ -1736,7 +1756,7 @@ def menu_page(request: Request):
         align-items: center;
         gap: 10px;
         flex-wrap: wrap;
-        margin-top: 4px;
+        margin-top: 0;
       }
 
       .hero-status-row .env-banner {
@@ -1759,13 +1779,14 @@ def menu_page(request: Request):
         display: none;
         align-items: center;
         gap: 8px;
-        padding: 9px 12px;
+        padding: 5px 9px;
         margin: 0;
-        border-radius: 12px;
+        border-radius: 10px;
         border: 1px solid #f0b44a;
         background: linear-gradient(180deg, #fff4df, #ffe4b8);
         color: #6a3c00;
-        box-shadow: 0 10px 18px rgba(198, 138, 18, 0.2);
+        box-shadow: 0 6px 12px rgba(198, 138, 18, 0.2);
+        font-size: 11px;
       }
 
       .session-timer .timer-label {
@@ -2191,6 +2212,15 @@ def menu_page(request: Request):
         <span class="brand-fallback">AMN Healthcare</span>
         <strong>Voice Operations Portal</strong>
       </div>
+      <div class="topbar-status">
+        <span class="page-kicker">Internal Operations Portal</span>
+        <span class="topbar-auth-pill">Authenticated Operator: __AUTH_USER__</span>
+        <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
+        <div id="session-timer-banner" class="session-timer" aria-live="polite">
+          <span class="timer-label">Credentials cached. Auto logout in:</span>
+          <span id="session-timer-remaining" class="timer-value"></span>
+        </div>
+      </div>
       <div class="topbar-actions">
         <a class="topbar-btn topbar-btn-login" href="/">Log In</a>
         <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
@@ -2199,24 +2229,11 @@ def menu_page(request: Request):
 
     <main class="content">
     <section class="page-hero">
-      <span class="page-kicker">Internal Operations Portal</span>
       <div class="page-title-row">
         <div class="page-title-block">
           <h2 class="page-title">Cisco Voice Server Automation</h2>
           <p class="page-subtitle">CUCM and Unity operations with fast navigation and inline outputs.</p>
-          <div class="hero-status-row">
-            <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
-            <div id="session-timer-banner" class="session-timer" aria-live="polite">
-              <span class="timer-label">Credentials cached. Auto logout in:</span>
-              <span id="session-timer-remaining" class="timer-value"></span>
-            </div>
-          </div>
         </div>
-        <aside class="page-meta-card">
-          <span class="page-meta-label">Authenticated Operator</span>
-          <span class="page-meta-value">__AUTH_USER__</span>
-          <p class="page-meta-note">Session is locked to selected environment.</p>
-        </aside>
       </div>
       <div class="hero-link-grid">
         <a class="hero-link-card" href="/">
@@ -4857,11 +4874,37 @@ def menu_admin_page(request: Request):
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        padding: 16px 28px;
+        padding: 8px 14px;
         background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94));
         color: #fff;
         box-shadow: 0 12px 28px rgba(0, 47, 108, 0.2);
         border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+      }
+
+      .topbar-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .topbar-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+
+      .topbar-auth-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 5px 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        background: rgba(255, 255, 255, 0.12);
+        font-size: 11px;
+        font-weight: 700;
+        color: #fff;
       }
 
       .brand-fallback {
@@ -5011,8 +5054,8 @@ def menu_admin_page(request: Request):
 
       .env-banner {
         display: inline-block;
-        margin: 8px 0 0 0;
-        padding: 10px 16px;
+        margin: 0;
+        padding: 5px 9px;
         border-radius: 10px;
         font-weight: 800;
         letter-spacing: 0.2px;
@@ -5024,7 +5067,7 @@ def menu_admin_page(request: Request):
         align-items: center;
         gap: 10px;
         flex-wrap: wrap;
-        margin-top: 8px;
+        margin-top: 0;
       }
 
       .hero-status-row .env-banner {
@@ -5047,13 +5090,14 @@ def menu_admin_page(request: Request):
         display: none;
         align-items: center;
         gap: 8px;
-        padding: 9px 12px;
+        padding: 5px 9px;
         margin: 0;
-        border-radius: 12px;
+        border-radius: 10px;
         border: 1px solid #f0b44a;
         background: linear-gradient(180deg, #fff4df, #ffe4b8);
         color: #6a3c00;
-        box-shadow: 0 10px 18px rgba(198, 138, 18, 0.2);
+        box-shadow: 0 6px 12px rgba(198, 138, 18, 0.2);
+        font-size: 11px;
       }
 
       .session-timer .timer-label {
@@ -5251,30 +5295,28 @@ def menu_admin_page(request: Request):
   </head>
   <body>
     <header class="topbar">
-      <span class="brand-fallback">AMN Healthcare</span>
-      <strong>Voice Operations Portal - Administrative Items</strong>
+      <div class="topbar-brand">
+        <span class="brand-fallback">AMN Healthcare</span>
+        <strong>Voice Operations Portal - Administrative Items</strong>
+      </div>
+      <div class="topbar-status">
+        <span class="page-kicker">Administrative Workbench</span>
+        <span class="topbar-auth-pill">Authenticated Operator: __AUTH_USER__</span>
+        <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
+        <div id="session-timer-banner" class="session-timer" aria-live="polite">
+          <span class="timer-label">Credentials cached. Auto logout in:</span>
+          <span id="session-timer-remaining" class="timer-value"></span>
+        </div>
+      </div>
     </header>
 
     <main class="content">
       <section class="page-hero">
-        <span class="page-kicker">Administrative Workbench</span>
         <div class="page-title-row">
           <div>
             <h2 class="page-title">Administrative Items</h2>
             <p class="page-subtitle">Bulk operations, strike workflows, export utilities, and translation lookups in a single workspace for higher-volume admin work.</p>
-            <div class="hero-status-row">
-              <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
-              <div id="session-timer-banner" class="session-timer" aria-live="polite">
-                <span class="timer-label">Credentials cached. Auto logout in:</span>
-                <span id="session-timer-remaining" class="timer-value"></span>
-              </div>
-            </div>
           </div>
-          <aside class="page-meta-card">
-            <span class="page-meta-label">Authenticated Operator</span>
-            <span class="page-meta-value">__AUTH_USER__</span>
-            <p class="page-meta-note">Use the main operations menu for day-to-day actions. This page is focused on advanced and bulk administration.</p>
-          </aside>
         </div>
         <div class="hero-link-grid">
           <a class="hero-link-card" href="/menu">
