@@ -2827,8 +2827,8 @@ __ADMIN_CARD__
               return;
             }
 
-            if (!cucmUser || !cucmPass) {
-              lookupStatusEl.textContent = "Enter CUCM username/password above before searching.";
+            if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
+              lookupStatusEl.textContent = "Enter CUCM username and password (or use cached login) before searching.";
               return;
             }
 
@@ -2993,8 +2993,8 @@ __ADMIN_CARD__
           return;
         }
 
-        if (!cucmUser || !cucmPass) {
-          statusEl.textContent = "Enter CUCM username/password above before searching.";
+        if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
+          statusEl.textContent = "Enter CUCM username and password (or use cached login) before searching.";
           return;
         }
 
