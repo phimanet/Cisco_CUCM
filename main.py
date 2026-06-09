@@ -1832,6 +1832,21 @@ def menu_page(request: Request):
         box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
       }
 
+      .portal-nav-btn.start-here-btn {
+        background: linear-gradient(180deg, #fff7d8, #ffe8a3);
+        border-color: #d7ac2a;
+        color: #4f3900;
+        box-shadow: 0 10px 18px rgba(198, 138, 18, 0.28);
+        line-height: 1.3;
+      }
+
+      .portal-nav-btn.start-here-btn:hover,
+      .portal-nav-btn.start-here-btn.active {
+        background: linear-gradient(180deg, #ffefbb, #ffd978);
+        border-color: #bd8e13;
+        color: #3f2a00;
+      }
+
       .portal-nav-btn-danger {
         background: rgba(203, 59, 47, 0.16);
         color: #ffd9d5;
@@ -2211,7 +2226,7 @@ __ADMIN_CARD__
       <aside class="portal-sidebar">
         <h4>Operations Menu</h4>
         <div class="portal-nav">
-          <button type="button" class="portal-nav-btn active" data-panel="personlookup">Start Here!<br>Employee Lookup By Name</button>
+          <button type="button" class="portal-nav-btn start-here-btn active" data-panel="personlookup">Start Here!<br>Employee Lookup By Name</button>
           <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Reverse Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel="precheck">Check for Existing Jabber Configuration</button>
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
@@ -5077,6 +5092,21 @@ def menu_admin_page(request: Request):
         border-color: rgba(0, 94, 184, 0.45);
       }
 
+      .portal-nav-btn.start-here-btn {
+        background: linear-gradient(180deg, #fff7d8, #ffe8a3);
+        border-color: #d7ac2a;
+        color: #4f3900;
+        box-shadow: 0 10px 18px rgba(198, 138, 18, 0.22);
+        line-height: 1.3;
+      }
+
+      .portal-nav-btn.start-here-btn:hover,
+      .portal-nav-btn.start-here-btn.active {
+        background: linear-gradient(180deg, #ffefbb, #ffd978);
+        border-color: #bd8e13;
+        color: #3f2a00;
+      }
+
       .portal-main {
         min-width: 0;
       }
@@ -5236,7 +5266,7 @@ def menu_admin_page(request: Request):
         <aside class="portal-sidebar">
           <h4>Administrative Menu</h4>
           <div class="portal-nav">
-            <button type="button" class="portal-nav-btn active" data-panel="personlookup">Start Here!<br>Employee Lookup By Name</button>
+            <button type="button" class="portal-nav-btn start-here-btn active" data-panel="personlookup">Start Here!<br>Employee Lookup By Name</button>
             <button type="button" class="portal-nav-btn" data-panel="strike">Strike Mode - Add iPhone and Android</button>
             <button type="button" class="portal-nav-btn" data-panel="mobiledelete">Remove only Jabber Mobile</button>
             <button type="button" class="portal-nav-btn" data-panel="rpo">Extract RPO Phones</button>
