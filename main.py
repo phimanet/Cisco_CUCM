@@ -2104,7 +2104,7 @@ def menu_page(request: Request):
 
       .jabber-check-frame {
         width: 100%;
-        min-height: 170px;
+        min-height: 340px;
         border: 1px solid var(--amn-border);
         border-radius: 12px;
         background: var(--amn-sky);
