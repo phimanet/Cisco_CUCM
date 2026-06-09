@@ -2284,7 +2284,13 @@ __ADMIN_CARD__
                     credentials: "same-origin",
                     headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
                   });
-                  const sp = await sr.json();
+                  const raw = await sr.text();
+                  let sp = null;
+                  try {
+                    sp = raw ? JSON.parse(raw) : {};
+                  } catch (_parseErr) {
+                    sp = { ok: false, detail: `Unexpected response from server (HTTP ${sr.status}).` };
+                  }
                   if (!sr.ok || !sp.ok) {
                     throw new Error((sp && sp.detail) || "Send failed.");
                   }
