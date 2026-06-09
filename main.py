@@ -1,7 +1,6 @@
 import csv
 import datetime
 import io
-import logging
 import os
 import re
 import smtplib
@@ -53,23 +52,12 @@ from toolkit.remove_teams_telephony_user import (
 )
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
-logger = logging.getLogger("cucm_web.security")
 JOB_OUTPUTS = {}
 AUTH_SESSIONS = {}
 SESSION_COOKIE_NAME = "cucm_web_session"
 SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
 CREDENTIAL_CACHE_TTL_SECONDS = 60 * 60
 APP_START_EPOCH = time.time()
-
-
-def _env_flag(name: str, default: bool = False) -> bool:
-  raw = (os.getenv(name, "") or "").strip().lower()
-  if not raw:
-    return default
-  return raw in {"1", "true", "yes", "on"}
-
-
-REQUIRE_CREDENTIAL_ENCRYPTION = _env_flag("CUCM_REQUIRE_CREDENTIAL_ENCRYPTION", default=False)
 CREDENTIAL_ENCRYPTION_KEY = (os.getenv("CUCM_CREDENTIAL_ENCRYPTION_KEY", "") or "").strip()
 if _FERNET_AVAILABLE and not CREDENTIAL_ENCRYPTION_KEY:
   # Generate an in-memory key when env key is absent so caching is still encrypted.
@@ -80,17 +68,6 @@ if _FERNET_AVAILABLE and CREDENTIAL_ENCRYPTION_KEY:
     _CREDENTIAL_CIPHER = Fernet(CREDENTIAL_ENCRYPTION_KEY.encode("utf-8"))
   except Exception:
     _CREDENTIAL_CIPHER = None
-
-if REQUIRE_CREDENTIAL_ENCRYPTION and not _CREDENTIAL_CIPHER:
-  raise RuntimeError(
-    "CUCM_REQUIRE_CREDENTIAL_ENCRYPTION is enabled, but cryptography/Fernet is unavailable "
-    "or CUCM_CREDENTIAL_ENCRYPTION_KEY is invalid."
-  )
-
-if _CREDENTIAL_CIPHER:
-  logger.info("Credential cache encryption: enabled")
-else:
-  logger.warning("Credential cache encryption: disabled (fallback mode)")
 PROD_CUCM_HOST = "lascucmpp01.ahs.int"
 LAB_CUCM_HOST = "lascucmpl01.ahs.int"
 PROD_UNITY_HOST = "SANCUTYP01.ahs.int"
