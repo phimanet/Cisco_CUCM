@@ -4413,6 +4413,10 @@ __ADMIN_CARD__
         if (targetField) {
           targetField.value = userId || "";
         }
+        const voicemailUserField = panel.querySelector('input[name="voicemail_user"]');
+        if (voicemailUserField) {
+          voicemailUserField.value = userId || "";
+        }
         const telephoneField = panel.querySelector('input[name="telephone"]');
         if (telephoneField) {
           telephoneField.value = telephone || "";
@@ -4455,6 +4459,10 @@ __ADMIN_CARD__
           const targetField = targetPanel.querySelector('input[name="target_user"]');
           if (targetField) {
             targetField.value = initialTargetUser;
+          }
+          const voicemailUserField = targetPanel.querySelector('input[name="voicemail_user"]');
+          if (voicemailUserField) {
+            voicemailUserField.value = initialTargetUser;
           }
         }
       }
