@@ -2379,7 +2379,7 @@ __ADMIN_CARD__
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Jabber Devices</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap; position:sticky; right:0; z-index:3; background:#005eb8; box-shadow:-3px 0 0 rgba(255,255,255,0.2);">Actions</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
             html += '</tr></thead><tbody>';
 
             results.forEach(function (r, i) {
@@ -2421,7 +2421,7 @@ __ADMIN_CARD__
               html += '<td style="padding:7px 10px;">' + telephone + '</td>';
               html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
               html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
-              html += '<td style="padding:7px 10px; position:sticky; right:0; background:' + bg + '; z-index:1; box-shadow:-3px 0 0 rgba(200,219,238,0.65);"><div style="display:grid;grid-template-columns:repeat(4,max-content);gap:4px;align-items:start;">' + actionBtns + '</div></td>';
+              html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(4,max-content);gap:4px;align-items:start;">' + actionBtns + '</div></td>';
               html += '</tr>';
             });
 
@@ -2559,7 +2559,7 @@ __ADMIN_CARD__
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Type</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Owner</th>';
             html += '<th style="padding:8px 10px; text-align:left;">All Lines on Device</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap; position:sticky; right:0; z-index:3; background:#005eb8; box-shadow:-3px 0 0 rgba(255,255,255,0.2);">Actions</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
             html += '</tr></thead><tbody>';
 
             matches.forEach(function (m, i) {
@@ -2585,7 +2585,7 @@ __ADMIN_CARD__
               html += '<td style="padding:7px 10px; font-size:12px;">' + devType + '</td>';
               html += '<td style="padding:7px 10px;">' + ownerCell + '</td>';
               html += '<td style="padding:7px 10px; font-size:12px; color:#355978;">' + allLines + '</td>';
-              html += '<td style="padding:7px 10px; position:sticky; right:0; background:' + bg + '; z-index:1; box-shadow:-3px 0 0 rgba(200,219,238,0.65);"><div style="display:grid;grid-template-columns:repeat(2,max-content);gap:4px;align-items:start;">' + actionBtns + '</div></td>';
+              html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(2,max-content);gap:4px;align-items:start;">' + actionBtns + '</div></td>';
               html += '</tr>';
             });
 
@@ -5948,7 +5948,7 @@ def menu_admin_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
               html += '<th style="padding:8px 10px; text-align:left;">Jabber Devices</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap; position:sticky; right:0; z-index:3; background:#005eb8; box-shadow:-3px 0 0 rgba(255,255,255,0.2);">Actions</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
               html += '</tr></thead><tbody>';
 
               results.forEach(function (r, i) {
@@ -5987,7 +5987,7 @@ def menu_admin_page(request: Request):
                 html += '<td style="padding:7px 10px;">' + telephone + '</td>';
                 html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
                 html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
-                html += '<td style="padding:7px 10px; position:sticky; right:0; background:' + bg + '; z-index:1; box-shadow:-3px 0 0 rgba(200,219,238,0.65);"><div style="display:grid;grid-template-columns:repeat(3,max-content);gap:4px;align-items:start;">' + actionBtn + '</div></td>';
+                html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(3,max-content);gap:4px;align-items:start;">' + actionBtn + '</div></td>';
                 html += '</tr>';
               });
 
@@ -6204,7 +6204,7 @@ def menu_admin_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap; position:sticky; right:0; z-index:3; background:#005eb8; box-shadow:-3px 0 0 rgba(255,255,255,0.2);">Delete Actions</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Delete Actions</th>';
               html += '</tr></thead><tbody>';
 
               results.forEach(function (r, i) {
@@ -6229,7 +6229,7 @@ def menu_admin_page(request: Request):
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
                 html += '<td style="padding:7px 10px;">' + telephone + '</td>';
                 html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
-                html += '<td style="padding:7px 10px; position:sticky; right:0; background:' + bg + '; z-index:1; box-shadow:-3px 0 0 rgba(200,219,238,0.65);"><div style="display:grid;grid-template-columns:repeat(2,max-content);gap:4px;align-items:start;">' + tctBtn + botBtn + bothBtn + '</div></td>';
+                html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(2,max-content);gap:4px;align-items:start;">' + tctBtn + botBtn + bothBtn + '</div></td>';
                 html += '</tr>';
               });
 
