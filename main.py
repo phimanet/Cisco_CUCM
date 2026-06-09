@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 import requests
 import urllib3
+from cryptography.fernet import Fernet, InvalidToken
 from fastapi import FastAPI, Form, UploadFile, File, Query, Request
 from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse
 from html import escape
@@ -51,6 +52,11 @@ SESSION_COOKIE_NAME = "cucm_web_session"
 SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
 CREDENTIAL_CACHE_TTL_SECONDS = 60 * 60
 APP_START_EPOCH = time.time()
+CREDENTIAL_ENCRYPTION_KEY = (os.getenv("CUCM_CREDENTIAL_ENCRYPTION_KEY", "") or "").strip()
+if not CREDENTIAL_ENCRYPTION_KEY:
+  # Generate an in-memory key when env key is absent so caching is still encrypted.
+  CREDENTIAL_ENCRYPTION_KEY = Fernet.generate_key().decode("utf-8")
+_CREDENTIAL_CIPHER = Fernet(CREDENTIAL_ENCRYPTION_KEY.encode("utf-8"))
 PROD_CUCM_HOST = "lascucmpp01.ahs.int"
 LAB_CUCM_HOST = "lascucmpl01.ahs.int"
 PROD_UNITY_HOST = "SANCUTYP01.ahs.int"
@@ -132,7 +138,9 @@ def _cache_secret(session: dict, key: str, value: str, now_epoch: float | None =
   if not cleaned:
     return
   now = now_epoch if now_epoch is not None else time.time()
-  session[key] = cleaned
+  token = _CREDENTIAL_CIPHER.encrypt(cleaned.encode("utf-8")).decode("utf-8")
+  session[f"{key}_enc"] = token
+  session.pop(key, None)
   session[f"{key}_cached_at"] = now
   session["credential_expires_at"] = now + CREDENTIAL_CACHE_TTL_SECONDS
 
@@ -144,17 +152,33 @@ def _get_cached_secret(session: dict, key: str, now_epoch: float | None = None) 
   now = now_epoch if now_epoch is not None else time.time()
   expires_at = float(session.get("credential_expires_at", 0) or 0)
   cached_at = float(session.get(f"{key}_cached_at", 0) or 0)
-  value = (session.get(key, "") or "").strip()
+  encrypted_value = (session.get(f"{key}_enc", "") or "").strip()
+  legacy_plain_value = (session.get(key, "") or "").strip()
 
-  if not value or not cached_at or not expires_at:
+  if (not encrypted_value and not legacy_plain_value) or not cached_at or not expires_at:
     return ""
 
   if now > expires_at or (now - cached_at) > CREDENTIAL_CACHE_TTL_SECONDS:
     session.pop(key, None)
+    session.pop(f"{key}_enc", None)
     session.pop(f"{key}_cached_at", None)
     return ""
 
-  return value
+  if encrypted_value:
+    try:
+      return _CREDENTIAL_CIPHER.decrypt(encrypted_value.encode("utf-8")).decode("utf-8").strip()
+    except (InvalidToken, ValueError, TypeError):
+      session.pop(f"{key}_enc", None)
+      session.pop(f"{key}_cached_at", None)
+      return ""
+
+  # Backward-compatible migration for sessions created before encryption was added.
+  if legacy_plain_value:
+    _cache_secret(session, key, legacy_plain_value, now)
+    session.pop(key, None)
+    return legacy_plain_value
+
+  return ""
 
 
 def _has_valid_cached_secret(session: dict, key: str, now_epoch: float | None = None) -> bool:
