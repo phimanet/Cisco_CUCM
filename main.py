@@ -1580,6 +1580,29 @@ def menu_page(request: Request):
         border-color: rgba(255, 255, 255, 0.35);
       }
 
+      .credential-health-chip {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+      }
+
+      .credential-health-chip.is-valid {
+        background: rgba(22, 163, 74, 0.25);
+        border-color: rgba(134, 239, 172, 0.6);
+        color: #e8ffe8;
+      }
+
+      .credential-health-chip.is-soon {
+        background: rgba(202, 138, 4, 0.28);
+        border-color: rgba(253, 224, 71, 0.7);
+        color: #fff8dc;
+      }
+
+      .credential-health-chip.is-expired {
+        background: rgba(185, 28, 28, 0.3);
+        border-color: rgba(252, 165, 165, 0.7);
+        color: #ffecec;
+      }
+
       .topbar-btn {
         display: inline-block;
         padding: 7px 12px;
@@ -2245,6 +2268,7 @@ def menu_page(request: Request):
           <span class="timer-label">Credentials cached. Auto logout in:</span>
           <span id="session-timer-remaining" class="timer-value"></span>
         </div>
+        <span id="credential-health-chip" class="credential-health-chip" aria-live="polite"></span>
       </div>
       <div class="topbar-actions">
         <a class="topbar-btn topbar-btn-login" href="/">Log In</a>
@@ -3790,6 +3814,34 @@ __ADMIN_CARD__
 
       const sessionTimerBanner = document.getElementById("session-timer-banner");
       const sessionTimerRemaining = document.getElementById("session-timer-remaining");
+      const credentialHealthChip = document.getElementById("credential-health-chip");
+
+      function setCredentialHealthState(state) {
+        if (!credentialHealthChip) {
+          return;
+        }
+
+        credentialHealthChip.classList.remove("is-valid", "is-soon", "is-expired");
+        if (state === "hidden") {
+          credentialHealthChip.style.display = "none";
+          credentialHealthChip.textContent = "";
+          return;
+        }
+
+        credentialHealthChip.style.display = "inline-flex";
+        if (state === "valid") {
+          credentialHealthChip.classList.add("is-valid");
+          credentialHealthChip.textContent = "Credential Health: Cached and valid";
+          return;
+        }
+        if (state === "soon") {
+          credentialHealthChip.classList.add("is-soon");
+          credentialHealthChip.textContent = "Credential Health: Expires soon";
+          return;
+        }
+        credentialHealthChip.classList.add("is-expired");
+        credentialHealthChip.textContent = "Credential Health: Expired";
+      }
 
       function formatTimerValue(totalSeconds) {
         const safe = Math.max(0, Math.floor(totalSeconds));
@@ -3801,6 +3853,7 @@ __ADMIN_CARD__
 
       function startCredentialTimer() {
         if (!hasCachedCucmPassword || !sessionTimerBanner || !sessionTimerRemaining || !credentialExpiresAtMs) {
+          setCredentialHealthState("hidden");
           return;
         }
 
@@ -3810,8 +3863,15 @@ __ADMIN_CARD__
           const remainingMs = credentialExpiresAtMs - Date.now();
           if (remainingMs <= 0) {
             sessionTimerRemaining.textContent = "Expired";
+            setCredentialHealthState("expired");
             window.location.href = "/logout";
             return;
+          }
+
+          if (remainingMs <= 10 * 60 * 1000) {
+            setCredentialHealthState("soon");
+          } else {
+            setCredentialHealthState("valid");
           }
           sessionTimerRemaining.textContent = formatTimerValue(remainingMs / 1000);
         };
@@ -4966,6 +5026,29 @@ def menu_admin_page(request: Request):
         border-color: rgba(255, 255, 255, 0.35);
       }
 
+      .credential-health-chip {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+      }
+
+      .credential-health-chip.is-valid {
+        background: rgba(22, 163, 74, 0.25);
+        border-color: rgba(134, 239, 172, 0.6);
+        color: #e8ffe8;
+      }
+
+      .credential-health-chip.is-soon {
+        background: rgba(202, 138, 4, 0.28);
+        border-color: rgba(253, 224, 71, 0.7);
+        color: #fff8dc;
+      }
+
+      .credential-health-chip.is-expired {
+        background: rgba(185, 28, 28, 0.3);
+        border-color: rgba(252, 165, 165, 0.7);
+        color: #ffecec;
+      }
+
       .content {
         max-width: 1200px;
         margin: 16px auto 22px auto;
@@ -5356,6 +5439,7 @@ def menu_admin_page(request: Request):
           <span class="timer-label">Credentials cached. Auto logout in:</span>
           <span id="session-timer-remaining" class="timer-value"></span>
         </div>
+        <span id="credential-health-chip" class="credential-health-chip" aria-live="polite"></span>
       </div>
     </header>
 
@@ -5696,6 +5780,34 @@ def menu_admin_page(request: Request):
           const credentialExpiresAtMs = __CREDENTIAL_EXPIRES_AT_MS__;
           const sessionTimerBanner = document.getElementById("session-timer-banner");
           const sessionTimerRemaining = document.getElementById("session-timer-remaining");
+          const credentialHealthChip = document.getElementById("credential-health-chip");
+
+          function setCredentialHealthState(state) {
+            if (!credentialHealthChip) {
+              return;
+            }
+
+            credentialHealthChip.classList.remove("is-valid", "is-soon", "is-expired");
+            if (state === "hidden") {
+              credentialHealthChip.style.display = "none";
+              credentialHealthChip.textContent = "";
+              return;
+            }
+
+            credentialHealthChip.style.display = "inline-flex";
+            if (state === "valid") {
+              credentialHealthChip.classList.add("is-valid");
+              credentialHealthChip.textContent = "Credential Health: Cached and valid";
+              return;
+            }
+            if (state === "soon") {
+              credentialHealthChip.classList.add("is-soon");
+              credentialHealthChip.textContent = "Credential Health: Expires soon";
+              return;
+            }
+            credentialHealthChip.classList.add("is-expired");
+            credentialHealthChip.textContent = "Credential Health: Expired";
+          }
 
           function formatTimerValue(totalSeconds) {
             const safe = Math.max(0, Math.floor(totalSeconds));
@@ -5707,6 +5819,7 @@ def menu_admin_page(request: Request):
 
           function startCredentialTimer() {
             if (!hasCachedCucmPassword || !sessionTimerBanner || !sessionTimerRemaining || !credentialExpiresAtMs) {
+              setCredentialHealthState("hidden");
               return;
             }
 
@@ -5716,8 +5829,15 @@ def menu_admin_page(request: Request):
               const remainingMs = credentialExpiresAtMs - Date.now();
               if (remainingMs <= 0) {
                 sessionTimerRemaining.textContent = "Expired";
+                setCredentialHealthState("expired");
                 window.location.href = "/logout";
                 return;
+              }
+
+              if (remainingMs <= 10 * 60 * 1000) {
+                setCredentialHealthState("soon");
+              } else {
+                setCredentialHealthState("valid");
               }
               sessionTimerRemaining.textContent = formatTimerValue(remainingMs / 1000);
             };
