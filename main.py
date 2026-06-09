@@ -3858,19 +3858,13 @@ __ADMIN_CARD__
         }
 
         sessionTimerBanner.style.display = "flex";
-        let logoutScheduled = false;
 
         const updateTimer = () => {
           const remainingMs = credentialExpiresAtMs - Date.now();
           if (remainingMs <= 0) {
-            sessionTimerRemaining.textContent = "Expired, logging out...";
+            sessionTimerRemaining.textContent = "Expired";
             setCredentialHealthState("expired");
-            if (!logoutScheduled) {
-              logoutScheduled = true;
-              window.setTimeout(() => {
-                window.location.href = "/logout";
-              }, 1000);
-            }
+            window.location.href = "/logout";
             return;
           }
 
@@ -5830,19 +5824,13 @@ def menu_admin_page(request: Request):
             }
 
             sessionTimerBanner.style.display = "flex";
-            let logoutScheduled = false;
 
             const updateTimer = () => {
               const remainingMs = credentialExpiresAtMs - Date.now();
               if (remainingMs <= 0) {
-                sessionTimerRemaining.textContent = "Expired, logging out...";
+                sessionTimerRemaining.textContent = "Expired";
                 setCredentialHealthState("expired");
-                if (!logoutScheduled) {
-                  logoutScheduled = true;
-                  window.setTimeout(() => {
-                    window.location.href = "/logout";
-                  }, 1000);
-                }
+                window.location.href = "/logout";
                 return;
               }
 
