@@ -4443,7 +4443,11 @@ __ADMIN_CARD__
 
       navButtons.forEach((btn) => {
         btn.addEventListener("click", () => {
-          showPanel(btn.dataset.panel);
+          const panelKey = (btn.dataset.panel || "").trim();
+          if (!panelKey) {
+            return;
+          }
+          showPanel(panelKey);
         });
       });
 
@@ -5397,7 +5401,11 @@ def menu_admin_page(request: Request):
 
           navButtons.forEach((btn) => {
             btn.addEventListener("click", () => {
-              showPanel(btn.dataset.panel);
+              const panelKey = (btn.dataset.panel || "").trim();
+              if (!panelKey) {
+                return;
+              }
+              showPanel(panelKey);
             });
           });
         })();
