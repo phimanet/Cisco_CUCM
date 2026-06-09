@@ -49,6 +49,7 @@ JOB_OUTPUTS = {}
 AUTH_SESSIONS = {}
 SESSION_COOKIE_NAME = "cucm_web_session"
 SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
+CREDENTIAL_CACHE_TTL_SECONDS = 4 * 60 * 60
 APP_START_EPOCH = time.time()
 PROD_CUCM_HOST = "lascucmpp01.ahs.int"
 LAB_CUCM_HOST = "lascucmpl01.ahs.int"
@@ -115,22 +116,63 @@ def _prune_auth_sessions_locked(now_epoch: float):
   expired = [
     sid
     for sid, data in AUTH_SESSIONS.items()
-    if (now_epoch - float(data.get("last_seen", 0))) > SESSION_IDLE_TIMEOUT_SECONDS
+    if (
+      (now_epoch - float(data.get("last_seen", 0))) > SESSION_IDLE_TIMEOUT_SECONDS
+      or now_epoch > float(data.get("credential_expires_at", 0) or 0)
+    )
   ]
   for sid in expired:
     AUTH_SESSIONS.pop(sid, None)
 
 
-def _create_auth_session(cucm_host: str, username: str) -> str:
+def _cache_secret(session: dict, key: str, value: str, now_epoch: float | None = None):
+  if not session:
+    return
+  cleaned = (value or "").strip()
+  if not cleaned:
+    return
+  now = now_epoch if now_epoch is not None else time.time()
+  session[key] = cleaned
+  session[f"{key}_cached_at"] = now
+  session["credential_expires_at"] = now + CREDENTIAL_CACHE_TTL_SECONDS
+
+
+def _get_cached_secret(session: dict, key: str, now_epoch: float | None = None) -> str:
+  if not session:
+    return ""
+
+  now = now_epoch if now_epoch is not None else time.time()
+  expires_at = float(session.get("credential_expires_at", 0) or 0)
+  cached_at = float(session.get(f"{key}_cached_at", 0) or 0)
+  value = (session.get(key, "") or "").strip()
+
+  if not value or not cached_at or not expires_at:
+    return ""
+
+  if now > expires_at or (now - cached_at) > CREDENTIAL_CACHE_TTL_SECONDS:
+    session.pop(key, None)
+    session.pop(f"{key}_cached_at", None)
+    return ""
+
+  return value
+
+
+def _has_valid_cached_secret(session: dict, key: str, now_epoch: float | None = None) -> bool:
+  return bool(_get_cached_secret(session, key, now_epoch))
+
+
+def _create_auth_session(cucm_host: str, username: str, cucm_pass: str) -> str:
   session_id = str(uuid4())
   now_epoch = time.time()
   AUTH_SESSIONS[session_id] = {
     "cucm_host": (cucm_host or "").strip(),
     "username": (username or "").strip(),
-    "unity_user": "",
+    "unity_user": (username or "").strip(),
     "created_at": now_epoch,
     "last_seen": now_epoch,
+    "credential_expires_at": now_epoch + CREDENTIAL_CACHE_TTL_SECONDS,
   }
+  _cache_secret(AUTH_SESSIONS[session_id], "cucm_pass", cucm_pass, now_epoch)
   return session_id
 
 
@@ -143,6 +185,10 @@ def _get_auth_session(request: Request):
   _prune_auth_sessions_locked(now_epoch)
   session = AUTH_SESSIONS.get(session_id)
   if not session:
+    return None
+
+  if now_epoch > float(session.get("credential_expires_at", 0) or 0):
+    AUTH_SESSIONS.pop(session_id, None)
     return None
 
   session["last_seen"] = now_epoch
@@ -178,7 +224,9 @@ def _update_cached_credentials(
   request: Request,
   cucm_host: str = "",
   cucm_user: str = "",
+  cucm_pass: str = "",
   unity_user: str = "",
+  unity_pass: str = "",
 ):
   session = _get_auth_session(request)
   if not session:
@@ -188,8 +236,12 @@ def _update_cached_credentials(
     session["cucm_host"] = cucm_host.strip()
   if (cucm_user or "").strip():
     session["username"] = cucm_user.strip()
+  if (cucm_pass or "").strip():
+    _cache_secret(session, "cucm_pass", cucm_pass)
   if (unity_user or "").strip():
     session["unity_user"] = unity_user.strip()
+  if (unity_pass or "").strip():
+    _cache_secret(session, "unity_pass", unity_pass)
 
 
 def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, cucm_pass: str):
@@ -199,7 +251,10 @@ def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, 
 
   resolved_host = (cucm_host or "").strip() or session.get("cucm_host", "")
   resolved_user = (cucm_user or "").strip() or session.get("username", "")
-  resolved_pass = cucm_pass
+  provided_pass = (cucm_pass or "").strip()
+  if provided_pass:
+    _cache_secret(session, "cucm_pass", provided_pass)
+  resolved_pass = provided_pass or _get_cached_secret(session, "cucm_pass")
 
   if not resolved_host or not resolved_user or not resolved_pass:
     raise RuntimeError("Missing CUCM credentials. Enter username/password for this action.")
@@ -213,7 +268,10 @@ def _resolve_unity_credentials(request: Request, unity_user: str, unity_pass: st
     raise RuntimeError("Authentication required.")
 
   resolved_user = (unity_user or "").strip() or session.get("unity_user", "") or session.get("username", "")
-  resolved_pass = unity_pass
+  provided_pass = (unity_pass or "").strip()
+  if provided_pass:
+    _cache_secret(session, "unity_pass", provided_pass)
+  resolved_pass = provided_pass or _get_cached_secret(session, "unity_pass") or _get_cached_secret(session, "cucm_pass")
 
   if not resolved_user or not resolved_pass:
     raise RuntimeError("Missing Unity credentials. Enter Unity admin username/password for this action.")
@@ -1380,7 +1438,7 @@ def login(
       status_code=401,
     )
 
-  session_id = _create_auth_session(cucm_host, cucm_user)
+  session_id = _create_auth_session(cucm_host, cucm_user, cucm_pass)
   response = RedirectResponse(url="/menu", status_code=303)
   response.set_cookie(
     key=SESSION_COOKIE_NAME,
@@ -1388,7 +1446,7 @@ def login(
     httponly=True,
     samesite="lax",
     secure=True,
-    max_age=SESSION_IDLE_TIMEOUT_SECONDS,
+    max_age=CREDENTIAL_CACHE_TTL_SECONDS,
   )
   return response
 
@@ -1407,9 +1465,12 @@ def logout(request: Request):
 @app.get("/menu", response_class=HTMLResponse)
 def menu_page(request: Request):
   session = _get_auth_session(request) or {}
+  now_epoch = time.time()
   session_username = str(session.get("username", ""))
   auth_user = escape(session_username)
   auth_cucm_host = str(session.get("cucm_host", ""))
+  has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
+  has_cached_unity_pass = _has_valid_cached_secret(session, "unity_pass", now_epoch) or has_cached_cucm_pass
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
   admin_card_html = "" if not _is_admin_user(session_username) else """
         <a class=\"hero-link-card\" href=\"/menu-admin\">
@@ -3612,6 +3673,50 @@ __ADMIN_CARD__
     </section>
 
     <script>
+      const hasCachedCucmPassword = __HAS_CACHED_CUCM_PASS__;
+      const hasCachedUnityPassword = __HAS_CACHED_UNITY_PASS__;
+
+      function hideCachedCredentialFields() {
+        if (!hasCachedCucmPassword) {
+          return;
+        }
+
+        document.querySelectorAll('input[name="cucm_user"], input[name="cucm_pass"]').forEach((inputEl) => {
+          inputEl.required = false;
+          if (inputEl.name === "cucm_pass") {
+            inputEl.value = "";
+            inputEl.placeholder = "Using cached password (expires in 4 hours)";
+          }
+
+          const row = inputEl.closest(".compact-inline-row");
+          if (row) {
+            row.style.display = "none";
+          }
+
+          if (inputEl.name === "cucm_pass") {
+            inputEl.style.display = "none";
+            let prev = inputEl.previousSibling;
+            while (prev) {
+              if (prev.nodeType === Node.TEXT_NODE && (prev.textContent || "").toLowerCase().includes("callmanager password")) {
+                prev.textContent = "";
+              }
+              if (prev.nodeType === Node.ELEMENT_NODE && prev.tagName === "BR") {
+                prev.style.display = "none";
+              }
+              prev = prev.previousSibling;
+            }
+          }
+        });
+
+        if (hasCachedUnityPassword) {
+          document.querySelectorAll('input[name="unity_pass"]').forEach((inputEl) => {
+            inputEl.required = false;
+            inputEl.value = "";
+            inputEl.placeholder = "Using cached password (expires in 4 hours)";
+          });
+        }
+      }
+
       const fieldRules = {
         cucm_user: {
           required: true,
@@ -3666,6 +3771,15 @@ __ADMIN_CARD__
           requiredMessage: "Last Name is required.",
         },
       };
+
+      if (hasCachedCucmPassword) {
+        fieldRules.cucm_pass.required = false;
+      }
+      if (hasCachedUnityPassword) {
+        fieldRules.unity_pass.required = false;
+      }
+
+      hideCachedCredentialFields();
 
       function clearFieldError(field) {
         const errorEl = field.nextElementSibling;
@@ -4540,7 +4654,7 @@ __ADMIN_CARD__
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__ADMIN_CARD__", admin_card_html)
+""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false")
 
   return HTMLResponse(
     content=html,
@@ -4555,6 +4669,7 @@ __ADMIN_CARD__
 @app.get("/menu-admin", response_class=HTMLResponse)
 def menu_admin_page(request: Request):
   session = _get_auth_session(request) or {}
+  now_epoch = time.time()
   session_username = str(session.get("username", ""))
   if not _is_admin_user(session_username):
     return HTMLResponse(
@@ -4564,6 +4679,7 @@ def menu_admin_page(request: Request):
 
   auth_user = escape(session_username)
   auth_cucm_host = str(session.get("cucm_host", ""))
+  has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
 
   html = """
@@ -5286,6 +5402,40 @@ def menu_admin_page(request: Request):
 
       <script>
         (function () {
+          const hasCachedCucmPassword = __HAS_CACHED_CUCM_PASS__;
+
+          function hideCachedCredentialFields() {
+            if (!hasCachedCucmPassword) {
+              return;
+            }
+
+            document.querySelectorAll('input[name="cucm_user"], input[name="cucm_pass"]').forEach((inputEl) => {
+              inputEl.required = false;
+              if (inputEl.name === "cucm_pass") {
+                inputEl.value = "";
+                inputEl.placeholder = "Using cached password (expires in 4 hours)";
+                inputEl.style.display = "none";
+                let prev = inputEl.previousSibling;
+                while (prev) {
+                  if (prev.nodeType === Node.TEXT_NODE && (prev.textContent || "").toLowerCase().includes("callmanager password")) {
+                    prev.textContent = "";
+                  }
+                  if (prev.nodeType === Node.ELEMENT_NODE && prev.tagName === "BR") {
+                    prev.style.display = "none";
+                  }
+                  prev = prev.previousSibling;
+                }
+              }
+
+              const row = inputEl.closest(".compact-inline-row");
+              if (row) {
+                row.style.display = "none";
+              }
+            });
+          }
+
+          hideCachedCredentialFields();
+
           // ── Jabber Notify panel ──────────────────────────────────────────────
           const jabberNotifyForm = document.getElementById("jabbernotify-form");
           const jabberNotifyStatus = document.getElementById("jabbernotify-search-status");
@@ -5949,7 +6099,7 @@ def menu_admin_page(request: Request):
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
+""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false")
 
   return HTMLResponse(
     content=html,
