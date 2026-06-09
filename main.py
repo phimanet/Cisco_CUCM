@@ -4404,23 +4404,27 @@ __ADMIN_CARD__
         });
       }
 
+      function applyPanelPrefill(panel, userId, telephone) {
+        if (!panel) return;
+        ['input[name="target_user"]', 'input[name="voicemail_user"]'].forEach((selector) => {
+          const field = panel.querySelector(selector);
+          if (field) {
+            field.value = userId || "";
+          }
+        });
+
+        const telephoneField = panel.querySelector('input[name="telephone"]');
+        if (telephoneField) {
+          telephoneField.value = telephone || "";
+        }
+      }
+
       // Globally accessible so inline onclick handlers in dynamic tables can call it.
       window.prefillPanel = function (panelKey, userId, telephone) {
         showPanel(panelKey);
         const panel = panels.find((p) => p.dataset.panel === panelKey);
         if (!panel) return;
-        const targetField = panel.querySelector('input[name="target_user"]');
-        if (targetField) {
-          targetField.value = userId || "";
-        }
-        const voicemailUserField = panel.querySelector('input[name="voicemail_user"]');
-        if (voicemailUserField) {
-          voicemailUserField.value = userId || "";
-        }
-        const telephoneField = panel.querySelector('input[name="telephone"]');
-        if (telephoneField) {
-          telephoneField.value = telephone || "";
-        }
+        applyPanelPrefill(panel, userId, telephone);
         // Scroll panel into view
         panel.scrollIntoView({ behavior: "smooth", block: "start" });
       };
@@ -4456,14 +4460,7 @@ __ADMIN_CARD__
           ? panels.find((panel) => panel.dataset.panel === initialPanel)
           : null;
         if (targetPanel) {
-          const targetField = targetPanel.querySelector('input[name="target_user"]');
-          if (targetField) {
-            targetField.value = initialTargetUser;
-          }
-          const voicemailUserField = targetPanel.querySelector('input[name="voicemail_user"]');
-          if (voicemailUserField) {
-            voicemailUserField.value = initialTargetUser;
-          }
+          applyPanelPrefill(targetPanel, initialTargetUser, "");
         }
       }
 
