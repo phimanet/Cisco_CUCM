@@ -2235,6 +2235,7 @@ __ADMIN_CARD__
 
     <div class="jabber-check-layout" style="display:block;">
       <form id="person-lookup-form" class="jabber-check-form" style="margin-bottom:14px;">
+        <input type="hidden" name="include_teams_status" value="1">
         <div class="compact-inline-row">
           <span>Cisco Callmanager Username:</span>
           <input name="cucm_user" value="__AUTH_USER__" required>
@@ -2305,6 +2306,7 @@ __ADMIN_CARD__
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
             html += '</tr></thead><tbody>';
@@ -2316,6 +2318,14 @@ __ADMIN_CARD__
               const email = r.email || "\u2014";
               const telephone = r.telephone || "\u2014";
               const uid = r.userid || "";
+              const teams = r.teams_telephony || {};
+              const teamsIsUser = !!teams.is_teams_user;
+              const teamsState = teams.status || (teamsIsUser ? "Yes" : "Not Found");
+              const teamsExt = teams.extension || "";
+              const teamsText = teamsIsUser
+                ? (teamsExt ? `Yes (${teamsExt})` : "Yes")
+                : (teamsState === "Unknown" ? "Unknown" : "Not Found");
+              const teamsColor = teamsIsUser ? "#0f6d35" : (teamsState === "Unknown" ? "#7a1020" : "#6b7280");
               const devList = (r.devices || []).map(function (d) {
                 const exts = (d.extensions || []).join(", ") || "\u2014";
                 return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
@@ -2338,6 +2348,7 @@ __ADMIN_CARD__
               html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
               html += '<td style="padding:7px 10px;">' + email + '</td>';
               html += '<td style="padding:7px 10px;">' + telephone + '</td>';
+              html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
               html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
               html += '<td style="padding:7px 10px; white-space:nowrap;">' + actionBtns + '</td>';
               html += '</tr>';
@@ -5235,6 +5246,7 @@ def menu_admin_page(request: Request):
         <h3>Employee Lookup by Name</h3>
         <p>Search by last name (optional first name), then use the result to prefill Strike Mode.</p>
         <form id="admin-person-lookup-form">
+          <input type="hidden" name="include_teams_status" value="1">
           <div class="compact-inline-row">
             <span>Cisco Callmanager Username:</span>
             <input name="cucm_user" value="__AUTH_USER__" required>
@@ -5771,6 +5783,7 @@ def menu_admin_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
               html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
               html += '</tr></thead><tbody>';
@@ -5782,6 +5795,14 @@ def menu_admin_page(request: Request):
                 const email = r.email || "\u2014";
                 const telephone = r.telephone || "\u2014";
                 const uid = r.userid || "";
+                const teams = r.teams_telephony || {};
+                const teamsIsUser = !!teams.is_teams_user;
+                const teamsState = teams.status || (teamsIsUser ? "Yes" : "Not Found");
+                const teamsExt = teams.extension || "";
+                const teamsText = teamsIsUser
+                  ? (teamsExt ? `Yes (${teamsExt})` : "Yes")
+                  : (teamsState === "Unknown" ? "Unknown" : "Not Found");
+                const teamsColor = teamsIsUser ? "#0f6d35" : (teamsState === "Unknown" ? "#7a1020" : "#6b7280");
                 const devList = (r.devices || []).map(function (d) {
                   const exts = (d.extensions || []).join(", ") || "\u2014";
                   return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
@@ -5801,6 +5822,7 @@ def menu_admin_page(request: Request):
                 html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
                 html += '<td style="padding:7px 10px;">' + telephone + '</td>';
+                html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
                 html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
                 html += '<td style="padding:7px 10px; white-space:nowrap;">' + actionBtn + '</td>';
                 html += '</tr>';
@@ -7128,14 +7150,40 @@ def lookup_person_route(
     cucm_pass: str = Form(""),
     last_name: str = Form(...),
     first_name: str = Form(""),
+  include_teams_status: str = Form(""),
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
     _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
     clean_last = (last_name or "").strip()
     clean_first = (first_name or "").strip()
+    include_teams = str(include_teams_status or "").strip().lower() in {"1", "true", "yes", "on"}
     if not clean_last:
         raise RuntimeError("Last Name is required.")
     results = search_persons_by_name(cucm_host, cucm_user, cucm_pass, clean_last, clean_first)
+    if include_teams:
+      for user in results:
+        uid = (user.get("userid") or "").strip()
+        user["teams_telephony"] = {
+          "is_teams_user": False,
+          "status": "Not Found",
+        }
+        if not uid:
+          continue
+        try:
+          candidate = lookup_teams_telephony_removal_candidate(cucm_host, cucm_user, cucm_pass, uid)
+          is_teams_user = bool(candidate.get("match_found"))
+          user["teams_telephony"] = {
+            "is_teams_user": is_teams_user,
+            "status": "Yes" if is_teams_user else "Not Found",
+            "extension": (candidate.get("extension") or "").strip(),
+            "pattern": (candidate.get("pattern") or "").strip(),
+            "route_partition": (candidate.get("route_partition") or "").strip(),
+          }
+        except Exception:
+          user["teams_telephony"] = {
+            "is_teams_user": False,
+            "status": "Unknown",
+          }
     return JSONResponse({
         "ok": True,
         "count": len(results),
