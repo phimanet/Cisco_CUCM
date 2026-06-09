@@ -2202,6 +2202,7 @@ __ADMIN_CARD__
                 `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build Jabber</button>` +
                 `<button type="button" style="${btnStyle}background:#0e7490;color:#fff;" onclick="prefillPanel('tct','${uid}')">Build iPhone</button>` +
                 `<button type="button" style="${btnStyle}background:#7c3aed;color:#fff;" onclick="prefillPanel('bot','${uid}')">Build Android</button>` +
+                `<button type="button" style="${btnStyle}background:#1f7a3d;color:#fff;" data-lookup-notify-uid="${uid}" data-lookup-notify-tel="${(r.telephone || "")}">Send Notification</button>` +
                 `<button type="button" style="${btnStyle}background:#8a5a00;color:#fff;" onclick="prefillPanel('namechange','${uid}')">Name Update</button>`;
 
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
@@ -2217,6 +2218,47 @@ __ADMIN_CARD__
 
             html += '</tbody></table>';
             resultsEl.innerHTML = html;
+
+            resultsEl.querySelectorAll('button[data-lookup-notify-uid]').forEach(function (btn) {
+              btn.addEventListener("click", async function () {
+                const uid = btn.getAttribute("data-lookup-notify-uid") || "";
+                const tel = btn.getAttribute("data-lookup-notify-tel") || "";
+                const userField = form.querySelector('input[name="cucm_user"]');
+                const passField = form.querySelector('input[name="cucm_pass"]');
+                const cucmUser = ((userField && userField.value) || "").trim();
+                const cucmPass = (passField && passField.value) || "";
+
+                if (!cucmUser || !cucmPass) {
+                  statusEl.textContent = "Enter CUCM username/password before sending notification.";
+                  return;
+                }
+
+                btn.disabled = true;
+                statusEl.textContent = `Sending Jabber notification for ${uid}...`;
+                try {
+                  const sf = new FormData();
+                  sf.append("cucm_user", cucmUser);
+                  sf.append("cucm_pass", cucmPass);
+                  sf.append("target_user", uid);
+                  sf.append("telephone", tel);
+
+                  const sr = await fetch("/send/jabber-ready-email", {
+                    method: "POST",
+                    body: sf,
+                    credentials: "same-origin",
+                    headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                  });
+                  const sp = await sr.json();
+                  if (!sr.ok || !sp.ok) {
+                    throw new Error((sp && sp.detail) || "Send failed.");
+                  }
+                  statusEl.textContent = "Notification sent: " + (sp.detail || "Email sent successfully.");
+                } catch (err) {
+                  statusEl.textContent = "Send failed: " + ((err && err.message) || "Unknown error.");
+                  btn.disabled = false;
+                }
+              });
+            });
 
           } catch (err) {
             statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
@@ -5139,8 +5181,9 @@ def menu_admin_page(request: Request):
                 const strikeBtn = `<button type="button" style="${btnStyle}background:#237741;" data-strike-user="${uid}">Strike Mode - Add in Both Jabber iPhone and Android</button>`;
                 const tctBtn = `<button type="button" style="${btnStyle}background:#0e7490;" data-tct-user="${uid}">Add Jabber iPhone</button>`;
                 const botBtn = `<button type="button" style="${btnStyle}background:#7c3aed;" data-bot-user="${uid}">Add Jabber Android</button>`;
+                const notifyBtn = `<button type="button" style="${btnStyle}background:#1f7a3d;" data-notify-user="${uid}" data-notify-tel="${(r.telephone || "")}">Send Notification</button>`;
                 const offboardBtn = `<button type="button" style="${btnStyle}background:#b00020;" data-offboard-user="${uid}">Separate Employee-Delete Jabber/VM</button>`;
-                const actionBtn = strikeBtn + tctBtn + botBtn + offboardBtn;
+                const actionBtn = strikeBtn + tctBtn + botBtn + notifyBtn + offboardBtn;
 
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
@@ -5220,6 +5263,47 @@ def menu_admin_page(request: Request):
                   const uid = btn.getAttribute("data-offboard-user") || "";
                   const qs = new URLSearchParams({ panel: "offboard", target_user: uid });
                   window.location.href = "/menu?" + qs.toString();
+                });
+              });
+
+              resultsEl.querySelectorAll("button[data-notify-user]").forEach(function (btn) {
+                btn.addEventListener("click", async function () {
+                  const uid = btn.getAttribute("data-notify-user") || "";
+                  const tel = btn.getAttribute("data-notify-tel") || "";
+                  const userField = form.querySelector('input[name="cucm_user"]');
+                  const passField = form.querySelector('input[name="cucm_pass"]');
+                  const cucmUser = ((userField && userField.value) || "").trim();
+                  const cucmPass = (passField && passField.value) || "";
+
+                  if (!cucmUser || !cucmPass) {
+                    statusEl.textContent = "Enter CUCM username/password before sending notification.";
+                    return;
+                  }
+
+                  btn.disabled = true;
+                  statusEl.textContent = `Sending Jabber notification for ${uid}...`;
+                  try {
+                    const sf = new FormData();
+                    sf.append("cucm_user", cucmUser);
+                    sf.append("cucm_pass", cucmPass);
+                    sf.append("target_user", uid);
+                    sf.append("telephone", tel);
+
+                    const sr = await fetch("/send/jabber-ready-email", {
+                      method: "POST",
+                      body: sf,
+                      credentials: "same-origin",
+                      headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                    });
+                    const sp = await sr.json();
+                    if (!sr.ok || !sp.ok) {
+                      throw new Error((sp && sp.detail) || "Send failed.");
+                    }
+                    statusEl.textContent = "Notification sent: " + (sp.detail || "Email sent successfully.");
+                  } catch (err) {
+                    statusEl.textContent = "Send failed: " + ((err && err.message) || "Unknown error.");
+                    btn.disabled = false;
+                  }
                 });
               });
             } catch (err) {
