@@ -6749,15 +6749,19 @@ def send_mobile_jabber_email_route(
       phone_number=phone,
     )
 
-    _append_audit_event(
-      action="send_mobile_jabber_email",
-      cucm_host=cucm_host,
-      operator=cucm_user,
-      target=clean_target,
-      output_filename="",
-      inline_mode=True,
-      account=notify_status,
-    )
+    try:
+      _append_audit_event(
+        action="send_mobile_jabber_email",
+        cucm_host=cucm_host,
+        operator=cucm_user,
+        target=clean_target,
+        output_filename="",
+        inline_mode=True,
+        account=notify_status,
+      )
+    except Exception:
+      # Do not fail the email response if audit logging has a transient issue.
+      pass
 
     if notify_status == "Success":
         return JSONResponse({"ok": True, "detail": notify_details})
