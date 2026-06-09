@@ -2974,6 +2974,13 @@ __ADMIN_CARD__
               if (targetUserField) {
                 targetUserField.value = uid;
               }
+              const lookupStatusEl = document.getElementById("teams-remove-status");
+              if (lookupStatusEl) {
+                lookupStatusEl.textContent = "Selected " + uid + ". Running strict lookup...";
+              }
+              if (window.runTeamsRemoveLookup) {
+                window.runTeamsRemoveLookup();
+              }
             });
           });
         } catch (err) {
@@ -3062,9 +3069,20 @@ __ADMIN_CARD__
         const statusEl = document.getElementById("teams-remove-status");
         const outputEl = document.getElementById("teams-remove-preview");
         const deleteBtn = document.getElementById("teams-remove-delete-btn");
-        const state = window.teamsRemoveLookupState;
-        if (!form || !statusEl || !outputEl || !deleteBtn || !state || !state.match_found) {
-          alert("Run lookup first and confirm strict match.");
+        if (!form || !statusEl || !outputEl || !deleteBtn) {
+          return;
+        }
+
+        let state = window.teamsRemoveLookupState;
+        if (!state || !state.match_found) {
+          if (window.runTeamsRemoveLookup) {
+            await window.runTeamsRemoveLookup();
+            state = window.teamsRemoveLookupState;
+          }
+        }
+
+        if (!state || !state.match_found) {
+          alert("No strict match found. Run lookup and confirm MATCHED before deleting.");
           return;
         }
 
