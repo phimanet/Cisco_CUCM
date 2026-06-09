@@ -1731,6 +1731,18 @@ def menu_page(request: Request):
         box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
       }
 
+      .hero-status-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 4px;
+      }
+
+      .hero-status-row .env-banner {
+        margin: 0;
+      }
+
       .env-banner-prod {
         color: #083252;
         background: #d8ecff;
@@ -1748,7 +1760,7 @@ def menu_page(request: Request):
         align-items: center;
         gap: 8px;
         padding: 9px 12px;
-        margin: 0 0 14px 0;
+        margin: 0;
         border-radius: 12px;
         border: 1px solid #f0b44a;
         background: linear-gradient(180deg, #fff4df, #ffe4b8);
@@ -2192,7 +2204,13 @@ def menu_page(request: Request):
         <div class="page-title-block">
           <h2 class="page-title">Cisco Voice Server Automation</h2>
           <p class="page-subtitle">CUCM and Unity operations with fast navigation and inline outputs.</p>
-          <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
+          <div class="hero-status-row">
+            <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
+            <div id="session-timer-banner" class="session-timer" aria-live="polite">
+              <span class="timer-label">Credentials cached. Auto logout in:</span>
+              <span id="session-timer-remaining" class="timer-value"></span>
+            </div>
+          </div>
         </div>
         <aside class="page-meta-card">
           <span class="page-meta-label">Authenticated Operator</span>
@@ -2216,11 +2234,6 @@ __ADMIN_CARD__
         </a>
       </div>
     </section>
-
-    <div id="session-timer-banner" class="session-timer" aria-live="polite">
-      <span class="timer-label">Credentials cached. Auto logout in:</span>
-      <span id="session-timer-remaining" class="timer-value"></span>
-    </div>
 
     <div class="portal-shell">
       <aside class="portal-sidebar">
@@ -5006,6 +5019,18 @@ def menu_admin_page(request: Request):
         box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
       }
 
+      .hero-status-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 8px;
+      }
+
+      .hero-status-row .env-banner {
+        margin: 0;
+      }
+
       .env-banner-prod {
         color: #083252;
         background: #d8ecff;
@@ -5023,7 +5048,7 @@ def menu_admin_page(request: Request):
         align-items: center;
         gap: 8px;
         padding: 9px 12px;
-        margin: 0 0 14px 0;
+        margin: 0;
         border-radius: 12px;
         border: 1px solid #f0b44a;
         background: linear-gradient(180deg, #fff4df, #ffe4b8);
@@ -5237,7 +5262,13 @@ def menu_admin_page(request: Request):
           <div>
             <h2 class="page-title">Administrative Items</h2>
             <p class="page-subtitle">Bulk operations, strike workflows, export utilities, and translation lookups in a single workspace for higher-volume admin work.</p>
-            <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
+            <div class="hero-status-row">
+              <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
+              <div id="session-timer-banner" class="session-timer" aria-live="polite">
+                <span class="timer-label">Credentials cached. Auto logout in:</span>
+                <span id="session-timer-remaining" class="timer-value"></span>
+              </div>
+            </div>
           </div>
           <aside class="page-meta-card">
             <span class="page-meta-label">Authenticated Operator</span>
@@ -5256,11 +5287,6 @@ def menu_admin_page(request: Request):
           </a>
         </div>
       </section>
-
-      <div id="session-timer-banner" class="session-timer" aria-live="polite">
-        <span class="timer-label">Credentials cached. Auto logout in:</span>
-        <span id="session-timer-remaining" class="timer-value"></span>
-      </div>
 
       <div class="portal-shell">
         <aside class="portal-sidebar">
