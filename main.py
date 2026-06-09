@@ -2242,7 +2242,7 @@ def menu_page(request: Request):
         <span class="topbar-auth-pill">Authenticated Operator: __AUTH_USER__</span>
         <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
         <div id="session-timer-banner" class="session-timer" aria-live="polite">
-          <span class="timer-label">Credentials cached. Auto logout in:</span>
+          <span class="timer-label">Auto logout in:</span>
           <span id="session-timer-remaining" class="timer-value"></span>
         </div>
       </div>
@@ -5353,7 +5353,7 @@ def menu_admin_page(request: Request):
         <span class="topbar-auth-pill">Authenticated Operator: __AUTH_USER__</span>
         <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
         <div id="session-timer-banner" class="session-timer" aria-live="polite">
-          <span class="timer-label">Credentials cached. Auto logout in:</span>
+          <span class="timer-label">Auto logout in:</span>
           <span id="session-timer-remaining" class="timer-value"></span>
         </div>
       </div>
