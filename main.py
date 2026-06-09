@@ -1542,6 +1542,18 @@ def menu_page(request: Request):
         justify-content: center;
       }
 
+      .topbar-auth-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 5px 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
       .topbar-btn {
         display: inline-block;
         padding: 7px 12px;
@@ -2201,6 +2213,7 @@ def menu_page(request: Request):
         <strong>Voice Operations Portal</strong>
       </div>
       <div class="topbar-status">
+        <span class="topbar-auth-pill">Authenticated Operator: __AUTH_USER__</span>
         <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
         <div id="session-timer-banner" class="session-timer" aria-live="polite">
           <span class="timer-label">Credentials cached. Auto logout in:</span>
@@ -2220,11 +2233,6 @@ def menu_page(request: Request):
           <h2 class="page-title">Cisco Voice Server Automation</h2>
           <p class="page-subtitle">CUCM and Unity operations with fast navigation and inline outputs.</p>
         </div>
-        <aside class="page-meta-card">
-          <span class="page-meta-label">Authenticated Operator</span>
-          <span class="page-meta-value">__AUTH_USER__</span>
-          <p class="page-meta-note">Session is locked to selected environment.</p>
-        </aside>
       </div>
       <div class="hero-link-grid">
         <a class="hero-link-card" href="/">
@@ -4894,6 +4902,18 @@ def menu_admin_page(request: Request):
         justify-content: center;
       }
 
+      .topbar-auth-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 5px 9px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+        font-size: 11px;
+        font-weight: 700;
+      }
+
       .content {
         max-width: 1200px;
         margin: 16px auto 22px auto;
@@ -5278,6 +5298,7 @@ def menu_admin_page(request: Request):
         <strong>Voice Operations Portal - Administrative Items</strong>
       </div>
       <div class="topbar-status">
+        <span class="topbar-auth-pill">Authenticated Operator: __AUTH_USER__</span>
         <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
         <div id="session-timer-banner" class="session-timer" aria-live="polite">
           <span class="timer-label">Credentials cached. Auto logout in:</span>
@@ -5294,11 +5315,6 @@ def menu_admin_page(request: Request):
             <h2 class="page-title">Administrative Items</h2>
             <p class="page-subtitle">Bulk operations, strike workflows, export utilities, and translation lookups in a single workspace for higher-volume admin work.</p>
           </div>
-          <aside class="page-meta-card">
-            <span class="page-meta-label">Authenticated Operator</span>
-            <span class="page-meta-value">__AUTH_USER__</span>
-            <p class="page-meta-note">Use the main operations menu for day-to-day actions. This page is focused on advanced and bulk administration.</p>
-          </aside>
         </div>
         <div class="hero-link-grid">
           <a class="hero-link-card" href="/menu">
