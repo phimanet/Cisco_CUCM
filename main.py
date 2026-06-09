@@ -4503,6 +4503,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=teams-telephony-remove'">Remove Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM (Main Ops)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=linegroup'">Update Hunt List Line Group (Main Ops)</button>
+            <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Training Notification</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
           </div>
@@ -4719,6 +4720,29 @@ def menu_admin_page(request: Request):
         <textarea id="admin-trans-template-preview" rows="8" readonly style="width:100%;"></textarea>
       </section>
 
+      <section class="panel tool-panel" data-panel="jabbernotify">
+        <h3>Send Jabber Training Notification</h3>
+        <p>Search for an employee by last name, then send them the Cisco Jabber ready email (with their telephone number and training link). Use this to test or resend the notification.</p>
+        <form id="jabbernotify-form">
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Username:</span>
+            <input name="cucm_user" value="__AUTH_USER__" required>
+          </div><br>
+          <div class="compact-inline-row">
+            <span>Cisco Callmanager Password:</span>
+            <input type="password" name="cucm_pass" required>
+          </div><br>
+          Last Name:<br>
+          <input id="jabbernotify-last-name" placeholder="Smith" required style="width:min(280px,100%);"><br><br>
+          First Name (optional):<br>
+          <input id="jabbernotify-first-name" placeholder="John" style="width:min(280px,100%);"><br><br>
+          <button type="submit">Search</button>
+        </form>
+        <p id="jabbernotify-search-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
+        <div id="jabbernotify-results" style="overflow-x:auto;"></div>
+        <p id="jabbernotify-send-status" style="margin-top:14px; font-weight:700; min-height:18px;"></p>
+      </section>
+
       <section class="panel tool-panel" data-panel="bulkperson">
         <h3>Bulk Person Lookup (CSV Upload)</h3>
         <p>Upload CSV with columns like <strong>last_name, first_name</strong> (or first column as last name).</p>
@@ -4773,6 +4797,125 @@ def menu_admin_page(request: Request):
 
       <script>
         (function () {
+          // ── Jabber Notify panel ──────────────────────────────────────────────
+          const jabberNotifyForm = document.getElementById("jabbernotify-form");
+          const jabberNotifyStatus = document.getElementById("jabbernotify-search-status");
+          const jabberNotifyResults = document.getElementById("jabbernotify-results");
+          const jabberNotifySendStatus = document.getElementById("jabbernotify-send-status");
+
+          if (jabberNotifyForm && jabberNotifyStatus && jabberNotifyResults) {
+            jabberNotifyForm.addEventListener("submit", async function (event) {
+              event.preventDefault();
+              jabberNotifyStatus.textContent = "Searching...";
+              jabberNotifyResults.innerHTML = "";
+              if (jabberNotifySendStatus) jabberNotifySendStatus.textContent = "";
+
+              const userField = jabberNotifyForm.querySelector('input[name="cucm_user"]');
+              const passField = jabberNotifyForm.querySelector('input[name="cucm_pass"]');
+              const lastNameEl = document.getElementById("jabbernotify-last-name");
+              const firstNameEl = document.getElementById("jabbernotify-first-name");
+
+              const lastName = ((lastNameEl && lastNameEl.value) || "").trim();
+              const firstName = ((firstNameEl && firstNameEl.value) || "").trim();
+              const cucmUser = ((userField && userField.value) || "").trim();
+              const cucmPass = (passField && passField.value) || "";
+
+              if (!lastName) {
+                jabberNotifyStatus.textContent = "Last Name is required.";
+                return;
+              }
+              if (!cucmUser || !cucmPass) {
+                jabberNotifyStatus.textContent = "Enter CUCM credentials first.";
+                return;
+              }
+
+              try {
+                const fd = new FormData();
+                fd.append("cucm_user", cucmUser);
+                fd.append("cucm_pass", cucmPass);
+                fd.append("last_name", lastName);
+                fd.append("first_name", firstName);
+
+                const resp = await fetch("/lookup/person", {
+                  method: "POST",
+                  body: fd,
+                  credentials: "same-origin",
+                  headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                });
+
+                const payload = await resp.json();
+                if (!resp.ok || !payload.ok) throw new Error((payload && payload.detail) || "Search failed.");
+
+                const results = payload.results || [];
+                if (!results.length) {
+                  jabberNotifyStatus.textContent = "No users found.";
+                  return;
+                }
+
+                jabberNotifyStatus.textContent = "Found " + results.length + " user(s). Click Send Notification to email a user.";
+
+                let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+                html += '<thead><tr style="background:#005eb8; color:#fff;">';
+                html += '<th style="padding:8px 10px; text-align:left;">Name</th>';
+                html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
+                html += '<th style="padding:8px 10px; text-align:left;">Telephone</th>';
+                html += '<th style="padding:8px 10px; text-align:left;">Email</th>';
+                html += '<th style="padding:8px 10px; text-align:left;">Action</th>';
+                html += '</tr></thead><tbody>';
+
+                results.forEach(function (r, i) {
+                  const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                  const uid = r.userid || "";
+                  const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || uid;
+                  const telephone = r.telephone || "\u2014";
+                  const email = r.email || "\u2014";
+                  html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                  html += '<td style="padding:7px 10px;">' + name + '</td>';
+                  html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+                  html += '<td style="padding:7px 10px;">' + telephone + '</td>';
+                  html += '<td style="padding:7px 10px;">' + email + '</td>';
+                  html += '<td style="padding:7px 10px;"><button type="button" data-notify-uid="' + uid + '" data-notify-tel="' + (r.telephone || "") + '" style="background:#237741;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer;">Send Notification</button></td>';
+                  html += '</tr>';
+                });
+                html += '</tbody></table>';
+                jabberNotifyResults.innerHTML = html;
+
+                jabberNotifyResults.querySelectorAll('button[data-notify-uid]').forEach(function (btn) {
+                  btn.addEventListener("click", async function () {
+                    const uid = btn.getAttribute("data-notify-uid") || "";
+                    const tel = btn.getAttribute("data-notify-tel") || "";
+                    if (jabberNotifySendStatus) jabberNotifySendStatus.textContent = "Sending...";
+                    btn.disabled = true;
+
+                    try {
+                      const sf = new FormData();
+                      sf.append("cucm_user", cucmUser);
+                      sf.append("cucm_pass", cucmPass);
+                      sf.append("target_user", uid);
+                      sf.append("telephone", tel);
+
+                      const sr = await fetch("/send/jabber-ready-email", {
+                        method: "POST",
+                        body: sf,
+                        credentials: "same-origin",
+                        headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                      });
+                      const sp = await sr.json();
+                      if (!sr.ok || !sp.ok) throw new Error((sp && sp.detail) || "Send failed.");
+                      if (jabberNotifySendStatus) jabberNotifySendStatus.textContent = "Sent: " + (sp.detail || "Email sent successfully.");
+                    } catch (err) {
+                      if (jabberNotifySendStatus) jabberNotifySendStatus.textContent = "Failed: " + ((err && err.message) || "Unknown error.");
+                      btn.disabled = false;
+                    }
+                  });
+                });
+              } catch (err) {
+                jabberNotifyStatus.textContent = "Search error: " + ((err && err.message) || "Unknown.");
+              }
+            });
+          }
+          // ── End Jabber Notify panel ──────────────────────────────────────────
+
           const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
           const panels = Array.from(document.querySelectorAll(".tool-panel"));
 
@@ -6041,6 +6184,50 @@ async def bulk_lookup_extension_route(
       "output_text": job_output["output_text"],
       "download_url": f"/download/job-output/{job_output['job_id']}",
     })
+
+
+@app.post("/send/jabber-ready-email")
+def send_jabber_ready_email_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    target_user: str = Form(...),
+    telephone: str = Form(""),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    clean_target = (target_user or "").strip()
+    phone = (telephone or "").strip()
+
+    # If no phone provided by caller, look it up from CUCM
+    if not phone:
+        try:
+            _, _ = _lookup_user_contact(cucm_host, cucm_user, cucm_pass, clean_target)
+        except Exception:
+            pass
+        # Re-fetch with full details via person lookup
+        results = search_persons_by_name(cucm_host, cucm_user, cucm_pass, "", "")
+        for r in results:
+            if (r.get("userid") or "").strip().lower() == clean_target.lower():
+                phone = (r.get("telephone") or "").strip()
+                break
+
+    if not phone:
+        # Fall back to mailid lookup to at least get recipient
+        pass
+
+    notify_status, notify_details = _send_csf_jabber_ready_email_if_created(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        target_user=clean_target,
+        added_dn=phone,
+    )
+
+    if notify_status == "Success":
+        return JSONResponse({"ok": True, "detail": notify_details})
+    else:
+        return JSONResponse({"ok": False, "detail": notify_details}, status_code=400)
 
 
 @app.post("/lookup/person")
