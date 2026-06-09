@@ -6941,13 +6941,18 @@ def lookup_extension_route(
     cucm_pass: str = Form(""),
     pattern: str = Form(...),
 ):
-    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
-    clean_pattern = (pattern or "").strip()
-    if not clean_pattern:
-        raise RuntimeError("Extension pattern is required.")
-    result = lookup_extension_owner(cucm_host, cucm_user, cucm_pass, clean_pattern)
-    return JSONResponse({"ok": True, **result})
+    try:
+      cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+      _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+      clean_pattern = (pattern or "").strip()
+      if not clean_pattern:
+          raise RuntimeError("Extension pattern is required.")
+      result = lookup_extension_owner(cucm_host, cucm_user, cucm_pass, clean_pattern)
+      return JSONResponse({"ok": True, **result})
+    except RuntimeError:
+      raise
+    except Exception as exc:
+      raise RuntimeError(f"Extension lookup failed: {exc}") from exc
 
 
 @app.post("/lookup/translation-pattern")
@@ -7315,44 +7320,49 @@ def lookup_person_route(
     first_name: str = Form(""),
   include_teams_status: str = Form(""),
 ):
-    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
-    clean_last = (last_name or "").strip()
-    clean_first = (first_name or "").strip()
-    include_teams = str(include_teams_status or "").strip().lower() in {"1", "true", "yes", "on"}
-    if not clean_last:
-        raise RuntimeError("Last Name is required.")
-    results = search_persons_by_name(cucm_host, cucm_user, cucm_pass, clean_last, clean_first)
-    if include_teams:
-      for user in results:
-        uid = (user.get("userid") or "").strip()
-        user["teams_telephony"] = {
-          "is_teams_user": False,
-          "status": "Not Found",
-        }
-        if not uid:
-          continue
-        try:
-          candidate = lookup_teams_telephony_removal_candidate(cucm_host, cucm_user, cucm_pass, uid)
-          is_teams_user = bool(candidate.get("match_found"))
-          user["teams_telephony"] = {
-            "is_teams_user": is_teams_user,
-            "status": "Yes" if is_teams_user else "Not Found",
-            "extension": (candidate.get("extension") or "").strip(),
-            "pattern": (candidate.get("pattern") or "").strip(),
-            "route_partition": (candidate.get("route_partition") or "").strip(),
-          }
-        except Exception:
+    try:
+      cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+      _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+      clean_last = (last_name or "").strip()
+      clean_first = (first_name or "").strip()
+      include_teams = str(include_teams_status or "").strip().lower() in {"1", "true", "yes", "on"}
+      if not clean_last:
+          raise RuntimeError("Last Name is required.")
+      results = search_persons_by_name(cucm_host, cucm_user, cucm_pass, clean_last, clean_first)
+      if include_teams:
+        for user in results:
+          uid = (user.get("userid") or "").strip()
           user["teams_telephony"] = {
             "is_teams_user": False,
-            "status": "Unknown",
+            "status": "Not Found",
           }
-    return JSONResponse({
-        "ok": True,
-        "count": len(results),
-        "results": results,
-        "query": {"last_name": clean_last, "first_name": clean_first},
-    })
+          if not uid:
+            continue
+          try:
+            candidate = lookup_teams_telephony_removal_candidate(cucm_host, cucm_user, cucm_pass, uid)
+            is_teams_user = bool(candidate.get("match_found"))
+            user["teams_telephony"] = {
+              "is_teams_user": is_teams_user,
+              "status": "Yes" if is_teams_user else "Not Found",
+              "extension": (candidate.get("extension") or "").strip(),
+              "pattern": (candidate.get("pattern") or "").strip(),
+              "route_partition": (candidate.get("route_partition") or "").strip(),
+            }
+          except Exception:
+            user["teams_telephony"] = {
+              "is_teams_user": False,
+              "status": "Unknown",
+            }
+      return JSONResponse({
+          "ok": True,
+          "count": len(results),
+          "results": results,
+          "query": {"last_name": clean_last, "first_name": clean_first},
+      })
+    except RuntimeError:
+      raise
+    except Exception as exc:
+      raise RuntimeError(f"Person lookup failed: {exc}") from exc
 
 
 @app.post("/check/jabber-status")
