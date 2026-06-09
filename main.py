@@ -6144,14 +6144,21 @@ async def build_user_csf_phone(
       inline_mode=inline,
     )
 
-    notify_status, notify_details = _send_csf_jabber_ready_email_if_created(
-      cucm_host=cucm_host,
-      cucm_user=cucm_user,
-      cucm_pass=cucm_pass,
-      target_user=clean_target_user,
-      added_dn=added_dn,
-      new_build=True,
-    )
+    build_ready_for_email = _csv_has_success_step(data, {"Add Phone", "Update User", "Unity Voicemail"})
+    if build_ready_for_email:
+      notify_status, notify_details = _send_csf_jabber_ready_email_if_created(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        target_user=clean_target_user,
+        added_dn=added_dn,
+        new_build=True,
+      )
+    else:
+      notify_status, notify_details = (
+        "Skipped",
+        "Build did not complete Add Phone + Update User + Unity Voicemail successfully; email not sent",
+      )
     data = _append_result_row(data, "Send Jabber Ready Email", notify_status, notify_details)
 
     if inline:
@@ -6372,13 +6379,20 @@ async def rebuild_user_csf_phone(
       inline_mode=inline,
     )
 
-    notify_status, notify_details = _send_csf_jabber_ready_email_if_created(
-      cucm_host=cucm_host,
-      cucm_user=cucm_user,
-      cucm_pass=cucm_pass,
-      target_user=clean_target_user,
-      added_dn=added_dn,
-    )
+    rebuild_ready_for_email = _csv_has_success_step(data, {"Add Phone", "Update User", "Unity Voicemail"})
+    if rebuild_ready_for_email:
+      notify_status, notify_details = _send_csf_jabber_ready_email_if_created(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        target_user=clean_target_user,
+        added_dn=added_dn,
+      )
+    else:
+      notify_status, notify_details = (
+        "Skipped",
+        "Rebuild did not complete Add Phone + Update User + Unity Voicemail successfully; email not sent",
+      )
     data = _append_result_row(data, "Send Jabber Ready Email", notify_status, notify_details)
 
     if inline:

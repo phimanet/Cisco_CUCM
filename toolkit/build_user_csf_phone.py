@@ -306,6 +306,13 @@ def _set_unity_pin(session, unity_server, object_id, pin):
         raise RuntimeError(f"Unity PIN update failed: {_parse_unity_error_text(response)}")
 
 
+def _resolve_unity_object_id_by_alias(session, unity_server, alias):
+    user = _get_unity_user_by_alias(session, unity_server, alias)
+    if not user:
+        return ""
+    return str(user.get("ObjectId", "") or "").strip()
+
+
 def _create_or_update_unity_voicemail(
     session,
     unity_server,
@@ -336,6 +343,8 @@ def _create_or_update_unity_voicemail(
                 extension,
                 template_alias,
             )
+            if not object_id:
+                object_id = _resolve_unity_object_id_by_alias(session, unity_server, alias)
             if object_id:
                 return object_id, "imported"
 
@@ -350,6 +359,10 @@ def _create_or_update_unity_voicemail(
         email_address,
         template_alias,
     )
+    if not object_id:
+        object_id = _resolve_unity_object_id_by_alias(session, unity_server, alias)
+    if not object_id:
+        raise RuntimeError("Unity mailbox create/update did not return ObjectId and alias lookup was empty.")
     return object_id, "created_local"
 
 
@@ -572,10 +585,20 @@ def _is_dn_inactive(session, cucm_ip, pattern, route_partition):
     return active_text not in {"true", "t", "1", "yes"}
 
 
-def _choose_available_dn(session, cucm_ip, prefix):
+def _phone_exists(session, cucm_ip, phone_name):
+    details = _get_phone_details(session, cucm_ip, phone_name)
+    return details is not None
+
+
+def _choose_available_dn(session, cucm_ip, prefix, device_name_prefix=""):
     candidates = _list_available_dns(session, cucm_ip, prefix)
     for candidate in candidates:
-        if _is_dn_unassigned(session, cucm_ip, candidate, ROUTE_PARTITION):
+        if not _is_dn_unassigned(session, cucm_ip, candidate, ROUTE_PARTITION):
+            continue
+        if device_name_prefix:
+            candidate_phone_name = f"{device_name_prefix}{candidate}"
+            if _phone_exists(session, cucm_ip, candidate_phone_name):
+                continue
             return candidate
     raise RuntimeError(f"No available inactive DN found in {ROUTE_PARTITION} starting with {prefix}.")
 
@@ -860,9 +883,25 @@ def build_user_csf_phone_from_template(
 
             new_dn = preferred_dn_clean
         else:
-            new_dn = _choose_available_dn(session, cucm_host, dn_prefix)
+            new_dn = _choose_available_dn(
+                session,
+                cucm_host,
+                dn_prefix,
+                template.get("deviceNamePrefix", ""),
+            )
         phone_name = f"{template['deviceNamePrefix']}{new_dn}"
         description = f"CSF {display_name}".strip()
+
+        if _phone_exists(session, cucm_host, phone_name):
+            log_writer.writerow([
+                "Select DN",
+                "Failed",
+                (
+                    f"Device name {phone_name} already exists in CUCM. "
+                    "Select another DN or remove the existing device first."
+                ),
+            ])
+            return out.getvalue().encode("utf-8"), filename
 
         log_writer.writerow(["Environment", "Success", f"{env_name} ({cucm_host})"])
         log_writer.writerow([
@@ -886,6 +925,16 @@ def build_user_csf_phone_from_template(
 
         add_response = _axl_post(session, cucm_host, add_phone_soap)
         if add_response.status_code != 200:
+            if "duplicate value in a UNIQUE INDEX" in (add_response.text or ""):
+                log_writer.writerow([
+                    "Add Phone",
+                    "Failed",
+                    (
+                        f"Device {phone_name} already exists or conflicts with an existing unique value in CUCM. "
+                        f"HTTP {add_response.status_code}: {add_response.text[:1000]}"
+                    ),
+                ])
+                return out.getvalue().encode("utf-8"), filename
             log_writer.writerow(["Add Phone", "Failed", f"HTTP {add_response.status_code}: {add_response.text[:1000]}"])
             return out.getvalue().encode("utf-8"), filename
 
