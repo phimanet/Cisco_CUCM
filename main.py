@@ -2238,7 +2238,7 @@ __ADMIN_CARD__
                 `<button type="button" style="${btnStyle}background:#0e7490;color:#fff;" onclick="prefillPanel('tct','${uid}')">Build iPhone</button>` +
                 `<button type="button" style="${btnStyle}background:#7c3aed;color:#fff;" onclick="prefillPanel('bot','${uid}')">Build Android</button>` +
                 `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" onclick="prefillMobileJabberNotify('${uid}','')">Re-send Mobile Email</button>` +
-                `<button type="button" style="${btnStyle}background:#1f7a3d;color:#fff;" data-lookup-notify-uid="${uid}" data-lookup-notify-tel="${(r.telephone || "")}">Send Notification</button>` +
+                `<button type="button" style="${btnStyle}background:#1f7a3d;color:#fff;" data-lookup-notify-uid="${uid}" data-lookup-notify-tel="${(r.telephone || "")}">Send New Jabber Email</button>` +
                 `<button type="button" style="${btnStyle}background:#8a5a00;color:#fff;" onclick="prefillPanel('namechange','${uid}')">Name Update</button>`;
 
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
@@ -4174,7 +4174,7 @@ __ADMIN_CARD__
             if (!resp.ok || !payload.ok) throw new Error((payload && payload.detail) || "Search failed.");
             var results = payload.results || [];
             if (!results.length) { jnStatus.textContent = "No users found."; return; }
-            jnStatus.textContent = "Found " + results.length + " user(s). Click Send Notification to email a user.";
+            jnStatus.textContent = "Found " + results.length + " user(s). Click Send New Jabber Email to email a user.";
             var html = '<table style="width:100%; border-collapse:collapse; font-size:13px;"><thead><tr style="background:#005eb8; color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left;">Name</th><th style="padding:8px 10px; text-align:left;">User ID</th><th style="padding:8px 10px; text-align:left;">Telephone</th><th style="padding:8px 10px; text-align:left;">Email</th><th style="padding:8px 10px; text-align:left;">Action</th></tr></thead><tbody>';
             results.forEach(function (r, i) {
@@ -4183,7 +4183,7 @@ __ADMIN_CARD__
               var name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || uid;
               var tel = r.telephone || "\u2014";
               var email = r.email || "\u2014";
-              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;"><td style="padding:7px 10px;">' + name + '</td><td style="padding:7px 10px;">' + uid + '</td><td style="padding:7px 10px;">' + tel + '</td><td style="padding:7px 10px;">' + email + '</td><td style="padding:7px 10px;"><button type="button" data-nuid="' + uid + '" data-ntel="' + (r.telephone || "") + '" style="background:#237741;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer;">Send Notification</button></td></tr>';
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;"><td style="padding:7px 10px;">' + name + '</td><td style="padding:7px 10px;">' + uid + '</td><td style="padding:7px 10px;">' + tel + '</td><td style="padding:7px 10px;">' + email + '</td><td style="padding:7px 10px;"><button type="button" data-nuid="' + uid + '" data-ntel="' + (r.telephone || "") + '" style="background:#237741;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer;">Send New Jabber Email</button></td></tr>';
             });
             html += '</tbody></table>';
             jnResults.innerHTML = html;
@@ -5313,7 +5313,7 @@ def menu_admin_page(request: Request):
                   return;
                 }
 
-                jabberNotifyStatus.textContent = "Found " + results.length + " user(s). Click Send Notification to email a user.";
+                jabberNotifyStatus.textContent = "Found " + results.length + " user(s). Click Send New Jabber Email to email a user.";
 
                 let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
                 html += '<thead><tr style="background:#005eb8; color:#fff;">';
@@ -5335,7 +5335,7 @@ def menu_admin_page(request: Request):
                   html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
                   html += '<td style="padding:7px 10px;">' + telephone + '</td>';
                   html += '<td style="padding:7px 10px;">' + email + '</td>';
-                  html += '<td style="padding:7px 10px;"><button type="button" data-notify-uid="' + uid + '" data-notify-tel="' + (r.telephone || "") + '" style="background:#237741;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer;">Send Notification</button></td>';
+                  html += '<td style="padding:7px 10px;"><button type="button" data-notify-uid="' + uid + '" data-notify-tel="' + (r.telephone || "") + '" style="background:#237741;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer;">Send New Jabber Email</button></td>';
                   html += '</tr>';
                 });
                 html += '</tbody></table>';
@@ -5460,7 +5460,7 @@ def menu_admin_page(request: Request):
                 const strikeBtn = `<button type="button" style="${btnStyle}background:#237741;" data-strike-user="${uid}">Strike Mode - Add in Both Jabber iPhone and Android</button>`;
                 const tctBtn = `<button type="button" style="${btnStyle}background:#0e7490;" data-tct-user="${uid}">Add Jabber iPhone</button>`;
                 const botBtn = `<button type="button" style="${btnStyle}background:#7c3aed;" data-bot-user="${uid}">Add Jabber Android</button>`;
-                const notifyBtn = `<button type="button" style="${btnStyle}background:#1f7a3d;" data-notify-user="${uid}" data-notify-tel="${(r.telephone || "")}">Send Notification</button>`;
+                const notifyBtn = `<button type="button" style="${btnStyle}background:#1f7a3d;" data-notify-user="${uid}" data-notify-tel="${(r.telephone || "")}">Send New Jabber Email</button>`;
                 const offboardBtn = `<button type="button" style="${btnStyle}background:#b00020;" data-offboard-user="${uid}">Separate Employee-Delete Jabber/VM</button>`;
                 const actionBtn = strikeBtn + tctBtn + botBtn + notifyBtn + offboardBtn;
 
