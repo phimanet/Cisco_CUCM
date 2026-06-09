@@ -2571,7 +2571,7 @@ __ADMIN_CARD__
               const ownerCell = uid ? (ownerName ? ownerName + "<br><span style='font-family:Consolas,monospace;font-size:11px;'>" + uid + "</span>" : uid) : "\u2014";
               const allLines = (m.all_lines || []).map(function (l) { return l.pattern; }).join(", ") || "\u2014";
 
-              const btnStyle = "display:inline-block;margin:2px 3px 2px 0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;";
+              const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;";
               const actionBtns = uid
                 ? `<button type="button" style="${btnStyle}background:#005eb8;color:#fff;" onclick="prefillPanel('precheck','${uid}')">Check Jabber</button>` +
                   `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build</button>` +
@@ -2585,7 +2585,7 @@ __ADMIN_CARD__
               html += '<td style="padding:7px 10px; font-size:12px;">' + devType + '</td>';
               html += '<td style="padding:7px 10px;">' + ownerCell + '</td>';
               html += '<td style="padding:7px 10px; font-size:12px; color:#355978;">' + allLines + '</td>';
-              html += '<td style="padding:7px 10px; white-space:nowrap;">' + actionBtns + '</td>';
+              html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(2,max-content);gap:4px;align-items:start;">' + actionBtns + '</div></td>';
               html += '</tr>';
             });
 
@@ -6210,7 +6210,7 @@ def menu_admin_page(request: Request):
                   return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
                 }).join("<br>") || "\u2014";
 
-                const btnStyle = "display:inline-block;margin:2px 3px 2px 0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;color:#fff;";
+                const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;color:#fff;";
                 const tctBtn = `<button type="button" style="${btnStyle}background:#0e7490;" data-delete-mode="tct" data-delete-user="${uid}">Delete iPhone (TCT)</button>`;
                 const botBtn = `<button type="button" style="${btnStyle}background:#7c3aed;" data-delete-mode="bot" data-delete-user="${uid}">Delete Android (BOT)</button>`;
                 const bothBtn = `<button type="button" style="${btnStyle}background:#b00020;" data-delete-mode="both" data-delete-user="${uid}">Delete Both</button>`;
@@ -6221,7 +6221,7 @@ def menu_admin_page(request: Request):
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
                 html += '<td style="padding:7px 10px;">' + telephone + '</td>';
                 html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
-                html += '<td style="padding:7px 10px; white-space:nowrap;">' + tctBtn + botBtn + bothBtn + '</td>';
+                html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(2,max-content);gap:4px;align-items:start;">' + tctBtn + botBtn + bothBtn + '</div></td>';
                 html += '</tr>';
               });
 
