@@ -2265,6 +2265,7 @@ __ADMIN_CARD__
 
     <script>
       (function () {
+        window.__hasCachedCucmPassword = __HAS_CACHED_CUCM_PASS__;
         const form = document.getElementById("person-lookup-form");
         const statusEl = document.getElementById("person-lookup-status");
         const resultsEl = document.getElementById("person-lookup-results");
@@ -2366,8 +2367,8 @@ __ADMIN_CARD__
                 const cucmUser = ((userField && userField.value) || "").trim();
                 const cucmPass = (passField && passField.value) || "";
 
-                if (!cucmUser || !cucmPass) {
-                  statusEl.textContent = "Enter CUCM username/password before sending notification.";
+                if (!cucmUser || (!cucmPass && window.__hasCachedCucmPassword !== true)) {
+                  statusEl.textContent = "Enter CUCM username and password (or use cached login) before sending notification.";
                   return;
                 }
 
@@ -2827,7 +2828,7 @@ __ADMIN_CARD__
               return;
             }
 
-            if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
+            if (!cucmUser || (!cucmPass && window.__hasCachedCucmPassword !== true)) {
               lookupStatusEl.textContent = "Enter CUCM username and password (or use cached login) before searching.";
               return;
             }
@@ -2993,7 +2994,7 @@ __ADMIN_CARD__
           return;
         }
 
-        if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
+        if (!cucmUser || (!cucmPass && window.__hasCachedCucmPassword !== true)) {
           statusEl.textContent = "Enter CUCM username and password (or use cached login) before searching.";
           return;
         }
@@ -4392,7 +4393,7 @@ __ADMIN_CARD__
           var cucmUser = ((userField && userField.value) || "").trim();
           var cucmPass = (passField && passField.value) || "";
           if (!lastName) { jnStatus.textContent = "Last Name is required."; return; }
-          if (!cucmUser || !cucmPass) { jnStatus.textContent = "Enter CUCM credentials first."; return; }
+          if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) { jnStatus.textContent = "Enter CUCM username and password (or use cached login) first."; return; }
           try {
             var fd = new FormData();
             fd.append("cucm_user", cucmUser);
@@ -4477,8 +4478,8 @@ __ADMIN_CARD__
           var targetUser = ((targetField && targetField.value) || "").trim();
           var telephone = ((phoneField && phoneField.value) || "").trim();
 
-          if (!cucmUser || !cucmPass) {
-            statusEl.textContent = "Enter CUCM credentials first.";
+          if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
+            statusEl.textContent = "Enter CUCM username and password (or use cached login) first.";
             return;
           }
           if (!targetUser) {
@@ -4524,8 +4525,8 @@ __ADMIN_CARD__
             var lastName = ((lastNameField && lastNameField.value) || "").trim();
             var firstName = ((firstNameField && firstNameField.value) || "").trim();
 
-            if (!cucmUser || !cucmPass) {
-              lookupStatusEl.textContent = "Enter CUCM credentials first.";
+            if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
+              lookupStatusEl.textContent = "Enter CUCM username and password (or use cached login) first.";
               return;
             }
             if (!lastName) {
@@ -5624,8 +5625,8 @@ def menu_admin_page(request: Request):
                 jabberNotifyStatus.textContent = "Last Name is required.";
                 return;
               }
-              if (!cucmUser || !cucmPass) {
-                jabberNotifyStatus.textContent = "Enter CUCM credentials first.";
+              if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
+                jabberNotifyStatus.textContent = "Enter CUCM username and password (or use cached login) first.";
                 return;
               }
 
@@ -5848,8 +5849,8 @@ def menu_admin_page(request: Request):
                 const cucmUser = ((userField && userField.value) || "").trim();
                 const cucmPass = (passField && passField.value) || "";
 
-                if (!cucmUser || !cucmPass) {
-                  statusEl.textContent = "Enter CUCM username/password in Employee Lookup by Name before running device actions.";
+                if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
+                  statusEl.textContent = "Enter CUCM username and password (or use cached login) in Employee Lookup by Name before running device actions.";
                   return;
                 }
 
@@ -5907,8 +5908,8 @@ def menu_admin_page(request: Request):
                   const cucmUser = ((userField && userField.value) || "").trim();
                   const cucmPass = (passField && passField.value) || "";
 
-                  if (!cucmUser || !cucmPass) {
-                    statusEl.textContent = "Enter CUCM username/password before sending notification.";
+                  if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
+                    statusEl.textContent = "Enter CUCM username and password (or use cached login) before sending notification.";
                     return;
                   }
 
@@ -5959,8 +5960,8 @@ def menu_admin_page(request: Request):
             const cucmUser = ((userField && userField.value) || "").trim();
             const cucmPass = (passField && passField.value) || "";
 
-            if (!cucmUser || !cucmPass) {
-              statusEl.textContent = "Enter CUCM username/password before running mobile device delete.";
+            if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
+              statusEl.textContent = "Enter CUCM username and password (or use cached login) before running mobile device delete.";
               return;
             }
 
