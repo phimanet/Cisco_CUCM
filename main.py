@@ -4218,6 +4218,18 @@ __ADMIN_CARD__
         var lookupStatusEl = document.getElementById("mobile-jabber-lookup-status");
         var lookupResultsEl = document.getElementById("mobile-jabber-lookup-results");
         if (!form || !statusEl) return;
+
+        function getApiErrorMessage(payload, fallbackMessage) {
+          if (!payload) return fallbackMessage;
+          if (typeof payload.detail === "string" && payload.detail.trim()) {
+            return payload.detail.trim();
+          }
+          if (payload.error && typeof payload.error.message === "string" && payload.error.message.trim()) {
+            return payload.error.message.trim();
+          }
+          return fallbackMessage;
+        }
+
         form.addEventListener("submit", async function (event) {
           event.preventDefault();
           var userField = form.querySelector('input[name="cucm_user"]');
@@ -4253,7 +4265,7 @@ __ADMIN_CARD__
             });
             var payload = await resp.json();
             if (!resp.ok || !payload.ok) {
-              throw new Error((payload && payload.detail) || "Send failed.");
+              throw new Error(getApiErrorMessage(payload, "Send failed."));
             }
             statusEl.textContent = "Sent: " + (payload.detail || "Mobile email sent successfully.");
           } catch (err) {
@@ -4299,7 +4311,7 @@ __ADMIN_CARD__
               });
               var payload = await resp.json();
               if (!resp.ok || !payload.ok) {
-                throw new Error((payload && payload.detail) || "Search failed.");
+                throw new Error(getApiErrorMessage(payload, "Search failed."));
               }
 
               var results = payload.results || [];
@@ -4354,7 +4366,7 @@ __ADMIN_CARD__
                     });
                     var sp = await sr.json();
                     if (!sr.ok || !sp.ok) {
-                      throw new Error((sp && sp.detail) || "Send failed.");
+                      throw new Error(getApiErrorMessage(sp, "Send failed."));
                     }
                     lookupStatusEl.textContent = "Sent: " + (sp.detail || "Mobile email sent successfully.");
                   } catch (err) {
