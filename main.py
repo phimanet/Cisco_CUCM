@@ -56,7 +56,7 @@ JOB_OUTPUTS = {}
 AUTH_SESSIONS = {}
 SESSION_COOKIE_NAME = "cucm_web_session"
 SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
-CREDENTIAL_CACHE_TTL_SECONDS = 60 * 60
+CREDENTIAL_CACHE_TTL_SECONDS = SESSION_IDLE_TIMEOUT_SECONDS
 APP_START_EPOCH = time.time()
 CREDENTIAL_ENCRYPTION_KEY = (os.getenv("CUCM_CREDENTIAL_ENCRYPTION_KEY", "") or "").strip()
 if _FERNET_AVAILABLE and not CREDENTIAL_ENCRYPTION_KEY:
@@ -301,7 +301,7 @@ def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, 
   resolved_pass = provided_pass or _get_cached_secret(session, "cucm_pass")
 
   if not resolved_host or not resolved_user or not resolved_pass:
-    raise RuntimeError("Missing CUCM credentials. Enter username/password for this action.")
+    raise RuntimeError("Session credentials expired. Please log in again.")
 
   return resolved_host, resolved_user, resolved_pass
 
@@ -463,7 +463,12 @@ def _render_error_page(title: str, message: str, status_code: int) -> HTMLRespon
 @app.exception_handler(RuntimeError)
 async def runtime_error_handler(request: Request, exc: RuntimeError):
   message = str(exc) or "Request validation failed."
-  status_code = 401 if "authentication required" in message.lower() else 400
+  message_lower = message.lower()
+  status_code = 401 if (
+    "authentication required" in message_lower
+    or "log in again" in message_lower
+    or "credentials expired" in message_lower
+  ) else 400
 
   if _wants_json_response(request):
     return JSONResponse(
@@ -2399,6 +2404,16 @@ __ADMIN_CARD__
 
             if (!response.ok || !payload.ok) {
               const msg = (payload.error && payload.error.message) || "Search failed.";
+              const normalized = String(msg || "").toLowerCase();
+              if (
+                response.status === 401
+                || normalized.includes("credentials expired")
+                || normalized.includes("log in again")
+                || normalized.includes("missing cucm credentials")
+              ) {
+                window.location.href = "/logout";
+                return;
+              }
               throw new Error(msg);
             }
 
@@ -2511,6 +2526,15 @@ __ADMIN_CARD__
             });
 
           } catch (err) {
+            const normalized = String((err && err.message) || "").toLowerCase();
+            if (
+              normalized.includes("credentials expired")
+              || normalized.includes("log in again")
+              || normalized.includes("missing cucm credentials")
+            ) {
+              window.location.href = "/logout";
+              return;
+            }
             statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
           }
         });
@@ -2957,6 +2981,16 @@ __ADMIN_CARD__
               const payload = await response.json();
               if (!response.ok || !payload.ok) {
                 const msg = (payload.error && payload.error.message) || "Search failed.";
+                const normalized = String(msg || "").toLowerCase();
+                if (
+                  response.status === 401
+                  || normalized.includes("credentials expired")
+                  || normalized.includes("log in again")
+                  || normalized.includes("missing cucm credentials")
+                ) {
+                  window.location.href = "/logout";
+                  return;
+                }
                 throw new Error(msg);
               }
 
@@ -6053,6 +6087,15 @@ def menu_admin_page(request: Request):
                 });
               });
             } catch (err) {
+              const normalized = String((err && err.message) || "").toLowerCase();
+              if (
+                normalized.includes("credentials expired")
+                || normalized.includes("log in again")
+                || normalized.includes("missing cucm credentials")
+              ) {
+                window.location.href = "/logout";
+                return;
+              }
               statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
             }
           });
