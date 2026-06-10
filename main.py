@@ -172,10 +172,18 @@ def _get_cached_secret(session: dict, key: str, now_epoch: float | None = None) 
   encrypted_value = (session.get(f"{key}_enc", "") or "").strip()
   legacy_plain_value = (session.get(key, "") or "").strip()
 
-  if (not encrypted_value and not legacy_plain_value) or not cached_at or not expires_at:
+  if not encrypted_value and not legacy_plain_value:
     return ""
 
-  if now > expires_at or (now - cached_at) > CREDENTIAL_CACHE_TTL_SECONDS:
+  # Only expire by absolute time when an expiry timestamp exists.
+  if expires_at and now > expires_at:
+    session.pop(key, None)
+    session.pop(f"{key}_enc", None)
+    session.pop(f"{key}_cached_at", None)
+    return ""
+
+  # Only expire by TTL delta when we have a cache timestamp.
+  if cached_at and (now - cached_at) > CREDENTIAL_CACHE_TTL_SECONDS:
     session.pop(key, None)
     session.pop(f"{key}_enc", None)
     session.pop(f"{key}_cached_at", None)
