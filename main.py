@@ -2349,14 +2349,9 @@ __ADMIN_CARD__
 
     <div class="jabber-check-layout" style="display:block;">
       <form id="person-lookup-form" class="jabber-check-form" style="margin-bottom:14px;">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
         <input type="hidden" name="include_teams_status" value="1">
-        <div class="compact-inline-row">
-          <span>Cisco Callmanager Username:</span>
-          <input name="cucm_user" value="__AUTH_USER__" required>
-        </div><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
 
         Last Name:<br>
         <input name="last_name" placeholder="Smith" required><br><br>
@@ -2476,15 +2471,8 @@ __ADMIN_CARD__
               btn.addEventListener("click", async function () {
                 const uid = btn.getAttribute("data-lookup-notify-uid") || "";
                 const tel = btn.getAttribute("data-lookup-notify-tel") || "";
-                const userField = form.querySelector('input[name="cucm_user"]');
-                const passField = form.querySelector('input[name="cucm_pass"]');
-                const cucmUser = ((userField && userField.value) || "").trim();
-                const cucmPass = (passField && passField.value) || "";
-
-                if (!cucmUser || (!cucmPass && window.__hasCachedCucmPassword !== true)) {
-                  statusEl.textContent = "Enter CUCM username and password (or use cached login) before sending notification.";
-                  return;
-                }
+                const cucmUser = "__AUTH_USER__";
+                const cucmPass = "";
 
                 btn.disabled = true;
                 statusEl.textContent = `Sending Jabber notification for ${uid}...`;
@@ -4906,6 +4894,8 @@ def menu_admin_page(request: Request):
   auth_user = escape(session_username)
   auth_cucm_host = str(session.get("cucm_host", ""))
   has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
+  if not has_cached_cucm_pass:
+    return RedirectResponse(url="/logout", status_code=303)
   credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
   credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
