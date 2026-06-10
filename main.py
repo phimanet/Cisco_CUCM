@@ -54,9 +54,10 @@ from toolkit.remove_teams_telephony_user import (
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 JOB_OUTPUTS = {}
 AUTH_SESSIONS = {}
+AUTH_SESSION_SECRETS = {}
 SESSION_COOKIE_NAME = "cucm_web_session"
 SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
-CREDENTIAL_CACHE_TTL_SECONDS = SESSION_IDLE_TIMEOUT_SECONDS
+CREDENTIAL_CACHE_TTL_SECONDS = 60 * 60
 APP_START_EPOCH = time.time()
 CREDENTIAL_ENCRYPTION_KEY = (os.getenv("CUCM_CREDENTIAL_ENCRYPTION_KEY", "") or "").strip()
 if _FERNET_AVAILABLE and not CREDENTIAL_ENCRYPTION_KEY:
@@ -140,6 +141,7 @@ def _prune_auth_sessions_locked(now_epoch: float):
   ]
   for sid in expired:
     AUTH_SESSIONS.pop(sid, None)
+    AUTH_SESSION_SECRETS.pop(sid, None)
 
 
 def _cache_secret(session: dict, key: str, value: str, now_epoch: float | None = None):
@@ -225,6 +227,10 @@ def _create_auth_session(cucm_host: str, username: str, cucm_pass: str) -> str:
     "last_seen": now_epoch,
     "credential_expires_at": now_epoch + CREDENTIAL_CACHE_TTL_SECONDS,
   }
+  AUTH_SESSION_SECRETS[session_id] = {
+    "cucm_pass": (cucm_pass or "").strip(),
+    "unity_pass": "",
+  }
   _cache_secret(AUTH_SESSIONS[session_id], "cucm_pass", cucm_pass, now_epoch)
   return session_id
 
@@ -285,16 +291,23 @@ def _update_cached_credentials(
   if not session:
     return
 
+  session_id = request.cookies.get(SESSION_COOKIE_NAME, "")
+  secret_store = AUTH_SESSION_SECRETS.setdefault(session_id, {}) if session_id else None
+
   if (cucm_host or "").strip():
     session["cucm_host"] = cucm_host.strip()
   if (cucm_user or "").strip():
     session["username"] = cucm_user.strip()
   if (cucm_pass or "").strip():
     _cache_secret(session, "cucm_pass", cucm_pass)
+    if secret_store is not None:
+      secret_store["cucm_pass"] = (cucm_pass or "").strip()
   if (unity_user or "").strip():
     session["unity_user"] = unity_user.strip()
   if (unity_pass or "").strip():
     _cache_secret(session, "unity_pass", unity_pass)
+    if secret_store is not None:
+      secret_store["unity_pass"] = (unity_pass or "").strip()
 
 
 def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, cucm_pass: str):
@@ -305,9 +318,16 @@ def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, 
   resolved_host = (cucm_host or "").strip() or session.get("cucm_host", "")
   resolved_user = (cucm_user or "").strip() or session.get("username", "")
   provided_pass = (cucm_pass or "").strip()
+  session_id = request.cookies.get(SESSION_COOKIE_NAME, "")
+  secret_store = AUTH_SESSION_SECRETS.get(session_id, {}) if session_id else {}
   if provided_pass:
     _cache_secret(session, "cucm_pass", provided_pass)
+    if session_id:
+      secret_store = AUTH_SESSION_SECRETS.setdefault(session_id, {})
+      secret_store["cucm_pass"] = provided_pass
   resolved_pass = provided_pass or _get_cached_secret(session, "cucm_pass")
+  if not resolved_pass:
+    resolved_pass = (secret_store.get("cucm_pass", "") or "").strip()
   if not resolved_pass:
     # Final fallback for sessions that still carry plain value from compatibility path.
     resolved_pass = (session.get("cucm_pass", "") or "").strip()
@@ -327,9 +347,16 @@ def _resolve_unity_credentials(request: Request, unity_user: str, unity_pass: st
 
   resolved_user = (unity_user or "").strip() or session.get("unity_user", "") or session.get("username", "")
   provided_pass = (unity_pass or "").strip()
+  session_id = request.cookies.get(SESSION_COOKIE_NAME, "")
+  secret_store = AUTH_SESSION_SECRETS.get(session_id, {}) if session_id else {}
   if provided_pass:
     _cache_secret(session, "unity_pass", provided_pass)
+    if session_id:
+      secret_store = AUTH_SESSION_SECRETS.setdefault(session_id, {})
+      secret_store["unity_pass"] = provided_pass
   resolved_pass = provided_pass or _get_cached_secret(session, "unity_pass") or _get_cached_secret(session, "cucm_pass")
+  if not resolved_pass:
+    resolved_pass = (secret_store.get("unity_pass", "") or "").strip() or (secret_store.get("cucm_pass", "") or "").strip()
 
   if not resolved_user or not resolved_pass:
     raise RuntimeError("Missing Unity credentials. Enter Unity admin username/password for this action.")
@@ -1519,6 +1546,7 @@ def logout(request: Request):
   session_id = request.cookies.get(SESSION_COOKIE_NAME, "")
   if session_id:
     AUTH_SESSIONS.pop(session_id, None)
+    AUTH_SESSION_SECRETS.pop(session_id, None)
 
   response = RedirectResponse(url="/", status_code=303)
   response.delete_cookie(SESSION_COOKIE_NAME)
