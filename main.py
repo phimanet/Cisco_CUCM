@@ -2411,8 +2411,7 @@ __ADMIN_CARD__
                 || normalized.includes("log in again")
                 || normalized.includes("missing cucm credentials")
               ) {
-                window.location.href = "/logout";
-                return;
+                throw new Error("Session credentials expired. Please log in again.");
               }
               throw new Error(msg);
             }
@@ -2532,7 +2531,7 @@ __ADMIN_CARD__
               || normalized.includes("log in again")
               || normalized.includes("missing cucm credentials")
             ) {
-              window.location.href = "/logout";
+              statusEl.textContent = "Session expired. Please log in again from the landing page.";
               return;
             }
             statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
