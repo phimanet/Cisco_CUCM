@@ -2349,6 +2349,7 @@ __ADMIN_CARD__
 
     <div class="jabber-check-layout" style="display:block;">
       <form id="person-lookup-form" class="jabber-check-form" style="margin-bottom:14px;">
+        <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
         <input type="hidden" name="cucm_user" value="__AUTH_USER__">
         <input type="hidden" name="cucm_pass" value="">
         <input type="hidden" name="include_teams_status" value="1">
@@ -2471,6 +2472,7 @@ __ADMIN_CARD__
               btn.addEventListener("click", async function () {
                 const uid = btn.getAttribute("data-lookup-notify-uid") || "";
                 const tel = btn.getAttribute("data-lookup-notify-tel") || "";
+                const cucmHost = "__AUTH_CUCM_HOST__";
                 const cucmUser = "__AUTH_USER__";
                 const cucmPass = "";
 
@@ -2478,6 +2480,7 @@ __ADMIN_CARD__
                 statusEl.textContent = `Sending Jabber notification for ${uid}...`;
                 try {
                   const sf = new FormData();
+                  sf.append("cucm_host", cucmHost);
                   sf.append("cucm_user", cucmUser);
                   sf.append("cucm_pass", cucmPass);
                   sf.append("target_user", uid);
@@ -4868,7 +4871,7 @@ __ADMIN_CARD__
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
+""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
 
   return HTMLResponse(
     content=html,
@@ -5481,6 +5484,7 @@ def menu_admin_page(request: Request):
         <h3>Employee Lookup by Name</h3>
         <p>Search by last name (optional first name), then use the result to prefill Strike Mode.</p>
         <form id="admin-person-lookup-form">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
           <input type="hidden" name="include_teams_status" value="1">
@@ -5959,6 +5963,7 @@ def menu_admin_page(request: Request):
               });
 
               function submitAdminAction(endpoint, uid) {
+                const cucmHost = "__AUTH_CUCM_HOST__";
                 const cucmUser = "__AUTH_USER__";
                 const cucmPass = "";
 
@@ -5967,6 +5972,7 @@ def menu_admin_page(request: Request):
                 actionForm.action = endpoint;
 
                 const fields = {
+                  cucm_host: cucmHost,
                   cucm_user: cucmUser,
                   cucm_pass: cucmPass,
                   target_user: uid,
@@ -6015,6 +6021,7 @@ def menu_admin_page(request: Request):
                 btn.addEventListener("click", async function () {
                   const uid = btn.getAttribute("data-notify-user") || "";
                   const tel = btn.getAttribute("data-notify-tel") || "";
+                  const cucmHost = "__AUTH_CUCM_HOST__";
                   const cucmUser = "__AUTH_USER__";
                   const cucmPass = "";
 
@@ -6022,6 +6029,7 @@ def menu_admin_page(request: Request):
                   statusEl.textContent = `Sending Jabber notification for ${uid}...`;
                   try {
                     const sf = new FormData();
+                    sf.append("cucm_host", cucmHost);
                     sf.append("cucm_user", cucmUser);
                     sf.append("cucm_pass", cucmPass);
                     sf.append("target_user", uid);
@@ -6060,6 +6068,7 @@ def menu_admin_page(request: Request):
           if (!form || !statusEl || !resultsEl) return;
 
           function submitDeleteAction(uid, mode) {
+            const cucmHost = "__AUTH_CUCM_HOST__";
             const cucmUser = "__AUTH_USER__";
             const cucmPass = "";
 
@@ -6079,6 +6088,7 @@ def menu_admin_page(request: Request):
             actionForm.action = "/delete/secondary-mobile-devices";
 
             const fields = {
+              cucm_host: cucmHost,
               cucm_user: cucmUser,
               cucm_pass: cucmPass,
               target_user: uid,
@@ -6369,7 +6379,7 @@ def menu_admin_page(request: Request):
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
+""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
 
   return HTMLResponse(
     content=html,
