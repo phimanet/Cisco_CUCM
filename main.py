@@ -4943,7 +4943,7 @@ def menu_admin_page(request: Request):
         align-items: center;
         justify-content: space-between;
         gap: 12px;
-        padding: 16px 28px;
+        padding: 10px 16px;
         background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94));
         color: #fff;
         box-shadow: 0 12px 28px rgba(0, 47, 108, 0.2);
@@ -4962,6 +4962,40 @@ def menu_admin_page(request: Request):
         display: flex;
         align-items: center;
         gap: 10px;
+      }
+
+      .topbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .topbar-btn {
+        display: inline-block;
+        padding: 7px 12px;
+        border-radius: 10px;
+        font-size: 12px;
+        font-weight: 700;
+        text-decoration: none;
+        border: 1px solid rgba(255, 255, 255, 0.65);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+      }
+
+      .topbar-btn-login {
+        color: #fff;
+        background: rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(8px);
+      }
+
+      .topbar-btn-logout {
+        color: #fff;
+        background: linear-gradient(180deg, #cb3b2f, #9f2018);
+        border-color: #f0a79c;
+      }
+
+      .topbar-btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
       }
 
       .topbar-status {
@@ -5391,7 +5425,7 @@ def menu_admin_page(request: Request):
     <header class="topbar">
       <div class="topbar-brand">
         <span class="brand-fallback">AMN Healthcare</span>
-        <strong>Voice Operations Portal - Administrative Items</strong>
+        <strong>Voice Operations Portal</strong>
       </div>
       <div class="topbar-status">
         <span class="topbar-auth-pill">Authenticated Operator: __AUTH_USER__</span>
@@ -5400,6 +5434,10 @@ def menu_admin_page(request: Request):
           <span class="timer-label">Auto logout in:</span>
           <span id="session-timer-remaining" class="timer-value"></span>
         </div>
+      </div>
+      <div class="topbar-actions">
+        <a class="topbar-btn topbar-btn-login" href="/">Log In</a>
+        <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
       </div>
     </header>
 
@@ -5453,17 +5491,9 @@ def menu_admin_page(request: Request):
         <h3>Employee Lookup by Name</h3>
         <p>Search by last name (optional first name), then use the result to prefill Strike Mode.</p>
         <form id="admin-person-lookup-form">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
           <input type="hidden" name="include_teams_status" value="1">
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Username:</span>
-            <input name="cucm_user" value="__AUTH_USER__" required>
-          </div><br>
-
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Password:</span>
-            <input type="password" name="cucm_pass" required>
-          </div><br>
-
           Last Name:<br>
           <input name="last_name" placeholder="Smith" required><br><br>
 
@@ -5480,15 +5510,8 @@ def menu_admin_page(request: Request):
       <section class="panel tool-panel" data-panel="strike">
         <h3>Strike Mode - Add in both Jabber iPhone and Android (Option 5)</h3>
         <form id="admin-strike-form" action="/add/secondary-strike-devices" method="post">
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Username:</span>
-            <input name="cucm_user" value="__AUTH_USER__" required>
-          </div><br>
-
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Password:</span>
-            <input type="password" name="cucm_pass" required>
-          </div><br>
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
 
           User ID for person to add STRIKE MODE devices for:<br>
           <input id="admin-strike-target-user" name="target_user" placeholder="john.doe" required><br><br>
@@ -5501,15 +5524,8 @@ def menu_admin_page(request: Request):
         <h3>Remove only Jabber Mobile - iPhone or Android</h3>
         <p>Lookup by last name, then remove Jabber iPhone (TCT), Jabber Android (BOT), or both. This does not delete CSF or voicemail.</p>
         <form id="admin-mobile-delete-lookup-form">
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Username:</span>
-            <input name="cucm_user" value="__AUTH_USER__" required>
-          </div><br>
-
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Password:</span>
-            <input type="password" name="cucm_pass" required>
-          </div><br>
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
 
           Last Name:<br>
           <input name="last_name" placeholder="Smith" required><br><br>
@@ -5527,15 +5543,8 @@ def menu_admin_page(request: Request):
       <section class="panel tool-panel" data-panel="rpo">
         <h3>Extract RPO Phones (Option 18)</h3>
         <form action="/export/rpo-phones" method="post">
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Username:</span>
-            <input name="cucm_user" value="__AUTH_USER__" required>
-          </div><br>
-
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Password:</span>
-            <input type="password" name="cucm_pass" required>
-          </div><br>
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
 
           User IDs (one per line):<br>
           <textarea name="rpo_userids" rows="8" placeholder="john.doe&#10;jane.smith" required></textarea><br><br>
@@ -5547,15 +5556,8 @@ def menu_admin_page(request: Request):
       <section class="panel tool-panel" data-panel="adddn">
         <h3>Add Directory Numbers (Upload CSV)</h3>
         <form action="/add/directorynumbers" method="post" enctype="multipart/form-data">
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Username:</span>
-            <input name="cucm_user" value="__AUTH_USER__" required>
-          </div><br>
-
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Password:</span>
-            <input type="password" name="cucm_pass" required>
-          </div><br>
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
 
           CSV File:<br>
           <input type="file" name="csv_file" required><br><br>
@@ -5569,15 +5571,8 @@ def menu_admin_page(request: Request):
       <section class="panel tool-panel" data-panel="exportdn">
         <h3>Export Directory Numbers</h3>
         <form action="/export/directorynumbers" method="post">
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Username:</span>
-            <input name="cucm_user" value="__AUTH_USER__" required>
-          </div><br>
-
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Password:</span>
-            <input type="password" name="cucm_pass" required>
-          </div><br>
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
 
           DN Pattern (supports %):<br>
           <input name="dn_contains"><br><br>
@@ -5592,15 +5587,8 @@ def menu_admin_page(request: Request):
       <section class="panel tool-panel" data-panel="exportusers">
         <h3>Export End Users</h3>
         <form action="/export/endusers" method="post">
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Username:</span>
-            <input name="cucm_user" value="__AUTH_USER__" required>
-          </div><br>
-
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Password:</span>
-            <input type="password" name="cucm_pass" required>
-          </div><br>
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
 
           Last Name:<br>
           <input name="lastname" required><br><br>
@@ -5613,15 +5601,8 @@ def menu_admin_page(request: Request):
         <h3>Translation Pattern Lookup</h3>
         <p>Search translation patterns and return pattern, description, and called party transform mask.</p>
         <form id="admin-trans-pattern-form">
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Username:</span>
-            <input name="cucm_user" value="__AUTH_USER__" required>
-          </div><br>
-
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Password:</span>
-            <input type="password" name="cucm_pass" required>
-          </div><br>
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
 
           Pattern contains:<br>
           <input name="pattern_query" placeholder="55512" required><br><br>
@@ -5637,15 +5618,8 @@ def menu_admin_page(request: Request):
         <h3>Translation Pattern Template From Example</h3>
         <p>Start with the example that begins with <strong>3148984689</strong>. The template keeps everything the same except the Translation Pattern and Description.</p>
         <form id="admin-trans-template-form">
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Username:</span>
-            <input name="cucm_user" value="__AUTH_USER__" required>
-          </div><br>
-
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Password:</span>
-            <input type="password" name="cucm_pass" required>
-          </div><br>
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
 
           Example starts with:<br>
           <input name="pattern_prefix" value="3148984689" required><br><br>
@@ -5663,14 +5637,8 @@ def menu_admin_page(request: Request):
         <h3>Send Jabber Training Notification</h3>
         <p>Search for an employee by last name, then send them the Cisco Jabber ready email (with their telephone number and training link). Use this to test or resend the notification.</p>
         <form id="jabbernotify-form">
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Username:</span>
-            <input name="cucm_user" value="__AUTH_USER__" required>
-          </div><br>
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Password:</span>
-            <input type="password" name="cucm_pass" required>
-          </div><br>
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
           Last Name:<br>
           <input id="jabbernotify-last-name" placeholder="Smith" required style="width:min(280px,100%);"><br><br>
           First Name (optional):<br>
@@ -5687,15 +5655,8 @@ def menu_admin_page(request: Request):
         <p>Upload CSV with columns like <strong>last_name, first_name</strong> (or first column as last name).</p>
         <p><a href="/download/bulk-person-template" style="font-weight:700;">Download Bulk Person Template</a></p>
         <form id="admin-bulk-person-form" enctype="multipart/form-data">
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Username:</span>
-            <input name="cucm_user" value="__AUTH_USER__" required>
-          </div><br>
-
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Password:</span>
-            <input type="password" name="cucm_pass" required>
-          </div><br>
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
 
           CSV File:<br>
           <input type="file" name="csv_file" accept=".csv" required><br><br>
@@ -5713,15 +5674,8 @@ def menu_admin_page(request: Request):
         <p>Upload CSV with a column like <strong>pattern</strong> or <strong>extension</strong> (or first column as pattern).</p>
         <p><a href="/download/bulk-extension-template" style="font-weight:700;">Download Bulk Extension Template</a></p>
         <form id="admin-bulk-extension-form" enctype="multipart/form-data">
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Username:</span>
-            <input name="cucm_user" value="__AUTH_USER__" required>
-          </div><br>
-
-          <div class="compact-inline-row">
-            <span>Cisco Callmanager Password:</span>
-            <input type="password" name="cucm_pass" required>
-          </div><br>
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
 
           CSV File:<br>
           <input type="file" name="csv_file" accept=".csv" required><br><br>
@@ -5772,38 +5726,6 @@ def menu_admin_page(request: Request):
 
           startCredentialTimer();
 
-          function hideCachedCredentialFields() {
-            if (!hasCachedCucmPassword) {
-              return;
-            }
-
-            document.querySelectorAll('input[name="cucm_user"], input[name="cucm_pass"]').forEach((inputEl) => {
-              inputEl.required = false;
-              if (inputEl.name === "cucm_pass") {
-                inputEl.value = "";
-                inputEl.placeholder = "Using cached password (expires in 60 minutes)";
-                inputEl.style.display = "none";
-                let prev = inputEl.previousSibling;
-                while (prev) {
-                  if (prev.nodeType === Node.TEXT_NODE && (prev.textContent || "").toLowerCase().includes("callmanager password")) {
-                    prev.textContent = "";
-                  }
-                  if (prev.nodeType === Node.ELEMENT_NODE && prev.tagName === "BR") {
-                    prev.style.display = "none";
-                  }
-                  prev = prev.previousSibling;
-                }
-              }
-
-              const row = inputEl.closest(".compact-inline-row");
-              if (row) {
-                row.style.display = "none";
-              }
-            });
-          }
-
-          hideCachedCredentialFields();
-
           // ── Jabber Notify panel ──────────────────────────────────────────────
           const jabberNotifyForm = document.getElementById("jabbernotify-form");
           const jabberNotifyStatus = document.getElementById("jabbernotify-search-status");
@@ -5817,25 +5739,18 @@ def menu_admin_page(request: Request):
               jabberNotifyResults.innerHTML = "";
               if (jabberNotifySendStatus) jabberNotifySendStatus.textContent = "";
 
-              const userField = jabberNotifyForm.querySelector('input[name="cucm_user"]');
-              const passField = jabberNotifyForm.querySelector('input[name="cucm_pass"]');
               const lastNameEl = document.getElementById("jabbernotify-last-name");
               const firstNameEl = document.getElementById("jabbernotify-first-name");
 
               const lastName = ((lastNameEl && lastNameEl.value) || "").trim();
               const firstName = ((firstNameEl && firstNameEl.value) || "").trim();
-              const cucmUser = ((userField && userField.value) || "").trim();
-              const cucmPass = (passField && passField.value) || "";
+              const cucmUser = "__AUTH_USER__";
+              const cucmPass = "";
 
               if (!lastName) {
                 jabberNotifyStatus.textContent = "Last Name is required.";
                 return;
               }
-              if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
-                jabberNotifyStatus.textContent = "Enter CUCM username and password (or use cached login) first.";
-                return;
-              }
-
               try {
                 const fd = new FormData();
                 fd.append("cucm_user", cucmUser);
@@ -6054,15 +5969,8 @@ def menu_admin_page(request: Request):
               });
 
               function submitAdminAction(endpoint, uid) {
-                const userField = form.querySelector('input[name="cucm_user"]');
-                const passField = form.querySelector('input[name="cucm_pass"]');
-                const cucmUser = ((userField && userField.value) || "").trim();
-                const cucmPass = (passField && passField.value) || "";
-
-                if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
-                  statusEl.textContent = "Enter CUCM username and password (or use cached login) in Employee Lookup by Name before running device actions.";
-                  return;
-                }
+                const cucmUser = "__AUTH_USER__";
+                const cucmPass = "";
 
                 const actionForm = document.createElement("form");
                 actionForm.method = "post";
@@ -6117,15 +6025,8 @@ def menu_admin_page(request: Request):
                 btn.addEventListener("click", async function () {
                   const uid = btn.getAttribute("data-notify-user") || "";
                   const tel = btn.getAttribute("data-notify-tel") || "";
-                  const userField = form.querySelector('input[name="cucm_user"]');
-                  const passField = form.querySelector('input[name="cucm_pass"]');
-                  const cucmUser = ((userField && userField.value) || "").trim();
-                  const cucmPass = (passField && passField.value) || "";
-
-                  if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
-                    statusEl.textContent = "Enter CUCM username and password (or use cached login) before sending notification.";
-                    return;
-                  }
+                  const cucmUser = "__AUTH_USER__";
+                  const cucmPass = "";
 
                   btn.disabled = true;
                   statusEl.textContent = `Sending Jabber notification for ${uid}...`;
@@ -6169,15 +6070,8 @@ def menu_admin_page(request: Request):
           if (!form || !statusEl || !resultsEl) return;
 
           function submitDeleteAction(uid, mode) {
-            const userField = form.querySelector('input[name="cucm_user"]');
-            const passField = form.querySelector('input[name="cucm_pass"]');
-            const cucmUser = ((userField && userField.value) || "").trim();
-            const cucmPass = (passField && passField.value) || "";
-
-            if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
-              statusEl.textContent = "Enter CUCM username and password (or use cached login) before running mobile device delete.";
-              return;
-            }
+            const cucmUser = "__AUTH_USER__";
+            const cucmPass = "";
 
             const removeTct = mode === "tct" || mode === "both";
             const removeBot = mode === "bot" || mode === "both";
