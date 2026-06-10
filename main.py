@@ -152,7 +152,8 @@ def _cache_secret(session: dict, key: str, value: str, now_epoch: float | None =
   if _CREDENTIAL_CIPHER:
     token = _CREDENTIAL_CIPHER.encrypt(cleaned.encode("utf-8")).decode("utf-8")
     session[f"{key}_enc"] = token
-    session.pop(key, None)
+    # Keep an in-memory fallback copy to tolerate cache-metadata edge cases.
+    session[key] = cleaned
   else:
     # Compatibility fallback: keep service running if cryptography is unavailable.
     session[key] = cleaned
@@ -299,6 +300,11 @@ def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, 
   if provided_pass:
     _cache_secret(session, "cucm_pass", provided_pass)
   resolved_pass = provided_pass or _get_cached_secret(session, "cucm_pass")
+  if not resolved_pass:
+    # Final fallback for sessions that still carry plain value from compatibility path.
+    resolved_pass = (session.get("cucm_pass", "") or "").strip()
+    if resolved_pass:
+      _cache_secret(session, "cucm_pass", resolved_pass)
 
   if not resolved_host or not resolved_user or not resolved_pass:
     raise RuntimeError("Session credentials expired. Please log in again.")
