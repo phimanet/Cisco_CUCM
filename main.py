@@ -1815,10 +1815,13 @@ def logout(request: Request):
 def menu_page(request: Request):
   session = _get_auth_session(request) or {}
   now_epoch = time.time()
+  session_id = request.cookies.get(SESSION_COOKIE_NAME, "")
   session_username = str(session.get("username", ""))
   auth_user = escape(session_username)
   auth_cucm_host = str(session.get("cucm_host", ""))
   has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
+  if not has_cached_cucm_pass and session_id:
+    has_cached_cucm_pass = bool((AUTH_SESSION_SECRETS.get(session_id, {}).get("cucm_pass", "") or "").strip())
   has_cached_unity_pass = _has_valid_cached_secret(session, "unity_pass", now_epoch) or has_cached_cucm_pass
   credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
   credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
@@ -5237,6 +5240,10 @@ def menu_admin_page(request: Request):
   auth_user = escape(session_username)
   auth_cucm_host = str(session.get("cucm_host", ""))
   has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
+  if not has_cached_cucm_pass:
+    _page2_sid = request.cookies.get(SESSION_COOKIE_NAME, "")
+    if _page2_sid:
+      has_cached_cucm_pass = bool((AUTH_SESSION_SECRETS.get(_page2_sid, {}).get("cucm_pass", "") or "").strip())
   credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
   credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
