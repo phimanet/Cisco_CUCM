@@ -10,6 +10,7 @@ import time
 import xml.etree.ElementTree as ET
 from email.message import EmailMessage
 from zoneinfo import ZoneInfo
+from xml.sax.saxutils import escape as xml_escape
 
 import requests
 import urllib3
@@ -96,6 +97,21 @@ MOBILE_JABBER_EMAIL_BODY = (
   "5. If it balks at an invalid certificate, this is OK. Accept or press OK.\n"
   "6. You should now be logged in."
 )
+TWILIO_INBOUND_VERIFICATION_PROFILES = {
+  "phimane": {
+    "panel_label": "Twilio-Inbound-Verificaton-Phimane",
+    "description": "Twilio Number Verification to Phimane 8585236648",
+    "home_pattern": "8585236648",
+  },
+  "lauraa": {
+    "panel_label": "Twilio-Inbound-Verificaton-LauraA",
+    "description": "Twilio Number Verification to LauraA 8583503289",
+    "home_pattern": "8583503289",
+  },
+}
+TWILIO_INBOUND_AUTO_RESTORE_SECONDS = 5 * 60
+TWILIO_INBOUND_AUTO_RESTORE_LOCK = threading.Lock()
+TWILIO_INBOUND_AUTO_RESTORE_TIMERS: dict[str, dict] = {}
 CSF_JABBER_EMAIL_FROM = (os.getenv("CSF_JABBER_EMAIL_FROM", MOBILE_JABBER_EMAIL_FROM) or MOBILE_JABBER_EMAIL_FROM).strip()
 CSF_JABBER_TRAINING_URL = (
   "https://amnhealthcare.sharepoint.com/teams/AMNITTrainingContent-tm/_layouts/15/stream.aspx?id=%2Fteams%2FAMNITTrainingContent%2Dtm%2FShared%20Documents%2FGeneral%2FWatch%20and%20Learn%20Cisco%20Jabber%20Softphone%2012%2E9%2Emp4&referrer=StreamWebApp%2EWeb&referrerScenario=AddressBarCopied%2Eview%2E973e7ace%2Dcbde%2D4892%2D8252%2Dd3edcfda9374"
@@ -435,6 +451,7 @@ def _wants_json_response(request: Request) -> bool:
     "/lookup/person",
     "/lookup/extension",
     "/lookup/translation-pattern",
+    "/translation-pattern/twilio-inbound-verification",
     "/bulk/lookup/person",
     "/bulk/lookup/extension",
     "/check/user-devices",
@@ -709,6 +726,247 @@ def _prepare_job_output(csv_data, filename: str) -> dict:
         "filename": filename,
         "output_text": csv_bytes.decode("utf-8", errors="replace"),
     }
+
+
+def _list_translation_patterns_by_description(cucm_host: str, cucm_user: str, cucm_pass: str, description_text: str) -> list[dict]:
+    clean_description = (description_text or "").strip()
+    if not clean_description:
+      raise RuntimeError("Translation pattern description is required.")
+
+    session = requests.Session()
+    session.verify = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:listTransPattern sequence=\"1\">
+      <searchCriteria>
+        <description>%{xml_escape(clean_description)}%</description>
+      </searchCriteria>
+      <returnedTags>
+        <pattern/>
+        <routePartitionName/>
+        <description/>
+        <calledPartyTransformationMask/>
+      </returnedTags>
+    </axl:listTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = session.post(
+      f"https://{cucm_host}:8443/axl/",
+      data=soap_xml.encode("utf-8"),
+      headers={"Content-Type": "text/xml"},
+      timeout=60,
+    )
+    if response.status_code != 200:
+      raise RuntimeError(f"listTransPattern failed HTTP {response.status_code}: {response.text[:800]}")
+
+    root = ET.fromstring(response.text)
+    matches = []
+    target_desc = clean_description.casefold()
+
+    for elem in root.iter():
+      if elem.tag.split("}")[-1] != "transPattern":
+        continue
+
+      values = {
+        "pattern": "",
+        "route_partition": "",
+        "description": "",
+        "called_party_transform_mask": "",
+      }
+      for child in list(elem):
+        key = child.tag.split("}")[-1]
+        text = (child.text or "").strip()
+        if key == "pattern":
+          values["pattern"] = text
+        elif key == "routePartitionName":
+          values["route_partition"] = text
+        elif key == "description":
+          values["description"] = text
+        elif key in {"calledPartyTransformationMask", "calledPartyTransformMask"}:
+          values["called_party_transform_mask"] = text
+
+      if values["description"].casefold() == target_desc and values["pattern"]:
+        matches.append(values)
+
+    return matches
+
+
+def _get_twilio_inbound_verification_profile(profile_key: str) -> dict:
+    key = (profile_key or "").strip().lower()
+    profile = TWILIO_INBOUND_VERIFICATION_PROFILES.get(key)
+    if not profile:
+      raise RuntimeError("Unknown Twilio inbound verification profile.")
+    return {
+      "key": key,
+      "panel_label": profile.get("panel_label", ""),
+      "description": profile.get("description", ""),
+      "home_pattern": profile.get("home_pattern", ""),
+    }
+
+
+def _get_single_twilio_inbound_verification_pattern(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  profile_key: str,
+) -> dict:
+    profile = _get_twilio_inbound_verification_profile(profile_key)
+    matches = _list_translation_patterns_by_description(
+      cucm_host,
+      cucm_user,
+      cucm_pass,
+      profile.get("description", ""),
+    )
+
+    if not matches:
+      raise RuntimeError(
+        "No translation pattern found with description "
+        f"'{profile.get('description', '')}'."
+      )
+
+    if len(matches) > 1:
+      joined = ", ".join(
+        f"{item.get('pattern', '')}/{item.get('route_partition', '')}" for item in matches
+      )
+      raise RuntimeError(
+        "Multiple translation patterns matched the constant description; no changes made. "
+        f"Matches: {joined}"
+      )
+
+    return matches[0]
+
+
+def _update_twilio_inbound_verification_pattern(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  new_pattern: str,
+  profile_key: str,
+) -> dict:
+    target_pattern = (new_pattern or "").strip()
+    if not target_pattern:
+      raise RuntimeError("Target translation pattern is required.")
+
+    profile = _get_twilio_inbound_verification_profile(profile_key)
+    current = _get_single_twilio_inbound_verification_pattern(cucm_host, cucm_user, cucm_pass, profile_key)
+    old_pattern = current.get("pattern", "")
+    route_partition = current.get("route_partition", "")
+    if not old_pattern or not route_partition:
+      raise RuntimeError("Could not resolve current translation pattern and route partition.")
+
+    if old_pattern == target_pattern:
+      return {
+        "profile_key": profile.get("key", ""),
+        "panel_label": profile.get("panel_label", ""),
+        "home_pattern": profile.get("home_pattern", ""),
+        "changed": False,
+        "old_pattern": old_pattern,
+        "new_pattern": target_pattern,
+        "route_partition": route_partition,
+        "description": current.get("description", ""),
+        "called_party_transform_mask": current.get("called_party_transform_mask", ""),
+      }
+
+    session = requests.Session()
+    session.verify = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:updateTransPattern sequence=\"1\">
+      <pattern>{xml_escape(old_pattern)}</pattern>
+      <routePartitionName>{xml_escape(route_partition)}</routePartitionName>
+      <newPattern>{xml_escape(target_pattern)}</newPattern>
+    </axl:updateTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = session.post(
+      f"https://{cucm_host}:8443/axl/",
+      data=soap_xml.encode("utf-8"),
+      headers={"Content-Type": "text/xml"},
+      timeout=60,
+    )
+    if response.status_code != 200:
+      raise RuntimeError(f"updateTransPattern failed HTTP {response.status_code}: {response.text[:800]}")
+
+    updated = _get_single_twilio_inbound_verification_pattern(cucm_host, cucm_user, cucm_pass, profile_key)
+    return {
+      "profile_key": profile.get("key", ""),
+      "panel_label": profile.get("panel_label", ""),
+      "home_pattern": profile.get("home_pattern", ""),
+      "changed": True,
+      "old_pattern": old_pattern,
+      "new_pattern": updated.get("pattern", target_pattern),
+      "route_partition": updated.get("route_partition", route_partition),
+      "description": updated.get("description", ""),
+      "called_party_transform_mask": updated.get("called_party_transform_mask", ""),
+    }
+
+
+def _cancel_twilio_inbound_auto_restore(profile_key: str):
+    key = (profile_key or "").strip().lower()
+    with TWILIO_INBOUND_AUTO_RESTORE_LOCK:
+      existing = TWILIO_INBOUND_AUTO_RESTORE_TIMERS.pop(key, None)
+      timer = existing.get("timer") if isinstance(existing, dict) else None
+      if timer:
+        timer.cancel()
+
+
+def _schedule_twilio_inbound_auto_restore(
+  profile_key: str,
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+) -> float:
+    profile = _get_twilio_inbound_verification_profile(profile_key)
+    key = profile.get("key", "")
+    restore_at_epoch = time.time() + TWILIO_INBOUND_AUTO_RESTORE_SECONDS
+
+    timer_ref = {"timer": None}
+
+    def _run_auto_restore():
+      try:
+        _update_twilio_inbound_verification_pattern(
+          cucm_host=cucm_host,
+          cucm_user=cucm_user,
+          cucm_pass=cucm_pass,
+          new_pattern=profile.get("home_pattern", ""),
+          profile_key=key,
+        )
+      except Exception:
+        # Fail-safe worker should never crash the app thread pool.
+        pass
+      finally:
+        with TWILIO_INBOUND_AUTO_RESTORE_LOCK:
+          existing = TWILIO_INBOUND_AUTO_RESTORE_TIMERS.get(key)
+          if existing and existing.get("timer") is timer_ref.get("timer"):
+            TWILIO_INBOUND_AUTO_RESTORE_TIMERS.pop(key, None)
+
+    timer = threading.Timer(TWILIO_INBOUND_AUTO_RESTORE_SECONDS, _run_auto_restore)
+    timer.daemon = True
+    timer_ref["timer"] = timer
+
+    with TWILIO_INBOUND_AUTO_RESTORE_LOCK:
+      existing = TWILIO_INBOUND_AUTO_RESTORE_TIMERS.pop(key, None)
+      existing_timer = existing.get("timer") if isinstance(existing, dict) else None
+      if existing_timer:
+        existing_timer.cancel()
+
+      TWILIO_INBOUND_AUTO_RESTORE_TIMERS[key] = {
+        "timer": timer,
+        "restore_at": restore_at_epoch,
+      }
+
+    timer.start()
+    return restore_at_epoch
 
 
 def _pick_column(fieldnames: list[str], candidates: list[str]) -> str:
@@ -5543,6 +5801,8 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
             <button type="button" class="portal-nav-btn" data-panel="translookup">Translation Pattern Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="transtemplate">Translation Pattern Template</button>
+            <button type="button" class="portal-nav-btn" data-panel="twilioverify-phimane">Twilio-Inbound-Verificaton-Phimane</button>
+            <button type="button" class="portal-nav-btn" data-panel="twilioverify-lauraa">Twilio-Inbound-Verificaton-LauraA</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=teams-telephony'">Create Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=teams-telephony-remove'">Remove Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM (Main Ops)</button>
@@ -5700,6 +5960,44 @@ def menu_admin_page(request: Request):
         <p id="admin-trans-template-summary" style="color:#355978; min-height:18px;"></p>
         <p><a id="admin-trans-template-download" href="#" style="display:none; font-weight:700;">Download CSV Output</a></p>
         <textarea id="admin-trans-template-preview" rows="8" readonly style="width:100%;"></textarea>
+      </section>
+
+      <section class="panel tool-panel" data-panel="twilioverify-phimane">
+        <h3>Twilio-Inbound-Verificaton-Phimane</h3>
+        <p>Targets only the translation pattern with exact description <strong>Twilio Number Verification to Phimane 8585236648</strong>. No other translation pattern fields are changed.</p>
+        <form id="admin-twilio-verify-phimane-form">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <input type="hidden" name="profile_key" value="phimane">
+
+          Set Translation Pattern to:<br>
+          <input name="target_pattern" placeholder="Enter target pattern" required><br><br>
+
+          <button type="submit">Apply Target Pattern</button>
+          <button type="button" id="admin-twilio-verify-phimane-restore" style="margin-left:8px; background:linear-gradient(180deg,#19743a,#145c2e);">Restore to 8585236648</button>
+        </form>
+
+        <p id="admin-twilio-verify-phimane-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Use Apply to switch temporarily, then Restore to return to 8585236648.</p>
+        <p id="admin-twilio-verify-phimane-summary" style="color:#355978; min-height:18px;"></p>
+      </section>
+
+      <section class="panel tool-panel" data-panel="twilioverify-lauraa">
+        <h3>Twilio-Inbound-Verificaton-LauraA</h3>
+        <p>Targets only the translation pattern with exact description <strong>Twilio Number Verification to LauraA 8583503289</strong>. No other translation pattern fields are changed.</p>
+        <form id="admin-twilio-verify-lauraa-form">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <input type="hidden" name="profile_key" value="lauraa">
+
+          Set Translation Pattern to:<br>
+          <input name="target_pattern" placeholder="Enter target pattern" required><br><br>
+
+          <button type="submit">Apply Target Pattern</button>
+          <button type="button" id="admin-twilio-verify-lauraa-restore" style="margin-left:8px; background:linear-gradient(180deg,#19743a,#145c2e);">Restore to 8583503289</button>
+        </form>
+
+        <p id="admin-twilio-verify-lauraa-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Use Apply to switch temporarily, then Restore to return to 8583503289.</p>
+        <p id="admin-twilio-verify-lauraa-summary" style="color:#355978; min-height:18px;"></p>
       </section>
 
       <section class="panel tool-panel" data-panel="jabbernotify">
@@ -6381,6 +6679,123 @@ def menu_admin_page(request: Request):
 
       <script>
         (function () {
+          function initTwilioInboundVerificationPanel(config) {
+            const form = document.getElementById(config.formId);
+            const statusEl = document.getElementById(config.statusId);
+            const summaryEl = document.getElementById(config.summaryId);
+            const restoreBtn = document.getElementById(config.restoreButtonId);
+            if (!form || !statusEl || !summaryEl || !restoreBtn) {
+              return;
+            }
+
+            let countdownTimer = null;
+
+            function stopCountdown() {
+              if (countdownTimer) {
+                window.clearInterval(countdownTimer);
+                countdownTimer = null;
+              }
+            }
+
+            function formatCountdown(msLeft) {
+              const safeMs = Math.max(0, Math.floor(msLeft));
+              const totalSeconds = Math.floor(safeMs / 1000);
+              const minutes = Math.floor(totalSeconds / 60);
+              const seconds = totalSeconds % 60;
+              return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+            }
+
+            function startCountdown(restoreAtEpochMs) {
+              stopCountdown();
+              if (!restoreAtEpochMs) {
+                return;
+              }
+
+              const render = () => {
+                const msLeft = restoreAtEpochMs - Date.now();
+                if (msLeft <= 0) {
+                  stopCountdown();
+                  summaryEl.textContent = "Fail-safe timer elapsed. Pattern should now be auto-restored to the original number.";
+                  return;
+                }
+                summaryEl.textContent = `Auto-restore in ${formatCountdown(msLeft)}. Fail-safe will revert to original if no manual restore is pressed.`;
+              };
+
+              render();
+              countdownTimer = window.setInterval(render, 1000);
+            }
+
+            async function submitRequest(mode) {
+              statusEl.textContent = mode === "restore" ? "Restoring default pattern..." : "Updating pattern...";
+              if (mode === "restore") {
+                stopCountdown();
+              }
+              summaryEl.textContent = "";
+
+              const formData = new FormData(form);
+              if (mode === "restore") {
+                formData.set("restore_default", "1");
+              } else {
+                formData.set("restore_default", "0");
+              }
+
+              try {
+                const response = await fetch("/translation-pattern/twilio-inbound-verification", {
+                  method: "POST",
+                  body: formData,
+                  credentials: "same-origin",
+                });
+
+                const payload = await response.json();
+                if (!response.ok || !payload.ok) {
+                  const msg = (payload.error && payload.error.message) || "Update failed.";
+                  throw new Error(msg);
+                }
+
+                const changeWord = payload.changed ? "Updated" : "No change";
+                statusEl.textContent = `${changeWord}: ${payload.old_pattern || ""} -> ${payload.new_pattern || ""}`;
+                const detailSummary = `Description: ${payload.description || ""} | Partition: ${payload.route_partition || ""} | Called Party Transform Mask: ${payload.called_party_transform_mask || ""}`;
+
+                if (payload.auto_restore_enabled && payload.auto_restore_at_epoch_ms) {
+                  startCountdown(payload.auto_restore_at_epoch_ms);
+                } else {
+                  stopCountdown();
+                  summaryEl.textContent = `No auto-restore timer active. ${detailSummary}`;
+                }
+              } catch (err) {
+                statusEl.textContent = "Action failed: " + ((err && err.message) || "Unknown error.");
+                stopCountdown();
+              }
+            }
+
+            form.addEventListener("submit", async function (event) {
+              event.preventDefault();
+              await submitRequest("apply");
+            });
+
+            restoreBtn.addEventListener("click", async function () {
+              await submitRequest("restore");
+            });
+          }
+
+          initTwilioInboundVerificationPanel({
+            formId: "admin-twilio-verify-phimane-form",
+            statusId: "admin-twilio-verify-phimane-status",
+            summaryId: "admin-twilio-verify-phimane-summary",
+            restoreButtonId: "admin-twilio-verify-phimane-restore",
+          });
+
+          initTwilioInboundVerificationPanel({
+            formId: "admin-twilio-verify-lauraa-form",
+            statusId: "admin-twilio-verify-lauraa-status",
+            summaryId: "admin-twilio-verify-lauraa-summary",
+            restoreButtonId: "admin-twilio-verify-lauraa-restore",
+          });
+        })();
+      </script>
+
+      <script>
+        (function () {
           function renderSummary(summary) {
             if (!summary) return "";
             return `Input rows: ${summary.input_rows || 0} | Matched: ${summary.matched_inputs || 0} | No results: ${summary.no_result_inputs || 0} | Errors: ${summary.error_inputs || 0} | Output rows: ${summary.output_rows || 0}`;
@@ -7052,6 +7467,73 @@ def translation_pattern_template_from_example_route(
       "download_url": f"/download/job-output/{job_output['job_id']}",
       "example": example,
     })
+
+
+@app.post("/translation-pattern/twilio-inbound-verification")
+def twilio_inbound_verification_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    profile_key: str = Form("phimane"),
+    target_pattern: str = Form(""),
+    restore_default: str = Form("0"),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+    profile = _get_twilio_inbound_verification_profile(profile_key)
+    restore_mode = (restore_default or "").strip().lower() in {"1", "true", "yes", "on"}
+    desired_pattern = profile.get("home_pattern", "") if restore_mode else (target_pattern or "").strip()
+    if not desired_pattern:
+      raise RuntimeError("Target translation pattern is required.")
+
+    result = _update_twilio_inbound_verification_pattern(
+      cucm_host=cucm_host,
+      cucm_user=cucm_user,
+      cucm_pass=cucm_pass,
+      new_pattern=desired_pattern,
+      profile_key=profile.get("key", ""),
+    )
+
+    auto_restore_enabled = False
+    auto_restore_at_epoch_ms = 0
+    if restore_mode:
+      _cancel_twilio_inbound_auto_restore(profile.get("key", ""))
+    elif desired_pattern != (profile.get("home_pattern", "") or ""):
+      restore_at_epoch = _schedule_twilio_inbound_auto_restore(
+        profile_key=profile.get("key", ""),
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+      )
+      auto_restore_enabled = True
+      auto_restore_at_epoch_ms = int(restore_at_epoch * 1000)
+    else:
+      _cancel_twilio_inbound_auto_restore(profile.get("key", ""))
+
+    _append_audit_event(
+      action="twilio_inbound_verification_update",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=(
+        f"profile={profile.get('key', '')};"
+        f"description={profile.get('description', '')};"
+        f"old={result.get('old_pattern', '')};new={result.get('new_pattern', '')}"
+      ),
+      output_filename="inline_json_ok",
+      inline_mode=True,
+    )
+
+    return JSONResponse(
+      {
+        "ok": True,
+        **result,
+        "auto_restore_enabled": auto_restore_enabled,
+        "auto_restore_at_epoch_ms": auto_restore_at_epoch_ms,
+        "auto_restore_seconds": TWILIO_INBOUND_AUTO_RESTORE_SECONDS if auto_restore_enabled else 0,
+      }
+    )
 
 
 @app.post("/bulk/lookup/person")
