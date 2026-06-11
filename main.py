@@ -1,6 +1,9 @@
 import csv
+import base64
 import datetime
+import hashlib
 import io
+import json
 import os
 import re
 import smtplib
@@ -57,13 +60,16 @@ JOB_OUTPUTS = {}
 AUTH_SESSIONS = {}
 AUTH_SESSION_SECRETS = {}
 SESSION_COOKIE_NAME = "cucm_web_session"
+SESSION_DATA_COOKIE_NAME = "cucm_web_session_data"
 SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
 CREDENTIAL_CACHE_TTL_SECONDS = 60 * 60
 APP_START_EPOCH = time.time()
 CREDENTIAL_ENCRYPTION_KEY = (os.getenv("CUCM_CREDENTIAL_ENCRYPTION_KEY", "") or "").strip()
 if _FERNET_AVAILABLE and not CREDENTIAL_ENCRYPTION_KEY:
-  # Generate an in-memory key when env key is absent so caching is still encrypted.
-  CREDENTIAL_ENCRYPTION_KEY = Fernet.generate_key().decode("utf-8")
+  # Deterministic fallback so multiple workers can decrypt the same cookie/session payload.
+  seed = (f"cucm-web|{os.path.abspath(__file__)}").encode("utf-8")
+  digest = hashlib.sha256(seed).digest()
+  CREDENTIAL_ENCRYPTION_KEY = base64.urlsafe_b64encode(digest).decode("utf-8")
 _CREDENTIAL_CIPHER = None
 if _FERNET_AVAILABLE and CREDENTIAL_ENCRYPTION_KEY:
   try:
@@ -251,6 +257,69 @@ def _create_auth_session(cucm_host: str, username: str, cucm_pass: str) -> str:
   return session_id
 
 
+def _build_session_cookie_payload(session: dict) -> str:
+  if not session:
+    return ""
+
+  if not _CREDENTIAL_CIPHER:
+    return ""
+
+  payload = {
+    "cucm_host": (session.get("cucm_host", "") or "").strip(),
+    "username": (session.get("username", "") or "").strip(),
+    "unity_user": (session.get("unity_user", "") or "").strip(),
+    "created_at": float(session.get("created_at", 0) or 0),
+    "last_seen": float(session.get("last_seen", 0) or 0),
+    "credential_expires_at": float(session.get("credential_expires_at", 0) or 0),
+    "cucm_pass_enc": (session.get("cucm_pass_enc", "") or "").strip(),
+    "unity_pass_enc": (session.get("unity_pass_enc", "") or "").strip(),
+    "cucm_pass_cached_at": float(session.get("cucm_pass_cached_at", 0) or 0),
+    "unity_pass_cached_at": float(session.get("unity_pass_cached_at", 0) or 0),
+  }
+
+  try:
+    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    return _CREDENTIAL_CIPHER.encrypt(raw).decode("utf-8")
+  except Exception:
+    return ""
+
+
+def _rehydrate_auth_session_from_cookie(request: Request, session_id: str):
+  if not session_id:
+    return None
+  if not _CREDENTIAL_CIPHER:
+    return None
+
+  token = (request.cookies.get(SESSION_DATA_COOKIE_NAME, "") or "").strip()
+  if not token:
+    return None
+
+  try:
+    raw = _CREDENTIAL_CIPHER.decrypt(token.encode("utf-8"))
+    payload = json.loads(raw.decode("utf-8"))
+  except Exception:
+    return None
+
+  session = {
+    "cucm_host": (payload.get("cucm_host", "") or "").strip(),
+    "username": (payload.get("username", "") or "").strip(),
+    "unity_user": (payload.get("unity_user", "") or "").strip(),
+    "created_at": float(payload.get("created_at", 0) or 0),
+    "last_seen": float(payload.get("last_seen", 0) or 0),
+    "credential_expires_at": float(payload.get("credential_expires_at", 0) or 0),
+    "cucm_pass_enc": (payload.get("cucm_pass_enc", "") or "").strip(),
+    "unity_pass_enc": (payload.get("unity_pass_enc", "") or "").strip(),
+    "cucm_pass_cached_at": float(payload.get("cucm_pass_cached_at", 0) or 0),
+    "unity_pass_cached_at": float(payload.get("unity_pass_cached_at", 0) or 0),
+  }
+
+  if not session.get("username"):
+    return None
+
+  AUTH_SESSIONS[session_id] = session
+  return session
+
+
 def _get_auth_session(request: Request):
   session_id = request.cookies.get(SESSION_COOKIE_NAME, "")
   if not session_id:
@@ -259,6 +328,8 @@ def _get_auth_session(request: Request):
   now_epoch = time.time()
   _prune_auth_sessions_locked(now_epoch)
   session = AUTH_SESSIONS.get(session_id)
+  if not session:
+    session = _rehydrate_auth_session_from_cookie(request, session_id)
   if not session:
     return None
 
@@ -1787,6 +1858,7 @@ def login(
     )
 
   session_id = _create_auth_session(cucm_host, cucm_user, cucm_pass)
+  session_payload = _build_session_cookie_payload(AUTH_SESSIONS.get(session_id, {}))
   response = RedirectResponse(url="/menu", status_code=303)
   response.set_cookie(
     key=SESSION_COOKIE_NAME,
@@ -1796,6 +1868,15 @@ def login(
     secure=True,
     max_age=CREDENTIAL_CACHE_TTL_SECONDS,
   )
+  if session_payload:
+    response.set_cookie(
+      key=SESSION_DATA_COOKIE_NAME,
+      value=session_payload,
+      httponly=True,
+      samesite="lax",
+      secure=True,
+      max_age=CREDENTIAL_CACHE_TTL_SECONDS,
+    )
   return response
 
 
@@ -1808,6 +1889,7 @@ def logout(request: Request):
 
   response = RedirectResponse(url="/", status_code=303)
   response.delete_cookie(SESSION_COOKIE_NAME)
+  response.delete_cookie(SESSION_DATA_COOKIE_NAME)
   return response
 
 
