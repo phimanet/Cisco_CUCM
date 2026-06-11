@@ -5383,43 +5383,37 @@ def menu_admin_page(request: Request):
       }
 
       .content {
-        max-width: 1200px;
-        margin: 16px auto 22px auto;
-        padding: 0 16px 16px 16px;
+        max-width: 1400px;
+        margin: 8px auto 14px auto;
+        padding: 0 12px 12px 12px;
       }
 
       .page-hero {
         position: relative;
         overflow: hidden;
-        padding: 20px 22px;
-        margin-bottom: 14px;
-        border-radius: 18px;
-        background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95));
+        padding: 12px 14px;
+        margin-bottom: 10px;
+        border-radius: 12px;
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95)),
+          linear-gradient(180deg, #ffffff, #eef6ff);
         border: 1px solid rgba(0, 47, 108, 0.1);
         box-shadow: var(--amn-shadow);
       }
 
       .page-hero::after {
-        content: "";
-        position: absolute;
-        right: -60px;
-        top: -50px;
-        width: 240px;
-        height: 240px;
-        border-radius: 50%;
-        background: radial-gradient(circle, rgba(0, 94, 184, 0.18), transparent 68%);
-        pointer-events: none;
+        content: none;
       }
 
       .page-kicker {
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        padding: 7px 12px;
+        padding: 5px 9px;
         border-radius: 999px;
         background: rgba(0, 94, 184, 0.08);
         color: var(--amn-blue);
-        font-size: 12px;
+        font-size: 10px;
         font-weight: 800;
         letter-spacing: 0.4px;
         text-transform: uppercase;
@@ -5428,31 +5422,30 @@ def menu_admin_page(request: Request):
       .page-title-row {
         display: flex;
         justify-content: space-between;
-        align-items: flex-start;
-        gap: 18px;
+        align-items: center;
+        gap: 10px;
         flex-wrap: wrap;
-        margin-top: 14px;
+        margin-top: 6px;
       }
 
       .page-title {
         margin: 0;
         color: var(--amn-navy);
-        font-size: 27px;
+        font-size: 22px;
         line-height: 1.1;
       }
 
       .page-subtitle {
-        margin: 10px 0 0 0;
+        margin: 4px 0 0 0;
         color: var(--amn-text-soft);
-        font-size: 14px;
-        line-height: 1.55;
-        max-width: 720px;
+        font-size: 12px;
+        line-height: 1.35;
       }
 
       .page-meta-card {
-        min-width: 230px;
-        padding: 14px 16px;
-        border-radius: 14px;
+        min-width: 180px;
+        padding: 8px 10px;
+        border-radius: 10px;
         background: linear-gradient(180deg, rgba(0, 47, 108, 0.96), rgba(0, 94, 184, 0.92));
         color: #fff;
         box-shadow: 0 14px 28px rgba(0, 47, 108, 0.22);
@@ -5460,7 +5453,7 @@ def menu_admin_page(request: Request):
 
       .page-meta-label {
         display: block;
-        font-size: 11px;
+        font-size: 10px;
         font-weight: 800;
         letter-spacing: 0.5px;
         opacity: 0.76;
@@ -5469,29 +5462,29 @@ def menu_admin_page(request: Request):
 
       .page-meta-value {
         display: block;
-        margin-top: 6px;
-        font-size: 18px;
+        margin-top: 2px;
+        font-size: 14px;
         font-weight: 700;
       }
 
       .page-meta-note {
-        margin: 10px 0 0 0;
-        font-size: 13px;
-        line-height: 1.5;
+        margin: 4px 0 0 0;
+        font-size: 11px;
+        line-height: 1.3;
         color: rgba(255, 255, 255, 0.86);
       }
 
       .hero-link-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-        gap: 10px;
-        margin-top: 14px;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 8px;
+        margin-top: 8px;
       }
 
       .hero-link-card {
         display: block;
-        padding: 12px 14px;
-        border-radius: 12px;
+        padding: 7px 10px;
+        border-radius: 10px;
         background: rgba(255, 255, 255, 0.9);
         border: 1px solid rgba(0, 47, 108, 0.1);
         color: inherit;
@@ -5509,12 +5502,13 @@ def menu_admin_page(request: Request):
       .hero-link-card strong {
         display: block;
         color: var(--amn-navy);
-        margin-bottom: 5px;
+        margin-bottom: 0;
+        font-size: 12px;
       }
 
       .hero-link-card span {
-        display: block;
-        font-size: 13px;
+        display: none;
+        font-size: 12px;
         color: var(--amn-text-soft);
         line-height: 1.5;
       }
@@ -5577,19 +5571,19 @@ def menu_admin_page(request: Request):
 
       .portal-shell {
         display: grid;
-        grid-template-columns: 300px minmax(0, 1fr);
-        gap: 18px;
+        grid-template-columns: 240px minmax(0, 1fr);
+        gap: 14px;
         align-items: start;
       }
 
       .portal-sidebar {
         position: sticky;
-        top: 18px;
+        top: 10px;
         background: rgba(255, 255, 255, 0.94);
         border: 1px solid rgba(0, 47, 108, 0.12);
-        border-radius: 14px;
+        border-radius: 12px;
         box-shadow: var(--amn-shadow);
-        padding: 12px;
+        padding: 10px;
       }
 
       .portal-sidebar h4 {
@@ -5609,7 +5603,8 @@ def menu_admin_page(request: Request):
         border: 1px solid rgba(0, 47, 108, 0.14);
         background: rgba(255, 255, 255, 0.92);
         color: #0d3150;
-        padding: 10px 11px;
+        padding: 7px 9px;
+        font-size: 12px;
         font-weight: 700;
         cursor: pointer;
         box-shadow: none;
@@ -5657,17 +5652,17 @@ def menu_admin_page(request: Request):
       .panel {
         background: rgba(255, 255, 255, 0.93);
         border: 1px solid var(--amn-panel-border);
-        border-radius: 14px;
-        padding: 14px;
+        border-radius: 12px;
+        padding: 12px;
         box-shadow: var(--amn-shadow);
         backdrop-filter: blur(6px);
-        margin: 0 0 18px 0;
+        margin: 0 0 12px 0;
       }
 
       h3 {
-        margin: 6px 0 10px 0;
+        margin: 4px 0 8px 0;
         color: var(--amn-navy);
-        font-size: 20px;
+        font-size: 17px;
       }
 
       input,
@@ -5734,7 +5729,7 @@ def menu_admin_page(request: Request):
 
       @media (max-width: 980px) {
         .topbar {
-          padding: 14px 16px;
+          padding: 8px 10px;
         }
 
         .compact-inline-row span {
@@ -5742,11 +5737,11 @@ def menu_admin_page(request: Request):
         }
 
         .page-hero {
-          padding: 16px 14px;
+          padding: 10px 8px;
         }
 
         .page-title {
-          font-size: 23px;
+          font-size: 18px;
         }
 
         .portal-shell {
@@ -5755,6 +5750,11 @@ def menu_admin_page(request: Request):
 
         .portal-sidebar {
           position: static;
+        }
+
+        .portal-nav {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
     </style>
