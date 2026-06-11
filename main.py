@@ -114,7 +114,7 @@ TWILIO_INBOUND_AUTO_RESTORE_LOCK = threading.Lock()
 TWILIO_INBOUND_AUTO_RESTORE_TIMERS: dict[str, dict] = {}
 CSF_JABBER_EMAIL_FROM = (os.getenv("CSF_JABBER_EMAIL_FROM", MOBILE_JABBER_EMAIL_FROM) or MOBILE_JABBER_EMAIL_FROM).strip()
 CSF_JABBER_TRAINING_URL = (
-  "https://amnhealthcare.sharepoint.com/teams/AMNITTrainingContent-tm/_layouts/15/stream.aspx?id=%2Fteams%2FAMNITTrainingContent%2Dtm%2FShared%20Documents%2FGeneral%2FWatch%20and%20Learn%20Cisco%20Jabber%20Softphone%2012%2E9%2Emp4&referrer=StreamWebApp%2EWeb&referrerScenario=AddressBarCopied%2Eview%2E973e7ace%2Dcbde%2D4892%2D8252%2Dd3edcfda9374"
+  "https://amnhealthcare.sharepoint.com/teams/AMNITTrainingContent-tm/_layouts/15/stream.aspx?id=%2Fteams%2FAMNITTrainingContent%2Dtm%2FShared%20Documents%2FGeneral%2FWatch%20and%20Learn%20Cisco%20Jabber%20Softphone%2012%2E9%2Emp4&referrer=StreamWebApp%2EWeb&referrerScenario=AddressBarCopied%2Eview%2Eadce168a%2D4d69%2D428b%2Dab7e%2D87e6335bb101"
 )
 AUDIT_LOG_LOCK = threading.Lock()
 AUDIT_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -1303,19 +1303,13 @@ def _send_csf_jabber_ready_email_if_created(
 
     phone_text = _format_notification_phone(number)
     subject = f"Cisco Jabber is ready for use - telephone number {phone_text} assigned"
-    if new_build:
-      body = (
-        f"Cisco Jabber has been created, and ready for your use. Telephone number {phone_text} has been assigned to you.\n\n"
-        "Your new voicemail box PIN number is 56219#.\n\n"
-        "Please click on the link here for the video training for the use of Cisco Jabber.\n"
-        f"{CSF_JABBER_TRAINING_URL}"
-      )
-    else:
-      body = (
-        f"Cisco Jabber has been created, and ready for your use. Telephone number {phone_text} has been assigned to you.\n\n"
-        "Please click on the link here for the video training for the use of Cisco Jabber.\n"
-        f"{CSF_JABBER_TRAINING_URL}"
-      )
+    body = (
+      "Welcome to AMN Healthcare\n\n"
+      f"Cisco Jabber has been created, and ready for your use. The Telephone number assigned to you is {phone_text}.\n\n"
+      "What is Cisco Jabber?  Jabber is what you will be using to make voice calls, providing secure and reliable communication.\n\n"
+      "Please click on the link below for video training on how to use of Cisco Jabber.\n"
+      f"How to use Cisco Jabber Softphone (Linked to: {CSF_JABBER_TRAINING_URL})"
+    )
 
     _send_smtp_email(
       sender=CSF_JABBER_EMAIL_FROM,
