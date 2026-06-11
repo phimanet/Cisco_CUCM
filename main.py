@@ -114,7 +114,7 @@ TWILIO_INBOUND_AUTO_RESTORE_LOCK = threading.Lock()
 TWILIO_INBOUND_AUTO_RESTORE_TIMERS: dict[str, dict] = {}
 CSF_JABBER_EMAIL_FROM = (os.getenv("CSF_JABBER_EMAIL_FROM", MOBILE_JABBER_EMAIL_FROM) or MOBILE_JABBER_EMAIL_FROM).strip()
 CSF_JABBER_TRAINING_URL = (
-  "https://amnhealthcare.sharepoint.com/teams/AMNITTrainingContent-tm/_layouts/15/stream.aspx?id=%2Fteams%2FAMNITTrainingContent%2Dtm%2FShared%20Documents%2FGeneral%2FWatch%20and%20Learn%20Cisco%20Jabber%20Softphone%2012%2E9%2Emp4&referrer=StreamWebApp%2EWeb&referrerScenario=AddressBarCopied%2Eview%2Eadce168a%2D4d69%2D428b%2Dab7e%2D87e6335bb101"
+  "https://amnhealthcare.sharepoint.com/teams/AMNITTrainingContent-tm/_layouts/15/stream.aspx?id=%2Fteams%2FAMNITTrainingContent%2Dtm%2FShared%20Documents%2FGeneral%2FWatch%20and%20Learn%20Cisco%20Jabber%20Softphone%2012%2E9%2Emp4&referrer=StreamWebApp%2EWeb&referrerScenario=AddressBarCopied%2Eview%2Ef9fafd5b%2D7aeb%2D4bfb%2Dbc57%2Dda61d14ef75f"
 )
 AUDIT_LOG_LOCK = threading.Lock()
 AUDIT_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
@@ -673,6 +673,7 @@ def _send_smtp_email(
     recipients: list[str],
     subject: str,
     body: str,
+  html_body: str = "",
     smtp_user: str = "",
     smtp_pass: str = "",
     smtp_port: int | None = None,
@@ -690,6 +691,8 @@ def _send_smtp_email(
     message["To"] = ", ".join(clean_recipients)
     message["Subject"] = subject or "CUCM Web SMTP Test"
     message.set_content(body or "SMTP test message from CUCM web portal.")
+    if (html_body or "").strip():
+      message.add_alternative(html_body, subtype="html")
 
     resolved_port = smtp_port if smtp_port is not None else SMTP_PORT
     resolved_starttls = SMTP_USE_STARTTLS if use_starttls is None else use_starttls
@@ -1308,7 +1311,14 @@ def _send_csf_jabber_ready_email_if_created(
       f"Cisco Jabber has been created, and ready for your use. The Telephone number assigned to you is {phone_text}.\n\n"
       "What is Cisco Jabber?  Jabber is what you will be using to make voice calls, providing secure and reliable communication.\n\n"
       "Please click on the link below for video training on how to use of Cisco Jabber.\n"
-      f"How to use Cisco Jabber Softphone (Linked to: {CSF_JABBER_TRAINING_URL})"
+      f"How to use Cisco Jabber Softphone\n{CSF_JABBER_TRAINING_URL}"
+    )
+    html_body = (
+      "<p>Welcome to AMN Healthcare</p>"
+      f"<p>Cisco Jabber has been created, and ready for your use. The Telephone number assigned to you is {escape(phone_text)}.</p>"
+      "<p>What is Cisco Jabber? Jabber is what you will be using to make voice calls, providing secure and reliable communication.</p>"
+      "<p>Please click on the link below for video training on how to use of Cisco Jabber.<br>"
+      f"<a href=\"{escape(CSF_JABBER_TRAINING_URL)}\">How to use Cisco Jabber Softphone</a></p>"
     )
 
     _send_smtp_email(
@@ -1316,6 +1326,7 @@ def _send_csf_jabber_ready_email_if_created(
       recipients=[recipient],
       subject=subject,
       body=body,
+      html_body=html_body,
       smtp_port=SMTP_PORT,
       use_starttls=SMTP_USE_STARTTLS,
     )
