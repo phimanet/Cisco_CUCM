@@ -1824,7 +1824,7 @@ def menu_page(request: Request):
   credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
   admin_card_html = "" if not _is_admin_user(session_username) else """
-        <a class=\"hero-link-card\" href=\"/menu-admin\">
+        <a class=\"hero-link-card\" href=\"/page2\">
           <strong>Administrative Items</strong>
           <span>Open bulk tools, strike workflows, exports, and translation lookups.</span>
         </a>
@@ -5217,6 +5217,8 @@ __ADMIN_CARD__
 
 
 @app.get("/menu-admin", response_class=HTMLResponse)
+@app.get("/menu2", response_class=HTMLResponse)
+@app.get("/page2", response_class=HTMLResponse)
 def menu_admin_page(request: Request):
   session = _get_auth_session(request) or {}
   now_epoch = time.time()
@@ -6349,7 +6351,7 @@ def menu_admin_page(request: Request):
                   cucm_user: cucmUser,
                   cucm_pass: cucmPass,
                   target_user: uid,
-                  back_url: "/menu-admin",
+                  back_url: "/page2",
                 };
 
                 Object.entries(fields).forEach(([name, value]) => {
@@ -7009,7 +7011,7 @@ async def add_directorynumbers(
       output_filename=filename,
       inline_mode=False,
     )
-    return _render_job_result("Add Directory Numbers", log_csv, filename, back_url="/menu-admin")
+    return _render_job_result("Add Directory Numbers", log_csv, filename, back_url="/page2")
 
 
 @app.post("/export/directorynumbers")
@@ -7035,7 +7037,7 @@ def export_directorynumbers(
       output_filename=filename,
       inline_mode=False,
     )
-    return _render_job_result("Export Directory Numbers", data, filename, back_url="/menu-admin")
+    return _render_job_result("Export Directory Numbers", data, filename, back_url="/page2")
 
 
 @app.post("/export/endusers")
@@ -7059,7 +7061,7 @@ def export_endusers(
       output_filename=filename,
       inline_mode=False,
     )
-    return _render_job_result("Export End Users", data, filename, back_url="/menu-admin")
+    return _render_job_result("Export End Users", data, filename, back_url="/page2")
 
 
 @app.post("/build/user-csf-phone")
@@ -8273,7 +8275,7 @@ def add_secondary_strike_devices_route(
             "download_url": f"/download/job-output/{job_output['job_id']}",
         })
 
-    return _render_job_result("STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)", data, filename, back_url="/menu-admin")
+    return _render_job_result("STRIKE MODE - Add Secondary Device Jabber TCT and BOT (Option 5)", data, filename, back_url="/page2")
 
 
 @app.post("/delete/secondary-mobile-devices")
@@ -8320,7 +8322,7 @@ def delete_secondary_mobile_devices_route(
       "download_url": f"/download/job-output/{job_output['job_id']}",
     })
 
-  return _render_job_result("Remove only Jabber Mobile - iPhone or Android", data, filename, back_url="/menu-admin")
+  return _render_job_result("Remove only Jabber Mobile - iPhone or Android", data, filename, back_url="/page2")
 
 
 @app.post("/line-groups/edit-members")
@@ -8364,7 +8366,7 @@ def edit_line_group_members_route(
         "download_url": f"/download/job-output/{job_output['job_id']}",
       })
 
-    return _render_job_result("Edit Line Group Members (Option 17)", data, filename, back_url="/menu-admin")
+    return _render_job_result("Edit Line Group Members (Option 17)", data, filename, back_url="/page2")
 
 
 @app.post("/line-groups/search")
@@ -8422,4 +8424,4 @@ def extract_rpo_phones_route(
         "download_url": f"/download/job-output/{job_output['job_id']}",
       })
 
-    return _render_job_result("Extract RPO Phones (Option 18)", data, filename, back_url="/menu-admin")
+    return _render_job_result("Extract RPO Phones (Option 18)", data, filename, back_url="/page2")
