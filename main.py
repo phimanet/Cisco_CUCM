@@ -2380,20 +2380,24 @@ def menu_page(request: Request):
 
       #person-lookup-form input[name="last_name"],
       #person-lookup-form input[name="first_name"] {
-        width: min(260px, 100%);
+        width: min(220px, 100%);
       }
 
       .compact-inline-row {
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 6px;
         flex-wrap: wrap;
       }
 
       .compact-inline-row span {
         display: inline-block;
-        width: 220px;
+        width: 170px;
         font-weight: 600;
+      }
+
+      .compact-inline-row input {
+        width: min(220px, 100%);
       }
 
       .jabber-check-output {
@@ -2662,11 +2666,15 @@ __ADMIN_CARD__
         <input type="hidden" name="cucm_pass" value="">
         <input type="hidden" name="include_teams_status" value="1">
 
-        Last Name:<br>
-        <input name="last_name" placeholder="Smith" required><br><br>
+        <div class="compact-inline-row">
+          <span>Last Name:</span>
+          <input name="last_name" placeholder="Smith" required>
+        </div><br>
 
-        First Name (optional):<br>
-        <input name="first_name" placeholder="John"><br><br>
+        <div class="compact-inline-row">
+          <span>First Name (optional):</span>
+          <input name="first_name" placeholder="John">
+        </div><br>
 
         <div class="action-row">
           <button id="person-lookup-btn" type="submit">Search</button>
@@ -3131,11 +3139,15 @@ __ADMIN_CARD__
 
         <div style="margin: 0 0 14px 0; padding: 12px; border: 1px solid #c8dbee; border-radius: 10px; background: #f7fbff;">
           <strong style="display:block; margin-bottom:10px; color:#002f6c;">Lookup by Name</strong>
-          Last Name:<br>
-          <input id="teams-lookup-last-name" placeholder="Smith" style="width:min(320px,100%);" required><br><br>
+          <div class="compact-inline-row">
+            <span>Last Name:</span>
+            <input id="teams-lookup-last-name" placeholder="Smith" required>
+          </div><br>
 
-          First Name (optional):<br>
-          <input id="teams-lookup-first-name" placeholder="John" style="width:min(320px,100%);"><br><br>
+          <div class="compact-inline-row">
+            <span>First Name (optional):</span>
+            <input id="teams-lookup-first-name" placeholder="John">
+          </div><br>
 
           <button id="teams-lookup-btn" type="button">Search User</button>
           <p id="teams-lookup-status" style="margin:10px 0 6px 0; color:#2c5c8a; min-height:18px;">Enter last name and click Search User.</p>
@@ -3371,11 +3383,15 @@ __ADMIN_CARD__
 
         <div style="margin: 0 0 14px 0; padding: 12px; border: 1px solid #c8dbee; border-radius: 10px; background: #fff6f6;">
           <strong style="display:block; margin-bottom:10px; color:#7a1020;">Lookup by Name</strong>
-          Last Name:<br>
-          <input id="teams-remove-last-name" placeholder="Smith" style="width:min(320px,100%);" required><br><br>
+          <div class="compact-inline-row">
+            <span>Last Name:</span>
+            <input id="teams-remove-last-name" placeholder="Smith" required>
+          </div><br>
 
-          First Name (optional):<br>
-          <input id="teams-remove-first-name" placeholder="John" style="width:min(320px,100%);"><br><br>
+          <div class="compact-inline-row">
+            <span>First Name (optional):</span>
+            <input id="teams-remove-first-name" placeholder="John">
+          </div><br>
 
           <button id="teams-remove-search-btn" type="button" onclick="if (window.runTeamsRemoveSearch) { window.runTeamsRemoveSearch(); } else { var s=document.getElementById('teams-remove-search-status'); if (s) { s.textContent='Search handler missing (JS did not load).'; } } return false;">Search User</button>
           <p id="teams-remove-search-status" style="margin:10px 0 6px 0; color:#7a1020; min-height:18px;">Enter last name and click Search User.</p>
@@ -4053,10 +4069,14 @@ __ADMIN_CARD__
         <span>Cisco Callmanager Password:</span>
         <input type="password" name="cucm_pass" required>
       </div><br>
-      Last Name:<br>
-      <input id="jabbernotify-last-name" placeholder="Smith" required style="width:min(280px,100%);"><br><br>
-      First Name (optional):<br>
-      <input id="jabbernotify-first-name" placeholder="John" style="width:min(280px,100%);"><br><br>
+      <div class="compact-inline-row">
+        <span>Last Name:</span>
+        <input id="jabbernotify-last-name" placeholder="Smith" required>
+      </div><br>
+      <div class="compact-inline-row">
+        <span>First Name (optional):</span>
+        <input id="jabbernotify-first-name" placeholder="John">
+      </div><br>
       <div class="action-row">
         <button type="submit">Search</button>
         <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
@@ -4101,10 +4121,14 @@ __ADMIN_CARD__
         <span>Cisco Callmanager Password:</span>
         <input type="password" name="cucm_pass" required>
       </div><br>
-      Last Name:<br>
-      <input id="mobile-jabber-last-name" name="last_name" placeholder="Smith" required style="width:min(280px,100%);"><br><br>
-      First Name (optional):<br>
-      <input id="mobile-jabber-first-name" name="first_name" placeholder="John" style="width:min(280px,100%);"><br><br>
+      <div class="compact-inline-row">
+        <span>Last Name:</span>
+        <input id="mobile-jabber-last-name" name="last_name" placeholder="Smith" required>
+      </div><br>
+      <div class="compact-inline-row">
+        <span>First Name (optional):</span>
+        <input id="mobile-jabber-first-name" name="first_name" placeholder="John">
+      </div><br>
       <div class="action-row">
         <button type="submit">Search</button>
         <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
@@ -5856,11 +5880,15 @@ def menu_admin_page(request: Request):
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
           <input type="hidden" name="include_teams_status" value="1">
-          Last Name:<br>
-          <input name="last_name" placeholder="Smith" required><br><br>
+          <div class="compact-inline-row">
+            <span>Last Name:</span>
+            <input name="last_name" placeholder="Smith" required>
+          </div><br>
 
-          First Name (optional):<br>
-          <input name="first_name" placeholder="John"><br><br>
+          <div class="compact-inline-row">
+            <span>First Name (optional):</span>
+            <input name="first_name" placeholder="John">
+          </div><br>
 
           <button type="submit">Search</button>
         </form>
@@ -5889,11 +5917,15 @@ def menu_admin_page(request: Request):
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
 
-          Last Name:<br>
-          <input name="last_name" placeholder="Smith" required><br><br>
+          <div class="compact-inline-row">
+            <span>Last Name:</span>
+            <input name="last_name" placeholder="Smith" required>
+          </div><br>
 
-          First Name (optional):<br>
-          <input name="first_name" placeholder="John"><br><br>
+          <div class="compact-inline-row">
+            <span>First Name (optional):</span>
+            <input name="first_name" placeholder="John">
+          </div><br>
 
           <button type="submit">Search Users for Mobile Delete</button>
         </form>
@@ -6039,10 +6071,14 @@ def menu_admin_page(request: Request):
         <form id="jabbernotify-form">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
-          Last Name:<br>
-          <input id="jabbernotify-last-name" placeholder="Smith" required style="width:min(280px,100%);"><br><br>
-          First Name (optional):<br>
-          <input id="jabbernotify-first-name" placeholder="John" style="width:min(280px,100%);"><br><br>
+          <div class="compact-inline-row">
+            <span>Last Name:</span>
+            <input id="jabbernotify-last-name" placeholder="Smith" required>
+          </div><br>
+          <div class="compact-inline-row">
+            <span>First Name (optional):</span>
+            <input id="jabbernotify-first-name" placeholder="John">
+          </div><br>
           <button type="submit">Search</button>
         </form>
         <p id="jabbernotify-search-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>

@@ -132,6 +132,7 @@ Priority keys:
 - Added stable Page 2 URL aliases: `/page2`, `/menu2`, `/menu-admin` all serve the same Administrative Items page.
 - Fixed admin page navigation loop: removed forced logout redirect from Page 2 when cached CUCM password was missing — this was the root cause of the login→Page1→click Administrative Items→login loop.
 - Cleanup: removed all temporary auth fallback mechanisms (sid hint, shared session file, session-data cookie) added during troubleshooting, since the real fix was the single forced-logout removal.
+- Compact search layout update: converted Page 1 and Page 2 last-name lookup panels to inline label/input rows and shrank search box widths to reclaim vertical space.
 
 ### 2026-04-30
 - Initialized project tracker format.
