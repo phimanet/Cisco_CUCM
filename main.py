@@ -1311,14 +1311,14 @@ def _send_csf_jabber_ready_email_if_created(
       f"Cisco Jabber has been created, and ready for your use. The Telephone number assigned to you is {phone_text}.\n\n"
       "What is Cisco Jabber?  Jabber is what you will be using to make voice calls, providing secure and reliable communication.\n\n"
       "Please click on the link below for video training on how to use of Cisco Jabber.\n"
-      f"How to use Cisco Jabber Softphone\n{CSF_JABBER_TRAINING_URL}"
+      f"Watch and Learn Cisco Jabber Softphone 12.9.mp4\n{CSF_JABBER_TRAINING_URL}"
     )
     html_body = (
       "<p>Welcome to AMN Healthcare</p>"
       f"<p>Cisco Jabber has been created, and ready for your use. The Telephone number assigned to you is {escape(phone_text)}.</p>"
       "<p>What is Cisco Jabber? Jabber is what you will be using to make voice calls, providing secure and reliable communication.</p>"
       "<p>Please click on the link below for video training on how to use of Cisco Jabber.<br>"
-      f"<a href=\"{escape(CSF_JABBER_TRAINING_URL)}\">How to use Cisco Jabber Softphone</a></p>"
+      f"<a href=\"{escape(CSF_JABBER_TRAINING_URL)}\">Watch and Learn Cisco Jabber Softphone 12.9.mp4</a></p>"
     )
 
     _send_smtp_email(
