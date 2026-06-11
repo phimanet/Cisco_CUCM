@@ -5579,16 +5579,18 @@ def menu_admin_page(request: Request):
       .portal-sidebar {
         position: sticky;
         top: 10px;
-        background: rgba(255, 255, 255, 0.94);
-        border: 1px solid rgba(0, 47, 108, 0.12);
+        background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
+        border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 12px;
-        box-shadow: var(--amn-shadow);
+        box-shadow: 0 18px 36px rgba(0, 47, 108, 0.18);
         padding: 10px;
       }
 
       .portal-sidebar h4 {
-        margin: 4px 0 10px 2px;
-        color: var(--amn-navy);
+        margin: 4px 6px 8px 6px;
+        color: #fff;
+        font-size: 13px;
+        letter-spacing: 0.3px;
       }
 
       .portal-nav {
@@ -5599,27 +5601,30 @@ def menu_admin_page(request: Request):
       .portal-nav-btn {
         text-align: left;
         width: 100%;
-        border-radius: 10px;
-        border: 1px solid rgba(0, 47, 108, 0.14);
-        background: rgba(255, 255, 255, 0.92);
-        color: #0d3150;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.09);
+        color: rgba(255, 255, 255, 0.94);
         padding: 7px 9px;
         font-size: 12px;
-        font-weight: 700;
+        line-height: 1.25;
+        font-weight: 600;
         cursor: pointer;
         box-shadow: none;
+        transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
       }
 
       .portal-nav-btn:hover {
-        background: #f3f9ff;
-        border-color: rgba(0, 94, 184, 0.3);
-        transform: translateY(-1px);
+        background: rgba(255, 255, 255, 0.16);
+        border-color: rgba(255, 255, 255, 0.24);
+        transform: translateX(2px);
       }
 
       .portal-nav-btn.active {
-        background: linear-gradient(180deg, #0c77d8, #005eb8);
-        color: #fff;
-        border-color: rgba(0, 94, 184, 0.45);
+        background: linear-gradient(90deg, #ffffff, #ecf6ff);
+        color: var(--amn-navy);
+        border-color: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
       }
 
       .portal-nav-btn.start-here-btn {
@@ -5635,6 +5640,22 @@ def menu_admin_page(request: Request):
         background: linear-gradient(180deg, #ffefbb, #ffd978);
         border-color: #bd8e13;
         color: #3f2a00;
+      }
+
+      .portal-nav-btn-danger {
+        background: rgba(203, 59, 47, 0.16);
+        color: #ffd9d5;
+        border-color: rgba(255, 167, 158, 0.26);
+      }
+
+      .portal-nav-btn-danger:hover {
+        background: rgba(203, 59, 47, 0.24);
+      }
+
+      .portal-nav-btn-danger.active {
+        background: linear-gradient(180deg, #d64e41, #a4221b);
+        color: #fff;
+        border-color: rgba(255, 255, 255, 0.2);
       }
 
       .portal-main {
