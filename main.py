@@ -287,17 +287,8 @@ def _build_session_cookie_payload(session: dict) -> str:
 def _rehydrate_auth_session_from_cookie(request: Request, session_id: str):
   if not session_id:
     return None
-  if not _CREDENTIAL_CIPHER:
-    return None
-
-  token = (request.cookies.get(SESSION_DATA_COOKIE_NAME, "") or "").strip()
-  if not token:
-    return None
-
-  try:
-    raw = _CREDENTIAL_CIPHER.decrypt(token.encode("utf-8"))
-    payload = json.loads(raw.decode("utf-8"))
-  except Exception:
+  payload = _decode_session_data_cookie(request)
+  if not payload:
     return None
 
   session = {
@@ -320,10 +311,51 @@ def _rehydrate_auth_session_from_cookie(request: Request, session_id: str):
   return session
 
 
+def _decode_session_data_cookie(request: Request) -> dict | None:
+  if not _CREDENTIAL_CIPHER:
+    return None
+
+  token = (request.cookies.get(SESSION_DATA_COOKIE_NAME, "") or "").strip()
+  if not token:
+    return None
+
+  try:
+    raw = _CREDENTIAL_CIPHER.decrypt(token.encode("utf-8"))
+    payload = json.loads(raw.decode("utf-8"))
+  except Exception:
+    return None
+
+  if not isinstance(payload, dict):
+    return None
+  return payload
+
+
 def _get_auth_session(request: Request):
   session_id = request.cookies.get(SESSION_COOKIE_NAME, "")
   if not session_id:
-    return None
+    payload = _decode_session_data_cookie(request)
+    if not payload:
+      return None
+
+    session = {
+      "cucm_host": (payload.get("cucm_host", "") or "").strip(),
+      "username": (payload.get("username", "") or "").strip(),
+      "unity_user": (payload.get("unity_user", "") or "").strip(),
+      "created_at": float(payload.get("created_at", 0) or 0),
+      "last_seen": float(payload.get("last_seen", 0) or 0),
+      "credential_expires_at": float(payload.get("credential_expires_at", 0) or 0),
+      "cucm_pass_enc": (payload.get("cucm_pass_enc", "") or "").strip(),
+      "unity_pass_enc": (payload.get("unity_pass_enc", "") or "").strip(),
+      "cucm_pass_cached_at": float(payload.get("cucm_pass_cached_at", 0) or 0),
+      "unity_pass_cached_at": float(payload.get("unity_pass_cached_at", 0) or 0),
+    }
+
+    now_epoch = time.time()
+    if now_epoch > float(session.get("credential_expires_at", 0) or 0):
+      return None
+
+    session["last_seen"] = now_epoch
+    return session
 
   now_epoch = time.time()
   _prune_auth_sessions_locked(now_epoch)
