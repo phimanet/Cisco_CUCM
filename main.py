@@ -1,9 +1,6 @@
 import csv
-import base64
 import datetime
-import hashlib
 import io
-import json
 import os
 import re
 import smtplib
@@ -60,28 +57,19 @@ JOB_OUTPUTS = {}
 AUTH_SESSIONS = {}
 AUTH_SESSION_SECRETS = {}
 SESSION_COOKIE_NAME = "cucm_web_session"
-SESSION_DATA_COOKIE_NAME = "cucm_web_session_data"
 SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
 CREDENTIAL_CACHE_TTL_SECONDS = 60 * 60
 APP_START_EPOCH = time.time()
 CREDENTIAL_ENCRYPTION_KEY = (os.getenv("CUCM_CREDENTIAL_ENCRYPTION_KEY", "") or "").strip()
 if _FERNET_AVAILABLE and not CREDENTIAL_ENCRYPTION_KEY:
-  # Deterministic fallback so multiple workers can decrypt the same cookie/session payload.
-  seed = (f"cucm-web|{os.path.abspath(__file__)}").encode("utf-8")
-  digest = hashlib.sha256(seed).digest()
-  CREDENTIAL_ENCRYPTION_KEY = base64.urlsafe_b64encode(digest).decode("utf-8")
+  # Generate an in-memory key when env key is absent so caching is still encrypted.
+  CREDENTIAL_ENCRYPTION_KEY = Fernet.generate_key().decode("utf-8")
 _CREDENTIAL_CIPHER = None
 if _FERNET_AVAILABLE and CREDENTIAL_ENCRYPTION_KEY:
   try:
     _CREDENTIAL_CIPHER = Fernet(CREDENTIAL_ENCRYPTION_KEY.encode("utf-8"))
   except Exception:
     _CREDENTIAL_CIPHER = None
-SESSION_STORE_LOCK = threading.Lock()
-SESSION_STORE_PATH = os.path.join(
-  os.path.dirname(os.path.abspath(__file__)),
-  "logs",
-  "auth_sessions.json",
-)
 PROD_CUCM_HOST = "lascucmpp01.ahs.int"
 LAB_CUCM_HOST = "lascucmpl01.ahs.int"
 PROD_UNITY_HOST = "SANCUTYP01.ahs.int"
@@ -172,90 +160,6 @@ def _prune_auth_sessions_locked(now_epoch: float):
     AUTH_SESSION_SECRETS.pop(sid, None)
 
 
-def _load_shared_sessions() -> dict:
-  if not os.path.exists(SESSION_STORE_PATH):
-    return {}
-
-  try:
-    with open(SESSION_STORE_PATH, "r", encoding="utf-8") as handle:
-      data = json.load(handle)
-      if isinstance(data, dict):
-        return data
-  except Exception:
-    return {}
-
-  return {}
-
-
-def _write_shared_sessions(store: dict):
-  os.makedirs(os.path.dirname(SESSION_STORE_PATH), exist_ok=True)
-  tmp_path = f"{SESSION_STORE_PATH}.tmp"
-  with open(tmp_path, "w", encoding="utf-8") as handle:
-    json.dump(store, handle, separators=(",", ":"), ensure_ascii=True)
-  os.replace(tmp_path, SESSION_STORE_PATH)
-
-
-def _persist_shared_session(session_id: str, session: dict):
-  if not session_id or not session:
-    return
-
-  with SESSION_STORE_LOCK:
-    store = _load_shared_sessions()
-    store[session_id] = {
-      "cucm_host": (session.get("cucm_host", "") or "").strip(),
-      "username": (session.get("username", "") or "").strip(),
-      "unity_user": (session.get("unity_user", "") or "").strip(),
-      "created_at": float(session.get("created_at", 0) or 0),
-      "last_seen": float(session.get("last_seen", 0) or 0),
-      "credential_expires_at": float(session.get("credential_expires_at", 0) or 0),
-      "cucm_pass_enc": (session.get("cucm_pass_enc", "") or "").strip(),
-      "unity_pass_enc": (session.get("unity_pass_enc", "") or "").strip(),
-      "cucm_pass_cached_at": float(session.get("cucm_pass_cached_at", 0) or 0),
-      "unity_pass_cached_at": float(session.get("unity_pass_cached_at", 0) or 0),
-      # Compatibility fallback for environments without cryptography.
-      "cucm_pass": (session.get("cucm_pass", "") or "").strip(),
-      "unity_pass": (session.get("unity_pass", "") or "").strip(),
-    }
-    _write_shared_sessions(store)
-
-
-def _get_shared_session(session_id: str):
-  if not session_id:
-    return None
-
-  with SESSION_STORE_LOCK:
-    store = _load_shared_sessions()
-    data = store.get(session_id)
-    if not isinstance(data, dict):
-      return None
-
-  return {
-    "cucm_host": (data.get("cucm_host", "") or "").strip(),
-    "username": (data.get("username", "") or "").strip(),
-    "unity_user": (data.get("unity_user", "") or "").strip(),
-    "created_at": float(data.get("created_at", 0) or 0),
-    "last_seen": float(data.get("last_seen", 0) or 0),
-    "credential_expires_at": float(data.get("credential_expires_at", 0) or 0),
-    "cucm_pass_enc": (data.get("cucm_pass_enc", "") or "").strip(),
-    "unity_pass_enc": (data.get("unity_pass_enc", "") or "").strip(),
-    "cucm_pass_cached_at": float(data.get("cucm_pass_cached_at", 0) or 0),
-    "unity_pass_cached_at": float(data.get("unity_pass_cached_at", 0) or 0),
-    "cucm_pass": (data.get("cucm_pass", "") or "").strip(),
-    "unity_pass": (data.get("unity_pass", "") or "").strip(),
-  }
-
-
-def _delete_shared_session(session_id: str):
-  if not session_id:
-    return
-
-  with SESSION_STORE_LOCK:
-    store = _load_shared_sessions()
-    if session_id in store:
-      store.pop(session_id, None)
-      _write_shared_sessions(store)
-
-
 def _cache_secret(session: dict, key: str, value: str, now_epoch: float | None = None):
   if not session:
     return
@@ -344,130 +248,25 @@ def _create_auth_session(cucm_host: str, username: str, cucm_pass: str) -> str:
     "unity_pass": "",
   }
   _cache_secret(AUTH_SESSIONS[session_id], "cucm_pass", cucm_pass, now_epoch)
-  _persist_shared_session(session_id, AUTH_SESSIONS[session_id])
   return session_id
-
-
-def _build_session_cookie_payload(session: dict) -> str:
-  if not session:
-    return ""
-
-  if not _CREDENTIAL_CIPHER:
-    return ""
-
-  payload = {
-    "cucm_host": (session.get("cucm_host", "") or "").strip(),
-    "username": (session.get("username", "") or "").strip(),
-    "unity_user": (session.get("unity_user", "") or "").strip(),
-    "created_at": float(session.get("created_at", 0) or 0),
-    "last_seen": float(session.get("last_seen", 0) or 0),
-    "credential_expires_at": float(session.get("credential_expires_at", 0) or 0),
-    "cucm_pass_enc": (session.get("cucm_pass_enc", "") or "").strip(),
-    "unity_pass_enc": (session.get("unity_pass_enc", "") or "").strip(),
-    "cucm_pass_cached_at": float(session.get("cucm_pass_cached_at", 0) or 0),
-    "unity_pass_cached_at": float(session.get("unity_pass_cached_at", 0) or 0),
-  }
-
-  try:
-    raw = json.dumps(payload, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
-    return _CREDENTIAL_CIPHER.encrypt(raw).decode("utf-8")
-  except Exception:
-    return ""
-
-
-def _rehydrate_auth_session_from_cookie(request: Request, session_id: str):
-  if not session_id:
-    return None
-  payload = _decode_session_data_cookie(request)
-  if not payload:
-    return None
-
-  session = {
-    "cucm_host": (payload.get("cucm_host", "") or "").strip(),
-    "username": (payload.get("username", "") or "").strip(),
-    "unity_user": (payload.get("unity_user", "") or "").strip(),
-    "created_at": float(payload.get("created_at", 0) or 0),
-    "last_seen": float(payload.get("last_seen", 0) or 0),
-    "credential_expires_at": float(payload.get("credential_expires_at", 0) or 0),
-    "cucm_pass_enc": (payload.get("cucm_pass_enc", "") or "").strip(),
-    "unity_pass_enc": (payload.get("unity_pass_enc", "") or "").strip(),
-    "cucm_pass_cached_at": float(payload.get("cucm_pass_cached_at", 0) or 0),
-    "unity_pass_cached_at": float(payload.get("unity_pass_cached_at", 0) or 0),
-  }
-
-  if not session.get("username"):
-    return None
-
-  AUTH_SESSIONS[session_id] = session
-  return session
-
-
-def _decode_session_data_cookie(request: Request) -> dict | None:
-  if not _CREDENTIAL_CIPHER:
-    return None
-
-  token = (request.cookies.get(SESSION_DATA_COOKIE_NAME, "") or "").strip()
-  if not token:
-    return None
-
-  try:
-    raw = _CREDENTIAL_CIPHER.decrypt(token.encode("utf-8"))
-    payload = json.loads(raw.decode("utf-8"))
-  except Exception:
-    return None
-
-  if not isinstance(payload, dict):
-    return None
-  return payload
 
 
 def _get_auth_session(request: Request):
   session_id = request.cookies.get(SESSION_COOKIE_NAME, "")
   if not session_id:
-    payload = _decode_session_data_cookie(request)
-    if not payload:
-      return None
-
-    session = {
-      "cucm_host": (payload.get("cucm_host", "") or "").strip(),
-      "username": (payload.get("username", "") or "").strip(),
-      "unity_user": (payload.get("unity_user", "") or "").strip(),
-      "created_at": float(payload.get("created_at", 0) or 0),
-      "last_seen": float(payload.get("last_seen", 0) or 0),
-      "credential_expires_at": float(payload.get("credential_expires_at", 0) or 0),
-      "cucm_pass_enc": (payload.get("cucm_pass_enc", "") or "").strip(),
-      "unity_pass_enc": (payload.get("unity_pass_enc", "") or "").strip(),
-      "cucm_pass_cached_at": float(payload.get("cucm_pass_cached_at", 0) or 0),
-      "unity_pass_cached_at": float(payload.get("unity_pass_cached_at", 0) or 0),
-    }
-
-    now_epoch = time.time()
-    if now_epoch > float(session.get("credential_expires_at", 0) or 0):
-      return None
-
-    session["last_seen"] = now_epoch
-    return session
+    return None
 
   now_epoch = time.time()
   _prune_auth_sessions_locked(now_epoch)
   session = AUTH_SESSIONS.get(session_id)
   if not session:
-    shared = _get_shared_session(session_id)
-    if shared:
-      AUTH_SESSIONS[session_id] = shared
-      session = shared
-  if not session:
-    session = _rehydrate_auth_session_from_cookie(request, session_id)
-  if not session:
     return None
 
   if now_epoch > float(session.get("credential_expires_at", 0) or 0):
     AUTH_SESSIONS.pop(session_id, None)
-    _delete_shared_session(session_id)
     return None
 
   session["last_seen"] = now_epoch
-  _persist_shared_session(session_id, session)
   return session
 
 
@@ -525,9 +324,6 @@ def _update_cached_credentials(
     _cache_secret(session, "unity_pass", unity_pass)
     if secret_store is not None:
       secret_store["unity_pass"] = (unity_pass or "").strip()
-
-  if session_id:
-    _persist_shared_session(session_id, session)
 
 
 def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, cucm_pass: str):
@@ -775,44 +571,12 @@ async def auth_middleware(request: Request, call_next):
   if _is_public_path(request.url.path):
     return await call_next(request)
 
-  recovered_session_id = ""
   session = _get_auth_session(request)
-  if not session:
-    sid_hint = (request.query_params.get("sid", "") or "").strip()
-    if sid_hint:
-      shared = _get_shared_session(sid_hint)
-      if shared:
-        AUTH_SESSIONS[sid_hint] = shared
-        session = shared
-        recovered_session_id = sid_hint
-
   if not session:
     return RedirectResponse(url="/", status_code=303)
 
   request.state.auth_session = session
-  response = await call_next(request)
-
-  if recovered_session_id:
-    response.set_cookie(
-      key=SESSION_COOKIE_NAME,
-      value=recovered_session_id,
-      httponly=True,
-      samesite="lax",
-      secure=True,
-      max_age=CREDENTIAL_CACHE_TTL_SECONDS,
-    )
-    session_payload = _build_session_cookie_payload(session)
-    if session_payload:
-      response.set_cookie(
-        key=SESSION_DATA_COOKIE_NAME,
-        value=session_payload,
-        httponly=True,
-        samesite="lax",
-        secure=True,
-        max_age=CREDENTIAL_CACHE_TTL_SECONDS,
-      )
-
-  return response
+  return await call_next(request)
 
 
 def _ensure_audit_log():
@@ -2023,7 +1787,6 @@ def login(
     )
 
   session_id = _create_auth_session(cucm_host, cucm_user, cucm_pass)
-  session_payload = _build_session_cookie_payload(AUTH_SESSIONS.get(session_id, {}))
   response = RedirectResponse(url="/menu", status_code=303)
   response.set_cookie(
     key=SESSION_COOKIE_NAME,
@@ -2033,15 +1796,6 @@ def login(
     secure=True,
     max_age=CREDENTIAL_CACHE_TTL_SECONDS,
   )
-  if session_payload:
-    response.set_cookie(
-      key=SESSION_DATA_COOKIE_NAME,
-      value=session_payload,
-      httponly=True,
-      samesite="lax",
-      secure=True,
-      max_age=CREDENTIAL_CACHE_TTL_SECONDS,
-    )
   return response
 
 
@@ -2051,21 +1805,15 @@ def logout(request: Request):
   if session_id:
     AUTH_SESSIONS.pop(session_id, None)
     AUTH_SESSION_SECRETS.pop(session_id, None)
-    _delete_shared_session(session_id)
 
   response = RedirectResponse(url="/", status_code=303)
   response.delete_cookie(SESSION_COOKIE_NAME)
-  response.delete_cookie(SESSION_DATA_COOKIE_NAME)
   return response
 
 
 @app.get("/menu", response_class=HTMLResponse)
 def menu_page(request: Request):
   session = _get_auth_session(request) or {}
-  session_id_hint = (request.cookies.get(SESSION_COOKIE_NAME, "") or "").strip()
-  admin_href = "/page2"
-  if session_id_hint:
-    admin_href = f"/page2?sid={escape(session_id_hint)}"
   now_epoch = time.time()
   session_username = str(session.get("username", ""))
   auth_user = escape(session_username)
@@ -2075,8 +1823,8 @@ def menu_page(request: Request):
   credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
   credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
-  admin_card_html = "" if not _is_admin_user(session_username) else f"""
-        <a class=\"hero-link-card\" href=\"{admin_href}\">
+  admin_card_html = "" if not _is_admin_user(session_username) else """
+        <a class=\"hero-link-card\" href=\"/page2\">
           <strong>Administrative Items</strong>
           <span>Open bulk tools, strike workflows, exports, and translation lookups.</span>
         </a>
