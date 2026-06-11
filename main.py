@@ -5484,8 +5484,6 @@ def menu_admin_page(request: Request):
   auth_user = escape(session_username)
   auth_cucm_host = str(session.get("cucm_host", ""))
   has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
-  if not has_cached_cucm_pass:
-    return RedirectResponse(url="/logout", status_code=303)
   credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
   credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
