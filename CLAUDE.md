@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-06-05
+- Date: 2026-06-11
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -121,6 +121,17 @@ Priority keys:
 
 ### 2026-06-06
 - Added Page 2 translation-pattern template generator seeded from example prefix `3148984689`, with a CSV template that keeps route partition and transform mask the same while leaving translation pattern and description as editable values.
+
+### 2026-06-11
+- Added two new Page 2 specialized menu items: **Twilio-Inbound-Verificaton-Phimane** and **Twilio-Inbound-Verificaton-LauraA**.
+  - Each targets only its own translation pattern by exact constant description (never touches other patterns).
+  - Only the translation pattern field is changed; all other settings are untouched.
+  - Apply button: sets pattern to any user-entered value; starts a server-side 5-minute auto-restore fail-safe timer.
+  - Restore button: immediately reverts to the home pattern (8585236648 or 8583503289) and cancels the timer.
+  - Repeated Apply resets the 5-minute timer; UI shows a live countdown.
+- Added stable Page 2 URL aliases: `/page2`, `/menu2`, `/menu-admin` all serve the same Administrative Items page.
+- Fixed admin page navigation loop: removed forced logout redirect from Page 2 when cached CUCM password was missing — this was the root cause of the login→Page1→click Administrative Items→login loop.
+- Cleanup: removed all temporary auth fallback mechanisms (sid hint, shared session file, session-data cookie) added during troubleshooting, since the real fix was the single forced-logout removal.
 
 ### 2026-04-30
 - Initialized project tracker format.
