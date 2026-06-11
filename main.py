@@ -4361,6 +4361,11 @@ __ADMIN_CARD__
             return;
           }
 
+          // Skip hidden inputs — they are filled programmatically, not by the user.
+          if (field.type === "hidden") {
+            return;
+          }
+
           const value = (field.value || "").trim();
           clearFieldError(field);
 
