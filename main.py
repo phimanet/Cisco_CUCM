@@ -775,12 +775,44 @@ async def auth_middleware(request: Request, call_next):
   if _is_public_path(request.url.path):
     return await call_next(request)
 
+  recovered_session_id = ""
   session = _get_auth_session(request)
+  if not session:
+    sid_hint = (request.query_params.get("sid", "") or "").strip()
+    if sid_hint:
+      shared = _get_shared_session(sid_hint)
+      if shared:
+        AUTH_SESSIONS[sid_hint] = shared
+        session = shared
+        recovered_session_id = sid_hint
+
   if not session:
     return RedirectResponse(url="/", status_code=303)
 
   request.state.auth_session = session
-  return await call_next(request)
+  response = await call_next(request)
+
+  if recovered_session_id:
+    response.set_cookie(
+      key=SESSION_COOKIE_NAME,
+      value=recovered_session_id,
+      httponly=True,
+      samesite="lax",
+      secure=True,
+      max_age=CREDENTIAL_CACHE_TTL_SECONDS,
+    )
+    session_payload = _build_session_cookie_payload(session)
+    if session_payload:
+      response.set_cookie(
+        key=SESSION_DATA_COOKIE_NAME,
+        value=session_payload,
+        httponly=True,
+        samesite="lax",
+        secure=True,
+        max_age=CREDENTIAL_CACHE_TTL_SECONDS,
+      )
+
+  return response
 
 
 def _ensure_audit_log():
@@ -2030,6 +2062,10 @@ def logout(request: Request):
 @app.get("/menu", response_class=HTMLResponse)
 def menu_page(request: Request):
   session = _get_auth_session(request) or {}
+  session_id_hint = (request.cookies.get(SESSION_COOKIE_NAME, "") or "").strip()
+  admin_href = "/page2"
+  if session_id_hint:
+    admin_href = f"/page2?sid={escape(session_id_hint)}"
   now_epoch = time.time()
   session_username = str(session.get("username", ""))
   auth_user = escape(session_username)
@@ -2039,8 +2075,8 @@ def menu_page(request: Request):
   credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
   credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
-  admin_card_html = "" if not _is_admin_user(session_username) else """
-        <a class=\"hero-link-card\" href=\"/page2\">
+  admin_card_html = "" if not _is_admin_user(session_username) else f"""
+        <a class=\"hero-link-card\" href=\"{admin_href}\">
           <strong>Administrative Items</strong>
           <span>Open bulk tools, strike workflows, exports, and translation lookups.</span>
         </a>
