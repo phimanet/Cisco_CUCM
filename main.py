@@ -53,26 +53,6 @@ from toolkit.remove_teams_telephony_user import (
   remove_teams_telephony_user,
 )
 
-from cucm_config import (
-  BOT_TEMPLATE_FILE,
-  CSF_JABBER_EMAIL_FROM,
-  CSF_JABBER_TRAINING_URL,
-  DEFAULT_ROUTE_PARTITION,
-  DEFAULT_VM_PIN,
-  ENVIRONMENT_SETTINGS,
-  LAB_CUCM_HOST,
-  LAB_UNITY_HOST,
-  LAB_CSF_TEMPLATE_FILE,
-  MOBILE_JABBER_EMAIL_BODY,
-  MOBILE_JABBER_EMAIL_FROM,
-  MOBILE_JABBER_EMAIL_SUBJECT,
-  PROD_CUCM_HOST,
-  PROD_UNITY_HOST,
-  TCT_TEMPLATE_FILE,
-  TEAMS_ROUTE_PARTITION,
-  TWILIO_INBOUND_VERIFICATION_PROFILES,
-)
-
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 JOB_OUTPUTS = {}
 AUTH_SESSIONS = {}
@@ -91,6 +71,10 @@ if _FERNET_AVAILABLE and CREDENTIAL_ENCRYPTION_KEY:
     _CREDENTIAL_CIPHER = Fernet(CREDENTIAL_ENCRYPTION_KEY.encode("utf-8"))
   except Exception:
     _CREDENTIAL_CIPHER = None
+PROD_CUCM_HOST = "lascucmpp01.ahs.int"
+LAB_CUCM_HOST = "lascucmpl01.ahs.int"
+PROD_UNITY_HOST = "SANCUTYP01.ahs.int"
+LAB_UNITY_HOST = "lascutypl01.ahs.int"
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp1.ahs.int").strip() or "smtp1.ahs.int"
 SMTP_PORT = int(os.getenv("SMTP_PORT", "25"))
 SMTP_TIMEOUT_SECONDS = int(os.getenv("SMTP_TIMEOUT_SECONDS", "20"))
@@ -101,9 +85,38 @@ SMTP_USE_STARTTLS = (os.getenv("SMTP_USE_STARTTLS", "false") or "false").strip()
   "on",
 }
 SMTP_DEFAULT_FROM = (os.getenv("SMTP_DEFAULT_FROM", "") or "").strip()
+MOBILE_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
+MOBILE_JABBER_EMAIL_SUBJECT = "Jabber on iPhone or Android - Ready to install"
+MOBILE_JABBER_EMAIL_BODY = (
+  "Jabber for mobile phones is ready for use.\n\n"
+  "You must delete the app on the iPhone/Android first if you have it already installed.\n\n"
+  "To setup Jabber on your mobile phone:\n\n"
+  "1. Download Cisco Jabber on your mobile phone.\n"
+  "2. Go thru the questions and accept Jabber to use the microphone.\n"
+  "3. Enter in your AMN Email address.\n"
+  "4. Enter in your AMN password.\n"
+  "5. If it balks at an invalid certificate, this is OK. Accept or press OK.\n"
+  "6. You should now be logged in."
+)
+TWILIO_INBOUND_VERIFICATION_PROFILES = {
+  "phimane": {
+    "panel_label": "Twilio-Inbound-Verificaton-Phimane",
+    "description": "Twilio Number Verification to Phimane 8585236648",
+    "home_pattern": "8585236648",
+  },
+  "lauraa": {
+    "panel_label": "Twilio-Inbound-Verificaton-LauraA",
+    "description": "Twilio Number Verification to LauraA 8583503289",
+    "home_pattern": "8583503289",
+  },
+}
 TWILIO_INBOUND_AUTO_RESTORE_SECONDS = 5 * 60
 TWILIO_INBOUND_AUTO_RESTORE_LOCK = threading.Lock()
 TWILIO_INBOUND_AUTO_RESTORE_TIMERS: dict[str, dict] = {}
+CSF_JABBER_EMAIL_FROM = (os.getenv("CSF_JABBER_EMAIL_FROM", MOBILE_JABBER_EMAIL_FROM) or MOBILE_JABBER_EMAIL_FROM).strip()
+CSF_JABBER_TRAINING_URL = (
+  "https://amnhealthcare.sharepoint.com/teams/AMNITTrainingContent-tm/_layouts/15/stream.aspx?id=%2Fteams%2FAMNITTrainingContent%2Dtm%2FShared%20Documents%2FGeneral%2FWatch%20and%20Learn%20Cisco%20Jabber%20Softphone%2012%2E9%2Emp4&referrer=StreamWebApp%2EWeb&referrerScenario=AddressBarCopied%2Eview%2Ef9fafd5b%2D7aeb%2D4bfb%2Dbc57%2Dda61d14ef75f"
+)
 AUDIT_LOG_LOCK = threading.Lock()
 AUDIT_TIMESTAMP_FORMAT = "%Y-%m-%d %H:%M:%S"
 AUDIT_TIMEZONE = (os.getenv("AUDIT_TIMEZONE", "America/Los_Angeles") or "America/Los_Angeles").strip()
@@ -502,7 +515,7 @@ def _render_error_page(title: str, message: str, status_code: int) -> HTMLRespon
     </section>
   </body>
 </html>
-""".replace("__PROD_CUCM_HOST__", PROD_CUCM_HOST).replace("__LAB_CUCM_HOST__", LAB_CUCM_HOST)
+"""
   return HTMLResponse(content=html, status_code=status_code)
 
 
@@ -1731,8 +1744,8 @@ def home(request: Request):
       <form action="/login" method="post">
         Cisco Callmanager Environment:<br>
         <select name="cucm_host">
-          <option value="__PROD_CUCM_HOST__" selected>PRODUCTION CUCM</option>
-          <option value="__LAB_CUCM_HOST__">LAB CUCM</option>
+          <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
+          <option value="lascucmpl01.ahs.int">LAB CUCM</option>
         </select><br><br>
 
         Cisco Callmanager Username:<br>
@@ -4210,7 +4223,7 @@ __ADMIN_CARD__
         <input name="dn_pattern" placeholder="8585236620" required><br><br>
 
         Route Partition:<br>
-        <input name="dn_partition" value="__DEFAULT_ROUTE_PARTITION__" required><br><br>
+        <input name="dn_partition" value="ENT_DEVICE_PT" required><br><br>
 
         <div class="action-row">
           <button type="submit">Run Edit Line Group Members (Option 17)</button>
@@ -5403,7 +5416,7 @@ __ADMIN_CARD__
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DEFAULT_ROUTE_PARTITION__", DEFAULT_ROUTE_PARTITION)
+""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
 
   return HTMLResponse(
     content=html,
@@ -8754,7 +8767,7 @@ def edit_line_group_members_route(
     line_group_name: str = Form(...),
     membership_action: str = Form(...),
     dn_pattern: str = Form(...),
-    dn_partition: str = Form(DEFAULT_ROUTE_PARTITION),
+    dn_partition: str = Form("ENT_DEVICE_PT"),
     inline: bool = Query(False),
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)

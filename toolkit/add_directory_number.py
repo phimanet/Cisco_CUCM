@@ -7,8 +7,6 @@ import datetime
 import re
 import xml.etree.ElementTree as ET
 
-from cucm_config import DEFAULT_ROUTE_PARTITION
-
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 SOAP_NS = "http://schemas.xmlsoap.org/soap/envelope/"
@@ -20,7 +18,7 @@ BODY_TEMPLATE = r"""<soapenv:Body>
  <axl:addLine>
  <line>
  <pattern>{pattern}</pattern>
- <routePartitionName>__DEFAULT_ROUTE_PARTITION__</routePartitionName>
+ <routePartitionName>ENT_DEVICE_PT</routePartitionName>
  <description>CNAM:AMNHelathcare {pattern} Automation Use Only</description>
  <usage>Device</usage>
  <aarKeepCallHistory>true</aarKeepCallHistory>
@@ -136,7 +134,7 @@ def add_directory_numbers_from_csv(
 
     for pattern in patterns:
         try:
-            body = BODY_TEMPLATE.format(pattern=pattern).replace("__DEFAULT_ROUTE_PARTITION__", DEFAULT_ROUTE_PARTITION)
+            body = BODY_TEMPLATE.format(pattern=pattern)
             soap = _soap_envelope(body)
             _axl_post(session, cucm_host, soap)
             results.append([pattern, "OK", "Added"])

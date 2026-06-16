@@ -10,16 +10,6 @@ import xml.etree.ElementTree as ET
 from requests.auth import HTTPBasicAuth
 from xml.sax.saxutils import escape
 
-from cucm_config import (
-    DEFAULT_ROUTE_PARTITION,
-    ENVIRONMENT_SETTINGS,
-    LAB_CUCM_HOST,
-    LAB_UNITY_HOST,
-    LAB_CSF_TEMPLATE_FILE,
-    PROD_CUCM_HOST,
-    PROD_UNITY_HOST,
-)
-
 try:
     from .ad_phone_fields import update_ad_phone_fields
 except ImportError:
@@ -27,24 +17,24 @@ except ImportError:
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-LAB_CUCM_IP = LAB_CUCM_HOST
-PROD_CUCM_IP = PROD_CUCM_HOST
-TEMPLATE_FILE = LAB_CSF_TEMPLATE_FILE
-ROUTE_PARTITION = DEFAULT_ROUTE_PARTITION
-UNITY_LAB_SERVER = LAB_UNITY_HOST
-UNITY_PROD_SERVER = PROD_UNITY_HOST
-DEFAULT_VM_PIN = ENVIRONMENT_SETTINGS["LAB"]["default_vm_pin"]
+LAB_CUCM_IP = "lascucmpl01.ahs.int"
+PROD_CUCM_IP = "lascucmpp01.ahs.int"
+TEMPLATE_FILE = "phone_device_template_lab_csf.json"
+ROUTE_PARTITION = "ENT_DEVICE_PT"
+UNITY_LAB_SERVER = "LASCUTYPL01.ahs.int"
+UNITY_PROD_SERVER = "SANCUTYP01.ahs.int"
+DEFAULT_VM_PIN = "56219"
 LDAP_INTEGRATION_ENABLED = True
 UNITY_ENV_SETTINGS = {
     "LAB": {
         "server": UNITY_LAB_SERVER,
-        "template_alias": ENVIRONMENT_SETTINGS["LAB"]["template_alias"],
+        "template_alias": "T3-CST",
         "default_pin": DEFAULT_VM_PIN,
         "ldap_import_enabled": True,
     },
     "PRODUCTION": {
         "server": UNITY_PROD_SERVER,
-        "template_alias": ENVIRONMENT_SETTINGS["PRODUCTION"]["template_alias"],
+        "template_alias": "T3-CST",
         "default_pin": DEFAULT_VM_PIN,
         "ldap_import_enabled": True,
     },

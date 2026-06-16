@@ -9,8 +9,6 @@ import urllib3
 from requests.auth import HTTPBasicAuth
 from xml.sax.saxutils import escape
 
-from cucm_config import DEFAULT_ROUTE_PARTITION, TEAMS_ROUTE_PARTITION
-
 try:
     from .ad_phone_fields import clear_ad_phone_fields
 except ImportError:
@@ -19,8 +17,8 @@ except ImportError:
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 AXL_NS = "http://www.cisco.com/AXL/API/15.0"
-TEAMS_ROUTE_PARTITION = TEAMS_ROUTE_PARTITION
-DEVICE_ROUTE_PARTITION = DEFAULT_ROUTE_PARTITION
+TEAMS_ROUTE_PARTITION = "ENT_TEAMS_DEVICE_PT"
+DEVICE_ROUTE_PARTITION = "ENT_DEVICE_PT"
 
 
 def _strip_ns(tag):

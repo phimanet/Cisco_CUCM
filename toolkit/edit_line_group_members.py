@@ -7,8 +7,6 @@ import xml.etree.ElementTree as ET
 from requests.auth import HTTPBasicAuth
 from xml.sax.saxutils import escape
 
-from cucm_config import DEFAULT_ROUTE_PARTITION
-
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
@@ -163,7 +161,7 @@ def edit_line_group_members(cucm_host, cucm_user, cucm_pass, line_group_name, ac
     clean_group = (line_group_name or "").strip()
     clean_action = (action or "").strip().lower()
     clean_dn = (dn_pattern or "").strip()
-    clean_partition = (dn_partition or "").strip() or DEFAULT_ROUTE_PARTITION
+    clean_partition = (dn_partition or "").strip() or "ENT_DEVICE_PT"
 
     if not clean_group:
         writer.writerow(["Validation", "Failed", "Line Group Name is required"])
