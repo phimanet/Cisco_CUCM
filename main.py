@@ -3021,7 +3021,7 @@ __ADMIN_CARD__
               const actionBtns = uid
                 ? `<button type="button" style="${btnStyle}background:#005eb8;color:#fff;" onclick="prefillPanel('precheck','${uid}')">Check Jabber</button>` +
                   `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build Jabber</button>` +
-                  `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" onclick="prefillMobileJabberNotify('${uid}','${m.pattern || ""}')">Re-send Mobile Email</button>`
+                  `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" data-mobile-resend-uid="${uid}">Re-send Mobile Email</button>`
                 : "\u2014";
 
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
@@ -5176,6 +5176,34 @@ __ADMIN_CARD__
       })();
       // ── End Mobile Jabber Notify panel ───────────────────────────────
 
+      // Wire inline Re-send Mobile Email buttons in search result tables (Page 1)
+      document.addEventListener("click", async function (event) {
+        const btn = event.target.closest("button[data-mobile-resend-uid]");
+        if (!btn) return;
+        const uid = btn.getAttribute("data-mobile-resend-uid") || "";
+        if (!uid) return;
+        const origText = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = "Sending...";
+        const statusEl = document.getElementById("person-lookup-status") || document.getElementById("extension-lookup-status");
+        try {
+          const fd = new FormData();
+          fd.append("cucm_user", (document.querySelector('[name="cucm_user"]') || {}).value || "");
+          fd.append("cucm_pass", (document.querySelector('[name="cucm_pass"]') || {}).value || "");
+          fd.append("target_user", uid);
+          const resp = await fetch("/send/mobile-jabber-email", { method: "POST", body: fd, credentials: "same-origin", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
+          const payload = await resp.json();
+          if (!resp.ok || !payload.ok) throw new Error((payload && payload.detail) || "Send failed.");
+          btn.textContent = "\u2713 Sent";
+          btn.style.background = "#166534";
+          if (statusEl) statusEl.textContent = "Mobile email sent for " + uid + ": " + (payload.detail || "Success.");
+        } catch (err) {
+          btn.textContent = origText;
+          btn.disabled = false;
+          if (statusEl) statusEl.textContent = "Mobile email failed for " + uid + ": " + ((err && err.message) || "Unknown error.");
+        }
+      });
+
       const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
       const panels = Array.from(document.querySelectorAll(".tool-panel"));
 
@@ -6441,8 +6469,9 @@ def menu_admin_page(request: Request):
                 const tctBtn = `<button type="button" style="${btnStyle}background:#0e7490;" data-tct-user="${uid}">Add Jabber iPhone</button>`;
                 const botBtn = `<button type="button" style="${btnStyle}background:#7c3aed;" data-bot-user="${uid}">Add Jabber Android</button>`;
                 const notifyBtn = `<button type="button" style="${btnStyle}background:#1f7a3d;" data-notify-user="${uid}" data-notify-tel="${(r.telephone || "")}">Send New Jabber Email</button>`;
+                const mobileResendBtn = `<button type="button" style="${btnStyle}background:#0f766e;" data-mobile-resend-uid="${uid}">Re-send Mobile Email</button>`;
                 const offboardBtn = `<button type="button" style="${btnStyle}background:#b00020;" data-offboard-user="${uid}">Separate Employee-Delete Jabber/VM</button>`;
-                const actionBtn = strikeBtn + tctBtn + botBtn + notifyBtn + offboardBtn;
+                const actionBtn = strikeBtn + tctBtn + botBtn + notifyBtn + mobileResendBtn + offboardBtn;
 
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
@@ -6561,6 +6590,76 @@ def menu_admin_page(request: Request):
                   } catch (err) {
                     statusEl.textContent = "Send failed: " + ((err && err.message) || "Unknown error.");
                     btn.disabled = false;
+                  }
+                });
+              });
+
+              resultsEl.querySelectorAll("button[data-mobile-resend-uid]").forEach(function (btn) {
+                btn.addEventListener("click", async function () {
+                  const uid = btn.getAttribute("data-mobile-resend-uid") || "";
+                  const cucmHost = "__AUTH_CUCM_HOST__";
+                  const cucmUser = "__AUTH_USER__";
+                  const cucmPass = "";
+                  const origText = btn.textContent;
+                  btn.disabled = true;
+                  btn.textContent = "Sending...";
+                  statusEl.textContent = `Sending mobile Jabber email for ${uid}...`;
+                  try {
+                    const sf = new FormData();
+                    sf.append("cucm_host", cucmHost);
+                    sf.append("cucm_user", cucmUser);
+                    sf.append("cucm_pass", cucmPass);
+                    sf.append("target_user", uid);
+                    const sr = await fetch("/send/mobile-jabber-email", {
+                      method: "POST",
+                      body: sf,
+                      credentials: "same-origin",
+                      headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                    });
+                    const sp = await sr.json();
+                    if (!sr.ok || !sp.ok) throw new Error((sp && sp.detail) || "Send failed.");
+                    btn.textContent = "\u2713 Sent";
+                    btn.style.background = "#166534";
+                    statusEl.textContent = "Mobile email sent for " + uid + ": " + (sp.detail || "Success.");
+                  } catch (err) {
+                    btn.textContent = origText;
+                    btn.disabled = false;
+                    statusEl.textContent = "Mobile email failed: " + ((err && err.message) || "Unknown error.");
+                  }
+                });
+              });
+
+              resultsEl.querySelectorAll("button[data-mobile-resend-uid]").forEach(function (btn) {
+                btn.addEventListener("click", async function () {
+                  const uid = btn.getAttribute("data-mobile-resend-uid") || "";
+                  const cucmHost = "__AUTH_CUCM_HOST__";
+                  const cucmUser = "__AUTH_USER__";
+                  const cucmPass = "";
+                  const origText = btn.textContent;
+                  btn.disabled = true;
+                  btn.textContent = "Sending...";
+                  statusEl.textContent = `Sending mobile Jabber email for ${uid}...`;
+                  try {
+                    const sf = new FormData();
+                    sf.append("cucm_host", cucmHost);
+                    sf.append("cucm_user", cucmUser);
+                    sf.append("cucm_pass", cucmPass);
+                    sf.append("target_user", uid);
+                    const sr = await fetch("/send/mobile-jabber-email", {
+                      method: "POST",
+                      body: sf,
+                      credentials: "same-origin",
+                      headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                    });
+                    const sp = await sr.json();
+                    if (!sr.ok || !sp.ok) throw new Error((sp && sp.detail) || "Send failed.");
+                    btn.textContent = "\u2713 Sent";
+                    btn.style.background = "#166534";
+                    statusEl.textContent = "Mobile email sent for " + uid + ": " + (sp.detail || "Success.");
+                  } catch (err) {
+                    btn.textContent = origText;
+                    btn.disabled = false;
+                    statusEl.textContent = "Mobile email failed: " + ((err && err.message) || "Unknown error.");
                   }
                 });
               });
