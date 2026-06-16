@@ -4011,11 +4011,17 @@ __ADMIN_CARD__
             return;
           }
 
-          const confirmed = confirm(
-            `DANGER: This will offboard user "${targetUser}" and remove Jabber devices and voicemail.\n\nDo you want to continue?`
+          const acknowledged = confirm(
+            `DANGER: This will offboard user "${targetUser}" and remove Jabber devices and voicemail.\n\nClick OK to continue to typed confirmation.`
           );
-          if (!confirmed) {
+          if (!acknowledged) {
             statusEl.textContent = "Offboard action canceled.";
+            return;
+          }
+
+          const typed = (prompt(`Type the exact user ID to confirm offboard for ${targetUser}:`) || "").trim();
+          if (typed !== targetUser) {
+            statusEl.textContent = "Offboard action canceled. Confirmation user ID did not match.";
             return;
           }
 
@@ -4708,11 +4714,17 @@ __ADMIN_CARD__
         const targetUserInput = form.querySelector('input[name="target_user"]');
         const targetUser = ((targetUserInput && targetUserInput.value) || "").trim();
 
-        const confirmed = confirm(
-          `DANGER: This will offboard user "${targetUser}" and remove Jabber devices and voicemail.\n\nDo you want to continue?`
+        const acknowledged = confirm(
+          `DANGER: This will offboard user "${targetUser}" and remove Jabber devices and voicemail.\n\nClick OK to continue to typed confirmation.`
         );
-        if (!confirmed) {
+        if (!acknowledged) {
           statusEl.textContent = "Offboard action canceled.";
+          return;
+        }
+
+        const typed = (prompt(`Type the exact user ID to confirm offboard for ${targetUser}:`) || "").trim();
+        if (typed !== targetUser) {
+          statusEl.textContent = "Offboard action canceled. Confirmation user ID did not match.";
           return;
         }
 
@@ -6748,10 +6760,16 @@ def menu_admin_page(request: Request):
             const removeBot = mode === "bot" || mode === "both";
             const label = mode === "tct" ? "TCT only" : (mode === "bot" ? "BOT only" : "TCT and BOT");
 
-            const confirmed = confirm(
-              `Delete mobile Jabber devices for ${uid}?\\n\\nSelection: ${label}\\n\\nThis action will not delete CSF or voicemail.`
+            const acknowledged = confirm(
+              `Delete mobile Jabber devices for ${uid}?\\n\\nSelection: ${label}\\n\\nThis action will not delete CSF or voicemail.\\n\\nClick OK to continue to typed confirmation.`
             );
-            if (!confirmed) {
+            if (!acknowledged) {
+              return;
+            }
+
+            const typed = (prompt(`Type the exact user ID to confirm delete action for ${uid}:`) || "").trim();
+            if (typed !== uid) {
+              statusEl.textContent = `Delete action canceled for ${uid}. Confirmation user ID did not match.`;
               return;
             }
 
