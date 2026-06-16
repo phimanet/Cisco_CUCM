@@ -498,6 +498,9 @@ def _list_available_dns(session, cucm_ip, prefix):
             <pattern/>
             <routePartitionName/>
             <active/>
+            <associatedDevices>
+               <device/>
+            </associatedDevices>
          </returnedTags>
       </axl:listLine>
    </soapenv:Body>
@@ -509,6 +512,7 @@ def _list_available_dns(session, cucm_ip, prefix):
         wanted_partition = (ROUTE_PARTITION or "").strip().upper()
         partitions_seen = set()
         active_count = 0
+        assigned_count = 0
         
         for elem in root.iter():
             if _strip_ns(elem.tag) != "line":
@@ -522,15 +526,28 @@ def _list_available_dns(session, cucm_ip, prefix):
             partitions_seen.add(partition)
             is_inactive = active not in {"true", "t", "1", "yes"}
             
+            # Check if DN has any associated devices
+            has_devices = False
+            for device_elem in elem.iter():
+                if _strip_ns(device_elem.tag) == "device" and device_elem.text and device_elem.text.strip():
+                    has_devices = True
+                    break
+            
             if is_inactive:
-                if pattern and partition == wanted_partition:
+                if active_count == 0 and active not in {"true", "t", "1", "yes"}:
+                    pass  # just counting
+                active_count += 0  # don't increment for inactive
+                
+                if has_devices:
+                    assigned_count += 1
+                elif pattern and partition == wanted_partition:
                     out_patterns.add(pattern)
             else:
                 active_count += 1
 
         out_debug["total_returned"] = line_count
         out_debug["active_count"] = active_count
-        out_debug["inactive_other_partition"] = line_count - active_count - len(out_patterns)
+        out_debug["assigned_count"] = assigned_count
         out_debug["partitions_seen"] = ",".join(sorted(partitions_seen))
         return line_count
 
