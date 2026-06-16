@@ -472,15 +472,15 @@ def _render_error_page(title: str, message: str, status_code: int) -> HTMLRespon
       body {{
         font-family: "Segoe UI", Tahoma, Arial, sans-serif;
         margin: 0;
-        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
-        color: #12304a;
+        background: linear-gradient(180deg, #fff7f7 0%, #feecec 100%);
+        color: #3f1111;
       }}
 
       .card {{
         max-width: 880px;
         margin: 48px auto;
         background: #fff;
-        border: 1px solid #c8dbee;
+        border: 1px solid #e5bcbc;
         border-radius: 12px;
         padding: 22px;
         box-shadow: 0 8px 20px rgba(0, 47, 108, 0.08);
@@ -488,7 +488,7 @@ def _render_error_page(title: str, message: str, status_code: int) -> HTMLRespon
 
       h2 {{
         margin-top: 0;
-        color: #002f6c;
+        color: #7f1d1d;
       }}
 
       p {{
@@ -496,12 +496,12 @@ def _render_error_page(title: str, message: str, status_code: int) -> HTMLRespon
       }}
 
       .meta {{
-        color: #355978;
+        color: #8b3a3a;
         font-size: 13px;
       }}
 
       a {{
-        color: #005eb8;
+        color: #b91c1c;
         font-weight: 700;
       }}
     </style>
@@ -1495,17 +1495,17 @@ def _render_job_result(title: str, csv_data, filename: str, back_url: str = "/me
     <title>{escape(title)} - Job Output</title>
     <style>
       :root {{
-        --amn-blue: #005eb8;
-        --amn-navy: #002f6c;
-        --amn-sky: #eaf4ff;
-        --amn-text: #12304a;
-        --amn-border: #c8dbee;
+        --amn-blue: #b91c1c;
+        --amn-navy: #7f1d1d;
+        --amn-sky: #fef2f2;
+        --amn-text: #3f1111;
+        --amn-border: #e5bcbc;
       }}
 
       body {{
         font-family: "Segoe UI", Tahoma, Arial, sans-serif;
         margin: 0;
-        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+        background: linear-gradient(180deg, #fff7f7 0%, #feecec 100%);
         color: var(--amn-text);
       }}
 
@@ -1597,16 +1597,16 @@ def home(request: Request):
     <title>Cisco Voice Administration Page</title>
     <style>
       :root {
-        --amn-blue: #005eb8;
-        --amn-navy: #002f6c;
-        --amn-sky: #eaf4ff;
-        --amn-text: #12304a;
+        --amn-blue: #b91c1c;
+        --amn-navy: #7f1d1d;
+        --amn-sky: #fef2f2;
+        --amn-text: #3f1111;
       }
 
       body {
         font-family: "Segoe UI", Tahoma, Arial, sans-serif;
         margin: 0;
-        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+        background: linear-gradient(180deg, #fff7f7 0%, #feecec 100%);
         color: var(--amn-text);
       }
 
@@ -1636,7 +1636,7 @@ def home(request: Request):
         max-width: 900px;
         margin: 48px auto;
         background: #fff;
-        border: 1px solid #c8dbee;
+        border: 1px solid #e5bcbc;
         border-radius: 14px;
         padding: 28px;
         box-shadow: 0 8px 20px rgba(0, 47, 108, 0.08);
@@ -1651,7 +1651,7 @@ def home(request: Request):
       select,
       button {
         border-radius: 8px;
-        border: 1px solid #c8dbee;
+        border: 1px solid #e5bcbc;
       }
 
       input,
@@ -1692,8 +1692,8 @@ def home(request: Request):
 
       .env-action-pill.env-banner-prod {
         color: #083252;
-        background: #d8ecff;
-        border-color: #8bb9e2;
+        background: #ffe4e6;
+        border-color: #f9a8b0;
       }
 
       .env-action-pill.env-banner-lab {
@@ -1703,7 +1703,7 @@ def home(request: Request):
       }
 
       .login-note {
-        color: #244e78;
+        color: #7f1d1d;
         font-size: 13px;
       }
 
@@ -1780,15 +1780,15 @@ def genesys_admin_placeholder():
     <title>Genesys Admin - Placeholder</title>
     <style>
       :root {
-        --amn-blue: #005eb8;
-        --amn-navy: #002f6c;
-        --amn-sky: #eaf4ff;
+        --amn-blue: #b91c1c;
+        --amn-navy: #7f1d1d;
+        --amn-sky: #fef2f2;
         --amn-ice: #f6fbff;
         --amn-mist: #dbeaf7;
         --amn-gold: #c68a12;
-        --amn-text: #12304a;
+        --amn-text: #3f1111;
         --amn-text-soft: #4e6a84;
-        --amn-border: #c8dbee;
+        --amn-border: #e5bcbc;
         --amn-panel-border: rgba(0, 47, 108, 0.12);
         --amn-shadow: 0 18px 40px rgba(0, 47, 108, 0.12);
       }
@@ -1799,7 +1799,7 @@ def genesys_admin_placeholder():
         background:
           radial-gradient(circle at top left, rgba(0, 94, 184, 0.18), transparent 26%),
           radial-gradient(circle at top right, rgba(198, 138, 18, 0.16), transparent 22%),
-          linear-gradient(180deg, #f4f9fe 0%, #e8f1f9 42%, #edf5fc 100%);
+          linear-gradient(180deg, #f4f9fe 0%, #e8f1f9 42%, #feecec 100%);
         color: var(--amn-text);
       }
 
@@ -1946,12 +1946,12 @@ def menu_page(request: Request):
     <title>Cisco Voice Server Automation Site - Restricted Access</title>
     <style>
       :root {
-        --amn-blue: #005eb8;
-        --amn-navy: #002f6c;
-        --amn-sky: #eaf4ff;
+        --amn-blue: #b91c1c;
+        --amn-navy: #7f1d1d;
+        --amn-sky: #fef2f2;
         --amn-text-soft: #4e6a84;
-        --amn-text: #12304a;
-        --amn-border: #c8dbee;
+        --amn-text: #3f1111;
+        --amn-border: #e5bcbc;
         --amn-panel-border: rgba(0, 47, 108, 0.12);
         --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
       }
@@ -1959,7 +1959,7 @@ def menu_page(request: Request):
       body {
         font-family: "Segoe UI", Tahoma, Arial, sans-serif;
         margin: 0;
-        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+        background: linear-gradient(180deg, #fff7f7 0%, #feecec 100%);
         color: var(--amn-text);
       }
 
@@ -2251,8 +2251,8 @@ def menu_page(request: Request):
 
       .env-banner-prod {
         color: #083252;
-        background: #d8ecff;
-        border: 1px solid #8bb9e2;
+        background: #ffe4e6;
+        border: 1px solid #f9a8b0;
       }
 
       .env-banner-lab {
@@ -2435,7 +2435,7 @@ def menu_page(request: Request):
       }
 
       button {
-        background: linear-gradient(180deg, #0c77d8, #005eb8);
+        background: linear-gradient(180deg, #0c77d8, #b91c1c);
         color: #fff;
         border: none;
         padding: 7px 11px;
@@ -2531,7 +2531,7 @@ def menu_page(request: Request):
       }
 
       .jabber-check-status {
-        color: #2c5c8a;
+        color: #8f2d2d;
         min-height: 18px;
       }
 
@@ -2554,12 +2554,12 @@ def menu_page(request: Request):
         width: 100%;
         height: 300px;
         font-family: Consolas, monospace;
-        background: linear-gradient(180deg, #f4faff, #eaf4ff);
+        background: linear-gradient(180deg, #f4faff, #fef2f2);
         color: #0f2940;
       }
 
       .build-user-status {
-        color: #2c5c8a;
+        color: #8f2d2d;
         min-height: 18px;
       }
 
@@ -2608,12 +2608,12 @@ def menu_page(request: Request):
         width: 100%;
         height: 300px;
         font-family: Consolas, monospace;
-        background: linear-gradient(180deg, #f4faff, #eaf4ff);
+        background: linear-gradient(180deg, #f4faff, #fef2f2);
         color: #0f2940;
       }
 
       .offboard-status {
-        color: #2c5c8a;
+        color: #8f2d2d;
         min-height: 18px;
       }
 
@@ -2643,12 +2643,12 @@ def menu_page(request: Request):
         width: 100%;
         height: 300px;
         font-family: Consolas, monospace;
-        background: linear-gradient(180deg, #f4faff, #eaf4ff);
+        background: linear-gradient(180deg, #f4faff, #fef2f2);
         color: #0f2940;
       }
 
       .secondary-status {
-        color: #2c5c8a;
+        color: #8f2d2d;
         min-height: 18px;
       }
 
@@ -2844,7 +2844,7 @@ __ADMIN_CARD__
             statusEl.textContent = `Found ${results.length} user(s).`;
 
             let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
-            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<thead><tr style="background:#b91c1c; color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
@@ -2856,7 +2856,7 @@ __ADMIN_CARD__
             html += '</tr></thead><tbody>';
 
             results.forEach(function (r, i) {
-              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const bg = i % 2 === 0 ? "#fff7f7" : "#ffffff";
               const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
               const ext = r.primary_extension || "\u2014";
               const email = r.email || "\u2014";
@@ -2877,7 +2877,7 @@ __ADMIN_CARD__
 
               const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;";
               const actionBtns =
-                `<button type="button" style="${btnStyle}background:#005eb8;color:#fff;" onclick="prefillPanel('precheck','${uid}')">Check Jabber</button>` +
+                `<button type="button" style="${btnStyle}background:#b91c1c;color:#fff;" onclick="prefillPanel('precheck','${uid}')">Check Jabber</button>` +
                 `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build Jabber</button>` +
                 `<button type="button" style="${btnStyle}background:#0e7490;color:#fff;" onclick="prefillPanel('tct','${uid}')">Build iPhone</button>` +
                 `<button type="button" style="${btnStyle}background:#7c3aed;color:#fff;" onclick="prefillPanel('bot','${uid}')">Build Android</button>` +
@@ -2886,10 +2886,10 @@ __ADMIN_CARD__
                 `<button type="button" style="${btnStyle}background:#b45309;color:#fff;" onclick="prefillPanel('pin','${uid}')">Reset Voicemail PIN</button>` +
                 `<button type="button" style="${btnStyle}background:#8a5a00;color:#fff;" onclick="prefillPanel('namechange','${uid}')">Name Update</button>`;
 
-              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #e5bcbc;">';
               html += '<td style="padding:7px 10px;">' + name + '</td>';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
-              html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
+              html += '<td style="padding:7px 10px; font-weight:700; color:#7f1d1d;">' + ext + '</td>';
               html += '<td style="padding:7px 10px;">' + email + '</td>';
               html += '<td style="padding:7px 10px;">' + telephone + '</td>';
               html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
@@ -3071,7 +3071,7 @@ __ADMIN_CARD__
             statusEl.textContent = `Found ${matches.length} result(s) for "${payload.pattern || ""}".`;
 
             let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
-            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<thead><tr style="background:#b91c1c; color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Partition</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Device</th>';
@@ -3082,7 +3082,7 @@ __ADMIN_CARD__
             html += '</tr></thead><tbody>';
 
             matches.forEach(function (m, i) {
-              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const bg = i % 2 === 0 ? "#fff7f7" : "#ffffff";
               const dev = m.device_name || "<em style='color:#888;'>Unassigned</em>";
               const devType = m.device_type || "\u2014";
               const uid = (m.user && m.user.userid) || m.owner_userid || "";
@@ -3092,18 +3092,18 @@ __ADMIN_CARD__
 
               const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;";
               const actionBtns = uid
-                ? `<button type="button" style="${btnStyle}background:#005eb8;color:#fff;" onclick="prefillPanel('precheck','${uid}')">Check Jabber</button>` +
+                ? `<button type="button" style="${btnStyle}background:#b91c1c;color:#fff;" onclick="prefillPanel('precheck','${uid}')">Check Jabber</button>` +
                   `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build Jabber</button>` +
                   `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" data-mobile-resend-uid="${uid}">Re-send Mobile Email</button>`
                 : "\u2014";
 
-              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
-              html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c; font-family:Consolas,monospace;">' + m.pattern + '</td>';
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #e5bcbc;">';
+              html += '<td style="padding:7px 10px; font-weight:700; color:#7f1d1d; font-family:Consolas,monospace;">' + m.pattern + '</td>';
               html += '<td style="padding:7px 10px; font-size:12px;">' + (m.partition || "\u2014") + '</td>';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + dev + '</td>';
               html += '<td style="padding:7px 10px; font-size:12px;">' + devType + '</td>';
               html += '<td style="padding:7px 10px;">' + ownerCell + '</td>';
-              html += '<td style="padding:7px 10px; font-size:12px; color:#355978;">' + allLines + '</td>';
+              html += '<td style="padding:7px 10px; font-size:12px; color:#8b3a3a;">' + allLines + '</td>';
               html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(2,max-content);gap:4px;align-items:start;">' + actionBtns + '</div></td>';
               html += '</tr>';
             });
@@ -3324,8 +3324,8 @@ __ADMIN_CARD__
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
 
-        <div style="margin: 0 0 14px 0; padding: 12px; border: 1px solid #c8dbee; border-radius: 10px; background: #f7fbff;">
-          <strong style="display:block; margin-bottom:10px; color:#002f6c;">Lookup by Name</strong>
+        <div style="margin: 0 0 14px 0; padding: 12px; border: 1px solid #e5bcbc; border-radius: 10px; background: #fff7f7;">
+          <strong style="display:block; margin-bottom:10px; color:#7f1d1d;">Lookup by Name</strong>
           <div class="compact-inline-row">
             <span>Last Name:</span>
             <input id="teams-lookup-last-name" placeholder="Smith" required>
@@ -3337,7 +3337,7 @@ __ADMIN_CARD__
           </div><br>
 
           <button id="teams-lookup-btn" type="button">Search User</button>
-          <p id="teams-lookup-status" style="margin:10px 0 6px 0; color:#2c5c8a; min-height:18px;">Enter last name and click Search User.</p>
+          <p id="teams-lookup-status" style="margin:10px 0 6px 0; color:#8f2d2d; min-height:18px;">Enter last name and click Search User.</p>
           <div id="teams-lookup-results" style="overflow-x:auto;"></div>
         </div>
 
@@ -3504,7 +3504,7 @@ __ADMIN_CARD__
               lookupStatusEl.textContent = `Found ${results.length} user(s).`;
 
               let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
-              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<thead><tr style="background:#b91c1c; color:#fff;">';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
@@ -3513,13 +3513,13 @@ __ADMIN_CARD__
               html += '</tr></thead><tbody>';
 
               results.forEach(function (r, i) {
-                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                const bg = i % 2 === 0 ? "#fff7f7" : "#ffffff";
                 const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
                 const uid = r.userid || "";
                 const email = r.email || "\u2014";
                 const telephone = r.telephone || "\u2014";
 
-                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #e5bcbc;">';
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
@@ -3568,7 +3568,7 @@ __ADMIN_CARD__
         Cisco Callmanager Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
 
-        <div style="margin: 0 0 14px 0; padding: 12px; border: 1px solid #c8dbee; border-radius: 10px; background: #fff6f6;">
+        <div style="margin: 0 0 14px 0; padding: 12px; border: 1px solid #e5bcbc; border-radius: 10px; background: #fff6f6;">
           <strong style="display:block; margin-bottom:10px; color:#7a1020;">Lookup by Name</strong>
           <div class="compact-inline-row">
             <span>Last Name:</span>
@@ -4269,7 +4269,7 @@ __ADMIN_CARD__
         <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
       </div>
     </form>
-    <p id="jabbernotify-search-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
+    <p id="jabbernotify-search-status" style="color:#8f2d2d; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
     <div id="jabbernotify-results" style="overflow-x:auto; margin-top:8px;"></div>
     <p id="jabbernotify-send-status" style="margin-top:14px; font-weight:700; min-height:18px;"></p>
     </section>
@@ -4296,7 +4296,7 @@ __ADMIN_CARD__
     <p id="mobile-jabber-notify-status" style="margin-top:14px; font-weight:700; min-height:18px;"></p>
 
     <hr style="margin:16px 0; border:none; border-top:1px solid #d6e4f3;">
-    <p style="margin:0 0 10px 0; color:#355978;">Or lookup by name and send from the results:</p>
+    <p style="margin:0 0 10px 0; color:#8b3a3a;">Or lookup by name and send from the results:</p>
     <form id="mobile-jabber-lookup-form" class="jabber-check-form" style="max-width:520px;">
       <div class="compact-inline-row">
         <span>Cisco Callmanager Username:</span>
@@ -4319,7 +4319,7 @@ __ADMIN_CARD__
         <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
       </div>
     </form>
-    <p id="mobile-jabber-lookup-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
+    <p id="mobile-jabber-lookup-status" style="color:#8f2d2d; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
     <div id="mobile-jabber-lookup-results" style="overflow-x:auto; margin-top:8px;"></div>
     </section>
 
@@ -5075,15 +5075,15 @@ __ADMIN_CARD__
             var results = payload.results || [];
             if (!results.length) { jnStatus.textContent = "No users found."; return; }
             jnStatus.textContent = "Found " + results.length + " user(s). Click Send New Jabber Email to email a user.";
-            var html = '<table style="width:100%; border-collapse:collapse; font-size:13px;"><thead><tr style="background:#005eb8; color:#fff;">';
+            var html = '<table style="width:100%; border-collapse:collapse; font-size:13px;"><thead><tr style="background:#b91c1c; color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left;">Name</th><th style="padding:8px 10px; text-align:left;">User ID</th><th style="padding:8px 10px; text-align:left;">Telephone</th><th style="padding:8px 10px; text-align:left;">Email</th><th style="padding:8px 10px; text-align:left;">Action</th></tr></thead><tbody>';
             results.forEach(function (r, i) {
-              var bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              var bg = i % 2 === 0 ? "#fff7f7" : "#ffffff";
               var uid = r.userid || "";
               var name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || uid;
               var tel = r.telephone || "\u2014";
               var email = r.email || "\u2014";
-              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;"><td style="padding:7px 10px;">' + name + '</td><td style="padding:7px 10px;">' + uid + '</td><td style="padding:7px 10px;">' + tel + '</td><td style="padding:7px 10px;">' + email + '</td><td style="padding:7px 10px;"><button type="button" data-nuid="' + uid + '" data-ntel="' + (r.telephone || "") + '" style="background:#237741;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer;">Send New Jabber Email</button></td></tr>';
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #e5bcbc;"><td style="padding:7px 10px;">' + name + '</td><td style="padding:7px 10px;">' + uid + '</td><td style="padding:7px 10px;">' + tel + '</td><td style="padding:7px 10px;">' + email + '</td><td style="padding:7px 10px;"><button type="button" data-nuid="' + uid + '" data-ntel="' + (r.telephone || "") + '" style="background:#237741;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-weight:700;cursor:pointer;">Send New Jabber Email</button></td></tr>';
             });
             html += '</tbody></table>';
             jnResults.innerHTML = html;
@@ -5224,7 +5224,7 @@ __ADMIN_CARD__
               }
 
               lookupStatusEl.textContent = "Found " + results.length + " user(s). Click Send Mobile Email.";
-              var html = '<table style="width:100%; border-collapse:collapse; font-size:13px;"><thead><tr style="background:#005eb8; color:#fff;">';
+              var html = '<table style="width:100%; border-collapse:collapse; font-size:13px;"><thead><tr style="background:#b91c1c; color:#fff;">';
               html += '<th style="padding:8px 10px; text-align:left;">Name</th>';
               html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
               html += '<th style="padding:8px 10px; text-align:left;">Telephone</th>';
@@ -5233,12 +5233,12 @@ __ADMIN_CARD__
               html += '</tr></thead><tbody>';
 
               results.forEach(function (r, i) {
-                var bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                var bg = i % 2 === 0 ? "#fff7f7" : "#ffffff";
                 var uid = r.userid || "";
                 var name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || uid;
                 var tel = r.telephone || "\u2014";
                 var email = r.email || "\u2014";
-                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #e5bcbc;">';
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
                 html += '<td style="padding:7px 10px;">' + tel + '</td>';
@@ -5458,14 +5458,14 @@ def menu_admin_page(request: Request):
     <title>Administrative Items - Voice Operations Portal</title>
     <style>
       :root {
-        --amn-blue: #005eb8;
-        --amn-navy: #002f6c;
-        --amn-sky: #eaf4ff;
+        --amn-blue: #b91c1c;
+        --amn-navy: #7f1d1d;
+        --amn-sky: #fef2f2;
         --amn-ice: #f6fbff;
         --amn-gold: #c68a12;
-        --amn-text: #12304a;
+        --amn-text: #3f1111;
         --amn-text-soft: #4e6a84;
-        --amn-border: #c8dbee;
+        --amn-border: #e5bcbc;
         --amn-panel-border: rgba(0, 47, 108, 0.12);
         --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
       }
@@ -5476,7 +5476,7 @@ def menu_admin_page(request: Request):
         background:
           radial-gradient(circle at top left, rgba(0, 94, 184, 0.18), transparent 26%),
           radial-gradient(circle at top right, rgba(198, 138, 18, 0.16), transparent 22%),
-          linear-gradient(180deg, #f4f9fe 0%, #e8f1f9 42%, #edf5fc 100%);
+          linear-gradient(180deg, #f4f9fe 0%, #e8f1f9 42%, #feecec 100%);
         color: var(--amn-text);
       }
 
@@ -5741,8 +5741,8 @@ def menu_admin_page(request: Request):
 
       .env-banner-prod {
         color: #083252;
-        background: #d8ecff;
-        border: 1px solid #8bb9e2;
+        background: #ffe4e6;
+        border: 1px solid #f9a8b0;
       }
 
       .env-banner-lab {
@@ -5931,7 +5931,7 @@ def menu_admin_page(request: Request):
       }
 
       button {
-        background: linear-gradient(180deg, #0c77d8, #005eb8);
+        background: linear-gradient(180deg, #0c77d8, #b91c1c);
         color: #fff;
         border: none;
         padding: 9px 13px;
@@ -6073,7 +6073,7 @@ def menu_admin_page(request: Request):
           <button type="submit">Search</button>
         </form>
 
-        <p id="admin-person-lookup-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
+        <p id="admin-person-lookup-status" style="color:#8f2d2d; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
         <div id="admin-person-lookup-results" style="overflow-x:auto;"></div>
       </section>
 
@@ -6110,7 +6110,7 @@ def menu_admin_page(request: Request):
           <button type="submit">Search Users for Mobile Delete</button>
         </form>
 
-        <p id="admin-mobile-delete-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
+        <p id="admin-mobile-delete-status" style="color:#8f2d2d; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
         <div id="admin-mobile-delete-results" style="overflow-x:auto;"></div>
       </section>
 
@@ -6184,7 +6184,7 @@ def menu_admin_page(request: Request):
           <button type="submit">Search Translation Patterns</button>
         </form>
 
-        <p id="admin-trans-pattern-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a pattern and click Search.</p>
+        <p id="admin-trans-pattern-status" style="color:#8f2d2d; min-height:18px; margin-top:12px;">Enter a pattern and click Search.</p>
         <div id="admin-trans-pattern-results" style="overflow-x:auto;"></div>
       </section>
 
@@ -6201,8 +6201,8 @@ def menu_admin_page(request: Request):
           <button type="submit">Build Example Template</button>
         </form>
 
-        <p id="admin-trans-template-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Click Build Example Template to load the example.</p>
-        <p id="admin-trans-template-summary" style="color:#355978; min-height:18px;"></p>
+        <p id="admin-trans-template-status" style="color:#8f2d2d; min-height:18px; margin-top:12px;">Click Build Example Template to load the example.</p>
+        <p id="admin-trans-template-summary" style="color:#8b3a3a; min-height:18px;"></p>
         <p><a id="admin-trans-template-download" href="#" style="display:none; font-weight:700;">Download CSV Output</a></p>
         <textarea id="admin-trans-template-preview" rows="8" readonly style="width:100%;"></textarea>
       </section>
@@ -6222,8 +6222,8 @@ def menu_admin_page(request: Request):
           <button type="button" id="admin-twilio-verify-phimane-restore" style="margin-left:8px; background:linear-gradient(180deg,#19743a,#145c2e);">Restore to 8585236648</button>
         </form>
 
-        <p id="admin-twilio-verify-phimane-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Use Apply to switch temporarily, then Restore to return to 8585236648.</p>
-        <p id="admin-twilio-verify-phimane-summary" style="color:#355978; min-height:18px;"></p>
+        <p id="admin-twilio-verify-phimane-status" style="color:#8f2d2d; min-height:18px; margin-top:12px;">Use Apply to switch temporarily, then Restore to return to 8585236648.</p>
+        <p id="admin-twilio-verify-phimane-summary" style="color:#8b3a3a; min-height:18px;"></p>
       </section>
 
       <section class="panel tool-panel" data-panel="twilioverify-lauraa">
@@ -6241,8 +6241,8 @@ def menu_admin_page(request: Request):
           <button type="button" id="admin-twilio-verify-lauraa-restore" style="margin-left:8px; background:linear-gradient(180deg,#19743a,#145c2e);">Restore to 8583503289</button>
         </form>
 
-        <p id="admin-twilio-verify-lauraa-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Use Apply to switch temporarily, then Restore to return to 8583503289.</p>
-        <p id="admin-twilio-verify-lauraa-summary" style="color:#355978; min-height:18px;"></p>
+        <p id="admin-twilio-verify-lauraa-status" style="color:#8f2d2d; min-height:18px; margin-top:12px;">Use Apply to switch temporarily, then Restore to return to 8583503289.</p>
+        <p id="admin-twilio-verify-lauraa-summary" style="color:#8b3a3a; min-height:18px;"></p>
       </section>
 
       <section class="panel tool-panel" data-panel="jabbernotify">
@@ -6261,7 +6261,7 @@ def menu_admin_page(request: Request):
           </div><br>
           <button type="submit">Search</button>
         </form>
-        <p id="jabbernotify-search-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
+        <p id="jabbernotify-search-status" style="color:#8f2d2d; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
         <div id="jabbernotify-results" style="overflow-x:auto;"></div>
         <p id="jabbernotify-send-status" style="margin-top:14px; font-weight:700; min-height:18px;"></p>
       </section>
@@ -6279,8 +6279,8 @@ def menu_admin_page(request: Request):
 
           <button type="submit">Run Bulk Person Lookup</button>
         </form>
-        <p id="admin-bulk-person-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Upload a CSV to run bulk lookup.</p>
-        <p id="admin-bulk-person-summary" style="color:#355978; min-height:18px;"></p>
+        <p id="admin-bulk-person-status" style="color:#8f2d2d; min-height:18px; margin-top:12px;">Upload a CSV to run bulk lookup.</p>
+        <p id="admin-bulk-person-summary" style="color:#8b3a3a; min-height:18px;"></p>
         <p><a id="admin-bulk-person-download" href="#" style="display:none; font-weight:700;">Download CSV Output</a></p>
         <textarea id="admin-bulk-person-preview" rows="10" readonly style="width:100%;"></textarea>
       </section>
@@ -6298,8 +6298,8 @@ def menu_admin_page(request: Request):
 
           <button type="submit">Run Bulk Extension Lookup</button>
         </form>
-        <p id="admin-bulk-extension-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Upload a CSV to run bulk lookup.</p>
-        <p id="admin-bulk-extension-summary" style="color:#355978; min-height:18px;"></p>
+        <p id="admin-bulk-extension-status" style="color:#8f2d2d; min-height:18px; margin-top:12px;">Upload a CSV to run bulk lookup.</p>
+        <p id="admin-bulk-extension-summary" style="color:#8b3a3a; min-height:18px;"></p>
         <p><a id="admin-bulk-extension-download" href="#" style="display:none; font-weight:700;">Download CSV Output</a></p>
         <textarea id="admin-bulk-extension-preview" rows="10" readonly style="width:100%;"></textarea>
       </section>
@@ -6393,7 +6393,7 @@ def menu_admin_page(request: Request):
                 jabberNotifyStatus.textContent = "Found " + results.length + " user(s). Click Send New Jabber Email to email a user.";
 
                 let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
-                html += '<thead><tr style="background:#005eb8; color:#fff;">';
+                html += '<thead><tr style="background:#b91c1c; color:#fff;">';
                 html += '<th style="padding:8px 10px; text-align:left;">Name</th>';
                 html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
                 html += '<th style="padding:8px 10px; text-align:left;">Telephone</th>';
@@ -6402,12 +6402,12 @@ def menu_admin_page(request: Request):
                 html += '</tr></thead><tbody>';
 
                 results.forEach(function (r, i) {
-                  const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                  const bg = i % 2 === 0 ? "#fff7f7" : "#ffffff";
                   const uid = r.userid || "";
                   const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || uid;
                   const telephone = r.telephone || "\u2014";
                   const email = r.email || "\u2014";
-                  html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                  html += '<tr style="background:' + bg + '; border-bottom:1px solid #e5bcbc;">';
                   html += '<td style="padding:7px 10px;">' + name + '</td>';
                   html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
                   html += '<td style="padding:7px 10px;">' + telephone + '</td>';
@@ -6515,7 +6515,7 @@ def menu_admin_page(request: Request):
               statusEl.textContent = `Found ${results.length} user(s).`;
 
               let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
-              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<thead><tr style="background:#b91c1c; color:#fff;">';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
@@ -6527,7 +6527,7 @@ def menu_admin_page(request: Request):
               html += '</tr></thead><tbody>';
 
               results.forEach(function (r, i) {
-                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                const bg = i % 2 === 0 ? "#fff7f7" : "#ffffff";
                 const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
                 const ext = r.primary_extension || "\u2014";
                 const email = r.email || "\u2014";
@@ -6555,10 +6555,10 @@ def menu_admin_page(request: Request):
                 const offboardBtn = `<button type="button" style="${btnStyle}background:#b00020;" data-offboard-user="${uid}">Separate Employee-Delete Jabber/VM</button>`;
                 const actionBtn = strikeBtn + tctBtn + botBtn + notifyBtn + mobileResendBtn + offboardBtn;
 
-                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #e5bcbc;">';
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
-                html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
+                html += '<td style="padding:7px 10px; font-weight:700; color:#7f1d1d;">' + ext + '</td>';
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
                 html += '<td style="padding:7px 10px;">' + telephone + '</td>';
                 html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
@@ -6808,7 +6808,7 @@ def menu_admin_page(request: Request):
               statusEl.textContent = `Found ${results.length} user(s). Choose delete action.`;
 
               let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
-              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<thead><tr style="background:#b91c1c; color:#fff;">';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
@@ -6818,7 +6818,7 @@ def menu_admin_page(request: Request):
               html += '</tr></thead><tbody>';
 
               results.forEach(function (r, i) {
-                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                const bg = i % 2 === 0 ? "#fff7f7" : "#ffffff";
                 const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
                 const email = r.email || "\u2014";
                 const telephone = r.telephone || "\u2014";
@@ -6833,7 +6833,7 @@ def menu_admin_page(request: Request):
                 const botBtn = `<button type="button" style="${btnStyle}background:#7c3aed;" data-delete-mode="bot" data-delete-user="${uid}">Delete Android (BOT)</button>`;
                 const bothBtn = `<button type="button" style="${btnStyle}background:#b00020;" data-delete-mode="both" data-delete-user="${uid}">Delete Both</button>`;
 
-                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #e5bcbc;">';
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
@@ -6897,16 +6897,16 @@ def menu_admin_page(request: Request):
               statusEl.textContent = `Found ${results.length} translation pattern(s).`;
 
               let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
-              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<thead><tr style="background:#b91c1c; color:#fff;">';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Pattern</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Description</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Called Party Transform Mask</th>';
               html += '</tr></thead><tbody>';
 
               results.forEach(function (item, i) {
-                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
-                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
-                html += '<td style="padding:7px 10px; font-family:Consolas,monospace; color:#002f6c; font-weight:700;">' + (item.pattern || "\u2014") + '</td>';
+                const bg = i % 2 === 0 ? "#fff7f7" : "#ffffff";
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #e5bcbc;">';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace; color:#7f1d1d; font-weight:700;">' + (item.pattern || "\u2014") + '</td>';
                 html += '<td style="padding:7px 10px;">' + (item.description || "\u2014") + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (item.called_party_transform_mask || "\u2014") + '</td>';
                 html += '</tr>';
@@ -7302,13 +7302,13 @@ def audit_trail_page():
     <title>Action History</title>
     <style>
       :root {{
-        --amn-blue: #005eb8;
-        --amn-navy: #002f6c;
-        --amn-sky: #eaf4ff;
-        --amn-text: #12304a;
-        --amn-border: #c8dbee;
+        --amn-blue: #b91c1c;
+        --amn-navy: #7f1d1d;
+        --amn-sky: #fef2f2;
+        --amn-text: #3f1111;
+        --amn-border: #e5bcbc;
       }}
-      body {{ margin: 0; font-family: Segoe UI, Tahoma, Arial, sans-serif; background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%); color: var(--amn-text); }}
+      body {{ margin: 0; font-family: Segoe UI, Tahoma, Arial, sans-serif; background: linear-gradient(180deg, #fff7f7 0%, #feecec 100%); color: var(--amn-text); }}
       .topbar {{ display:flex; align-items:center; gap:12px; padding:14px 24px; background: linear-gradient(90deg, var(--amn-navy), var(--amn-blue)); color:#fff; box-shadow:0 2px 12px rgba(0,47,108,.25); }}
       .content {{ max-width: 1380px; margin: 22px auto; padding: 0 18px 30px; }}
       .panel {{ background:#fff; border:1px solid var(--amn-border); border-radius:14px; padding:18px; box-shadow:0 8px 20px rgba(0,47,108,.08); }}
