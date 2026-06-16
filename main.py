@@ -3080,6 +3080,43 @@ __ADMIN_CARD__
             html += '</tbody></table>';
             resultsEl.innerHTML = html;
 
+            resultsEl.querySelectorAll('button[data-mobile-resend-uid]').forEach(function (btn) {
+              btn.addEventListener("click", async function () {
+                const uid = btn.getAttribute("data-mobile-resend-uid") || "";
+                const cucmHost = "__AUTH_CUCM_HOST__";
+                const cucmUser = "__AUTH_USER__";
+                const cucmPass = "";
+                const origText = btn.textContent;
+                btn.disabled = true;
+                btn.textContent = "Sending...";
+                statusEl.textContent = `Sending mobile Jabber email for ${uid}...`;
+                try {
+                  const sf = new FormData();
+                  sf.append("cucm_host", cucmHost);
+                  sf.append("cucm_user", cucmUser);
+                  sf.append("cucm_pass", cucmPass);
+                  sf.append("target_user", uid);
+                  const sr = await fetch("/send/mobile-jabber-email", {
+                    method: "POST",
+                    body: sf,
+                    credentials: "same-origin",
+                    headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                  });
+                  const raw = await sr.text();
+                  let sp = null;
+                  try { sp = raw ? JSON.parse(raw) : {}; } catch (_) { sp = { ok: false, detail: `Unexpected response (HTTP ${sr.status}).` }; }
+                  if (!sr.ok || !sp.ok) throw new Error((sp && sp.detail) || "Send failed.");
+                  btn.textContent = "\u2713 Sent";
+                  btn.style.background = "#166534";
+                  statusEl.textContent = "Mobile email sent for " + uid + ": " + (sp.detail || "Success.");
+                } catch (err) {
+                  btn.textContent = origText;
+                  btn.disabled = false;
+                  statusEl.textContent = "Mobile email failed: " + ((err && err.message) || "Unknown error.");
+                }
+              });
+            });
+
           } catch (err) {
             statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
           }
@@ -6609,41 +6646,6 @@ def menu_admin_page(request: Request):
                     btn.textContent = origText;
                     btn.disabled = false;
                     statusEl.textContent = "Send failed: " + ((err && err.message) || "Unknown error.");
-                  }
-                });
-              });
-
-              resultsEl.querySelectorAll("button[data-mobile-resend-uid]").forEach(function (btn) {
-                btn.addEventListener("click", async function () {
-                  const uid = btn.getAttribute("data-mobile-resend-uid") || "";
-                  const cucmHost = "__AUTH_CUCM_HOST__";
-                  const cucmUser = "__AUTH_USER__";
-                  const cucmPass = "";
-                  const origText = btn.textContent;
-                  btn.disabled = true;
-                  btn.textContent = "Sending...";
-                  statusEl.textContent = `Sending mobile Jabber email for ${uid}...`;
-                  try {
-                    const sf = new FormData();
-                    sf.append("cucm_host", cucmHost);
-                    sf.append("cucm_user", cucmUser);
-                    sf.append("cucm_pass", cucmPass);
-                    sf.append("target_user", uid);
-                    const sr = await fetch("/send/mobile-jabber-email", {
-                      method: "POST",
-                      body: sf,
-                      credentials: "same-origin",
-                      headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
-                    });
-                    const sp = await sr.json();
-                    if (!sr.ok || !sp.ok) throw new Error((sp && sp.detail) || "Send failed.");
-                    btn.textContent = "\u2713 Sent";
-                    btn.style.background = "#166534";
-                    statusEl.textContent = "Mobile email sent for " + uid + ": " + (sp.detail || "Success.");
-                  } catch (err) {
-                    btn.textContent = origText;
-                    btn.disabled = false;
-                    statusEl.textContent = "Mobile email failed: " + ((err && err.message) || "Unknown error.");
                   }
                 });
               });
