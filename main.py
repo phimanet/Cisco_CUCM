@@ -3,6 +3,7 @@ import datetime
 import io
 import os
 import re
+from collections import Counter
 import smtplib
 import ssl
 import threading
@@ -729,6 +730,36 @@ def _prepare_job_output(csv_data, filename: str) -> dict:
         "filename": filename,
         "output_text": csv_bytes.decode("utf-8", errors="replace"),
     }
+
+
+def _load_audit_rows(limit: int | None = None) -> list[dict]:
+  with AUDIT_LOG_LOCK:
+    _ensure_audit_log()
+    _prune_audit_log_locked()
+    with open(AUDIT_LOG_PATH, "r", newline="", encoding="utf-8") as handle:
+      rows = list(csv.DictReader(handle))
+
+  rows = list(reversed(rows))
+  if limit is not None and limit >= 0:
+    rows = rows[:limit]
+  return rows
+
+
+def _build_jabber_precheck_warnings(result: dict) -> list[str]:
+  warnings: list[str] = []
+  if result.get("jabber_built"):
+    device_name = (result.get("device_name") or "").strip() or "existing CSF device"
+    extension = (result.get("extension") or "").strip()
+    if extension:
+      warnings.append(f"Existing Jabber device found: {device_name} on extension {extension}.")
+    else:
+      warnings.append(f"Existing Jabber device found: {device_name}.")
+
+  voicemail_extension = (result.get("voicemail_extension") or "").strip()
+  if voicemail_extension:
+    warnings.append(f"Existing voicemail extension found: {voicemail_extension}.")
+
+  return warnings
 
 
 def _list_translation_patterns_by_description(cucm_host: str, cucm_user: str, cucm_pass: str, description_text: str) -> list[dict]:
@@ -2699,9 +2730,9 @@ def menu_page(request: Request):
           <span>Return to login and environment selection.</span>
         </a>
 __ADMIN_CARD__
-        <a class="hero-link-card" href="/download/audit-trail">
-          <strong>Audit Trail CSV</strong>
-          <span>Download recorded portal activity for review and traceability.</span>
+        <a class="hero-link-card" href="/audit-trail">
+          <strong>Action History</strong>
+          <span>Review recent portal actions and download the audit CSV.</span>
         </a>
         <a class="hero-link-card" href="/genesys-admin">
           <strong>Genesys Placeholder</strong>
@@ -5987,9 +6018,9 @@ def menu_admin_page(request: Request):
             <strong>Main Operations</strong>
             <span>Return to standard user-facing voice operations workflows.</span>
           </a>
-          <a class="hero-link-card" href="/download/audit-trail">
-            <strong>Audit Trail CSV</strong>
-            <span>Download logged portal activity and execution history.</span>
+          <a class="hero-link-card" href="/audit-trail">
+            <strong>Action History</strong>
+            <span>Review recent portal actions and download the audit CSV.</span>
           </a>
         </div>
       </section>
@@ -7229,6 +7260,121 @@ def download_audit_trail():
   )
 
 
+@app.get("/audit-trail", response_class=HTMLResponse)
+def audit_trail_page():
+  rows = _load_audit_rows(limit=100)
+  action_counts = Counter((row.get("action") or "").strip() or "unknown" for row in rows)
+  total_rows = len(rows)
+  latest_timestamp = rows[0].get("timestamp", "No activity recorded yet") if rows else "No activity recorded yet"
+
+  summary_cards = "".join(
+    f"""
+    <div class=\"history-card\">
+      <span class=\"history-label\">{escape(action)}</span>
+      <strong>{count}</strong>
+    </div>
+    """
+    for action, count in action_counts.most_common(6)
+  ) or '<div class="history-card"><span class="history-label">No actions logged yet</span><strong>0</strong></div>'
+
+  table_rows = []
+  for row in rows:
+    target_text = (row.get("account") or row.get("target") or "")
+    extension_text = (row.get("extension_added") or row.get("extension_deleted") or "")
+    table_rows.append(
+      "<tr>"
+      f"<td>{escape(row.get('timestamp', ''))}</td>"
+      f"<td>{escape(row.get('action', ''))}</td>"
+      f"<td>{escape(row.get('operator', ''))}</td>"
+      f"<td>{escape(target_text)}</td>"
+      f"<td>{escape(extension_text)}</td>"
+      f"<td>{escape(row.get('output_filename', ''))}</td>"
+      f"<td>{escape(row.get('inline_mode', ''))}</td>"
+      "</tr>"
+    )
+  history_rows_html = "".join(table_rows) if table_rows else "<tr><td colspan='7' style='padding:12px;'>No audit activity recorded yet.</td></tr>"
+
+  html = f"""
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Action History</title>
+    <style>
+      :root {{
+        --amn-blue: #005eb8;
+        --amn-navy: #002f6c;
+        --amn-sky: #eaf4ff;
+        --amn-text: #12304a;
+        --amn-border: #c8dbee;
+      }}
+      body {{ margin: 0; font-family: Segoe UI, Tahoma, Arial, sans-serif; background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%); color: var(--amn-text); }}
+      .topbar {{ display:flex; align-items:center; gap:12px; padding:14px 24px; background: linear-gradient(90deg, var(--amn-navy), var(--amn-blue)); color:#fff; box-shadow:0 2px 12px rgba(0,47,108,.25); }}
+      .content {{ max-width: 1380px; margin: 22px auto; padding: 0 18px 30px; }}
+      .panel {{ background:#fff; border:1px solid var(--amn-border); border-radius:14px; padding:18px; box-shadow:0 8px 20px rgba(0,47,108,.08); }}
+      .meta-grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap:10px; margin:14px 0 18px; }}
+      .history-card {{ border:1px solid var(--amn-border); border-radius:12px; background:var(--amn-sky); padding:12px 14px; }}
+      .history-card strong {{ display:block; font-size:24px; color:var(--amn-navy); margin-top:4px; }}
+      .history-label {{ display:block; font-size:12px; text-transform:uppercase; letter-spacing:.05em; color:#5d7690; }}
+      .toolbar {{ display:flex; flex-wrap:wrap; gap:10px; margin: 14px 0 18px; }}
+      .toolbar a {{ color:#fff; background:var(--amn-blue); padding:10px 14px; border-radius:8px; text-decoration:none; font-weight:700; }}
+      .toolbar a.secondary {{ background:#385977; }}
+      .table-wrap {{ overflow-x:auto; border:1px solid var(--amn-border); border-radius:12px; }}
+      table {{ width:100%; border-collapse:collapse; font-size:13px; }}
+      thead th {{ position:sticky; top:0; background:var(--amn-navy); color:#fff; text-align:left; padding:10px 12px; white-space:nowrap; }}
+      tbody td {{ padding:8px 12px; border-top:1px solid #dce8f2; vertical-align:top; }}
+      tbody tr:nth-child(even) {{ background:#f8fbff; }}
+      .muted {{ color:#5d7690; }}
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="brand-fallback">AMN Healthcare</span>
+      <strong>Voice Operations Portal</strong>
+    </header>
+    <main class="content">
+      <section class="panel">
+        <h2>Action History</h2>
+        <p class="muted">Recent logged portal actions from the audit trail. Showing the latest {total_rows} record(s).</p>
+        <div class="meta-grid">
+          <div class="history-card"><span class="history-label">Records Shown</span><strong>{total_rows}</strong></div>
+          <div class="history-card"><span class="history-label">Latest Activity</span><strong style="font-size:16px; line-height:1.3;">{escape(latest_timestamp)}</strong></div>
+          <div class="history-card"><span class="history-label">Unique Actions</span><strong>{len(action_counts)}</strong></div>
+        </div>
+        <div class="toolbar">
+          <a href="/download/audit-trail">Download Audit CSV</a>
+          <a class="secondary" href="/audit-trail/stats">View Audit Stats JSON</a>
+          <a class="secondary" href="/menu">Back to Main Menu</a>
+        </div>
+        <div class="meta-grid">
+          {summary_cards}
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Timestamp</th>
+                <th>Action</th>
+                <th>Operator</th>
+                <th>Target / Account</th>
+                <th>Extensions</th>
+                <th>Output</th>
+                <th>Inline</th>
+              </tr>
+            </thead>
+            <tbody>
+              {history_rows_html}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
+"""
+  return HTMLResponse(html)
+
+
 @app.get("/audit-trail/stats")
 def audit_trail_stats():
   with AUDIT_LOG_LOCK:
@@ -8021,10 +8167,26 @@ def send_jabber_ready_email_route(
         added_dn=phone,
     )
 
-    if notify_status == "Success":
-        return JSONResponse({"ok": True, "detail": notify_details})
-    else:
-        return JSONResponse({"ok": False, "detail": notify_details}, status_code=400)
+    ok = notify_status == "Success"
+    try:
+      _append_audit_event(
+        action="send_jabber_ready_email",
+        cucm_host=cucm_host,
+        operator=cucm_user,
+        target=clean_target,
+        account=clean_target,
+        extension_added=phone,
+        extension_deleted="",
+        output_filename="inline_json_ok" if ok else "inline_json_error",
+        inline_mode=True,
+      )
+    except Exception:
+      # Audit logging should not block the email response.
+      pass
+
+    if ok:
+      return JSONResponse({"ok": True, "detail": notify_details})
+    return JSONResponse({"ok": False, "detail": notify_details}, status_code=400)
 
 
 @app.post("/send/mobile-jabber-email")
@@ -8143,6 +8305,10 @@ def check_jabber_status_route(
       target_user=target_user,
     )
 
+    duplicate_warnings = _build_jabber_precheck_warnings(result)
+    result["duplicate_warnings"] = duplicate_warnings
+    result["can_proceed"] = not duplicate_warnings
+
     _append_audit_event(
       action="check_jabber_status",
       cucm_host=cucm_host,
@@ -8164,7 +8330,16 @@ def check_jabber_status_route(
     <title>Jabber Pre-Check Result</title>
     <style>
       body {{ font-family: Segoe UI, Arial, sans-serif; background: #f4f8fc; color: #10324f; margin: 24px; }}
-      .card {{ max-width: 880px; background: #ffffff; border: 1px solid #d7e2ee; border-radius: 10px; padding: 18px; }}
+      .card {{ max-width: 960px; background: #ffffff; border: 1px solid #d7e2ee; border-radius: 12px; padding: 18px; box-shadow: 0 8px 20px rgba(0, 47, 108, 0.08); }}
+      .precheck-banner {{ border-radius: 10px; padding: 14px 16px; margin: 14px 0 16px 0; border: 1px solid #cfe1f3; background: #eef6ff; }}
+      .precheck-banner.warning {{ border-color: #f0c36d; background: #fff8e8; }}
+      .precheck-banner.ok {{ border-color: #9fd1b6; background: #eefaf2; }}
+      .precheck-banner h3 {{ margin: 0 0 8px 0; font-size: 18px; }}
+      .precheck-banner ul {{ margin: 8px 0 0 18px; padding: 0; }}
+      .summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; margin: 14px 0; }}
+      .summary-item {{ border: 1px solid #d7e2ee; border-radius: 10px; padding: 12px; background: #f9fcff; }}
+      .summary-label {{ display: block; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: #5d7690; margin-bottom: 4px; }}
+      .summary-value {{ font-weight: 700; color: #10324f; }}
       pre {{ background: #eef5fb; border: 1px solid #d7e2ee; border-radius: 8px; padding: 12px; white-space: pre-wrap; }}
       a {{ color: #005cb9; font-weight: 600; }}
     </style>
@@ -8172,6 +8347,19 @@ def check_jabber_status_route(
   <body>
     <div class=\"card\">
       <h2>Jabber Pre-Check Result</h2>
+      <div class=\"precheck-banner {'warning' if duplicate_warnings else 'ok'}\">
+        <h3>{'Duplicate resources found' if duplicate_warnings else 'No duplicate Jabber resources found'}</h3>
+        <div>{'Review the items below before building.' if duplicate_warnings else 'You can proceed with the build workflow.'}</div>
+        {f"<ul>{''.join(f'<li>{escape(item)}</li>' for item in duplicate_warnings)}</ul>" if duplicate_warnings else ''}
+      </div>
+      <div class=\"summary-grid\">
+        <div class=\"summary-item\"><span class=\"summary-label\">User</span><span class=\"summary-value\">{escape(result.get('target_user', '') or 'Not found')}</span></div>
+        <div class=\"summary-item\"><span class=\"summary-label\">Jabber Built</span><span class=\"summary-value\">{'YES' if result.get('jabber_built') else 'NO'}</span></div>
+        <div class=\"summary-item\"><span class=\"summary-label\">Device Name</span><span class=\"summary-value\">{escape(result.get('device_name') or 'Not found')}</span></div>
+        <div class=\"summary-item\"><span class=\"summary-label\">Jabber Extension</span><span class=\"summary-value\">{escape(result.get('extension') or 'Not found')}</span></div>
+        <div class=\"summary-item\"><span class=\"summary-label\">Voicemail Extension</span><span class=\"summary-value\">{escape(result.get('voicemail_extension') or 'Not found')}</span></div>
+        <div class=\"summary-item\"><span class=\"summary-label\">Environment</span><span class=\"summary-value\">{escape(result.get('environment', '') or '')}</span></div>
+      </div>
       <pre>{escape(chr(10).join([
         f"User: {result.get('target_user', '')}",
         f"Jabber Built: {'YES' if result.get('jabber_built') else 'NO'}",

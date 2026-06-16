@@ -81,6 +81,11 @@ Priority keys:
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
 
+### 2026-06-16
+- Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.
+- Logged Send New Jabber Email actions into the audit trail so the history view includes inline notification activity.
+- Enhanced the Jabber pre-check result to highlight duplicate Jabber and voicemail resources before building.
+
 ### 2026-05-01
 - Decision update: proceed with a controlled test to remove `hmac-sha1` after removing `hmac-sha1-etm`, then validate Cisco CUCM/Unity systems negotiate stronger MACs; rollback if any SSH automation fails.
 - TASK0723797: vsftpd log analysis showed two FTP clients: `10.241.18.11` (CUCM CDR uploads, confirmed) and `10.241.17.165` (unknown — suspected networking device sending backups).
