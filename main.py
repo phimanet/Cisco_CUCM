@@ -1129,18 +1129,39 @@ def _extract_mobile_shared_dn_from_output(csv_data) -> str:
   csv_text = _to_bytes(csv_data).decode("utf-8", errors="replace")
   reader = csv.reader(io.StringIO(csv_text))
 
+  def _find_dn(text: str) -> str:
+    # Prefer full PSTN-looking numbers first, then any DN length >= 4.
+    for pattern in (r"\b(\d{10,11})\b", r"\b(\d{4,})\b"):
+      match = re.search(pattern, text or "")
+      if match:
+        return match.group(1)
+    return ""
+
+  fallback_dn = ""
   for row in reader:
     if len(row) < 3:
       continue
+
     step = (row[0] or "").strip()
     status = (row[1] or "").strip().lower()
     details = (row[2] or "").strip()
-    if step == "Resolve DN" and status == "success":
-      match = re.search(r"\b(\d{4,})\b", details)
-      if match:
-        return match.group(1)
+    if status != "success":
+      continue
 
-  return ""
+    # Primary row emitted by secondary-device workflows.
+    if step == "Resolve DN":
+      dn = _find_dn(details)
+      if dn:
+        return dn
+
+    # Alternate success row emitted when a mobile device is actually created.
+    # Example: "Created TCT214... with shared DN 2142100994"
+    if step in {"Add TCT Device", "Add BOT Device"} or "shared DN" in details:
+      dn = _find_dn(details)
+      if dn and not fallback_dn:
+        fallback_dn = dn
+
+  return fallback_dn
 
 
 def _append_result_row(csv_data, step: str, status: str, details: str) -> bytes:
@@ -1311,7 +1332,7 @@ def _send_csf_jabber_ready_email_if_created(
       f"Cisco Jabber has been created, and ready for your use. The Telephone number assigned to you is {phone_text}.\n\n"
       "What is Cisco Jabber?  Jabber is what you will be using to make voice calls, providing secure and reliable communication.\n\n"
       "Please click on the link below for video training on how to use of Cisco Jabber.\n"
-      f"Watch and Learn Cisco Jabber Softphone 12.9.mp4\n{CSF_JABBER_TRAINING_URL}"
+      f"Watch and Learn Cisco Jabber Softphone \n{CSF_JABBER_TRAINING_URL}"
     )
     html_body = (
       "<p>Welcome to AMN Healthcare</p>"
