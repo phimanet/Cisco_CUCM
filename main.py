@@ -2850,7 +2850,7 @@ __ADMIN_CARD__
                 `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build Jabber</button>` +
                 `<button type="button" style="${btnStyle}background:#0e7490;color:#fff;" onclick="prefillPanel('tct','${uid}')">Build iPhone</button>` +
                 `<button type="button" style="${btnStyle}background:#7c3aed;color:#fff;" onclick="prefillPanel('bot','${uid}')">Build Android</button>` +
-                `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" onclick="prefillMobileJabberNotify('${uid}','')">Re-send Mobile Email</button>` +
+                `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" data-mobile-resend-uid="${uid}">Re-send Mobile Email</button>` +
                 `<button type="button" style="${btnStyle}background:#1f7a3d;color:#fff;" data-lookup-notify-uid="${uid}" data-lookup-notify-tel="${(r.telephone || "")}">Send New Jabber Email</button>` +
                 `<button type="button" style="${btnStyle}background:#b45309;color:#fff;" onclick="prefillPanel('pin','${uid}')">Reset Voicemail PIN</button>` +
                 `<button type="button" style="${btnStyle}background:#8a5a00;color:#fff;" onclick="prefillPanel('namechange','${uid}')">Name Update</button>`;
