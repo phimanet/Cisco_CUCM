@@ -5213,34 +5213,6 @@ __ADMIN_CARD__
       })();
       // ── End Mobile Jabber Notify panel ───────────────────────────────
 
-      // Wire inline Re-send Mobile Email buttons in search result tables (Page 1)
-      document.addEventListener("click", async function (event) {
-        const btn = event.target.closest("button[data-mobile-resend-uid]");
-        if (!btn) return;
-        const uid = btn.getAttribute("data-mobile-resend-uid") || "";
-        if (!uid) return;
-        const origText = btn.textContent;
-        btn.disabled = true;
-        btn.textContent = "Sending...";
-        const statusEl = document.getElementById("person-lookup-status") || document.getElementById("extension-lookup-status");
-        try {
-          const fd = new FormData();
-          fd.append("cucm_user", (document.querySelector('[name="cucm_user"]') || {}).value || "");
-          fd.append("cucm_pass", (document.querySelector('[name="cucm_pass"]') || {}).value || "");
-          fd.append("target_user", uid);
-          const resp = await fetch("/send/mobile-jabber-email", { method: "POST", body: fd, credentials: "same-origin", headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" } });
-          const payload = await resp.json();
-          if (!resp.ok || !payload.ok) throw new Error((payload && payload.detail) || "Send failed.");
-          btn.textContent = "\u2713 Sent";
-          btn.style.background = "#166534";
-          if (statusEl) statusEl.textContent = "Mobile email sent for " + uid + ": " + (payload.detail || "Success.");
-        } catch (err) {
-          btn.textContent = origText;
-          btn.disabled = false;
-          if (statusEl) statusEl.textContent = "Mobile email failed for " + uid + ": " + ((err && err.message) || "Unknown error.");
-        }
-      });
-
       const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
       const panels = Array.from(document.querySelectorAll(".tool-panel"));
 
