@@ -503,10 +503,13 @@ def _list_available_dns(session, cucm_ip, prefix):
    </soapenv:Body>
 </soapenv:Envelope>"""
 
-    def _collect_from_response(xml_text, out_patterns):
+    def _collect_from_response(xml_text, out_patterns, out_debug):
         root = ET.fromstring(xml_text)
         line_count = 0
         wanted_partition = (ROUTE_PARTITION or "").strip().upper()
+        partitions_seen = set()
+        active_count = 0
+        
         for elem in root.iter():
             if _strip_ns(elem.tag) != "line":
                 continue
@@ -516,13 +519,23 @@ def _list_available_dns(session, cucm_ip, prefix):
             partition = _find_first_text(elem, [["routePartitionName"]]).strip().upper()
             active = _find_first_text(elem, [["active"]]).strip().lower()
 
+            partitions_seen.add(partition)
             is_inactive = active not in {"true", "t", "1", "yes"}
-            if pattern and partition == wanted_partition and is_inactive:
-                out_patterns.add(pattern)
+            
+            if is_inactive:
+                if pattern and partition == wanted_partition:
+                    out_patterns.add(pattern)
+            else:
+                active_count += 1
 
+        out_debug["total_returned"] = line_count
+        out_debug["active_count"] = active_count
+        out_debug["inactive_other_partition"] = line_count - active_count - len(out_patterns)
+        out_debug["partitions_seen"] = ",".join(sorted(partitions_seen))
         return line_count
 
     candidates = set()
+    debug_info = {}
     page_size = 1000
     max_pages = 25
     used_paging = True
@@ -539,7 +552,7 @@ def _list_available_dns(session, cucm_ip, prefix):
                 f"listLine paging for prefix {prefix} failed with HTTP {response.status_code}: {response.text[:1000]}"
             )
 
-        line_count = _collect_from_response(response.text, candidates)
+        line_count = _collect_from_response(response.text, candidates, debug_info)
         if line_count < page_size:
             break
 
@@ -549,7 +562,12 @@ def _list_available_dns(session, cucm_ip, prefix):
             raise RuntimeError(
                 f"listLine for prefix {prefix} failed with HTTP {legacy_response.status_code}: {legacy_response.text[:1000]}"
             )
-        _collect_from_response(legacy_response.text, candidates)
+        _collect_from_response(legacy_response.text, candidates, debug_info)
+
+    # Store debug info for logging
+    if not hasattr(_list_available_dns, "last_debug"):
+        _list_available_dns.last_debug = {}
+    _list_available_dns.last_debug[prefix] = debug_info
 
     return sorted(candidates)
 
@@ -627,6 +645,8 @@ def _phone_exists(session, cucm_ip, phone_name):
 
 def _choose_available_dn(session, cucm_ip, prefix, device_name_prefix=""):
     candidates = _list_available_dns(session, cucm_ip, prefix)
+    debug_info = getattr(_list_available_dns, "last_debug", {}).get(prefix, {})
+    
     for candidate in candidates:
         if not _is_dn_inactive(session, cucm_ip, candidate, ROUTE_PARTITION):
             continue
@@ -636,8 +656,18 @@ def _choose_available_dn(session, cucm_ip, prefix, device_name_prefix=""):
             candidate_phone_name = f"{device_name_prefix}{candidate}"
             if _phone_exists(session, cucm_ip, candidate_phone_name):
                 continue
-            return candidate
-    raise RuntimeError(f"No available inactive DN found in {ROUTE_PARTITION} starting with {prefix}.")
+        return candidate
+    
+    # Build detailed error with debug info
+    err_detail = f"No available inactive DN found in {ROUTE_PARTITION} starting with {prefix}."
+    if debug_info:
+        err_detail += (
+            f" [Debug: returned={debug_info.get('total_returned', 0)}, "
+            f"active={debug_info.get('active_count', 0)}, "
+            f"inactive_other_partition={debug_info.get('inactive_other_partition', 0)}, "
+            f"partitions={debug_info.get('partitions_seen', 'none')}]"
+        )
+    raise RuntimeError(err_detail)
 
 
 def _build_add_phone_soap(template, user_details, phone_name, description, new_dn, display_name):
