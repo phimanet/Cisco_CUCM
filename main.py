@@ -7889,22 +7889,9 @@ def send_jabber_ready_email_route(
     clean_target = (target_user or "").strip()
     phone = (telephone or "").strip()
 
-    # If no phone provided by caller, look it up from CUCM
+    # Always resolve from CUCM primary extension when phone not provided.
     if not phone:
-        try:
-            _, _ = _lookup_user_contact(cucm_host, cucm_user, cucm_pass, clean_target)
-        except Exception:
-            pass
-        # Re-fetch with full details via person lookup
-        results = search_persons_by_name(cucm_host, cucm_user, cucm_pass, "", "")
-        for r in results:
-            if (r.get("userid") or "").strip().lower() == clean_target.lower():
-                phone = (r.get("telephone") or "").strip()
-                break
-
-    if not phone:
-        # Fall back to mailid lookup to at least get recipient
-        pass
+        phone = _lookup_user_primary_extension(cucm_host, cucm_user, cucm_pass, clean_target)
 
     notify_status, notify_details = _send_csf_jabber_ready_email_if_created(
         cucm_host=cucm_host,
