@@ -651,31 +651,23 @@ def _choose_available_dn(session, cucm_ip, prefix, device_name_prefix=""):
         raise RuntimeError(f"No available inactive DN found in {ROUTE_PARTITION} starting with {prefix}.")
     
     # _list_available_dns already filtered for inactive + correct partition.
-    # Try the first few candidates; skip redundant _is_dn_inactive check.
-    max_tries = min(5, len(candidates))
-    for i, candidate in enumerate(candidates[:max_tries]):
-        # Only check if DN is unassigned (has devices) and phone doesn't already exist
-        if not _is_dn_unassigned(session, cucm_ip, candidate, ROUTE_PARTITION):
-            continue
-        if device_name_prefix:
-            candidate_phone_name = f"{device_name_prefix}{candidate}"
-            if _phone_exists(session, cucm_ip, candidate_phone_name):
-                continue
-        return candidate
+    # Pick first candidate; skip device/phone checks (let addPhone fail if DN is truly in use).
+    candidate = candidates[0]
     
-    # If first 5 failed, all 286 likely have devices or check is timing out
-    err_detail = (
-        f"No available DN passed secondary checks in {ROUTE_PARTITION} starting with {prefix}. "
-        f"Tried first {max_tries} of {len(candidates)} inactive candidates."
-    )
-    if debug_info:
-        err_detail += (
-            f" [Debug: returned={debug_info.get('total_returned', 0)}, "
-            f"active={debug_info.get('active_count', 0)}, "
-            f"inactive_other_partition={debug_info.get('inactive_other_partition', 0)}, "
-            f"partitions={debug_info.get('partitions_seen', 'none')}]"
-        )
-    raise RuntimeError(err_detail)
+    # Only check if CSF phone name would conflict
+    if device_name_prefix:
+        candidate_phone_name = f"{device_name_prefix}{candidate}"
+        if _phone_exists(session, cucm_ip, candidate_phone_name):
+            # Phone exists, try next few candidates
+            for candidate in candidates[1:min(6, len(candidates))]:
+                candidate_phone_name = f"{device_name_prefix}{candidate}"
+                if not _phone_exists(session, cucm_ip, candidate_phone_name):
+                    return candidate
+            raise RuntimeError(
+                f"CSF phone names conflict for first 6 candidates in {ROUTE_PARTITION} starting with {prefix}."
+            )
+    
+    return candidate
 
 
 def _build_add_phone_soap(template, user_details, phone_name, description, new_dn, display_name):
