@@ -7,6 +7,8 @@ import xml.etree.ElementTree as ET
 from requests.auth import HTTPBasicAuth
 from xml.sax.saxutils import escape
 
+from cucm_config import DEFAULT_ROUTE_PARTITION, LAB_CUCM_HOST, LAB_UNITY_HOST, PROD_CUCM_HOST, PROD_UNITY_HOST
+
 try:
     from .ad_phone_fields import clear_ad_phone_fields
 except ImportError:
@@ -14,11 +16,10 @@ except ImportError:
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-LAB_CUCM_IP = "lascucmpl01.ahs.int"
-PROD_CUCM_IP = "lascucmpp01.ahs.int"
-UNITY_LAB_SERVER = "LASCUTYPL01.ahs.int"
-UNITY_PROD_SERVER = "SANCUTYP01.ahs.int"
-DEFAULT_ROUTE_PARTITION = "ENT_DEVICE_PT"
+LAB_CUCM_IP = LAB_CUCM_HOST
+PROD_CUCM_IP = PROD_CUCM_HOST
+UNITY_LAB_SERVER = LAB_UNITY_HOST
+UNITY_PROD_SERVER = PROD_UNITY_HOST
 TARGET_DEVICE_PREFIXES = ("CSF", "BOT", "TCT")
 
 

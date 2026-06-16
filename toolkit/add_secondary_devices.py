@@ -9,11 +9,13 @@ import xml.etree.ElementTree as ET
 from requests.auth import HTTPBasicAuth
 from xml.sax.saxutils import escape
 
+from cucm_config import BOT_TEMPLATE_FILE, DEFAULT_ROUTE_PARTITION, TCT_TEMPLATE_FILE
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-DEFAULT_ROUTE_PARTITION = "ENT_DEVICE_PT"
-TCT_TEMPLATE_FILE = "phone_device_template_tct.json"
-BOT_TEMPLATE_FILE = "phone_device_template_bot.json"
+DEFAULT_ROUTE_PARTITION = DEFAULT_ROUTE_PARTITION
+TCT_TEMPLATE_FILE = TCT_TEMPLATE_FILE
+BOT_TEMPLATE_FILE = BOT_TEMPLATE_FILE
 
 
 def _axl_post(session, cucm_host, soap_xml):

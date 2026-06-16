@@ -11,6 +11,8 @@ import urllib3
 from requests.auth import HTTPBasicAuth
 from xml.sax.saxutils import escape
 
+from cucm_config import DEFAULT_ROUTE_PARTITION
+
 try:
     from .ad_phone_fields import update_ad_phone_fields
 except ImportError:
@@ -19,7 +21,7 @@ except ImportError:
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 AXL_NS = "http://www.cisco.com/AXL/API/15.0"
-DN_ROUTE_PARTITION = "ENT_DEVICE_PT"
+DN_ROUTE_PARTITION = DEFAULT_ROUTE_PARTITION
 AUTO_DN_PREFIXES = ("214", "469", "945")
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp1.ahs.int").strip() or "smtp1.ahs.int"
 SMTP_PORT = int(os.getenv("SMTP_PORT", "25") or "25")
@@ -210,7 +212,7 @@ def _choose_available_dn_auto(session, cucm_host):
         except Exception:
             continue
     raise RuntimeError(
-        "No available inactive DN found in ENT_DEVICE_PT for auto-selection prefixes: "
+        f"No available inactive DN found in {DN_ROUTE_PARTITION} for auto-selection prefixes: "
         + ", ".join(AUTO_DN_PREFIXES)
     )
 
