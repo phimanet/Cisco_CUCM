@@ -4178,8 +4178,6 @@ __ADMIN_CARD__
       </div><br>
       User ID:<br>
       <input id="mobile-jabber-target-user" name="target_user" placeholder="john.doe" required style="width:min(280px,100%);"><br><br>
-      Telephone Number (optional):<br>
-      <input id="mobile-jabber-telephone" name="telephone" placeholder="8585236620" style="width:min(280px,100%);"><br><br>
       <div class="action-row">
         <button type="submit">Send Mobile Instructions</button>
         <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
@@ -5033,11 +5031,9 @@ __ADMIN_CARD__
           var userField = form.querySelector('input[name="cucm_user"]');
           var passField = form.querySelector('input[name="cucm_pass"]');
           var targetField = form.querySelector('input[name="target_user"]');
-          var phoneField = form.querySelector('input[name="telephone"]');
           var cucmUser = ((userField && userField.value) || "").trim();
           var cucmPass = (passField && passField.value) || "";
           var targetUser = ((targetField && targetField.value) || "").trim();
-          var telephone = ((phoneField && phoneField.value) || "").trim();
 
           if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
             statusEl.textContent = "Enter CUCM username and password (or use cached login) first.";
@@ -5054,7 +5050,6 @@ __ADMIN_CARD__
             fd.append("cucm_user", cucmUser);
             fd.append("cucm_pass", cucmPass);
             fd.append("target_user", targetUser);
-            fd.append("telephone", telephone);
             var resp = await fetch("/send/mobile-jabber-email", {
               method: "POST",
               body: fd,
@@ -5223,9 +5218,7 @@ __ADMIN_CARD__
       window.prefillMobileJabberNotify = function (userId, telephone) {
         showPanel("mobilejabbernotify");
         var userField = document.getElementById("mobile-jabber-target-user");
-        var telField = document.getElementById("mobile-jabber-telephone");
         if (userField) userField.value = userId || "";
-        if (telField) telField.value = telephone || "";
         var panel = panels.find((p) => p.dataset.panel === "mobilejabbernotify");
         if (panel) {
           panel.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -7934,11 +7927,12 @@ def send_mobile_jabber_email_route(
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
     target_user: str = Form(...),
-    telephone: str = Form(""),
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
     clean_target = (target_user or "").strip()
-    phone = (telephone or "").strip()
+
+    # Always resolve phone number from CUCM primary extension.
+    phone = _lookup_user_primary_extension(cucm_host, cucm_user, cucm_pass, clean_target)
 
     notify_status, notify_details = _send_mobile_jabber_ready_email(
       cucm_host=cucm_host,
