@@ -482,111 +482,41 @@ def _extract_unity_extension(unity_user):
 
 
 def _list_available_dns(session, cucm_ip, prefix):
-    def _build_list_line_soap(skip=0, first=1000, paged=True):
-        page_xml = f"""
-         <first>{first}</first>
-         <skip>{skip}</skip>""" if paged else ""
-
-        return f"""<?xml version="1.0" encoding="UTF-8"?>
+    soap = f"""<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
    <soapenv:Body>
       <axl:listLine>
          <searchCriteria>
             <pattern>{escape(prefix)}%</pattern>
-         </searchCriteria>{page_xml}
+         </searchCriteria>
          <returnedTags>
             <pattern/>
             <routePartitionName/>
             <active/>
-            <associatedDevices>
-               <device/>
-            </associatedDevices>
          </returnedTags>
       </axl:listLine>
    </soapenv:Body>
 </soapenv:Envelope>"""
 
-    def _collect_from_response(xml_text, out_patterns, out_debug):
-        root = ET.fromstring(xml_text)
-        line_count = 0
-        wanted_partition = (ROUTE_PARTITION or "").strip().upper()
-        partitions_seen = set()
-        active_count = 0
-        assigned_count = 0
-        
-        for elem in root.iter():
-            if _strip_ns(elem.tag) != "line":
-                continue
+    response = _axl_post(session, cucm_ip, soap)
+    if response.status_code != 200:
+        raise RuntimeError(f"listLine for prefix {prefix} failed with HTTP {response.status_code}: {response.text[:1000]}")
 
-            line_count += 1
-            pattern = _find_first_text(elem, [["pattern"]]).strip()
-            partition = _find_first_text(elem, [["routePartitionName"]]).strip().upper()
-            active = _find_first_text(elem, [["active"]]).strip().lower()
+    root = ET.fromstring(response.text)
+    candidates = []
+    for elem in root.iter():
+        if _strip_ns(elem.tag) != "line":
+            continue
 
-            partitions_seen.add(partition)
-            is_inactive = active not in {"true", "t", "1", "yes"}
-            
-            # Check if DN has any associated devices
-            has_devices = False
-            for device_elem in elem.iter():
-                if _strip_ns(device_elem.tag) == "device" and device_elem.text and device_elem.text.strip():
-                    has_devices = True
-                    break
-            
-            if is_inactive:
-                if active_count == 0 and active not in {"true", "t", "1", "yes"}:
-                    pass  # just counting
-                active_count += 0  # don't increment for inactive
-                
-                if has_devices:
-                    assigned_count += 1
-                elif pattern and partition == wanted_partition:
-                    out_patterns.add(pattern)
-            else:
-                active_count += 1
+        pattern = _find_first_text(elem, [["pattern"]])
+        partition = _find_first_text(elem, [["routePartitionName"]])
+        active = _find_first_text(elem, [["active"]]).strip().lower()
 
-        out_debug["total_returned"] = line_count
-        out_debug["active_count"] = active_count
-        out_debug["assigned_count"] = assigned_count
-        out_debug["partitions_seen"] = ",".join(sorted(partitions_seen))
-        return line_count
+        is_inactive = active not in {"true", "t", "1", "yes"}
+        if pattern and partition == ROUTE_PARTITION and is_inactive:
+            candidates.append(pattern)
 
-    candidates = set()
-    debug_info = {}
-    page_size = 1000
-    max_pages = 25
-    used_paging = True
-
-    for page in range(max_pages):
-        skip = page * page_size
-        response = _axl_post(session, cucm_ip, _build_list_line_soap(skip=skip, first=page_size, paged=True))
-
-        if response.status_code != 200:
-            if page == 0:
-                used_paging = False
-                break
-            raise RuntimeError(
-                f"listLine paging for prefix {prefix} failed with HTTP {response.status_code}: {response.text[:1000]}"
-            )
-
-        line_count = _collect_from_response(response.text, candidates, debug_info)
-        if line_count < page_size:
-            break
-
-    if not used_paging:
-        legacy_response = _axl_post(session, cucm_ip, _build_list_line_soap(paged=False))
-        if legacy_response.status_code != 200:
-            raise RuntimeError(
-                f"listLine for prefix {prefix} failed with HTTP {legacy_response.status_code}: {legacy_response.text[:1000]}"
-            )
-        _collect_from_response(legacy_response.text, candidates, debug_info)
-
-    # Store debug info for logging
-    if not hasattr(_list_available_dns, "last_debug"):
-        _list_available_dns.last_debug = {}
-    _list_available_dns.last_debug[prefix] = debug_info
-
-    return sorted(candidates)
+    return sorted(set(candidates))
 
 
 def _is_dn_unassigned(session, cucm_ip, pattern, route_partition):
@@ -662,13 +592,10 @@ def _phone_exists(session, cucm_ip, phone_name):
 
 def _choose_available_dn(session, cucm_ip, prefix, device_name_prefix=""):
     candidates = _list_available_dns(session, cucm_ip, prefix)
-    
-    if not candidates:
-        raise RuntimeError(f"No available inactive DN found in {ROUTE_PARTITION} starting with {prefix}.")
-    
-    # _list_available_dns already filtered for inactive + correct partition.
-    # Use first candidate; let addPhone validate device name and DN conflicts.
-    return candidates[0]
+    for candidate in candidates:
+        if _is_dn_unassigned(session, cucm_ip, candidate, ROUTE_PARTITION):
+            return candidate
+    raise RuntimeError(f"No available inactive DN found in {ROUTE_PARTITION} starting with {prefix}.")
 
 
 def _build_add_phone_soap(template, user_details, phone_name, description, new_dn, display_name):
@@ -957,13 +884,6 @@ def build_user_csf_phone_from_template(
                 dn_prefix,
                 template.get("deviceNamePrefix", ""),
             )
-        
-        # Log selected candidate for verification
-        log_writer.writerow([
-            "Select DN",
-            "Candidate",
-            f"Selected {new_dn} from available inactive pool (prefix {dn_prefix}); verify in CUCM that it is inactive",
-        ])
         
         phone_name = f"{template['deviceNamePrefix']}{new_dn}"
         description = f"CSF {display_name}".strip()
