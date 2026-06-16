@@ -2877,8 +2877,10 @@ __ADMIN_CARD__
                 const cucmHost = "__AUTH_CUCM_HOST__";
                 const cucmUser = "__AUTH_USER__";
                 const cucmPass = "";
+                const origText = btn.textContent;
 
                 btn.disabled = true;
+                btn.textContent = "Sending...";
                 statusEl.textContent = `Sending Jabber notification for ${uid}...`;
                 try {
                   const sf = new FormData();
@@ -2904,10 +2906,13 @@ __ADMIN_CARD__
                   if (!sr.ok || !sp.ok) {
                     throw new Error((sp && sp.detail) || "Send failed.");
                   }
+                  btn.textContent = "\u2713 Sent";
+                  btn.style.background = "#166534";
                   statusEl.textContent = "Notification sent: " + (sp.detail || "Email sent successfully.");
                 } catch (err) {
-                  statusEl.textContent = "Send failed: " + ((err && err.message) || "Unknown error.");
+                  btn.textContent = origText;
                   btn.disabled = false;
+                  statusEl.textContent = "Send failed: " + ((err && err.message) || "Unknown error.");
                 }
               });
             });
@@ -6574,8 +6579,10 @@ def menu_admin_page(request: Request):
                   const cucmHost = "__AUTH_CUCM_HOST__";
                   const cucmUser = "__AUTH_USER__";
                   const cucmPass = "";
+                  const origText = btn.textContent;
 
                   btn.disabled = true;
+                  btn.textContent = "Sending...";
                   statusEl.textContent = `Sending Jabber notification for ${uid}...`;
                   try {
                     const sf = new FormData();
@@ -6595,10 +6602,13 @@ def menu_admin_page(request: Request):
                     if (!sr.ok || !sp.ok) {
                       throw new Error((sp && sp.detail) || "Send failed.");
                     }
+                    btn.textContent = "\u2713 Sent";
+                    btn.style.background = "#166534";
                     statusEl.textContent = "Notification sent: " + (sp.detail || "Email sent successfully.");
                   } catch (err) {
-                    statusEl.textContent = "Send failed: " + ((err && err.message) || "Unknown error.");
+                    btn.textContent = origText;
                     btn.disabled = false;
+                    statusEl.textContent = "Send failed: " + ((err && err.message) || "Unknown error.");
                   }
                 });
               });
