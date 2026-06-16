@@ -645,29 +645,13 @@ def _phone_exists(session, cucm_ip, phone_name):
 
 def _choose_available_dn(session, cucm_ip, prefix, device_name_prefix=""):
     candidates = _list_available_dns(session, cucm_ip, prefix)
-    debug_info = getattr(_list_available_dns, "last_debug", {}).get(prefix, {})
     
     if not candidates:
         raise RuntimeError(f"No available inactive DN found in {ROUTE_PARTITION} starting with {prefix}.")
     
     # _list_available_dns already filtered for inactive + correct partition.
-    # Pick first candidate; skip device/phone checks (let addPhone fail if DN is truly in use).
-    candidate = candidates[0]
-    
-    # Only check if CSF phone name would conflict
-    if device_name_prefix:
-        candidate_phone_name = f"{device_name_prefix}{candidate}"
-        if _phone_exists(session, cucm_ip, candidate_phone_name):
-            # Phone exists, try next few candidates
-            for candidate in candidates[1:min(6, len(candidates))]:
-                candidate_phone_name = f"{device_name_prefix}{candidate}"
-                if not _phone_exists(session, cucm_ip, candidate_phone_name):
-                    return candidate
-            raise RuntimeError(
-                f"CSF phone names conflict for first 6 candidates in {ROUTE_PARTITION} starting with {prefix}."
-            )
-    
-    return candidate
+    # Use first candidate; let addPhone validate device name and DN conflicts.
+    return candidates[0]
 
 
 def _build_add_phone_soap(template, user_details, phone_name, description, new_dn, display_name):
