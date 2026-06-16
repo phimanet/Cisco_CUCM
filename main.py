@@ -1225,6 +1225,52 @@ def _lookup_user_contact(cucm_host: str, cucm_user: str, cucm_pass: str, target_
     return values.get("mailid", ""), display_name
 
 
+def _lookup_user_primary_extension(cucm_host: str, cucm_user: str, cucm_pass: str, target_user: str) -> str:
+    clean_target = (target_user or "").strip()
+    if not clean_target:
+      return ""
+
+    soap = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getUser>
+      <userid>{escape(clean_target)}</userid>
+      <returnedTags>
+        <primaryExtension>
+          <pattern/>
+        </primaryExtension>
+      </returnedTags>
+    </axl:getUser>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    session = requests.Session()
+    session.verify = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    response = session.post(
+      f"https://{cucm_host}:8443/axl/",
+      data=soap.encode("utf-8"),
+      headers={"Content-Type": "text/xml"},
+      timeout=60,
+    )
+    if response.status_code != 200:
+      return ""
+
+    try:
+      root = ET.fromstring(response.text)
+    except Exception:
+      return ""
+
+    for elem in root.iter():
+      if elem.tag.split("}")[-1] == "pattern":
+        value = (elem.text or "").strip()
+        if value:
+          return value
+
+    return ""
+
 def _send_mobile_jabber_ready_email_if_built(
   cucm_host: str,
   cucm_user: str,
@@ -1242,6 +1288,9 @@ def _send_mobile_jabber_ready_email_if_built(
       return "Failed", "Target user does not have a CUCM mailid; email not sent"
 
     phone_number = _extract_mobile_shared_dn_from_output(csv_data)
+    if not (phone_number or "").strip():
+      phone_number = _lookup_user_primary_extension(cucm_host, cucm_user, cucm_pass, target_user)
+
     return _send_mobile_jabber_ready_email(
       cucm_host=cucm_host,
       cucm_user=cucm_user,
@@ -1318,7 +1367,9 @@ def _send_csf_jabber_ready_email_if_created(
 ) -> tuple[str, str]:
     number = (added_dn or "").strip()
     if not number:
-      return "Skipped", "No new CSF Jabber number was assigned; email not sent"
+      number = _lookup_user_primary_extension(cucm_host, cucm_user, cucm_pass, target_user)
+    if not number:
+      return "Skipped", "No Jabber number was resolved for this user; email not sent"
 
     recipient, _display_name = _lookup_user_contact(cucm_host, cucm_user, cucm_pass, target_user)
     recipient = (recipient or "").strip()
