@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-06-11
+- Date: 2026-06-16
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -121,6 +121,12 @@ Priority keys:
 
 ### 2026-06-06
 - Added Page 2 translation-pattern template generator seeded from example prefix `3148984689`, with a CSV template that keeps route partition and transform mask the same while leaving translation pattern and description as editable values.
+
+### 2026-06-16
+- Fixed Page 1 "Start Here" Re-send Mobile Email button: changed from `onclick="prefillMobileJabberNotify()"` (navigated to form) to `data-mobile-resend-uid` with inline handler (sends immediately without navigation).
+- Added checkmark + green background visual feedback to "Re-send Mobile Email" buttons across all search interfaces (Page 1 Start Here, Page 1 Extension Lookup, Page 2 Admin Person Search).
+- Added checkmark + green background visual feedback to "Send New Jabber Email" buttons on both Page 1 and Page 2 person search results (matches Re-send Mobile Email UX pattern).
+- Enforced critical workflow: always commit and push code immediately after file edits — verified with `git log` before instructing user to pull.
 
 ### 2026-06-11
 - Added two new Page 2 specialized menu items: **Twilio-Inbound-Verificaton-Phimane** and **Twilio-Inbound-Verificaton-LauraA**.
