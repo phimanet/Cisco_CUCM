@@ -483,7 +483,7 @@ def _render_error_page(title: str, message: str, status_code: int) -> HTMLRespon
         border: 1px solid #e5bcbc;
         border-radius: 12px;
         padding: 22px;
-        box-shadow: 0 8px 20px rgba(127, 29, 29, 0.08);
+        box-shadow: 0 8px 20px rgba(0, 47, 108, 0.08);
       }}
 
       h2 {{
@@ -1516,7 +1516,7 @@ def _render_job_result(title: str, csv_data, filename: str, back_url: str = "/me
         padding: 14px 24px;
         background: linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
         color: #fff;
-        box-shadow: 0 2px 12px rgba(127, 29, 29, 0.25);
+        box-shadow: 0 2px 12px rgba(0, 47, 108, 0.25);
       }}
 
       .logo {{
@@ -1543,7 +1543,7 @@ def _render_job_result(title: str, csv_data, filename: str, back_url: str = "/me
         border: 1px solid var(--amn-border);
         border-radius: 12px;
         padding: 18px;
-        box-shadow: 0 8px 20px rgba(127, 29, 29, 0.08);
+        box-shadow: 0 8px 20px rgba(0, 47, 108, 0.08);
       }}
 
       a {{ color: var(--amn-blue); }}
@@ -1556,7 +1556,7 @@ def _render_job_result(title: str, csv_data, filename: str, back_url: str = "/me
         border-radius: 8px;
         padding: 10px;
         background: var(--amn-sky);
-        color: #3f1111;
+        color: #0f2940;
       }}
     </style>
   </head>
@@ -1639,7 +1639,7 @@ def home(request: Request):
         border: 1px solid #e5bcbc;
         border-radius: 14px;
         padding: 28px;
-        box-shadow: 0 8px 20px rgba(127, 29, 29, 0.08);
+        box-shadow: 0 8px 20px rgba(0, 47, 108, 0.08);
       }
 
       a {
@@ -1671,7 +1671,7 @@ def home(request: Request):
       }
 
       button:hover {
-        background: #991b1b;
+        background: #004f9e;
       }
 
       .action-row {
@@ -1691,7 +1691,7 @@ def home(request: Request):
       }
 
       .env-action-pill.env-banner-prod {
-        color: #5f1414;
+        color: #083252;
         background: #ffe4e6;
         border-color: #f9a8b0;
       }
@@ -1789,15 +1789,15 @@ def genesys_admin_placeholder():
         --amn-text: #3f1111;
         --amn-text-soft: #4e6a84;
         --amn-border: #e5bcbc;
-        --amn-panel-border: rgba(127, 29, 29, 0.12);
-        --amn-shadow: 0 18px 40px rgba(127, 29, 29, 0.12);
+        --amn-panel-border: rgba(0, 47, 108, 0.12);
+        --amn-shadow: 0 18px 40px rgba(0, 47, 108, 0.12);
       }
 
       body {
         font-family: "Segoe UI", Tahoma, Arial, sans-serif;
         margin: 0;
         background:
-          radial-gradient(circle at top left, rgba(185, 28, 28, 0.18), transparent 26%),
+          radial-gradient(circle at top left, rgba(0, 94, 184, 0.18), transparent 26%),
           radial-gradient(circle at top right, rgba(198, 138, 18, 0.16), transparent 22%),
           linear-gradient(180deg, #f4f9fe 0%, #e8f1f9 42%, #feecec 100%);
         color: var(--amn-text);
@@ -1828,7 +1828,7 @@ def genesys_admin_placeholder():
         border: 1px solid var(--amn-border);
         border-radius: 12px;
         padding: 22px;
-        box-shadow: 0 8px 20px rgba(127, 29, 29, 0.08);
+        box-shadow: 0 8px 20px rgba(0, 47, 108, 0.08);
       }
 
       .badge {
@@ -1952,8 +1952,8 @@ def menu_page(request: Request):
         --amn-text-soft: #4e6a84;
         --amn-text: #3f1111;
         --amn-border: #e5bcbc;
-        --amn-panel-border: rgba(127, 29, 29, 0.12);
-        --amn-shadow: 0 14px 30px rgba(127, 29, 29, 0.11);
+        --amn-panel-border: rgba(0, 47, 108, 0.12);
+        --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
       }
 
       body {
@@ -1970,10 +1970,10 @@ def menu_page(request: Request):
         gap: 12px;
         padding: 10px 16px;
         background:
-          linear-gradient(120deg, rgba(127, 29, 29, 0.98), rgba(185, 28, 28, 0.94)),
+          linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)),
           linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
         color: #fff;
-        box-shadow: 0 12px 28px rgba(127, 29, 29, 0.22);
+        box-shadow: 0 12px 28px rgba(0, 47, 108, 0.22);
         border-bottom: 1px solid rgba(255, 255, 255, 0.16);
       }
 
@@ -2099,7 +2099,7 @@ def menu_page(request: Request):
         background:
           linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95)),
           linear-gradient(180deg, #ffffff, #eef6ff);
-        border: 1px solid rgba(127, 29, 29, 0.1);
+        border: 1px solid rgba(0, 47, 108, 0.1);
         box-shadow: var(--amn-shadow);
       }
 
@@ -2111,7 +2111,7 @@ def menu_page(request: Request):
         width: 280px;
         height: 280px;
         border-radius: 50%;
-        background: radial-gradient(circle, rgba(185, 28, 28, 0.18), transparent 68%);
+        background: radial-gradient(circle, rgba(0, 94, 184, 0.18), transparent 68%);
         pointer-events: none;
       }
 
@@ -2121,7 +2121,7 @@ def menu_page(request: Request):
         gap: 8px;
         padding: 5px 9px;
         border-radius: 999px;
-        background: rgba(185, 28, 28, 0.08);
+        background: rgba(0, 94, 184, 0.08);
         color: var(--amn-blue);
         font-size: 10px;
         font-weight: 800;
@@ -2160,9 +2160,9 @@ def menu_page(request: Request):
         min-width: 180px;
         padding: 8px 10px;
         border-radius: 10px;
-        background: linear-gradient(180deg, rgba(127, 29, 29, 0.96), rgba(185, 28, 28, 0.92));
+        background: linear-gradient(180deg, rgba(0, 47, 108, 0.96), rgba(0, 94, 184, 0.92));
         color: #fff;
-        box-shadow: 0 14px 28px rgba(127, 29, 29, 0.22);
+        box-shadow: 0 14px 28px rgba(0, 47, 108, 0.22);
       }
 
       .page-meta-label {
@@ -2200,17 +2200,17 @@ def menu_page(request: Request):
         padding: 7px 10px;
         border-radius: 10px;
         background: rgba(255, 255, 255, 0.9);
-        border: 1px solid rgba(127, 29, 29, 0.1);
+        border: 1px solid rgba(0, 47, 108, 0.1);
         color: inherit;
         text-decoration: none;
-        box-shadow: 0 10px 20px rgba(127, 29, 29, 0.06);
+        box-shadow: 0 10px 20px rgba(0, 47, 108, 0.06);
         transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
       }
 
       .hero-link-card:hover {
         transform: translateY(-2px);
-        border-color: rgba(185, 28, 28, 0.3);
-        box-shadow: 0 14px 28px rgba(127, 29, 29, 0.11);
+        border-color: rgba(0, 94, 184, 0.3);
+        box-shadow: 0 14px 28px rgba(0, 47, 108, 0.11);
       }
 
       .hero-link-card strong {
@@ -2250,7 +2250,7 @@ def menu_page(request: Request):
       }
 
       .env-banner-prod {
-        color: #5f1414;
+        color: #083252;
         background: #ffe4e6;
         border: 1px solid #f9a8b0;
       }
@@ -2304,11 +2304,11 @@ def menu_page(request: Request):
       .portal-sidebar {
         position: sticky;
         top: 54px;
-        background: linear-gradient(180deg, rgba(127, 29, 29, 0.97), rgba(153, 27, 27, 0.96));
+        background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 12px;
         padding: 8px;
-        box-shadow: 0 18px 36px rgba(127, 29, 29, 0.18);
+        box-shadow: 0 18px 36px rgba(0, 47, 108, 0.18);
       }
 
       .portal-sidebar h4 {
@@ -2345,7 +2345,7 @@ def menu_page(request: Request):
       }
 
       .portal-nav-btn.active {
-        background: linear-gradient(90deg, #ffffff, #ffeaea);
+        background: linear-gradient(90deg, #ffffff, #ecf6ff);
         color: var(--amn-navy);
         border-color: rgba(255, 255, 255, 0.92);
         box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
@@ -2430,25 +2430,25 @@ def menu_page(request: Request):
       select:focus,
       textarea:focus {
         outline: none;
-        border-color: rgba(185, 28, 28, 0.55);
-        box-shadow: 0 0 0 4px rgba(185, 28, 28, 0.12);
+        border-color: rgba(0, 94, 184, 0.55);
+        box-shadow: 0 0 0 4px rgba(0, 94, 184, 0.12);
       }
 
       button {
-        background: linear-gradient(180deg, #dc2626, #b91c1c);
+        background: linear-gradient(180deg, #0c77d8, #b91c1c);
         color: #fff;
         border: none;
         padding: 7px 11px;
         font-weight: 700;
         cursor: pointer;
-        box-shadow: 0 8px 18px rgba(185, 28, 28, 0.16);
+        box-shadow: 0 8px 18px rgba(0, 94, 184, 0.16);
         transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
       }
 
       button:hover {
         filter: brightness(1.04);
         transform: translateY(-1px);
-        box-shadow: 0 12px 22px rgba(185, 28, 28, 0.2);
+        box-shadow: 0 12px 22px rgba(0, 94, 184, 0.2);
       }
 
       a {
@@ -2554,8 +2554,8 @@ def menu_page(request: Request):
         width: 100%;
         height: 300px;
         font-family: Consolas, monospace;
-        background: linear-gradient(180deg, #fff1f2, #fef2f2);
-        color: #3f1111;
+        background: linear-gradient(180deg, #f4faff, #fef2f2);
+        color: #0f2940;
       }
 
       .build-user-status {
@@ -2608,8 +2608,8 @@ def menu_page(request: Request):
         width: 100%;
         height: 300px;
         font-family: Consolas, monospace;
-        background: linear-gradient(180deg, #fff1f2, #fef2f2);
-        color: #3f1111;
+        background: linear-gradient(180deg, #f4faff, #fef2f2);
+        color: #0f2940;
       }
 
       .offboard-status {
@@ -2643,8 +2643,8 @@ def menu_page(request: Request):
         width: 100%;
         height: 300px;
         font-family: Consolas, monospace;
-        background: linear-gradient(180deg, #fff1f2, #fef2f2);
-        color: #3f1111;
+        background: linear-gradient(180deg, #f4faff, #fef2f2);
+        color: #0f2940;
       }
 
       .secondary-status {
@@ -5466,15 +5466,15 @@ def menu_admin_page(request: Request):
         --amn-text: #3f1111;
         --amn-text-soft: #4e6a84;
         --amn-border: #e5bcbc;
-        --amn-panel-border: rgba(127, 29, 29, 0.12);
-        --amn-shadow: 0 14px 30px rgba(127, 29, 29, 0.11);
+        --amn-panel-border: rgba(0, 47, 108, 0.12);
+        --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
       }
 
       body {
         font-family: "Segoe UI", Tahoma, Arial, sans-serif;
         margin: 0;
         background:
-          radial-gradient(circle at top left, rgba(185, 28, 28, 0.18), transparent 26%),
+          radial-gradient(circle at top left, rgba(0, 94, 184, 0.18), transparent 26%),
           radial-gradient(circle at top right, rgba(198, 138, 18, 0.16), transparent 22%),
           linear-gradient(180deg, #f4f9fe 0%, #e8f1f9 42%, #feecec 100%);
         color: var(--amn-text);
@@ -5486,9 +5486,9 @@ def menu_admin_page(request: Request):
         justify-content: space-between;
         gap: 12px;
         padding: 10px 16px;
-        background: linear-gradient(120deg, rgba(127, 29, 29, 0.98), rgba(185, 28, 28, 0.94));
+        background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94));
         color: #fff;
-        box-shadow: 0 12px 28px rgba(127, 29, 29, 0.2);
+        box-shadow: 0 12px 28px rgba(0, 47, 108, 0.2);
         border-bottom: 1px solid rgba(255, 255, 255, 0.16);
       }
 
@@ -5601,7 +5601,7 @@ def menu_admin_page(request: Request):
         background:
           linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95)),
           linear-gradient(180deg, #ffffff, #eef6ff);
-        border: 1px solid rgba(127, 29, 29, 0.1);
+        border: 1px solid rgba(0, 47, 108, 0.1);
         box-shadow: var(--amn-shadow);
       }
 
@@ -5615,7 +5615,7 @@ def menu_admin_page(request: Request):
         gap: 8px;
         padding: 5px 9px;
         border-radius: 999px;
-        background: rgba(185, 28, 28, 0.08);
+        background: rgba(0, 94, 184, 0.08);
         color: var(--amn-blue);
         font-size: 10px;
         font-weight: 800;
@@ -5650,9 +5650,9 @@ def menu_admin_page(request: Request):
         min-width: 180px;
         padding: 8px 10px;
         border-radius: 10px;
-        background: linear-gradient(180deg, rgba(127, 29, 29, 0.96), rgba(185, 28, 28, 0.92));
+        background: linear-gradient(180deg, rgba(0, 47, 108, 0.96), rgba(0, 94, 184, 0.92));
         color: #fff;
-        box-shadow: 0 14px 28px rgba(127, 29, 29, 0.22);
+        box-shadow: 0 14px 28px rgba(0, 47, 108, 0.22);
       }
 
       .page-meta-label {
@@ -5690,17 +5690,17 @@ def menu_admin_page(request: Request):
         padding: 7px 10px;
         border-radius: 10px;
         background: rgba(255, 255, 255, 0.9);
-        border: 1px solid rgba(127, 29, 29, 0.1);
+        border: 1px solid rgba(0, 47, 108, 0.1);
         color: inherit;
         text-decoration: none;
-        box-shadow: 0 10px 20px rgba(127, 29, 29, 0.06);
+        box-shadow: 0 10px 20px rgba(0, 47, 108, 0.06);
         transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
       }
 
       .hero-link-card:hover {
         transform: translateY(-2px);
-        border-color: rgba(185, 28, 28, 0.3);
-        box-shadow: 0 14px 28px rgba(127, 29, 29, 0.11);
+        border-color: rgba(0, 94, 184, 0.3);
+        box-shadow: 0 14px 28px rgba(0, 47, 108, 0.11);
       }
 
       .hero-link-card strong {
@@ -5740,7 +5740,7 @@ def menu_admin_page(request: Request):
       }
 
       .env-banner-prod {
-        color: #5f1414;
+        color: #083252;
         background: #ffe4e6;
         border: 1px solid #f9a8b0;
       }
@@ -5783,10 +5783,10 @@ def menu_admin_page(request: Request):
       .portal-sidebar {
         position: sticky;
         top: 10px;
-        background: linear-gradient(180deg, rgba(127, 29, 29, 0.97), rgba(153, 27, 27, 0.96));
+        background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 12px;
-        box-shadow: 0 18px 36px rgba(127, 29, 29, 0.18);
+        box-shadow: 0 18px 36px rgba(0, 47, 108, 0.18);
         padding: 10px;
       }
 
@@ -5825,7 +5825,7 @@ def menu_admin_page(request: Request):
       }
 
       .portal-nav-btn.active {
-        background: linear-gradient(90deg, #ffffff, #ffeaea);
+        background: linear-gradient(90deg, #ffffff, #ecf6ff);
         color: var(--amn-navy);
         border-color: rgba(255, 255, 255, 0.92);
         box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
@@ -5926,25 +5926,25 @@ def menu_admin_page(request: Request):
       input:focus,
       textarea:focus {
         outline: none;
-        border-color: rgba(185, 28, 28, 0.55);
-        box-shadow: 0 0 0 4px rgba(185, 28, 28, 0.12);
+        border-color: rgba(0, 94, 184, 0.55);
+        box-shadow: 0 0 0 4px rgba(0, 94, 184, 0.12);
       }
 
       button {
-        background: linear-gradient(180deg, #dc2626, #b91c1c);
+        background: linear-gradient(180deg, #0c77d8, #b91c1c);
         color: #fff;
         border: none;
         padding: 9px 13px;
         font-weight: 700;
         cursor: pointer;
-        box-shadow: 0 8px 18px rgba(185, 28, 28, 0.16);
+        box-shadow: 0 8px 18px rgba(0, 94, 184, 0.16);
         transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
       }
 
       button:hover {
         filter: brightness(1.04);
         transform: translateY(-1px);
-        box-shadow: 0 12px 22px rgba(185, 28, 28, 0.2);
+        box-shadow: 0 12px 22px rgba(0, 94, 184, 0.2);
       }
 
       a {
@@ -8330,7 +8330,7 @@ def check_jabber_status_route(
     <title>Jabber Pre-Check Result</title>
     <style>
       body {{ font-family: Segoe UI, Arial, sans-serif; background: #f4f8fc; color: #10324f; margin: 24px; }}
-      .card {{ max-width: 960px; background: #ffffff; border: 1px solid #d7e2ee; border-radius: 12px; padding: 18px; box-shadow: 0 8px 20px rgba(127, 29, 29, 0.08); }}
+      .card {{ max-width: 960px; background: #ffffff; border: 1px solid #d7e2ee; border-radius: 12px; padding: 18px; box-shadow: 0 8px 20px rgba(0, 47, 108, 0.08); }}
       .precheck-banner {{ border-radius: 10px; padding: 14px 16px; margin: 14px 0 16px 0; border: 1px solid #cfe1f3; background: #eef6ff; }}
       .precheck-banner.warning {{ border-color: #f0c36d; background: #fff8e8; }}
       .precheck-banner.ok {{ border-color: #9fd1b6; background: #eefaf2; }}
