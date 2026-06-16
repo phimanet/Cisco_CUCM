@@ -940,6 +940,14 @@ def build_user_csf_phone_from_template(
                 dn_prefix,
                 template.get("deviceNamePrefix", ""),
             )
+        
+        # Log selected candidate for verification
+        log_writer.writerow([
+            "Select DN",
+            "Candidate",
+            f"Selected {new_dn} from available inactive pool (prefix {dn_prefix}); verify in CUCM that it is inactive",
+        ])
+        
         phone_name = f"{template['deviceNamePrefix']}{new_dn}"
         description = f"CSF {display_name}".strip()
 
