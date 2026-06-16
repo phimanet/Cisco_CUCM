@@ -647,9 +647,14 @@ def _choose_available_dn(session, cucm_ip, prefix, device_name_prefix=""):
     candidates = _list_available_dns(session, cucm_ip, prefix)
     debug_info = getattr(_list_available_dns, "last_debug", {}).get(prefix, {})
     
-    for candidate in candidates:
-        if not _is_dn_inactive(session, cucm_ip, candidate, ROUTE_PARTITION):
-            continue
+    if not candidates:
+        raise RuntimeError(f"No available inactive DN found in {ROUTE_PARTITION} starting with {prefix}.")
+    
+    # _list_available_dns already filtered for inactive + correct partition.
+    # Try the first few candidates; skip redundant _is_dn_inactive check.
+    max_tries = min(5, len(candidates))
+    for i, candidate in enumerate(candidates[:max_tries]):
+        # Only check if DN is unassigned (has devices) and phone doesn't already exist
         if not _is_dn_unassigned(session, cucm_ip, candidate, ROUTE_PARTITION):
             continue
         if device_name_prefix:
@@ -658,8 +663,11 @@ def _choose_available_dn(session, cucm_ip, prefix, device_name_prefix=""):
                 continue
         return candidate
     
-    # Build detailed error with debug info
-    err_detail = f"No available inactive DN found in {ROUTE_PARTITION} starting with {prefix}."
+    # If first 5 failed, all 286 likely have devices or check is timing out
+    err_detail = (
+        f"No available DN passed secondary checks in {ROUTE_PARTITION} starting with {prefix}. "
+        f"Tried first {max_tries} of {len(candidates)} inactive candidates."
+    )
     if debug_info:
         err_detail += (
             f" [Debug: returned={debug_info.get('total_returned', 0)}, "
