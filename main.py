@@ -2508,6 +2508,39 @@ def menu_page(request: Request):
         width: min(220px, 100%);
       }
 
+      .search-filter-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 14px;
+      }
+
+      .search-filter-row input {
+        flex: 0 0 auto;
+        width: 180px;
+        padding: 8px 10px;
+        border: 1px solid rgba(0, 47, 108, 0.2);
+        border-radius: 6px;
+        font-size: 14px;
+      }
+
+      .search-filter-row button {
+        flex: 0 0 auto;
+        padding: 8px 20px;
+        background: linear-gradient(135deg, #0f5db8 0%, #0a3f7d 100%);
+        color: white;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 14px;
+      }
+
+      .search-filter-row button:hover {
+        background: linear-gradient(135deg, #0a3f7d 0%, #072f5f 100%);
+      }
+
       .jabber-check-output {
         flex: 1 1 480px;
         min-width: 320px;
@@ -2768,23 +2801,15 @@ __ADMIN_CARD__
     <p>Search for a user by last name (and optional first name) to view their extension, email, and associated Jabber devices.</p>
 
     <div class="jabber-check-layout" style="display:block;">
-      <form id="person-lookup-form" class="jabber-check-form" style="margin-bottom:14px;">
+      <form id="person-lookup-form" class="jabber-check-form">
         <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
         <input type="hidden" name="cucm_user" value="__AUTH_USER__">
         <input type="hidden" name="cucm_pass" value="">
         <input type="hidden" name="include_teams_status" value="1">
 
-        <div class="compact-inline-row">
-          <span>Last Name:</span>
-          <input name="last_name" placeholder="Smith" required>
-        </div><br>
-
-        <div class="compact-inline-row">
-          <span>First Name (optional):</span>
-          <input name="first_name" placeholder="John">
-        </div><br>
-
-        <div class="action-row">
+        <div class="search-filter-row">
+          <input name="last_name" placeholder="Last Name *" required>
+          <input name="first_name" placeholder="First Name (optional)">
           <button id="person-lookup-btn" type="submit">Search</button>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
@@ -6060,17 +6085,11 @@ def menu_admin_page(request: Request):
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
           <input type="hidden" name="include_teams_status" value="1">
-          <div class="compact-inline-row">
-            <span>Last Name:</span>
-            <input name="last_name" placeholder="Smith" required>
-          </div><br>
-
-          <div class="compact-inline-row">
-            <span>First Name (optional):</span>
-            <input name="first_name" placeholder="John">
-          </div><br>
-
-          <button type="submit">Search</button>
+          <div class="search-filter-row">
+            <input name="last_name" placeholder="Last Name *" required>
+            <input name="first_name" placeholder="First Name (optional)">
+            <button type="submit">Search</button>
+          </div>
         </form>
 
         <p id="admin-person-lookup-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
