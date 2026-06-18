@@ -4291,6 +4291,7 @@ __ADMIN_CARD__
       </div><br>
       <div class="action-row">
         <button type="submit">Search</button>
+        +            <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
       </div>
     </form>
