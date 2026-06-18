@@ -5949,6 +5949,25 @@ def menu_admin_page(request: Request):
         font-weight: 600;
       }
 
+      .search-filter-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 14px;
+      }
+
+      .search-filter-row input {
+        flex: 0 0 auto;
+        width: 180px;
+        padding: 8px 10px;
+      }
+
+      .search-filter-row button {
+        flex: 0 0 auto;
+        padding: 8px 20px;
+      }
+
       input:focus,
       textarea:focus {
         outline: none;
