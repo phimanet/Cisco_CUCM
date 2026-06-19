@@ -414,34 +414,20 @@ def _create_or_update_unity_voicemail(
     template_alias,
     ldap_import_enabled,
 ):
-    expected_alias_clean = _normalize_text(alias)
+    # New-build rule: if the target extension exists in Unity, remove it and recreate for current user.
     extension_owner = _get_unity_user_by_extension(session, unity_server, extension)
     if extension_owner:
         extension_owner_id = str(extension_owner.get("ObjectId", "") or "").strip()
-        extension_owner_alias = _normalize_text(extension_owner.get("Alias"))
-        if extension_owner_id and expected_alias_clean and extension_owner_alias and extension_owner_alias != expected_alias_clean:
+        if extension_owner_id:
             _delete_unity_user(session, unity_server, extension_owner_id)
 
+    # Also remove any alias mailbox to force clean recreate for onboarding consistency.
     existing_user = _get_unity_user_by_alias(session, unity_server, alias)
     if existing_user:
-        object_id = existing_user.get("ObjectId")
-        if not object_id:
+        existing_id = str(existing_user.get("ObjectId", "") or "").strip()
+        if not existing_id:
             raise RuntimeError("Unity user exists but ObjectId is missing.")
-
-        existing_detail = _get_unity_user_by_object_id(session, unity_server, object_id)
-        is_stale = _is_stale_unity_user(
-            unity_user_detail=existing_detail,
-            expected_alias=alias,
-            expected_first_name=first_name,
-            expected_last_name=last_name,
-            expected_email=email_address,
-        )
-
-        if is_stale:
-            _delete_unity_user(session, unity_server, object_id)
-        else:
-            _update_existing_unity_user_mailbox(session, unity_server, object_id, extension, email_address)
-            return object_id, "updated"
+        _delete_unity_user(session, unity_server, existing_id)
 
     if ldap_import_enabled:
         import_user = _get_import_user_by_alias(session, unity_server, alias)
@@ -470,7 +456,7 @@ def _create_or_update_unity_voicemail(
             if not object_id:
                 object_id = _resolve_unity_object_id_by_alias(session, unity_server, alias)
             if object_id:
-                return object_id, "recreated_from_ldap" if existing_user else "imported"
+                return object_id, "recreated_from_ldap"
 
     try:
         object_id = _create_local_unity_user_with_mailbox(
@@ -505,7 +491,7 @@ def _create_or_update_unity_voicemail(
         object_id = _resolve_unity_object_id_by_alias(session, unity_server, alias)
     if not object_id:
         raise RuntimeError("Unity mailbox create/update did not return ObjectId and alias lookup was empty.")
-    return object_id, "recreated_local" if existing_user else "created_local"
+    return object_id, "recreated_local"
 
 
 def _get_user_details(session, cucm_ip, username):
