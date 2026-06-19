@@ -139,6 +139,45 @@ def _get_unity_user_by_alias(session, unity_server, alias):
     return None
 
 
+def _get_unity_user_by_extension(session, unity_server, extension):
+    clean_extension = str(extension or "").strip()
+    if not clean_extension:
+        return None
+
+    url = _make_unity_url(unity_server, "/vmrest/users")
+    queries = [
+        f"(DtmfAccessId is {clean_extension})",
+        f"(dtmfAccessId is {clean_extension})",
+    ]
+
+    for query in queries:
+        response = session.get(url, headers=_unity_headers(), params={"query": query}, timeout=120)
+        if response.status_code != 200 or not response.text:
+            continue
+
+        try:
+            data = response.json()
+        except ValueError:
+            continue
+
+        users = data.get("User")
+        if isinstance(users, dict):
+            users = [users]
+        if not isinstance(users, list):
+            continue
+
+        for user in users:
+            if _extract_unity_extension(user) == clean_extension:
+                return user
+            if str(user.get("DtmfAccessId", "")).strip() == clean_extension:
+                return user
+
+        if users:
+            return users[0]
+
+    return None
+
+
 def _get_unity_user_by_object_id(session, unity_server, object_id):
     url = _make_unity_url(unity_server, f"/vmrest/users/{object_id}")
     response = session.get(url, headers=_unity_headers(), timeout=120)
@@ -313,6 +352,14 @@ def _delete_unity_user(session, unity_server, object_id):
         raise RuntimeError(f"Unity mailbox delete failed: {_parse_unity_error_text(response)}")
 
 
+def _extract_owner_object_id_from_unity_error(error_text):
+    text = str(error_text or "")
+    match = re.search(r"OwnerObjectId\s*=\s*([0-9a-fA-F-]{36})", text)
+    if match:
+        return match.group(1)
+    return ""
+
+
 def _normalize_text(value):
     return str(value or "").strip().lower()
 
@@ -367,6 +414,14 @@ def _create_or_update_unity_voicemail(
     template_alias,
     ldap_import_enabled,
 ):
+    expected_alias_clean = _normalize_text(alias)
+    extension_owner = _get_unity_user_by_extension(session, unity_server, extension)
+    if extension_owner:
+        extension_owner_id = str(extension_owner.get("ObjectId", "") or "").strip()
+        extension_owner_alias = _normalize_text(extension_owner.get("Alias"))
+        if extension_owner_id and expected_alias_clean and extension_owner_alias and extension_owner_alias != expected_alias_clean:
+            _delete_unity_user(session, unity_server, extension_owner_id)
+
     existing_user = _get_unity_user_by_alias(session, unity_server, alias)
     if existing_user:
         object_id = existing_user.get("ObjectId")
@@ -391,29 +446,61 @@ def _create_or_update_unity_voicemail(
     if ldap_import_enabled:
         import_user = _get_import_user_by_alias(session, unity_server, alias)
         if import_user and import_user.get("pkid"):
-            object_id = _import_ldap_user_with_new_vm(
-                session,
-                unity_server,
-                import_user.get("pkid"),
-                extension,
-                template_alias,
-            )
+            try:
+                object_id = _import_ldap_user_with_new_vm(
+                    session,
+                    unity_server,
+                    import_user.get("pkid"),
+                    extension,
+                    template_alias,
+                )
+            except RuntimeError as exc:
+                owner_object_id = _extract_owner_object_id_from_unity_error(str(exc))
+                if "Duplicate extension in partition" in str(exc) and owner_object_id:
+                    _delete_unity_user(session, unity_server, owner_object_id)
+                    object_id = _import_ldap_user_with_new_vm(
+                        session,
+                        unity_server,
+                        import_user.get("pkid"),
+                        extension,
+                        template_alias,
+                    )
+                else:
+                    raise
             if not object_id:
                 object_id = _resolve_unity_object_id_by_alias(session, unity_server, alias)
             if object_id:
                 return object_id, "recreated_from_ldap" if existing_user else "imported"
 
-    object_id = _create_local_unity_user_with_mailbox(
-        session,
-        unity_server,
-        alias,
-        first_name,
-        last_name,
-        display_name,
-        extension,
-        email_address,
-        template_alias,
-    )
+    try:
+        object_id = _create_local_unity_user_with_mailbox(
+            session,
+            unity_server,
+            alias,
+            first_name,
+            last_name,
+            display_name,
+            extension,
+            email_address,
+            template_alias,
+        )
+    except RuntimeError as exc:
+        owner_object_id = _extract_owner_object_id_from_unity_error(str(exc))
+        if "Duplicate extension in partition" in str(exc) and owner_object_id:
+            _delete_unity_user(session, unity_server, owner_object_id)
+            object_id = _create_local_unity_user_with_mailbox(
+                session,
+                unity_server,
+                alias,
+                first_name,
+                last_name,
+                display_name,
+                extension,
+                email_address,
+                template_alias,
+            )
+        else:
+            raise
     if not object_id:
         object_id = _resolve_unity_object_id_by_alias(session, unity_server, alias)
     if not object_id:
