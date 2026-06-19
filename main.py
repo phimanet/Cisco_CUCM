@@ -2756,6 +2756,11 @@ def menu_page(request: Request):
           <h2 class="page-title">Cisco Voice Server Automation</h2>
           <p class="page-subtitle">CUCM and Unity operations with fast navigation and inline outputs.</p>
         </div>
+        <div class="page-meta-card">
+          <span class="page-meta-label">Portal Version</span>
+          <span class="page-meta-value">v1.0 Current</span>
+          <p class="page-meta-note">v1.01 queued for VeraSMART automation enhancement.</p>
+        </div>
       </div>
       <div class="hero-link-grid">
         <a class="hero-link-card" href="/">
@@ -6053,9 +6058,14 @@ def menu_admin_page(request: Request):
       <section class="page-hero">
         <span class="page-kicker">Administrative Workbench</span>
         <div class="page-title-row">
-          <div>
+          <div class="page-title-block">
             <h2 class="page-title">Administrative Items</h2>
             <p class="page-subtitle">Bulk operations, strike workflows, export utilities, and translation lookups in a single workspace for higher-volume admin work.</p>
+          </div>
+          <div class="page-meta-card">
+            <span class="page-meta-label">Portal Version</span>
+            <span class="page-meta-value">v1.0 Current</span>
+            <p class="page-meta-note">v1.01 queued for VeraSMART automation enhancement.</p>
           </div>
         </div>
         <div class="hero-link-grid">
