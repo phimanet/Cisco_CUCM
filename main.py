@@ -55,6 +55,9 @@ from toolkit.remove_teams_telephony_user import (
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 JOB_OUTPUTS = {}
+VERASMART_QUEUE_RUNS = {}
+VERASMART_QUEUE_LOCK = threading.Lock()
+VERASMART_QUEUE_MAX_RUNS = 50
 AUTH_SESSIONS = {}
 AUTH_SESSION_SECRETS = {}
 SESSION_COOKIE_NAME = "cucm_web_session"
@@ -455,6 +458,8 @@ def _wants_json_response(request: Request) -> bool:
     "/translation-pattern/twilio-inbound-verification",
     "/bulk/lookup/person",
     "/bulk/lookup/extension",
+    "/verasmart/lab/queue/upload",
+    "/verasmart/lab/queue/status",
     "/check/user-devices",
   }:
     return True
@@ -730,6 +735,79 @@ def _prepare_job_output(csv_data, filename: str) -> dict:
         "filename": filename,
         "output_text": csv_bytes.decode("utf-8", errors="replace"),
     }
+
+
+def _require_admin_session(request: Request) -> tuple[dict, str]:
+  session = _get_auth_session(request)
+  if not session:
+    raise RuntimeError("Authentication required.")
+
+  username = str(session.get("username", "") or "").strip()
+  if not _is_admin_user(username):
+    raise RuntimeError("Admin authorization required for this action.")
+
+  return session, username
+
+
+def _parse_verasmart_queue_rows(csv_text: str) -> list[dict]:
+  if not (csv_text or "").strip():
+    return []
+
+  reader = csv.DictReader(io.StringIO(csv_text))
+  rows: list[dict] = []
+  for raw in reader:
+    row = {str(k or "").strip().lower(): (v or "").strip() for k, v in (raw or {}).items()}
+    record_key = row.get("record_key", "") or row.get("userid", "") or row.get("employee_id", "") or row.get("target_user", "")
+    target_change = row.get("target_change", "") or row.get("action", "")
+    note = row.get("note", "")
+    if not record_key and not target_change and not note:
+      continue
+    rows.append(
+      {
+        "record_key": record_key,
+        "target_change": target_change,
+        "note": note,
+        "status": "Pending",
+        "error": "",
+      }
+    )
+
+  return rows
+
+
+def _store_verasmart_queue_run(operator: str, source_filename: str, rows: list[dict]) -> dict:
+  run_id = str(uuid4())
+  now_text = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  entry = {
+    "run_id": run_id,
+    "created_at": now_text,
+    "operator": operator,
+    "source_filename": source_filename,
+    "mode": "LAB_SCAFFOLD_ONLY",
+    "status": "Queued",
+    "total_rows": len(rows),
+    "pending_rows": len(rows),
+    "in_progress_rows": 0,
+    "done_rows": 0,
+    "failed_rows": 0,
+    "note": "LAB scaffold only. No VeraSMART write actions executed.",
+    "rows_preview": rows[:25],
+  }
+
+  with VERASMART_QUEUE_LOCK:
+    VERASMART_QUEUE_RUNS[run_id] = entry
+    if len(VERASMART_QUEUE_RUNS) > VERASMART_QUEUE_MAX_RUNS:
+      oldest_key = next(iter(VERASMART_QUEUE_RUNS))
+      VERASMART_QUEUE_RUNS.pop(oldest_key, None)
+
+  return entry
+
+
+def _list_verasmart_queue_runs(limit: int = 10) -> list[dict]:
+  with VERASMART_QUEUE_LOCK:
+    runs = list(VERASMART_QUEUE_RUNS.values())
+  runs.sort(key=lambda item: item.get("created_at", ""), reverse=True)
+  return runs[: max(1, min(limit, 50))]
 
 
 def _load_audit_rows(limit: int | None = None) -> list[dict]:
@@ -6093,6 +6171,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
             <button type="button" class="portal-nav-btn" data-panel="translookup">Translation Pattern Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="transtemplate">Translation Pattern Template</button>
+            <button type="button" class="portal-nav-btn" data-panel="verasmart-lab">VeraSMART Automation (v1.01 LAB)</button>
             <button type="button" class="portal-nav-btn" data-panel="twilioverify-phimane">Twilio-Inbound-Verificaton-Phimane</button>
             <button type="button" class="portal-nav-btn" data-panel="twilioverify-lauraa">Twilio-Inbound-Verificaton-LauraA</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=teams-telephony'">Create Teams Telephony User (Main Ops)</button>
@@ -6254,6 +6333,20 @@ def menu_admin_page(request: Request):
         <p id="admin-trans-template-summary" style="color:#355978; min-height:18px;"></p>
         <p><a id="admin-trans-template-download" href="#" style="display:none; font-weight:700;">Download CSV Output</a></p>
         <textarea id="admin-trans-template-preview" rows="8" readonly style="width:100%;"></textarea>
+      </section>
+
+      <section class="panel tool-panel" data-panel="verasmart-lab">
+        <h3>VeraSMART Automation (v1.01 LAB-Only Scaffold)</h3>
+        <p>This is a lab scaffold only. Upload a queue CSV, review run status, and validate intake/audit flow. No VeraSMART write action executes yet.</p>
+        <p><a href="/download/verasmart-queue-template" style="font-weight:700;">Download Queue CSV Template</a></p>
+        <form id="verasmart-lab-queue-form" enctype="multipart/form-data">
+          CSV File:<br>
+          <input type="file" name="csv_file" accept=".csv" required><br><br>
+          <button type="submit">Upload Queue (LAB)</button>
+          <button type="button" id="verasmart-lab-refresh" style="margin-left:8px;">Refresh Run Status</button>
+        </form>
+        <p id="verasmart-lab-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Upload a queue CSV to create a LAB run.</p>
+        <div id="verasmart-lab-runs" style="overflow-x:auto;"></div>
       </section>
 
       <section class="panel tool-panel" data-panel="twilioverify-phimane">
@@ -7135,6 +7228,100 @@ def menu_admin_page(request: Request):
 
       <script>
         (function () {
+          const form = document.getElementById("verasmart-lab-queue-form");
+          const statusEl = document.getElementById("verasmart-lab-status");
+          const runsEl = document.getElementById("verasmart-lab-runs");
+          const refreshBtn = document.getElementById("verasmart-lab-refresh");
+
+          if (!form || !statusEl || !runsEl || !refreshBtn) {
+            return;
+          }
+
+          function renderRuns(runs) {
+            if (!runs || !runs.length) {
+              runsEl.innerHTML = "<p style='color:#355978;'>No LAB runs yet.</p>";
+              return;
+            }
+
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left;">Created</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Run ID</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Operator</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Source</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Rows</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Status</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Note</th>';
+            html += '</tr></thead><tbody>';
+
+            runs.forEach(function (run, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const rows = `${run.total_rows || 0} total / ${run.pending_rows || 0} pending`;
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px; white-space:nowrap;">' + (run.created_at || "") + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (run.run_id || "") + '</td>';
+              html += '<td style="padding:7px 10px;">' + (run.operator || "") + '</td>';
+              html += '<td style="padding:7px 10px;">' + (run.source_filename || "") + '</td>';
+              html += '<td style="padding:7px 10px;">' + rows + '</td>';
+              html += '<td style="padding:7px 10px; font-weight:700;">' + (run.status || "") + '</td>';
+              html += '<td style="padding:7px 10px;">' + (run.note || "") + '</td>';
+              html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            runsEl.innerHTML = html;
+          }
+
+          async function refreshRuns() {
+            statusEl.textContent = "Loading LAB queue status...";
+            try {
+              const resp = await fetch("/verasmart/lab/queue/status", {
+                method: "GET",
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+              });
+              const payload = await resp.json();
+              if (!resp.ok || !payload.ok) {
+                throw new Error((payload.error && payload.error.message) || "Status load failed.");
+              }
+              renderRuns(payload.runs || []);
+              statusEl.textContent = "LAB queue status loaded.";
+            } catch (err) {
+              statusEl.textContent = "Status failed: " + ((err && err.message) || "Unknown error.");
+            }
+          }
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Uploading LAB queue CSV...";
+            try {
+              const formData = new FormData(form);
+              const resp = await fetch("/verasmart/lab/queue/upload", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+              });
+              const payload = await resp.json();
+              if (!resp.ok || !payload.ok) {
+                throw new Error((payload.error && payload.error.message) || "Upload failed.");
+              }
+              statusEl.textContent = `Queue uploaded: ${payload.run_id || ""} (${payload.total_rows || 0} rows)`;
+              form.reset();
+              await refreshRuns();
+            } catch (err) {
+              statusEl.textContent = "Upload failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+
+          refreshBtn.addEventListener("click", async function () {
+            await refreshRuns();
+          });
+        })();
+      </script>
+
+      <script>
+        (function () {
           function renderSummary(summary) {
             if (!summary) return "";
             return `Input rows: ${summary.input_rows || 0} | Matched: ${summary.matched_inputs || 0} | No results: ${summary.no_result_inputs || 0} | Errors: ${summary.error_inputs || 0} | Output rows: ${summary.output_rows || 0}`;
@@ -7256,6 +7443,16 @@ def download_bulk_extension_template():
     template_csv.encode("utf-8"),
     media_type="text/csv",
     headers={"Content-Disposition": 'attachment; filename="bulk_extension_lookup_template.csv"'}
+  )
+
+
+@app.get("/download/verasmart-queue-template")
+def download_verasmart_queue_template():
+  template_csv = "record_key,target_change,note\nEMP001,Update Cost Center to 12345,LAB test row\nEMP002,Disable mobile allowance,LAB test row\n"
+  return Response(
+    template_csv.encode("utf-8"),
+    media_type="text/csv",
+    headers={"Content-Disposition": 'attachment; filename="verasmart_queue_template.csv"'}
   )
 
 
@@ -7988,6 +8185,53 @@ def twilio_inbound_verification_route(
         "auto_restore_seconds": TWILIO_INBOUND_AUTO_RESTORE_SECONDS if auto_restore_enabled else 0,
       }
     )
+
+
+@app.post("/verasmart/lab/queue/upload")
+async def verasmart_lab_queue_upload_route(
+    request: Request,
+    csv_file: UploadFile = File(...),
+):
+    _session, operator = _require_admin_session(request)
+
+    raw = await csv_file.read()
+    text = raw.decode("utf-8-sig", errors="replace")
+    rows = _parse_verasmart_queue_rows(text)
+    if not rows:
+      raise RuntimeError("No usable rows found. Include headers: record_key,target_change,note.")
+
+    entry = _store_verasmart_queue_run(
+      operator=operator,
+      source_filename=(csv_file.filename or "verasmart_queue.csv"),
+      rows=rows,
+    )
+
+    _append_audit_event(
+      action="verasmart_lab_queue_upload",
+      cucm_host=str((_session or {}).get("cucm_host", "") or ""),
+      operator=operator,
+      target=f"run_id={entry.get('run_id', '')};rows={entry.get('total_rows', 0)}",
+      output_filename=entry.get("source_filename", ""),
+      inline_mode=True,
+    )
+
+    return JSONResponse({
+      "ok": True,
+      "run_id": entry.get("run_id", ""),
+      "total_rows": entry.get("total_rows", 0),
+      "status": entry.get("status", ""),
+      "note": entry.get("note", ""),
+    })
+
+
+@app.get("/verasmart/lab/queue/status")
+def verasmart_lab_queue_status_route(
+    request: Request,
+    limit: int = Query(10),
+):
+    _require_admin_session(request)
+    runs = _list_verasmart_queue_runs(limit=limit)
+    return JSONResponse({"ok": True, "runs": runs, "count": len(runs)})
 
 
 @app.post("/bulk/lookup/person")
