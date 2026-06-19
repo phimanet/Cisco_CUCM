@@ -306,6 +306,48 @@ def _set_unity_pin(session, unity_server, object_id, pin):
         raise RuntimeError(f"Unity PIN update failed: {_parse_unity_error_text(response)}")
 
 
+def _delete_unity_user(session, unity_server, object_id):
+    url = _make_unity_url(unity_server, f"/vmrest/users/{object_id}")
+    response = session.delete(url, headers=_unity_headers(), timeout=120)
+    if response.status_code not in {200, 202, 204, 404}:
+        raise RuntimeError(f"Unity mailbox delete failed: {_parse_unity_error_text(response)}")
+
+
+def _normalize_text(value):
+    return str(value or "").strip().lower()
+
+
+def _is_stale_unity_user(unity_user_detail, expected_alias, expected_first_name, expected_last_name, expected_email):
+    # Mark a mailbox stale when it looks like a previous occupant account.
+    # This protects onboarding flows where an old Unity user still exists.
+    if not isinstance(unity_user_detail, dict):
+        return False
+
+    alias = _normalize_text(unity_user_detail.get("Alias"))
+    first_name = _normalize_text(unity_user_detail.get("FirstName"))
+    last_name = _normalize_text(unity_user_detail.get("LastName"))
+    email = _normalize_text(unity_user_detail.get("EmailAddress"))
+
+    expected_alias_clean = _normalize_text(expected_alias)
+    expected_first_clean = _normalize_text(expected_first_name)
+    expected_last_clean = _normalize_text(expected_last_name)
+    expected_email_clean = _normalize_text(expected_email)
+
+    if alias and expected_alias_clean and alias != expected_alias_clean:
+        return True
+
+    if first_name and expected_first_clean and first_name != expected_first_clean:
+        return True
+
+    if last_name and expected_last_clean and last_name != expected_last_clean:
+        return True
+
+    if email and expected_email_clean and email != expected_email_clean:
+        return True
+
+    return False
+
+
 def _resolve_unity_object_id_by_alias(session, unity_server, alias):
     user = _get_unity_user_by_alias(session, unity_server, alias)
     if not user:
@@ -330,8 +372,21 @@ def _create_or_update_unity_voicemail(
         object_id = existing_user.get("ObjectId")
         if not object_id:
             raise RuntimeError("Unity user exists but ObjectId is missing.")
-        _update_existing_unity_user_mailbox(session, unity_server, object_id, extension, email_address)
-        return object_id, "updated"
+
+        existing_detail = _get_unity_user_by_object_id(session, unity_server, object_id)
+        is_stale = _is_stale_unity_user(
+            unity_user_detail=existing_detail,
+            expected_alias=alias,
+            expected_first_name=first_name,
+            expected_last_name=last_name,
+            expected_email=email_address,
+        )
+
+        if is_stale:
+            _delete_unity_user(session, unity_server, object_id)
+        else:
+            _update_existing_unity_user_mailbox(session, unity_server, object_id, extension, email_address)
+            return object_id, "updated"
 
     if ldap_import_enabled:
         import_user = _get_import_user_by_alias(session, unity_server, alias)
@@ -346,7 +401,7 @@ def _create_or_update_unity_voicemail(
             if not object_id:
                 object_id = _resolve_unity_object_id_by_alias(session, unity_server, alias)
             if object_id:
-                return object_id, "imported"
+                return object_id, "recreated_from_ldap" if existing_user else "imported"
 
     object_id = _create_local_unity_user_with_mailbox(
         session,
@@ -363,7 +418,7 @@ def _create_or_update_unity_voicemail(
         object_id = _resolve_unity_object_id_by_alias(session, unity_server, alias)
     if not object_id:
         raise RuntimeError("Unity mailbox create/update did not return ObjectId and alias lookup was empty.")
-    return object_id, "created_local"
+    return object_id, "recreated_local" if existing_user else "created_local"
 
 
 def _get_user_details(session, cucm_ip, username):
