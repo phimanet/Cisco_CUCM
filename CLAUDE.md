@@ -34,6 +34,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
   - [ ] CVE-2025-61984 (CVSSv3 3.6) — Not started
 - [ ] [P1][Idea] Before creating Jabber devices or voicemail, always verify whether the target resource already exists to prevent duplicate provisioning and resource waste.
 - [ ] [P1][Planned] v1.01 enhancement: add VeraSMART (Calero on-prem) LAB-only automation module scaffold in portal (queue intake, run status, audit/log placeholders; no production rollout yet).
+- [ ] [P1][Planned] On Jabber build workflows (Page 1 and Page 2), detect Unity voicemail failure due to AD inactive account, prompt admin for start date, auto-schedule voicemail creation for that user at 10:00 AM PST on start date, then email the build operator on success (operator email derived from username with trailing `.ad`/`.adm` removed + `@amnhealthcare.com`).
 - [x] [P2][Done] After job submission, clear the "User ID for person..." input field to prevent accidental repeat Jabber creation.
 - [x] [P2][Done] Refresh the web portal theme to align with AMN Healthcare visual style (brand colors, typography, spacing, and overall look/feel).
 - [x] [P2][Done] Add per-option success/failure summary panel in the UI after CSV generation.
@@ -86,6 +87,7 @@ Priority keys:
 - Added portal version labeling in UI: current web pages marked as v1.0; queued enhancement marker for v1.01 (VeraSMART automation).
 - Added Administrative Items LAB-only v1.01 scaffold panel: VeraSMART queue CSV template download, queue upload endpoint, and run-status view placeholders.
 - Confirmed rollout posture: LAB web server only for v1.01 testing; no production pull/deploy during this phase.
+- Captured next priority enhancement as Planned: automatic deferred voicemail build at 10:00 AM PST after AD-inactive Unity failure, with operator-success notification email.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.
