@@ -947,7 +947,6 @@ def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str)
     <axl:listTransPattern sequence="1">
       <searchCriteria>
         <pattern>{xml_escape(pattern_prefix)}%</pattern>
-        <description>Strike Mask - %Available%</description>
       </searchCriteria>
       <returnedTags>
         <pattern/>
@@ -993,7 +992,14 @@ def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str)
       elif child_tag in {"calledPartyTransformationMask", "calledPartyTransformMask"}:
         mask = text
 
-    if pattern:
+    desc_lower = (desc or "").strip().lower()
+    expected_simple_desc = f"strike mask - {pattern}".lower()
+    is_available = (
+      "available" in desc_lower
+      or desc_lower == expected_simple_desc
+    )
+
+    if pattern and is_available:
       patterns.append({
         "pattern": pattern,
         "partition": partition,
