@@ -7672,7 +7672,12 @@ def menu_admin_page(request: Request):
 
                 document.querySelectorAll('[id^="strikemask-apply-"]').forEach(function (btn) {
                   btn.addEventListener("click", function () {
-                    alert("Strike Mask apply logic will be implemented next. User: " + btn.getAttribute("data-user-id"));
+                    const userId = btn.getAttribute("data-user-id");
+                    const statusEl = document.getElementById("admin-strikemask-lookup-status");
+                    statusEl.textContent = "⏳ Preparing to apply Strike Mask for user: " + userId + "...";
+                    console.log("Strike Mask apply clicked for user:", userId);
+                    alert("Strike Mask apply logic will be implemented next. User: " + userId);
+                    statusEl.textContent = "Alert dismissed. No endpoint yet.";
                   });
                 });
               } catch (err) {
