@@ -469,6 +469,7 @@ def _wants_json_response(request: Request) -> bool:
     "/check/user-devices",
     "/strike-mask/apply",
     "/strike-mask/reverse",
+    "/strike-mask/options",
   }:
     return True
   return False
@@ -1170,7 +1171,110 @@ def _reverse_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str,
   }
 
 
-def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, target_user: str, operator: str, selected_pattern: str = "") -> dict:
+def _update_device_line_e164_mask(session: requests.Session, cucm_host: str, device_name: str, line_pattern: str, line_partition: str, new_mask: str) -> dict:
+  get_phone_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getPhone>
+      <name>{xml_escape(device_name)}</name>
+      <returnedTags>
+        <lines>
+          <line>
+            <index/>
+            <dirn>
+              <pattern/>
+              <routePartitionName/>
+            </dirn>
+            <e164Mask/>
+          </line>
+        </lines>
+      </returnedTags>
+    </axl:getPhone>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response_get = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=get_phone_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    timeout=60,
+  )
+  if response_get.status_code != 200:
+    return {
+      "status": "Failed",
+      "error": f"getPhone failed HTTP {response_get.status_code}",
+    }
+
+  target_index = ""
+  root = ET.fromstring(response_get.text)
+  for elem in root.iter():
+    tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+    if tag != "line":
+      continue
+
+    line_index = ""
+    pattern_val = ""
+    partition_val = ""
+
+    for child in list(elem):
+      child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+      if child_tag == "index":
+        line_index = (child.text or "").strip()
+      elif child_tag == "dirn":
+        for grandchild in list(child):
+          grand_tag = grandchild.tag.split("}")[-1] if "}" in grandchild.tag else grandchild.tag
+          if grand_tag == "pattern":
+            pattern_val = (grandchild.text or "").strip()
+          elif grand_tag == "routePartitionName":
+            partition_val = (grandchild.text or "").strip()
+
+    if line_index and pattern_val == line_pattern and partition_val == line_partition:
+      target_index = line_index
+      break
+
+  if not target_index:
+    return {
+      "status": "Failed",
+      "error": f"No matching line appearance found on {device_name} for {line_pattern} ({line_partition})",
+    }
+
+  update_phone_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:updatePhone sequence=\"1\">
+      <name>{xml_escape(device_name)}</name>
+      <lines>
+        <line>
+          <index>{xml_escape(target_index)}</index>
+          <dirn>
+            <pattern>{xml_escape(line_pattern)}</pattern>
+            <routePartitionName>{xml_escape(line_partition)}</routePartitionName>
+          </dirn>
+          <e164Mask>{xml_escape(new_mask)}</e164Mask>
+        </line>
+      </lines>
+    </axl:updatePhone>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response_update = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=update_phone_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    timeout=60,
+  )
+  if response_update.status_code != 200:
+    return {
+      "status": "Failed",
+      "error": f"updatePhone failed HTTP {response_update.status_code}",
+    }
+
+  return {"status": "Success", "line_index": target_index}
+
+
+def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, target_user: str, operator: str, selected_pattern: str = "", selected_device_names: list[str] | None = None) -> dict:
   clean_target = (target_user or "").strip()
   if not clean_target:
     raise RuntimeError("target_user is required")
@@ -1178,6 +1282,16 @@ def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, t
   jabber_extension, jabber_devices = _find_jabber_extension(cucm_host, cucm_user, cucm_pass, clean_target)
   if not jabber_devices:
     raise RuntimeError(f"{clean_target} has no Jabber devices (CSF/TCT/BOT) assigned")
+
+  selected_device_names = selected_device_names or []
+  selected_device_set = {name.strip() for name in selected_device_names if (name or "").strip()}
+  if selected_device_set:
+    selected_jabber_devices = [d for d in jabber_devices if (d.get("name") or "").strip() in selected_device_set]
+  else:
+    selected_jabber_devices = list(jabber_devices)
+
+  if not selected_jabber_devices:
+    raise RuntimeError(f"No valid Jabber devices were selected for {clean_target}")
 
   available_patterns = _find_available_945_patterns(cucm_host, cucm_user, cucm_pass)
   if not available_patterns:
@@ -1206,13 +1320,14 @@ def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, t
   if not original_transform_mask:
     original_transform_mask = STRIKE_MASK_AVAILABLE_TRANSFORM_MASK
 
-  selected_devices = _enrich_devices_with_original_masks(cucm_host, cucm_user, cucm_pass, jabber_devices, jabber_extension)
+  selected_devices = _enrich_devices_with_original_masks(cucm_host, cucm_user, cucm_pass, selected_jabber_devices, jabber_extension)
 
   session = requests.Session()
   session.verify = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   new_description = f"Strike Mask - {clean_target} {jabber_extension}"
+  new_transform_mask = jabber_extension
   update_pattern_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
   <soapenv:Header/>
@@ -1221,7 +1336,7 @@ def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, t
       <pattern>{xml_escape(trans_pattern)}</pattern>
       <routePartitionName>{xml_escape(trans_partition)}</routePartitionName>
       <description>{xml_escape(new_description)}</description>
-      <calledPartyTransformationMask>{xml_escape(original_transform_mask)}</calledPartyTransformationMask>
+      <calledPartyTransformationMask>{xml_escape(new_transform_mask)}</calledPartyTransformationMask>
     </axl:updateTransPattern>
   </soapenv:Body>
 </soapenv:Envelope>"""
@@ -1258,13 +1373,25 @@ def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, t
 
   devices_applied = []
   for dev_info in selected_devices:
+    dev_name = (dev_info.get("name") or "").strip()
+    phone_line_result = _update_device_line_e164_mask(
+      session=session,
+      cucm_host=cucm_host,
+      device_name=dev_name,
+      line_pattern=jabber_extension,
+      line_partition="ENT_DEVICE_PT",
+      new_mask=trans_pattern,
+    ) if dev_name else {"status": "Failed", "error": "Missing device name"}
+
     devices_applied.append(
       {
-        "device_name": dev_info.get("name", ""),
+        "device_name": dev_name,
         "device_type": dev_info.get("type", ""),
         "original_external_mask": dev_info.get("original_external_number_mask", ""),
         "new_external_mask": trans_pattern,
-        "status": "Success",
+        "line_mask_status": phone_line_result.get("status", "Failed"),
+        "line_mask_error": phone_line_result.get("error", ""),
+        "status": "Success" if phone_line_result.get("status") == "Success" else "Partial",
       }
     )
 
@@ -1288,6 +1415,7 @@ def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, t
     "translation_pattern": trans_pattern,
     "translation_pattern_partition": trans_partition,
     "new_description": new_description,
+    "new_transform_mask": new_transform_mask,
     "devices_applied": devices_applied,
   }
 
@@ -7803,22 +7931,32 @@ def menu_admin_page(request: Request):
                 });
 
                 html += '</tbody></table>';
+                html += '<div id="admin-strikemask-apply-config" style="margin-top:12px;"></div>';
                 resultsEl.innerHTML = html;
+
+                const applyConfigEl = document.getElementById("admin-strikemask-apply-config");
+                const escapeHtml = function (value) {
+                  return String(value || "")
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/\"/g, "&quot;")
+                    .replace(/'/g, "&#39;");
+                };
 
                 document.querySelectorAll('[id^="strikemask-apply-"]').forEach(function (btn) {
                   btn.addEventListener("click", async function () {
                     const userId = btn.getAttribute("data-user-id");
-                    const statusEl = document.getElementById("admin-strikemask-lookup-status");
                     if (!userId) {
                       statusEl.textContent = "Unable to apply Strike Mask: missing user ID.";
                       return;
                     }
 
                     btn.disabled = true;
-                    statusEl.textContent = "Applying Strike Mask for " + userId + "...";
+                    statusEl.textContent = "Loading Strike Mask options for " + userId + "...";
 
                     try {
-                      const response = await fetch("/strike-mask/apply", {
+                      const optionsResponse = await fetch("/strike-mask/options", {
                         method: "POST",
                         headers: {
                           "Content-Type": "application/x-www-form-urlencoded",
@@ -7834,24 +7972,122 @@ def menu_admin_page(request: Request):
                         }),
                       });
 
-                      const data = await response.json();
-                      if (!response.ok || !data.ok) {
-                        const msg = (data.error && data.error.message) || data.detail || "Strike Mask apply failed.";
-                        statusEl.textContent = "Error applying Strike Mask for " + userId + ": " + msg;
+                      const optionsData = await optionsResponse.json();
+                      if (!optionsResponse.ok || !optionsData.ok) {
+                        const msg = (optionsData.error && optionsData.error.message) || optionsData.detail || "Unable to load Strike Mask options.";
+                        statusEl.textContent = "Error loading options for " + userId + ": " + msg;
                         btn.disabled = false;
                         return;
                       }
 
-                      btn.textContent = "Applied";
-                      statusEl.textContent =
-                        "✓ Applied Strike Mask for "
-                        + userId
-                        + " | Pattern: "
-                        + (data.translation_pattern || "")
-                        + " | Operation ID: "
-                        + (data.operation_id || "");
+                      const patterns = optionsData.available_patterns || [];
+                      const devices = optionsData.devices || [];
+                      if (!patterns.length) {
+                        statusEl.textContent = "No available Strike Mask patterns found for apply.";
+                        btn.disabled = false;
+                        return;
+                      }
+                      if (!devices.length) {
+                        statusEl.textContent = "No Jabber devices found for " + userId + ".";
+                        btn.disabled = false;
+                        return;
+                      }
+
+                      const patternOptions = patterns.map(function (p) {
+                        const pattern = p.pattern || "";
+                        const partition = p.partition || "";
+                        const desc = p.description || "";
+                        return '<option value="' + escapeHtml(pattern) + '">' + escapeHtml(pattern + " | " + partition + " | " + desc) + '</option>';
+                      }).join("");
+
+                      const deviceCheckboxes = devices.map(function (d, idx) {
+                        const name = d.name || "";
+                        const type = d.type || "";
+                        const checkboxId = "strikemask-device-" + idx + "-" + name.replace(/[^a-zA-Z0-9_-]/g, "");
+                        return '<label style="display:block; margin:4px 0;">'
+                          + '<input type="checkbox" class="strikemask-device-checkbox" id="' + escapeHtml(checkboxId) + '" value="' + escapeHtml(name) + '" checked> '
+                          + '<span>' + escapeHtml(name + " (" + type + ")") + '</span></label>';
+                      }).join("");
+
+                      applyConfigEl.innerHTML =
+                        '<div style="border:1px solid #c8dbee; border-radius:8px; background:#f8fbff; padding:12px;">'
+                        + '<h4 style="margin:0 0 8px 0;">Step 2 - Apply Strike Mask for ' + escapeHtml(userId) + '</h4>'
+                        + '<p style="margin:0 0 8px 0; color:#355978;">Jabber Extension: <strong>' + escapeHtml(optionsData.jabber_extension || "") + '</strong></p>'
+                        + '<div style="margin-bottom:8px;"><label><strong>Select Pattern:</strong></label><br><select id="admin-strikemask-pattern-select" style="width:100%; max-width:760px;">' + patternOptions + '</select></div>'
+                        + '<div style="margin-bottom:10px;"><label><strong>Select Devices:</strong></label>' + deviceCheckboxes + '</div>'
+                        + '<button type="button" id="admin-strikemask-apply-confirm" class="mini-btn" style="background:#005eb8; color:#fff;">Apply Selected</button>'
+                        + '</div>';
+
+                      const confirmBtn = document.getElementById("admin-strikemask-apply-confirm");
+                      if (confirmBtn) {
+                        confirmBtn.addEventListener("click", async function () {
+                          const patternSelect = document.getElementById("admin-strikemask-pattern-select");
+                          const selectedPattern = patternSelect ? (patternSelect.value || "").trim() : "";
+                          const selectedDevices = Array.from(applyConfigEl.querySelectorAll(".strikemask-device-checkbox:checked"))
+                            .map(function (checkbox) { return (checkbox.value || "").trim(); })
+                            .filter(Boolean);
+
+                          if (!selectedPattern) {
+                            statusEl.textContent = "Select a Strike Mask pattern before applying.";
+                            return;
+                          }
+                          if (!selectedDevices.length) {
+                            statusEl.textContent = "Select at least one device before applying.";
+                            return;
+                          }
+
+                          confirmBtn.disabled = true;
+                          statusEl.textContent = "Applying Strike Mask for " + userId + " on selected device(s)...";
+
+                          try {
+                            const applyResponse = await fetch("/strike-mask/apply", {
+                              method: "POST",
+                              headers: {
+                                "Content-Type": "application/x-www-form-urlencoded",
+                                "Accept": "application/json",
+                                "X-Requested-With": "XMLHttpRequest",
+                              },
+                              credentials: "same-origin",
+                              body: new URLSearchParams({
+                                cucm_host: strikeMaskLookupForm.querySelector('input[name="cucm_host"]').value,
+                                cucm_user: strikeMaskLookupForm.querySelector('input[name="cucm_user"]').value,
+                                cucm_pass: strikeMaskLookupForm.querySelector('input[name="cucm_pass"]').value,
+                                target_user: userId,
+                                selected_pattern: selectedPattern,
+                                selected_devices: selectedDevices.join(","),
+                              }),
+                            });
+
+                            const applyData = await applyResponse.json();
+                            if (!applyResponse.ok || !applyData.ok) {
+                              const msg = (applyData.error && applyData.error.message) || applyData.detail || "Strike Mask apply failed.";
+                              statusEl.textContent = "Error applying Strike Mask for " + userId + ": " + msg;
+                              confirmBtn.disabled = false;
+                              return;
+                            }
+
+                            const lineStatuses = (applyData.devices_applied || []).map(function (d) {
+                              return (d.device_name || "") + "=" + (d.line_mask_status || d.status || "");
+                            }).join("; ");
+
+                            btn.textContent = "Applied";
+                            statusEl.textContent =
+                              "✓ Applied Strike Mask for " + userId
+                              + " | Pattern: " + (applyData.translation_pattern || "")
+                              + " | Transform Mask: " + (applyData.new_transform_mask || "")
+                              + " | Operation ID: " + (applyData.operation_id || "")
+                              + (lineStatuses ? " | Line updates: " + lineStatuses : "");
+                          } catch (err) {
+                            statusEl.textContent = "Error applying Strike Mask for " + userId + ": " + err.message;
+                            confirmBtn.disabled = false;
+                          }
+                        });
+                      }
+
+                      statusEl.textContent = "Loaded options. Select pattern/device(s), then click Apply Selected.";
+                      btn.disabled = false;
                     } catch (err) {
-                      statusEl.textContent = "Error applying Strike Mask for " + userId + ": " + err.message;
+                      statusEl.textContent = "Error preparing Strike Mask for " + userId + ": " + err.message;
                       btn.disabled = false;
                     }
                   });
@@ -8905,14 +9141,13 @@ def strike_mask_reverse_route(
     return JSONResponse({"ok": True, **result})
 
 
-@app.post("/strike-mask/apply")
-def strike_mask_apply_route(
+@app.post("/strike-mask/options")
+def strike_mask_options_route(
     request: Request,
     cucm_host: str = Form(""),
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
     target_user: str = Form(""),
-    selected_pattern: str = Form(""),
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
     _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
@@ -8921,6 +9156,40 @@ def strike_mask_apply_route(
     if not clean_target:
       raise RuntimeError("target_user is required")
 
+    jabber_extension, jabber_devices = _find_jabber_extension(cucm_host, cucm_user, cucm_pass, clean_target)
+    available_patterns = _find_available_945_patterns(cucm_host, cucm_user, cucm_pass)
+    available_patterns.sort(key=lambda item: (item.get("pattern") or ""))
+
+    return JSONResponse(
+      {
+        "ok": True,
+        "target_user": clean_target,
+        "jabber_extension": jabber_extension,
+        "devices": jabber_devices,
+        "available_patterns": available_patterns,
+      }
+    )
+
+
+@app.post("/strike-mask/apply")
+def strike_mask_apply_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    target_user: str = Form(""),
+    selected_pattern: str = Form(""),
+    selected_devices: str = Form(""),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+    clean_target = (target_user or "").strip()
+    if not clean_target:
+      raise RuntimeError("target_user is required")
+
+    selected_device_names = [item.strip() for item in (selected_devices or "").split(",") if item.strip()]
+
     result = _apply_strike_mask_pattern(
       cucm_host=cucm_host,
       cucm_user=cucm_user,
@@ -8928,6 +9197,7 @@ def strike_mask_apply_route(
       target_user=clean_target,
       operator=cucm_user,
       selected_pattern=selected_pattern,
+      selected_device_names=selected_device_names,
     )
 
     _append_audit_event(
