@@ -6745,15 +6745,11 @@ def menu_admin_page(request: Request):
           <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
-          <div class="compact-inline-row">
-            <span>Last Name:</span>
-            <input name="last_name" placeholder="Smith" required>
-          </div><br>
-          <div class="compact-inline-row">
-            <span>First Name (optional):</span>
-            <input name="first_name" placeholder="John">
-          </div><br>
-          <button type="submit">Search for User</button>
+          <div class="search-filter-row">
+            <input name="last_name" placeholder="Last Name *" required>
+            <input name="first_name" placeholder="First Name (optional)">
+            <button type="submit">Search</button>
+          </div>
         </form>
         
         <p id="admin-strikemask-lookup-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
