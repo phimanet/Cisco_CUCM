@@ -466,6 +466,8 @@ def _wants_json_response(request: Request) -> bool:
     "/verasmart/lab/queue/upload",
     "/verasmart/lab/queue/status",
     "/check/user-devices",
+    "/strike-mask/apply",
+    "/strike-mask/reverse",
   }:
     return True
   return False
@@ -1154,6 +1156,128 @@ def _reverse_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str,
     "new_transform_mask": new_transform_mask,
     "devices_reverted": devices_reverted,
     "reversed_at": _get_strike_mask_operation(op_id).get("reversed_at", ""),
+  }
+
+
+def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, target_user: str, operator: str, selected_pattern: str = "") -> dict:
+  clean_target = (target_user or "").strip()
+  if not clean_target:
+    raise RuntimeError("target_user is required")
+
+  jabber_extension, jabber_devices = _find_jabber_extension(cucm_host, cucm_user, cucm_pass, clean_target)
+  if not jabber_devices:
+    raise RuntimeError(f"{clean_target} has no Jabber devices (CSF/TCT/BOT) assigned")
+
+  available_patterns = _find_available_945_patterns(cucm_host, cucm_user, cucm_pass)
+  if not available_patterns:
+    raise RuntimeError(f"No available {STRIKE_MASK_PATTERN_PREFIX} Strike Mask patterns were found")
+
+  selected = None
+  requested_pattern = (selected_pattern or "").strip()
+  if requested_pattern:
+    for pattern_item in available_patterns:
+      if (pattern_item.get("pattern") or "").strip() == requested_pattern:
+        selected = pattern_item
+        break
+    if not selected:
+      raise RuntimeError(f"Requested Strike Mask pattern is not available: {requested_pattern}")
+  else:
+    available_patterns.sort(key=lambda item: (item.get("pattern") or ""))
+    selected = available_patterns[0]
+
+  trans_pattern = (selected.get("pattern") or "").strip()
+  trans_partition = (selected.get("partition") or "").strip()
+  if not trans_pattern or not trans_partition:
+    raise RuntimeError("Selected Strike Mask pattern is missing pattern/partition details")
+
+  original_description = (selected.get("description") or "").strip()
+  original_transform_mask = (selected.get("called_party_transform_mask") or "").strip()
+  if not original_transform_mask:
+    original_transform_mask = "2481001"
+
+  selected_devices = _enrich_devices_with_original_masks(cucm_host, cucm_user, cucm_pass, jabber_devices, jabber_extension)
+
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  new_description = f"Strike Mask - {clean_target} {jabber_extension}"
+  update_pattern_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:updateTransPattern sequence=\"1\">
+      <pattern>{xml_escape(trans_pattern)}</pattern>
+      <routePartitionName>{xml_escape(trans_partition)}</routePartitionName>
+      <description>{xml_escape(new_description)}</description>
+      <calledPartyTransformationMask>{xml_escape(original_transform_mask)}</calledPartyTransformationMask>
+    </axl:updateTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=update_pattern_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    timeout=60,
+  )
+  if response.status_code != 200:
+    raise RuntimeError(f"updateTransPattern failed HTTP {response.status_code}: {response.text[:800]}")
+
+  update_line_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:updateLine sequence=\"1\">
+      <pattern>{xml_escape(jabber_extension)}</pattern>
+      <routePartitionName>ENT_DEVICE_PT</routePartitionName>
+      <externalPhoneNumberMask>{xml_escape(trans_pattern)}</externalPhoneNumberMask>
+    </axl:updateLine>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response_line = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=update_line_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    timeout=60,
+  )
+  if response_line.status_code != 200:
+    raise RuntimeError(f"updateLine failed HTTP {response_line.status_code}: {response_line.text[:800]}")
+
+  devices_applied = []
+  for dev_info in selected_devices:
+    devices_applied.append(
+      {
+        "device_name": dev_info.get("name", ""),
+        "device_type": dev_info.get("type", ""),
+        "original_external_mask": dev_info.get("original_external_number_mask", ""),
+        "new_external_mask": trans_pattern,
+        "status": "Success",
+      }
+    )
+
+  op_id = _store_strike_mask_operation(
+    operator=operator,
+    cucm_host=cucm_host,
+    target_user=clean_target,
+    target_user_display=clean_target,
+    jabber_extension=jabber_extension,
+    selected_devices=selected_devices,
+    trans_pattern=trans_pattern,
+    trans_partition=trans_partition,
+    original_transform_mask=original_transform_mask,
+    original_description=original_description,
+  )
+
+  return {
+    "operation_id": op_id,
+    "target_user": clean_target,
+    "jabber_extension": jabber_extension,
+    "translation_pattern": trans_pattern,
+    "translation_pattern_partition": trans_partition,
+    "new_description": new_description,
+    "devices_applied": devices_applied,
   }
 
 
@@ -7671,13 +7795,54 @@ def menu_admin_page(request: Request):
                 resultsEl.innerHTML = html;
 
                 document.querySelectorAll('[id^="strikemask-apply-"]').forEach(function (btn) {
-                  btn.addEventListener("click", function () {
+                  btn.addEventListener("click", async function () {
                     const userId = btn.getAttribute("data-user-id");
                     const statusEl = document.getElementById("admin-strikemask-lookup-status");
-                    statusEl.textContent = "⏳ Preparing to apply Strike Mask for user: " + userId + "...";
-                    console.log("Strike Mask apply clicked for user:", userId);
-                    alert("Strike Mask apply logic will be implemented next. User: " + userId);
-                    statusEl.textContent = "Alert dismissed. No endpoint yet.";
+                    if (!userId) {
+                      statusEl.textContent = "Unable to apply Strike Mask: missing user ID.";
+                      return;
+                    }
+
+                    btn.disabled = true;
+                    statusEl.textContent = "Applying Strike Mask for " + userId + "...";
+
+                    try {
+                      const response = await fetch("/strike-mask/apply", {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/x-www-form-urlencoded",
+                          "Accept": "application/json",
+                          "X-Requested-With": "XMLHttpRequest",
+                        },
+                        credentials: "same-origin",
+                        body: new URLSearchParams({
+                          cucm_host: strikeMaskLookupForm.querySelector('input[name="cucm_host"]').value,
+                          cucm_user: strikeMaskLookupForm.querySelector('input[name="cucm_user"]').value,
+                          cucm_pass: strikeMaskLookupForm.querySelector('input[name="cucm_pass"]').value,
+                          target_user: userId,
+                        }),
+                      });
+
+                      const data = await response.json();
+                      if (!response.ok || !data.ok) {
+                        const msg = (data.error && data.error.message) || data.detail || "Strike Mask apply failed.";
+                        statusEl.textContent = "Error applying Strike Mask for " + userId + ": " + msg;
+                        btn.disabled = false;
+                        return;
+                      }
+
+                      btn.textContent = "Applied";
+                      statusEl.textContent =
+                        "✓ Applied Strike Mask for "
+                        + userId
+                        + " | Pattern: "
+                        + (data.translation_pattern || "")
+                        + " | Operation ID: "
+                        + (data.operation_id || "");
+                    } catch (err) {
+                      statusEl.textContent = "Error applying Strike Mask for " + userId + ": " + err.message;
+                      btn.disabled = false;
+                    }
                   });
                 });
               } catch (err) {
@@ -8721,6 +8886,47 @@ def strike_mask_reverse_route(
         f"operation_id={op_id};"
         f"pattern={result.get('translation_pattern', '')};"
         f"description={result.get('new_description', '')}"
+      ),
+      output_filename="inline_json_ok",
+      inline_mode=True,
+    )
+
+    return JSONResponse({"ok": True, **result})
+
+
+@app.post("/strike-mask/apply")
+def strike_mask_apply_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    target_user: str = Form(""),
+    selected_pattern: str = Form(""),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+    clean_target = (target_user or "").strip()
+    if not clean_target:
+      raise RuntimeError("target_user is required")
+
+    result = _apply_strike_mask_pattern(
+      cucm_host=cucm_host,
+      cucm_user=cucm_user,
+      cucm_pass=cucm_pass,
+      target_user=clean_target,
+      operator=cucm_user,
+      selected_pattern=selected_pattern,
+    )
+
+    _append_audit_event(
+      action="strike_mask_apply",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=(
+        f"operation_id={result.get('operation_id', '')};"
+        f"target_user={result.get('target_user', '')};"
+        f"pattern={result.get('translation_pattern', '')}"
       ),
       output_filename="inline_json_ok",
       inline_mode=True,
