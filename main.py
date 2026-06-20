@@ -152,6 +152,26 @@ AUDIT_LOG_PATH = os.path.join(
   "logs",
   "audit_trail.csv",
 )
+STRIKE_MASK_HISTORY_LOCK = threading.Lock()
+STRIKE_MASK_HISTORY_FIELDS = [
+  "timestamp",
+  "event",
+  "operation_id",
+  "cucm_host",
+  "operator",
+  "target_user",
+  "translation_pattern",
+  "translation_pattern_partition",
+  "device_name",
+  "device_type",
+  "line_mask_status",
+  "detail",
+]
+STRIKE_MASK_HISTORY_PATH = os.path.join(
+  os.path.dirname(os.path.abspath(__file__)),
+  "logs",
+  "strike_mask_history.csv",
+)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -666,6 +686,49 @@ def _append_audit_event(
     with open(AUDIT_LOG_PATH, "a", newline="", encoding="utf-8") as handle:
       writer = csv.writer(handle)
       writer.writerow(row)
+
+
+def _append_strike_mask_history_event(
+  event: str,
+  operation_id: str,
+  cucm_host: str,
+  operator: str,
+  target_user: str,
+  translation_pattern: str,
+  translation_pattern_partition: str,
+  devices: list[dict],
+  detail: str = "",
+):
+  os.makedirs(os.path.dirname(STRIKE_MASK_HISTORY_PATH), exist_ok=True)
+
+  with STRIKE_MASK_HISTORY_LOCK:
+    if not os.path.exists(STRIKE_MASK_HISTORY_PATH):
+      with open(STRIKE_MASK_HISTORY_PATH, "w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(STRIKE_MASK_HISTORY_FIELDS)
+
+    timestamp_text = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+    rows = []
+    device_list = devices or [{}]
+    for device in device_list:
+      rows.append([
+        timestamp_text,
+        event,
+        operation_id,
+        cucm_host,
+        operator,
+        target_user,
+        translation_pattern,
+        translation_pattern_partition,
+        device.get("device_name", "") or device.get("name", ""),
+        device.get("device_type", "") or device.get("type", ""),
+        device.get("line_mask_status", device.get("status", "")),
+        detail,
+      ])
+
+    with open(STRIKE_MASK_HISTORY_PATH, "a", newline="", encoding="utf-8") as handle:
+      writer = csv.writer(handle)
+      writer.writerows(rows)
 
 
 def _audit_now() -> datetime.datetime:
@@ -1198,6 +1261,7 @@ def _reverse_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str,
   for dev_info in applied_devices:
     dev_name = dev_info.get("name", "")
     original_external_mask = dev_info.get("original_external_number_mask", jabber_ext)
+    original_device_e164_mask = dev_info.get("original_device_e164_mask", "")
 
     if dev_name:
       try:
@@ -1220,15 +1284,28 @@ def _reverse_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str,
           timeout=60,
         )
         if response_line.status_code == 200:
+          line_restore_result = _update_device_line_e164_mask(
+            session=session,
+            cucm_host=cucm_host,
+            device_name=dev_name,
+            line_pattern=jabber_ext,
+            line_partition="ENT_DEVICE_PT",
+            new_mask=original_device_e164_mask,
+          )
+
           devices_reverted.append({
             "device_name": dev_name,
             "restored_external_mask": original_external_mask,
-            "status": "Success",
+            "restored_device_e164_mask": original_device_e164_mask,
+            "line_mask_status": line_restore_result.get("status", "Failed"),
+            "line_mask_error": line_restore_result.get("error", ""),
+            "status": "Success" if line_restore_result.get("status") == "Success" else "Partial",
           })
         else:
           devices_reverted.append({
             "device_name": dev_name,
             "restored_external_mask": original_external_mask,
+            "restored_device_e164_mask": original_device_e164_mask,
             "status": "Failed",
             "error": response_line.text[:200],
           })
@@ -1236,6 +1313,7 @@ def _reverse_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str,
         devices_reverted.append({
           "device_name": dev_name,
           "restored_external_mask": original_external_mask,
+          "restored_device_e164_mask": original_device_e164_mask,
           "status": "Error",
           "error": str(e)[:200],
         })
@@ -1245,6 +1323,8 @@ def _reverse_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str,
   return {
     "operation_id": op_id,
     "status": "Reversed",
+    "target_user": op.get("target_user", ""),
+    "jabber_extension": jabber_ext,
     "translation_pattern": trans_pattern,
     "translation_pattern_partition": trans_partition,
     "new_description": new_description,
@@ -1290,6 +1370,7 @@ def _update_device_line_e164_mask(session: requests.Session, cucm_host: str, dev
     }
 
   target_index = ""
+  target_existing_e164 = ""
   root = ET.fromstring(response_get.text)
   for elem in root.iter():
     tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
@@ -1299,11 +1380,14 @@ def _update_device_line_e164_mask(session: requests.Session, cucm_host: str, dev
     line_index = ""
     pattern_val = ""
     partition_val = ""
+    existing_e164_val = ""
 
     for child in list(elem):
       child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
       if child_tag == "index":
         line_index = (child.text or "").strip()
+      elif child_tag == "e164Mask":
+        existing_e164_val = (child.text or "").strip()
       elif child_tag == "dirn":
         for grandchild in list(child):
           grand_tag = grandchild.tag.split("}")[-1] if "}" in grandchild.tag else grandchild.tag
@@ -1314,6 +1398,7 @@ def _update_device_line_e164_mask(session: requests.Session, cucm_host: str, dev
 
     if line_index and pattern_val == line_pattern and partition_val == line_partition:
       target_index = line_index
+      target_existing_e164 = existing_e164_val
       break
 
   if not target_index:
@@ -1352,9 +1437,14 @@ def _update_device_line_e164_mask(session: requests.Session, cucm_host: str, dev
     return {
       "status": "Failed",
       "error": f"updatePhone failed HTTP {response_update.status_code}",
+      "previous_e164_mask": target_existing_e164,
     }
 
-  return {"status": "Success", "line_index": target_index}
+  return {
+    "status": "Success",
+    "line_index": target_index,
+    "previous_e164_mask": target_existing_e164,
+  }
 
 
 def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, target_user: str, operator: str, selected_pattern: str = "", selected_device_names: list[str] | None = None) -> dict:
@@ -1466,11 +1556,15 @@ def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, t
       new_mask=trans_pattern,
     ) if dev_name else {"status": "Failed", "error": "Missing device name"}
 
+    if dev_name:
+      dev_info["original_device_e164_mask"] = phone_line_result.get("previous_e164_mask", "")
+
     devices_applied.append(
       {
         "device_name": dev_name,
         "device_type": dev_info.get("type", ""),
         "original_external_mask": dev_info.get("original_external_number_mask", ""),
+        "original_device_e164_mask": dev_info.get("original_device_e164_mask", ""),
         "new_external_mask": trans_pattern,
         "line_mask_status": phone_line_result.get("status", "Failed"),
         "line_mask_error": phone_line_result.get("error", ""),
@@ -9409,6 +9503,18 @@ def strike_mask_reverse_route(
       inline_mode=True,
     )
 
+    _append_strike_mask_history_event(
+      event="reverse",
+      operation_id=result.get("operation_id", op_id),
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target_user=result.get("target_user", ""),
+      translation_pattern=result.get("translation_pattern", ""),
+      translation_pattern_partition=result.get("translation_pattern_partition", ""),
+      devices=result.get("devices_reverted", []),
+      detail=f"description={result.get('new_description', '')};transform={result.get('new_transform_mask', '')}",
+    )
+
     return JSONResponse({"ok": True, **result})
 
 
@@ -9507,6 +9613,18 @@ def strike_mask_apply_route(
       ),
       output_filename="inline_json_ok",
       inline_mode=True,
+    )
+
+    _append_strike_mask_history_event(
+      event="apply",
+      operation_id=result.get("operation_id", ""),
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target_user=result.get("target_user", ""),
+      translation_pattern=result.get("translation_pattern", ""),
+      translation_pattern_partition=result.get("translation_pattern_partition", ""),
+      devices=result.get("devices_applied", []),
+      detail=f"description={result.get('new_description', '')};transform={result.get('new_transform_mask', '')}",
     )
 
     return JSONResponse({"ok": True, **result})
