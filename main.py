@@ -58,6 +58,9 @@ JOB_OUTPUTS = {}
 VERASMART_QUEUE_RUNS = {}
 VERASMART_QUEUE_LOCK = threading.Lock()
 VERASMART_QUEUE_MAX_RUNS = 50
+STRIKE_MASK_OPERATIONS = {}
+STRIKE_MASK_LOCK = threading.Lock()
+STRIKE_MASK_MAX_OPERATIONS = 200
 AUTH_SESSIONS = {}
 AUTH_SESSION_SECRETS = {}
 SESSION_COOKIE_NAME = "cucm_web_session"
@@ -101,6 +104,8 @@ MOBILE_JABBER_EMAIL_BODY = (
   "5. If it balks at an invalid certificate, this is OK. Accept or press OK.\n"
   "6. You should now be logged in."
 )
+STRIKE_MASK_PATTERN_PREFIX = (os.getenv("STRIKE_MASK_PATTERN_PREFIX", "945") or "945").strip()
+CSF_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 TWILIO_INBOUND_VERIFICATION_PROFILES = {
   "phimane": {
     "panel_label": "Twilio-Inbound-Verificaton-Phimane",
@@ -808,6 +813,348 @@ def _list_verasmart_queue_runs(limit: int = 10) -> list[dict]:
     runs = list(VERASMART_QUEUE_RUNS.values())
   runs.sort(key=lambda item: item.get("created_at", ""), reverse=True)
   return runs[: max(1, min(limit, 50))]
+
+
+def _get_line_external_number_mask(cucm_host: str, cucm_user: str, cucm_pass: str, pattern: str, partition: str = "ENT_DEVICE_PT") -> str:
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  soap = f"""<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getLine>
+      <pattern>{xml_escape(pattern)}</pattern>
+      <routePartitionName>{xml_escape(partition)}</routePartitionName>
+      <returnedTags>
+        <externalPhoneNumberMask/>
+      </returnedTags>
+    </axl:getLine>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=soap.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    timeout=60,
+  )
+  if response.status_code != 200:
+    return pattern
+
+  root = ET.fromstring(response.text)
+  for elem in root.iter():
+    tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+    if tag == "externalPhoneNumberMask":
+      return (elem.text or "").strip() or pattern
+
+  return pattern
+
+
+def _enrich_devices_with_original_masks(cucm_host: str, cucm_user: str, cucm_pass: str, devices: list[dict], jabber_extension: str) -> list[dict]:
+  """Capture original external phone number mask from each device's DN before Strike Mask apply."""
+  enriched = []
+  for dev in devices:
+    dev_copy = dev.copy()
+    try:
+      original_mask = _get_line_external_number_mask(cucm_host, cucm_user, cucm_pass, jabber_extension)
+      dev_copy["original_external_number_mask"] = original_mask
+    except Exception:
+      dev_copy["original_external_number_mask"] = jabber_extension
+
+    enriched.append(dev_copy)
+
+  return enriched
+
+
+def _find_jabber_extension(cucm_host: str, cucm_user: str, cucm_pass: str, target_user: str) -> tuple[str, list[dict]]:
+  clean_target = (target_user or "").strip()
+  if not clean_target:
+    raise RuntimeError("target_user is required")
+
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  soap = f"""<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getUser>
+      <userid>{escape(clean_target)}</userid>
+      <returnedTags>
+        <primaryExtension>
+          <pattern/>
+        </primaryExtension>
+        <associatedDevices>
+          <device/>
+        </associatedDevices>
+      </returnedTags>
+    </axl:getUser>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=soap.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    timeout=60,
+  )
+  if response.status_code != 200:
+    raise RuntimeError(f"getUser failed: {response.status_code}")
+
+  root = ET.fromstring(response.text)
+  primary_ext = ""
+  jabber_devices = []
+
+  for elem in root.iter():
+    tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+
+    if tag == "pattern" and primary_ext == "":
+      primary_ext = (elem.text or "").strip()
+    elif tag == "device":
+      dev_name = (elem.text or "").strip()
+      if dev_name and (dev_name.upper().startswith("CSF") or dev_name.upper().startswith("TCT") or dev_name.upper().startswith("BOT")):
+        if dev_name.upper().startswith("CSF"):
+          dev_type = "CSF (Jabber Laptop)"
+        elif dev_name.upper().startswith("TCT"):
+          dev_type = "TCT (Jabber iPhone)"
+        else:
+          dev_type = "BOT (Jabber Android)"
+        jabber_devices.append({"name": dev_name, "type": dev_type})
+
+  if not primary_ext:
+    raise RuntimeError(f"{clean_target} has no primary extension (no Jabber built)")
+  if not jabber_devices:
+    raise RuntimeError(f"{clean_target} has no Jabber devices (CSF/TCT/BOT) assigned")
+
+  return primary_ext, jabber_devices
+
+
+def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[dict]:
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  pattern_prefix = STRIKE_MASK_PATTERN_PREFIX
+  soap = f"""<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:listTransPattern sequence="1">
+      <searchCriteria>
+        <pattern>{xml_escape(pattern_prefix)}%</pattern>
+        <description>Strike Mask - %Available%</description>
+      </searchCriteria>
+      <returnedTags>
+        <pattern/>
+        <routePartitionName/>
+        <description/>
+        <calledPartyTransformationMask/>
+      </returnedTags>
+    </axl:listTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=soap.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    timeout=60,
+  )
+  if response.status_code != 200:
+    raise RuntimeError(f"listTransPattern failed: {response.status_code}")
+
+  root = ET.fromstring(response.text)
+  patterns = []
+
+  for elem in root.iter():
+    tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+    if tag != "transPattern":
+      continue
+
+    pattern = ""
+    partition = ""
+    desc = ""
+    mask = ""
+
+    for child in list(elem):
+      child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+      text = (child.text or "").strip()
+      if child_tag == "pattern":
+        pattern = text
+      elif child_tag == "routePartitionName":
+        partition = text
+      elif child_tag == "description":
+        desc = text
+      elif child_tag in {"calledPartyTransformationMask", "calledPartyTransformMask"}:
+        mask = text
+
+    if pattern:
+      patterns.append({
+        "pattern": pattern,
+        "partition": partition,
+        "description": desc,
+        "called_party_transform_mask": mask,
+      })
+
+  return patterns
+
+
+def _store_strike_mask_operation(operator: str, cucm_host: str, target_user: str, target_user_display: str, jabber_extension: str, selected_devices: list[dict], trans_pattern: str, trans_partition: str, original_transform_mask: str, original_description: str) -> str:
+  op_id = str(uuid4())
+  now_text = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  entry = {
+    "operation_id": op_id,
+    "created_at": now_text,
+    "operator": operator,
+    "cucm_host": cucm_host,
+    "target_user": target_user,
+    "target_user_display": target_user_display,
+    "jabber_extension": jabber_extension,
+    "applied_devices": selected_devices,
+    "translation_pattern": trans_pattern,
+    "translation_pattern_partition": trans_partition,
+    "original_transform_mask": original_transform_mask,
+    "original_pattern_description": original_description,
+    "status": "Active",
+    "reversed_at": None,
+  }
+
+  with STRIKE_MASK_LOCK:
+    STRIKE_MASK_OPERATIONS[op_id] = entry
+    if len(STRIKE_MASK_OPERATIONS) > STRIKE_MASK_MAX_OPERATIONS:
+      oldest_key = next(iter(STRIKE_MASK_OPERATIONS))
+      STRIKE_MASK_OPERATIONS.pop(oldest_key, None)
+
+  return op_id
+
+
+def _list_active_strike_mask_operations(limit: int = 20) -> list[dict]:
+  with STRIKE_MASK_LOCK:
+    all_ops = list(STRIKE_MASK_OPERATIONS.values())
+  active = [op for op in all_ops if op.get("status") == "Active"]
+  active.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+  return active[:max(1, min(limit, 100))]
+
+
+def _get_strike_mask_operation(op_id: str) -> dict:
+  with STRIKE_MASK_LOCK:
+    return STRIKE_MASK_OPERATIONS.get(op_id, {})
+
+
+def _mark_strike_mask_reversed(op_id: str):
+  with STRIKE_MASK_LOCK:
+    if op_id in STRIKE_MASK_OPERATIONS:
+      STRIKE_MASK_OPERATIONS[op_id]["status"] = "Reversed"
+      STRIKE_MASK_OPERATIONS[op_id]["reversed_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _reverse_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, op_id: str) -> dict:
+  op = _get_strike_mask_operation(op_id)
+  if not op:
+    raise RuntimeError(f"Operation {op_id} not found")
+
+  if op.get("status") == "Reversed":
+    raise RuntimeError(f"Operation {op_id} has already been reversed")
+
+  trans_pattern = op.get("translation_pattern", "")
+  trans_partition = op.get("translation_pattern_partition", "")
+  
+  if not trans_pattern or not trans_partition:
+    raise RuntimeError(f"Operation {op_id} missing pattern details")
+
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  new_description = f"Strike Mask - {trans_pattern} Available"
+  new_transform_mask = "2481001"
+
+  soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:updateTransPattern sequence=\"1\">
+      <pattern>{xml_escape(trans_pattern)}</pattern>
+      <routePartitionName>{xml_escape(trans_partition)}</routePartitionName>
+      <description>{xml_escape(new_description)}</description>
+      <calledPartyTransformationMask>{xml_escape(new_transform_mask)}</calledPartyTransformationMask>
+    </axl:updateTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=soap_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    timeout=60,
+  )
+  if response.status_code != 200:
+    raise RuntimeError(f"updateTransPattern failed HTTP {response.status_code}: {response.text[:800]}")
+
+  devices_reverted = []
+  jabber_ext = op.get("jabber_extension", "")
+  applied_devices = op.get("applied_devices", [])
+
+  for dev_info in applied_devices:
+    dev_name = dev_info.get("name", "")
+    original_external_mask = dev_info.get("original_external_number_mask", jabber_ext)
+
+    if dev_name:
+      try:
+        soap_update_line = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:updateLine sequence=\"1\">
+      <pattern>{xml_escape(jabber_ext)}</pattern>
+      <routePartitionName>ENT_DEVICE_PT</routePartitionName>
+      <externalPhoneNumberMask>{xml_escape(original_external_mask)}</externalPhoneNumberMask>
+    </axl:updateLine>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+        response_line = session.post(
+          f"https://{cucm_host}:8443/axl/",
+          data=soap_update_line.encode("utf-8"),
+          headers={"Content-Type": "text/xml"},
+          timeout=60,
+        )
+        if response_line.status_code == 200:
+          devices_reverted.append({
+            "device_name": dev_name,
+            "restored_external_mask": original_external_mask,
+            "status": "Success",
+          })
+        else:
+          devices_reverted.append({
+            "device_name": dev_name,
+            "restored_external_mask": original_external_mask,
+            "status": "Failed",
+            "error": response_line.text[:200],
+          })
+      except Exception as e:
+        devices_reverted.append({
+          "device_name": dev_name,
+          "restored_external_mask": original_external_mask,
+          "status": "Error",
+          "error": str(e)[:200],
+        })
+
+  _mark_strike_mask_reversed(op_id)
+
+  return {
+    "operation_id": op_id,
+    "status": "Reversed",
+    "translation_pattern": trans_pattern,
+    "translation_pattern_partition": trans_partition,
+    "new_description": new_description,
+    "new_transform_mask": new_transform_mask,
+    "devices_reverted": devices_reverted,
+    "reversed_at": _get_strike_mask_operation(op_id).get("reversed_at", ""),
+  }
 
 
 def _load_audit_rows(limit: int | None = None) -> list[dict]:
@@ -8185,6 +8532,39 @@ def twilio_inbound_verification_route(
         "auto_restore_seconds": TWILIO_INBOUND_AUTO_RESTORE_SECONDS if auto_restore_enabled else 0,
       }
     )
+
+
+@app.post("/strike-mask/reverse")
+def strike_mask_reverse_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    operation_id: str = Form(""),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+    op_id = (operation_id or "").strip()
+    if not op_id:
+      raise RuntimeError("operation_id is required")
+
+    result = _reverse_strike_mask_pattern(cucm_host, cucm_user, cucm_pass, op_id)
+
+    _append_audit_event(
+      action="strike_mask_reverse",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=(
+        f"operation_id={op_id};"
+        f"pattern={result.get('translation_pattern', '')};"
+        f"description={result.get('new_description', '')}"
+      ),
+      output_filename="inline_json_ok",
+      inline_mode=True,
+    )
+
+    return JSONResponse({"ok": True, **result})
 
 
 @app.post("/verasmart/lab/queue/upload")
