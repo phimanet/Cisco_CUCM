@@ -7615,64 +7615,55 @@ def menu_admin_page(request: Request):
           if (strikeMaskLookupForm) {
             strikeMaskLookupForm.addEventListener("submit", async function (event) {
               event.preventDefault();
-              const lastNameInput = strikeMaskLookupForm.querySelector('input[name="last_name"]');
-              const firstNameInput = strikeMaskLookupForm.querySelector('input[name="first_name"]');
               const statusEl = document.getElementById("admin-strikemask-lookup-status");
               const resultsEl = document.getElementById("admin-strikemask-lookup-results");
-
-              const lastName = (lastNameInput.value || "").trim();
-              const firstName = (firstNameInput.value || "").trim();
-              if (!lastName) {
-                statusEl.textContent = "Last name is required.";
-                return;
-              }
 
               statusEl.textContent = "Searching...";
               resultsEl.innerHTML = "";
 
               try {
-                const resp = await fetch("/lookup/person", {
+                const formData = new FormData(strikeMaskLookupForm);
+                const response = await fetch("/lookup/person", {
                   method: "POST",
-                  headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                  body: new URLSearchParams({
-                    cucm_host: strikeMaskLookupForm.querySelector('input[name="cucm_host"]').value,
-                    cucm_user: strikeMaskLookupForm.querySelector('input[name="cucm_user"]').value,
-                    cucm_pass: strikeMaskLookupForm.querySelector('input[name="cucm_pass"]').value,
-                    last_name: lastName,
-                    first_name: firstName,
-                  }),
+                  body: formData,
+                  credentials: "same-origin",
                 });
-                const data = await resp.json();
-                if (!data.ok) {
-                  statusEl.textContent = "Error: " + (data.error || "Unknown error");
+
+                const payload = await response.json();
+
+                if (!response.ok || !payload.ok) {
+                  const msg = (payload.error && payload.error.message) || "Search failed.";
+                  statusEl.textContent = "Error: " + msg;
                   return;
                 }
 
-                if (!data.matches || data.matches.length === 0) {
-                  statusEl.textContent = "No users found.";
+                const results = payload.results || [];
+                if (!results.length) {
+                  statusEl.textContent = "No users found matching that name.";
                   return;
                 }
 
-                statusEl.textContent = `Found ${data.matches.length} user(s).`;
-                let html = '<table style="width:100%; border-collapse:collapse; font-size:13px; margin-top:10px;">';
+                statusEl.textContent = `Found ${results.length} user(s).`;
+
+                let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
                 html += '<thead><tr style="background:#005eb8; color:#fff;">';
-                html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
-                html += '<th style="padding:8px 10px; text-align:left;">Name</th>';
-                html += '<th style="padding:8px 10px; text-align:left;">Extension</th>';
+                html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+                html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+                html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
                 html += '<th style="padding:8px 10px; text-align:left;">Action</th>';
                 html += '</tr></thead><tbody>';
 
-                data.matches.forEach(function (match, i) {
+                results.forEach(function (r, i) {
                   const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
-                  const userId = match.userid || "";
-                  const fullName = (match.user || {}).full_name || "";
-                  const ext = match.extension || "";
+                  const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+                  const uid = r.userid || "";
+                  const ext = r.primary_extension || "\u2014";
                   const btnId = "strikemask-apply-" + i;
                   html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
-                  html += '<td style="padding:7px 10px;">' + userId + '</td>';
-                  html += '<td style="padding:7px 10px;">' + fullName + '</td>';
-                  html += '<td style="padding:7px 10px;">' + ext + '</td>';
-                  html += '<td style="padding:7px 10px;"><button type="button" id="' + btnId + '" class="mini-btn" data-user-id="' + userId + '">Apply Strike Mask</button></td>';
+                  html += '<td style="padding:7px 10px;">' + name + '</td>';
+                  html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+                  html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
+                  html += '<td style="padding:7px 10px;"><button type="button" id="' + btnId + '" class="mini-btn" data-user-id="' + uid + '">Apply Strike Mask</button></td>';
                   html += '</tr>';
                 });
 
