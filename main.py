@@ -470,6 +470,7 @@ def _wants_json_response(request: Request) -> bool:
     "/strike-mask/apply",
     "/strike-mask/reverse",
     "/strike-mask/options",
+    "/strike-mask/in-use",
   }:
     return True
   return False
@@ -1013,6 +1014,88 @@ def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str)
         "called_party_transform_mask": mask,
       })
 
+  return patterns
+
+
+def _list_in_use_strike_mask_patterns(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[dict]:
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  pattern_prefix = STRIKE_MASK_PATTERN_PREFIX
+  soap = f"""<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:listTransPattern sequence="1">
+      <searchCriteria>
+        <pattern>{xml_escape(pattern_prefix)}%</pattern>
+      </searchCriteria>
+      <returnedTags>
+        <pattern/>
+        <routePartitionName/>
+        <description/>
+        <calledPartyTransformationMask/>
+      </returnedTags>
+    </axl:listTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=soap.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    timeout=60,
+  )
+  if response.status_code != 200:
+    raise RuntimeError(f"listTransPattern failed: {response.status_code}")
+
+  root = ET.fromstring(response.text)
+  patterns = []
+
+  for elem in root.iter():
+    tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+    if tag != "transPattern":
+      continue
+
+    pattern = ""
+    partition = ""
+    desc = ""
+    mask = ""
+
+    for child in list(elem):
+      child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+      text = (child.text or "").strip()
+      if child_tag == "pattern":
+        pattern = text
+      elif child_tag == "routePartitionName":
+        partition = text
+      elif child_tag == "description":
+        desc = text
+      elif child_tag in {"calledPartyTransformationMask", "calledPartyTransformMask"}:
+        mask = text
+
+    desc_lower = (desc or "").strip().lower()
+    expected_simple_desc = f"strike mask - {pattern}".lower()
+    is_available = (
+      (
+        "available" in desc_lower
+        or desc_lower == expected_simple_desc
+      )
+      and (mask or "").strip() == STRIKE_MASK_AVAILABLE_TRANSFORM_MASK
+    )
+
+    if pattern and desc_lower.startswith("strike mask -") and not is_available:
+      patterns.append(
+        {
+          "pattern": pattern,
+          "partition": partition,
+          "description": desc,
+          "called_party_transform_mask": mask,
+        }
+      )
+
+  patterns.sort(key=lambda item: (item.get("pattern") or ""))
   return patterns
 
 
@@ -7017,6 +7100,12 @@ def menu_admin_page(request: Request):
         
         <p id="admin-strikemask-lookup-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
         <div id="admin-strikemask-lookup-results" style="overflow-x:auto;"></div>
+
+        <div style="margin-top:14px;">
+          <button type="button" id="admin-strikemask-list-inuse" class="mini-btn">List All Currently In-Use Strike Masks</button>
+          <p id="admin-strikemask-inuse-status" style="color:#2c5c8a; min-height:18px; margin-top:10px;">Click the button to load in-use patterns.</p>
+          <div id="admin-strikemask-inuse-results" style="overflow-x:auto;"></div>
+        </div>
         
         <hr style="margin:20px 0; border:none; border-top:1px solid #d0dce8;">
         
@@ -7922,11 +8011,15 @@ def menu_admin_page(request: Request):
                   const uid = r.userid || "";
                   const ext = r.primary_extension || "\u2014";
                   const btnId = "strikemask-apply-" + i;
+                  const reverseBtnId = "strikemask-reverse-latest-" + i;
                   html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
                   html += '<td style="padding:7px 10px;">' + name + '</td>';
                   html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
                   html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
-                  html += '<td style="padding:7px 10px;"><button type="button" id="' + btnId + '" class="mini-btn" data-user-id="' + uid + '">Apply Strike Mask</button></td>';
+                  html += '<td style="padding:7px 10px;">'
+                    + '<button type="button" id="' + btnId + '" class="mini-btn" data-user-id="' + uid + '">Apply Strike Mask</button>'
+                    + '<button type="button" id="' + reverseBtnId + '" class="mini-btn" data-user-id="' + uid + '" style="margin-left:6px; background:#a63b00; color:#fff;">Reverse Latest</button>'
+                    + '</td>';
                   html += '</tr>';
                 });
 
@@ -8092,6 +8185,184 @@ def menu_admin_page(request: Request):
                     }
                   });
                 });
+
+                document.querySelectorAll('[id^="strikemask-reverse-latest-"]').forEach(function (btn) {
+                  btn.addEventListener("click", async function () {
+                    const userId = btn.getAttribute("data-user-id");
+                    if (!userId) {
+                      statusEl.textContent = "Unable to reverse Strike Mask: missing user ID.";
+                      return;
+                    }
+
+                    btn.disabled = true;
+                    statusEl.textContent = "Finding latest active Strike Mask operation for " + userId + "...";
+
+                    try {
+                      const opsResp = await fetch("/strike-mask/in-use", {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/x-www-form-urlencoded",
+                          "Accept": "application/json",
+                          "X-Requested-With": "XMLHttpRequest",
+                        },
+                        credentials: "same-origin",
+                        body: new URLSearchParams({
+                          cucm_host: strikeMaskLookupForm.querySelector('input[name="cucm_host"]').value,
+                          cucm_user: strikeMaskLookupForm.querySelector('input[name="cucm_user"]').value,
+                          cucm_pass: strikeMaskLookupForm.querySelector('input[name="cucm_pass"]').value,
+                          limit: "200",
+                        }),
+                      });
+
+                      const opsData = await opsResp.json();
+                      if (!opsResp.ok || !opsData.ok) {
+                        const msg = (opsData.error && opsData.error.message) || opsData.detail || "Unable to load active Strike Mask operations.";
+                        statusEl.textContent = "Error loading active operations: " + msg;
+                        btn.disabled = false;
+                        return;
+                      }
+
+                      const activeOps = opsData.active_operations || [];
+                      const targetOp = activeOps.find(function (op) {
+                        const opUser = (op.target_user || "").trim().toLowerCase();
+                        return opUser === String(userId).trim().toLowerCase();
+                      });
+
+                      if (!targetOp || !targetOp.operation_id) {
+                        statusEl.textContent = "No active Strike Mask operation found for " + userId + ".";
+                        btn.disabled = false;
+                        return;
+                      }
+
+                      statusEl.textContent = "Reversing latest operation for " + userId + "...";
+                      const reverseResp = await fetch("/strike-mask/reverse", {
+                        method: "POST",
+                        headers: {
+                          "Content-Type": "application/x-www-form-urlencoded",
+                          "Accept": "application/json",
+                          "X-Requested-With": "XMLHttpRequest",
+                        },
+                        credentials: "same-origin",
+                        body: new URLSearchParams({
+                          cucm_host: strikeMaskLookupForm.querySelector('input[name="cucm_host"]').value,
+                          cucm_user: strikeMaskLookupForm.querySelector('input[name="cucm_user"]').value,
+                          cucm_pass: strikeMaskLookupForm.querySelector('input[name="cucm_pass"]').value,
+                          operation_id: targetOp.operation_id,
+                        }),
+                      });
+
+                      const reverseData = await reverseResp.json();
+                      if (!reverseResp.ok || !reverseData.ok) {
+                        const msg = (reverseData.error && reverseData.error.message) || reverseData.detail || "Strike Mask reversal failed.";
+                        statusEl.textContent = "Error reversing Strike Mask for " + userId + ": " + msg;
+                        btn.disabled = false;
+                        return;
+                      }
+
+                      btn.textContent = "Reversed";
+                      statusEl.textContent =
+                        "✓ Reversed Strike Mask for " + userId
+                        + " | Operation ID: " + (targetOp.operation_id || "")
+                        + " | Pattern: " + (reverseData.translation_pattern || "");
+                    } catch (err) {
+                      statusEl.textContent = "Error reversing Strike Mask for " + userId + ": " + err.message;
+                      btn.disabled = false;
+                    }
+                  });
+                });
+              } catch (err) {
+                statusEl.textContent = "Error: " + err.message;
+              }
+            });
+          }
+
+          const strikeMaskListInUseBtn = document.getElementById("admin-strikemask-list-inuse");
+          if (strikeMaskListInUseBtn && strikeMaskLookupForm) {
+            strikeMaskListInUseBtn.addEventListener("click", async function () {
+              const statusEl = document.getElementById("admin-strikemask-inuse-status");
+              const resultsEl = document.getElementById("admin-strikemask-inuse-results");
+              statusEl.textContent = "Loading in-use Strike Masks...";
+              resultsEl.innerHTML = "";
+
+              try {
+                const response = await fetch("/strike-mask/in-use", {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json",
+                    "X-Requested-With": "XMLHttpRequest",
+                  },
+                  credentials: "same-origin",
+                  body: new URLSearchParams({
+                    cucm_host: strikeMaskLookupForm.querySelector('input[name="cucm_host"]').value,
+                    cucm_user: strikeMaskLookupForm.querySelector('input[name="cucm_user"]').value,
+                    cucm_pass: strikeMaskLookupForm.querySelector('input[name="cucm_pass"]').value,
+                    limit: "200",
+                  }),
+                });
+
+                const data = await response.json();
+                if (!response.ok || !data.ok) {
+                  const msg = (data.error && data.error.message) || data.detail || "Unable to list in-use Strike Masks.";
+                  statusEl.textContent = "Error: " + msg;
+                  return;
+                }
+
+                const live = data.live_in_use_patterns || [];
+                const ops = data.active_operations || [];
+                statusEl.textContent =
+                  "In-use patterns: " + live.length
+                  + " | Active operations tracked: " + ops.length;
+
+                let html = "";
+
+                html += '<h4 style="margin:8px 0 6px 0;">Live In-Use Patterns (CUCM)</h4>';
+                if (!live.length) {
+                  html += '<p style="color:#355978;">No in-use Strike Mask patterns found.</p>';
+                } else {
+                  html += '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+                  html += '<thead><tr style="background:#005eb8; color:#fff;">';
+                  html += '<th style="padding:8px 10px; text-align:left;">Pattern</th>';
+                  html += '<th style="padding:8px 10px; text-align:left;">Partition</th>';
+                  html += '<th style="padding:8px 10px; text-align:left;">Description</th>';
+                  html += '<th style="padding:8px 10px; text-align:left;">Called Party Transform Mask</th>';
+                  html += '</tr></thead><tbody>';
+                  live.forEach(function (item, i) {
+                    const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                    html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                    html += '<td style="padding:7px 10px;">' + (item.pattern || "") + '</td>';
+                    html += '<td style="padding:7px 10px;">' + (item.partition || "") + '</td>';
+                    html += '<td style="padding:7px 10px;">' + (item.description || "") + '</td>';
+                    html += '<td style="padding:7px 10px;">' + (item.called_party_transform_mask || "") + '</td>';
+                    html += '</tr>';
+                  });
+                  html += '</tbody></table>';
+                }
+
+                html += '<h4 style="margin:12px 0 6px 0;">Active Operations (This App Session)</h4>';
+                if (!ops.length) {
+                  html += '<p style="color:#355978;">No active operations tracked in memory.</p>';
+                } else {
+                  html += '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+                  html += '<thead><tr style="background:#005eb8; color:#fff;">';
+                  html += '<th style="padding:8px 10px; text-align:left;">Operation ID</th>';
+                  html += '<th style="padding:8px 10px; text-align:left;">User</th>';
+                  html += '<th style="padding:8px 10px; text-align:left;">Pattern</th>';
+                  html += '<th style="padding:8px 10px; text-align:left;">Created</th>';
+                  html += '</tr></thead><tbody>';
+                  ops.forEach(function (item, i) {
+                    const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                    html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                    html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (item.operation_id || "") + '</td>';
+                    html += '<td style="padding:7px 10px;">' + (item.target_user || "") + '</td>';
+                    html += '<td style="padding:7px 10px;">' + (item.translation_pattern || "") + '</td>';
+                    html += '<td style="padding:7px 10px;">' + (item.created_at || "") + '</td>';
+                    html += '</tr>';
+                  });
+                  html += '</tbody></table>';
+                }
+
+                resultsEl.innerHTML = html;
               } catch (err) {
                 statusEl.textContent = "Error: " + err.message;
               }
@@ -9139,6 +9410,31 @@ def strike_mask_reverse_route(
     )
 
     return JSONResponse({"ok": True, **result})
+
+
+@app.post("/strike-mask/in-use")
+def strike_mask_in_use_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    limit: int = Form(50),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+    live_in_use = _list_in_use_strike_mask_patterns(cucm_host, cucm_user, cucm_pass)
+    active_ops = _list_active_strike_mask_operations(limit=max(1, min(limit, 200)))
+
+    return JSONResponse(
+      {
+        "ok": True,
+        "count_live_in_use": len(live_in_use),
+        "live_in_use_patterns": live_in_use,
+        "count_active_operations": len(active_ops),
+        "active_operations": active_ops,
+      }
+    )
 
 
 @app.post("/strike-mask/options")
