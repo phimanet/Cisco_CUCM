@@ -6521,6 +6521,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="verasmart-lab">VeraSMART Automation (v1.01 LAB)</button>
             <button type="button" class="portal-nav-btn" data-panel="twilioverify-phimane">Twilio-Inbound-Verificaton-Phimane</button>
             <button type="button" class="portal-nav-btn" data-panel="twilioverify-lauraa">Twilio-Inbound-Verificaton-LauraA</button>
+            <button type="button" class="portal-nav-btn" data-panel="strikemask">Strike Mask - Masked Calling</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=teams-telephony'">Create Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=teams-telephony-remove'">Remove Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM (Main Ops)</button>
@@ -6732,6 +6733,49 @@ def menu_admin_page(request: Request):
 
         <p id="admin-twilio-verify-lauraa-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Use Apply to switch temporarily, then Restore to return to 8583503289.</p>
         <p id="admin-twilio-verify-lauraa-summary" style="color:#355978; min-height:18px;"></p>
+      </section>
+
+      <section class="panel tool-panel" data-panel="strikemask">
+        <h3>Strike Mask - Masked Calling (Page 2)</h3>
+        <p>Apply or reverse Strike Mask for masked calling. Strike Mask uses a 945-series translation pattern to mask the caller's Jabber extension when making calls.</p>
+        
+        <h4 style="margin-top:18px;">Lookup Strike Mask Status</h4>
+        <p>Search by last name to see if the user has active Strike Mask operations or available patterns to apply.</p>
+        <form id="admin-strikemask-lookup-form">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <div class="compact-inline-row">
+            <span>Last Name:</span>
+            <input name="last_name" placeholder="Smith" required>
+          </div><br>
+          <div class="compact-inline-row">
+            <span>First Name (optional):</span>
+            <input name="first_name" placeholder="John">
+          </div><br>
+          <button type="submit">Search for User</button>
+        </form>
+        
+        <p id="admin-strikemask-lookup-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
+        <div id="admin-strikemask-lookup-results" style="overflow-x:auto;"></div>
+        
+        <hr style="margin:20px 0; border:none; border-top:1px solid #d0dce8;">
+        
+        <h4>Reverse Strike Mask</h4>
+        <p>Enter an operation ID to restore the translation pattern to "Available" state and remove Strike Mask from Jabber devices.</p>
+        <form id="admin-strikemask-reverse-form">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <div class="compact-inline-row">
+            <span>Operation ID:</span>
+            <input name="operation_id" placeholder="12345678-abcd-1234-5678-abcdef123456" required>
+          </div><br>
+          <button type="submit">Reverse Strike Mask</button>
+        </form>
+        
+        <p id="admin-strikemask-reverse-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter an operation ID and click Reverse.</p>
+        <p id="admin-strikemask-reverse-summary" style="color:#355978; min-height:18px;"></p>
       </section>
 
       <section class="panel tool-panel" data-panel="jabbernotify">
@@ -7570,6 +7614,132 @@ def menu_admin_page(request: Request):
             summaryId: "admin-twilio-verify-lauraa-summary",
             restoreButtonId: "admin-twilio-verify-lauraa-restore",
           });
+
+          const strikeMaskLookupForm = document.getElementById("admin-strikemask-lookup-form");
+          if (strikeMaskLookupForm) {
+            strikeMaskLookupForm.addEventListener("submit", async function (event) {
+              event.preventDefault();
+              const lastNameInput = strikeMaskLookupForm.querySelector('input[name="last_name"]');
+              const firstNameInput = strikeMaskLookupForm.querySelector('input[name="first_name"]');
+              const statusEl = document.getElementById("admin-strikemask-lookup-status");
+              const resultsEl = document.getElementById("admin-strikemask-lookup-results");
+
+              const lastName = (lastNameInput.value || "").trim();
+              const firstName = (firstNameInput.value || "").trim();
+              if (!lastName) {
+                statusEl.textContent = "Last name is required.";
+                return;
+              }
+
+              statusEl.textContent = "Searching...";
+              resultsEl.innerHTML = "";
+
+              try {
+                const resp = await fetch("/lookup/person", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                  body: new URLSearchParams({
+                    cucm_host: strikeMaskLookupForm.querySelector('input[name="cucm_host"]').value,
+                    cucm_user: strikeMaskLookupForm.querySelector('input[name="cucm_user"]').value,
+                    cucm_pass: strikeMaskLookupForm.querySelector('input[name="cucm_pass"]').value,
+                    last_name: lastName,
+                    first_name: firstName,
+                  }),
+                });
+                const data = await resp.json();
+                if (!data.ok) {
+                  statusEl.textContent = "Error: " + (data.error || "Unknown error");
+                  return;
+                }
+
+                if (!data.matches || data.matches.length === 0) {
+                  statusEl.textContent = "No users found.";
+                  return;
+                }
+
+                statusEl.textContent = `Found ${data.matches.length} user(s).`;
+                let html = '<table style="width:100%; border-collapse:collapse; font-size:13px; margin-top:10px;">';
+                html += '<thead><tr style="background:#005eb8; color:#fff;">';
+                html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
+                html += '<th style="padding:8px 10px; text-align:left;">Name</th>';
+                html += '<th style="padding:8px 10px; text-align:left;">Extension</th>';
+                html += '<th style="padding:8px 10px; text-align:left;">Action</th>';
+                html += '</tr></thead><tbody>';
+
+                data.matches.forEach(function (match, i) {
+                  const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                  const userId = match.userid || "";
+                  const fullName = (match.user || {}).full_name || "";
+                  const ext = match.extension || "";
+                  const btnId = "strikemask-apply-" + i;
+                  html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                  html += '<td style="padding:7px 10px;">' + userId + '</td>';
+                  html += '<td style="padding:7px 10px;">' + fullName + '</td>';
+                  html += '<td style="padding:7px 10px;">' + ext + '</td>';
+                  html += '<td style="padding:7px 10px;"><button type="button" id="' + btnId + '" class="mini-btn" data-user-id="' + userId + '">Apply Strike Mask</button></td>';
+                  html += '</tr>';
+                });
+
+                html += '</tbody></table>';
+                resultsEl.innerHTML = html;
+
+                document.querySelectorAll('[id^="strikemask-apply-"]').forEach(function (btn) {
+                  btn.addEventListener("click", function () {
+                    alert("Strike Mask apply logic will be implemented next. User: " + btn.getAttribute("data-user-id"));
+                  });
+                });
+              } catch (err) {
+                statusEl.textContent = "Error: " + err.message;
+              }
+            });
+          }
+
+          const strikeMaskReverseForm = document.getElementById("admin-strikemask-reverse-form");
+          if (strikeMaskReverseForm) {
+            strikeMaskReverseForm.addEventListener("submit", async function (event) {
+              event.preventDefault();
+              const opIdInput = strikeMaskReverseForm.querySelector('input[name="operation_id"]');
+              const statusEl = document.getElementById("admin-strikemask-reverse-status");
+              const summaryEl = document.getElementById("admin-strikemask-reverse-summary");
+
+              const opId = (opIdInput.value || "").trim();
+              if (!opId) {
+                statusEl.textContent = "Operation ID is required.";
+                return;
+              }
+
+              statusEl.textContent = "Reversing...";
+              summaryEl.textContent = "";
+
+              try {
+                const resp = await fetch("/strike-mask/reverse", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                  body: new URLSearchParams({
+                    cucm_host: strikeMaskReverseForm.querySelector('input[name="cucm_host"]').value,
+                    cucm_user: strikeMaskReverseForm.querySelector('input[name="cucm_user"]').value,
+                    cucm_pass: strikeMaskReverseForm.querySelector('input[name="cucm_pass"]').value,
+                    operation_id: opId,
+                  }),
+                });
+                const data = await resp.json();
+                if (!data.ok) {
+                  statusEl.textContent = "Error: " + (data.error || "Unknown error");
+                  return;
+                }
+
+                statusEl.textContent = "✓ Strike Mask reversed successfully!";
+                const reverted = data.devices_reverted || [];
+                let summary = "Pattern: " + data.translation_pattern + " | Devices: " + reverted.length;
+                reverted.forEach(function (dev) {
+                  summary += " | " + dev.device_name + ": " + dev.status;
+                });
+                summaryEl.textContent = summary;
+              } catch (err) {
+                statusEl.textContent = "Error: " + err.message;
+              }
+            });
+          }
         })();
       </script>
 
