@@ -1261,7 +1261,7 @@ def _reverse_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str,
   for dev_info in applied_devices:
     dev_name = dev_info.get("name", "")
     original_external_mask = dev_info.get("original_external_number_mask", jabber_ext)
-    original_device_e164_mask = dev_info.get("original_device_e164_mask", "")
+    original_device_e164_mask = dev_info.get("original_device_e164_mask", "") or jabber_ext
 
     if dev_name:
       try:
@@ -1557,7 +1557,7 @@ def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, t
     ) if dev_name else {"status": "Failed", "error": "Missing device name"}
 
     if dev_name:
-      dev_info["original_device_e164_mask"] = phone_line_result.get("previous_e164_mask", "")
+      dev_info["original_device_e164_mask"] = phone_line_result.get("previous_e164_mask", "") or jabber_extension
 
     devices_applied.append(
       {
@@ -8112,7 +8112,7 @@ def menu_admin_page(request: Request):
                   html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
                   html += '<td style="padding:7px 10px;">'
                     + '<button type="button" id="' + btnId + '" class="mini-btn" data-user-id="' + uid + '">Apply Strike Mask</button>'
-                    + '<button type="button" id="' + reverseBtnId + '" class="mini-btn" data-user-id="' + uid + '" style="margin-left:6px; background:#a63b00; color:#fff;">Reverse Latest</button>'
+                    + '<button type="button" id="' + reverseBtnId + '" class="mini-btn" data-user-id="' + uid + '" style="margin-left:6px; background:#a63b00; color:#fff;">Reverse Strike Mask</button>'
                     + '</td>';
                   html += '</tr>';
                 });
