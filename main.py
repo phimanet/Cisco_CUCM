@@ -105,6 +105,7 @@ MOBILE_JABBER_EMAIL_BODY = (
   "6. You should now be logged in."
 )
 STRIKE_MASK_PATTERN_PREFIX = (os.getenv("STRIKE_MASK_PATTERN_PREFIX", "945") or "945").strip()
+STRIKE_MASK_AVAILABLE_TRANSFORM_MASK = (os.getenv("STRIKE_MASK_AVAILABLE_TRANSFORM_MASK", "2481001") or "2481001").strip()
 CSF_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 TWILIO_INBOUND_VERIFICATION_PROFILES = {
   "phimane": {
@@ -994,9 +995,13 @@ def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str)
 
     desc_lower = (desc or "").strip().lower()
     expected_simple_desc = f"strike mask - {pattern}".lower()
+    mask_clean = (mask or "").strip()
     is_available = (
-      "available" in desc_lower
-      or desc_lower == expected_simple_desc
+      (
+        "available" in desc_lower
+        or desc_lower == expected_simple_desc
+      )
+      and mask_clean == STRIKE_MASK_AVAILABLE_TRANSFORM_MASK
     )
 
     if pattern and is_available:
@@ -1078,7 +1083,7 @@ def _reverse_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str,
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   new_description = f"Strike Mask - {trans_pattern} Available"
-  new_transform_mask = "2481001"
+  new_transform_mask = STRIKE_MASK_AVAILABLE_TRANSFORM_MASK
 
   soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
@@ -1199,7 +1204,7 @@ def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, t
   original_description = (selected.get("description") or "").strip()
   original_transform_mask = (selected.get("called_party_transform_mask") or "").strip()
   if not original_transform_mask:
-    original_transform_mask = "2481001"
+    original_transform_mask = STRIKE_MASK_AVAILABLE_TRANSFORM_MASK
 
   selected_devices = _enrich_devices_with_original_masks(cucm_host, cucm_user, cucm_pass, jabber_devices, jabber_extension)
 
