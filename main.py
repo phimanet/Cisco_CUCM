@@ -109,6 +109,7 @@ MOBILE_JABBER_EMAIL_BODY = (
   "6. You should now be logged in."
 )
 STRIKE_MASK_PATTERN_PREFIX = (os.getenv("STRIKE_MASK_PATTERN_PREFIX", "945") or "945").strip()
+STRIKE_MASK_ROUTE_PARTITION = (os.getenv("STRIKE_MASK_ROUTE_PARTITION", "ENT_DEVICE_PT") or "ENT_DEVICE_PT").strip()
 STRIKE_MASK_AVAILABLE_TRANSFORM_MASK = (os.getenv("STRIKE_MASK_AVAILABLE_TRANSFORM_MASK", "2481001") or "2481001").strip()
 CSF_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 TWILIO_INBOUND_VERIFICATION_PROFILES = {
@@ -7131,13 +7132,12 @@ def menu_admin_page(request: Request):
       <section class="panel tool-panel" data-panel="strikemask-template">
         <h3>Add Translation for Strike Mask Use (CSV Template)</h3>
         <p>Download a ready-to-fill CSV template for pre-staging Strike Mask translation patterns in bulk. This template is not tied to 945 only; you can use any numbering range.</p>
+        <p style="margin-top:8px; color:#355978;"><strong>Fixed constants applied for every row:</strong> route partition <strong>ENT_DEVICE_PT</strong> and called party transform mask <strong>2481001</strong>.</p>
         <p><a href="/download/strike-mask-translation-template" style="font-weight:700;">Download Strike Mask Translation Upload Template</a></p>
         <p style="margin-top:10px; color:#355978;">Template notes:</p>
         <ul style="margin-top:6px; color:#355978;">
           <li><strong>pattern</strong>: the Strike Mask translation pattern number to create.</li>
           <li><strong>description</strong>: use a standard available marker like <em>Strike Mask - &lt;pattern&gt; Available</em>.</li>
-          <li><strong>route_partition</strong>: target CUCM route partition (example: <em>ENT_DEVICE_PT</em>).</li>
-          <li><strong>called_party_transform_mask</strong>: typically <em>2481001</em> for available/unassigned.</li>
           <li><strong>notes</strong>: optional internal tracking note.</li>
         </ul>
       </section>
@@ -8764,9 +8764,9 @@ def download_verasmart_queue_template():
 @app.get("/download/strike-mask-translation-template")
 def download_strike_mask_translation_template():
   template_csv = (
-    "pattern,description,route_partition,called_party_transform_mask,notes\n"
-    "9452190000,Strike Mask - 9452190000 Available,ENT_DEVICE_PT,2481001,Example available row\n"
-    "9552190001,Strike Mask - 9552190001 Available,ENT_DEVICE_PT,2481001,Example alternate range\n"
+    "pattern,description,notes\n"
+    "9452190000,Strike Mask - 9452190000 Available,Example available row\n"
+    "9552190001,Strike Mask - 9552190001 Available,Example alternate range\n"
   )
   return Response(
     template_csv.encode("utf-8"),
