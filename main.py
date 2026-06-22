@@ -96,6 +96,7 @@ SMTP_USE_STARTTLS = (os.getenv("SMTP_USE_STARTTLS", "false") or "false").strip()
   "on",
 }
 SMTP_DEFAULT_FROM = (os.getenv("SMTP_DEFAULT_FROM", "") or "").strip()
+AUDIT_LOG_EMAIL_DOMAIN = (os.getenv("AUDIT_LOG_EMAIL_DOMAIN", "amnheathcare.com") or "amnheathcare.com").strip().lstrip("@")
 MOBILE_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 MOBILE_JABBER_EMAIL_SUBJECT = "Jabber on iPhone or Android - Ready to install"
 MOBILE_JABBER_EMAIL_BODY = (
@@ -809,6 +810,7 @@ def _send_smtp_email(
     smtp_pass: str = "",
     smtp_port: int | None = None,
     use_starttls: bool | None = None,
+    attachments: list[tuple[str, bytes, str]] | None = None,
   ):
     if not sender:
       raise RuntimeError("Sender email is required.")
@@ -824,6 +826,10 @@ def _send_smtp_email(
     message.set_content(body or "SMTP test message from CUCM web portal.")
     if (html_body or "").strip():
       message.add_alternative(html_body, subtype="html")
+    for attachment in attachments or []:
+      filename, content, mime_type = attachment
+      maintype, subtype = (mime_type or "application/octet-stream").split("/", 1)
+      message.add_attachment(_to_bytes(content), maintype=maintype, subtype=subtype, filename=filename)
 
     resolved_port = smtp_port if smtp_port is not None else SMTP_PORT
     resolved_starttls = SMTP_USE_STARTTLS if use_starttls is None else use_starttls
@@ -838,6 +844,22 @@ def _send_smtp_email(
         server.login((smtp_user or "").strip(), smtp_pass or "")
 
       server.send_message(message)
+
+
+def _derive_admin_audit_email(username: str) -> str:
+  """Build recipient email from logged-in admin username by stripping .ad/.adm suffix."""
+  clean_user = (username or "").strip()
+  if not clean_user:
+    return ""
+  lowered = clean_user.lower()
+  if lowered.endswith(".adm"):
+    clean_user = clean_user[:-4]
+  elif lowered.endswith(".ad"):
+    clean_user = clean_user[:-3]
+  clean_user = clean_user.strip()
+  if not clean_user:
+    return ""
+  return f"{clean_user}@{AUDIT_LOG_EMAIL_DOMAIN}"
 
 
 def _store_job_output(csv_data: bytes, filename: str) -> str:
@@ -7154,6 +7176,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM (Main Ops)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=linegroup'">Update Hunt List Line Group (Main Ops)</button>
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
+            <button type="button" class="portal-nav-btn" data-panel="auditemail">Email Audit Logs</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">⚙️ DN Prefix Settings</button>
@@ -7461,6 +7484,18 @@ def menu_admin_page(request: Request):
         <p id="jabbernotify-send-status" style="margin-top:14px; font-weight:700; min-height:18px;"></p>
       </section>
 
+      <section class="panel tool-panel" data-panel="auditemail">
+        <h3>Email Audit Logs</h3>
+        <p>Send the current audit trail CSV to the logged-in admin email. Recipient is built from your username by removing trailing <strong>.ad</strong>/<strong>.adm</strong> and appending <strong>@amnheathcare.com</strong>.</p>
+        <form id="audit-email-form">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <button type="submit">Email Audit Trail CSV</button>
+        </form>
+        <p id="audit-email-status" style="margin-top:14px; min-height:18px; color:#2c5c8a;">Click the button to send the latest audit log attachment.</p>
+      </section>
+
       <section class="panel tool-panel" data-panel="bulkperson">
         <h3>Bulk Person Lookup (CSV Upload)</h3>
         <p>Upload CSV with columns like <strong>last_name, first_name</strong> (or first column as last name).</p>
@@ -7648,6 +7683,34 @@ def menu_admin_page(request: Request):
             });
           }
           // ── End Jabber Notify panel ──────────────────────────────────────────
+
+          // ── Audit Email panel ───────────────────────────────────────────────
+          const auditEmailForm = document.getElementById("audit-email-form");
+          const auditEmailStatus = document.getElementById("audit-email-status");
+          if (auditEmailForm && auditEmailStatus) {
+            auditEmailForm.addEventListener("submit", async function (event) {
+              event.preventDefault();
+              auditEmailStatus.textContent = "Sending audit log email...";
+
+              try {
+                const formData = new FormData(auditEmailForm);
+                const response = await fetch("/send/audit-trail-email", {
+                  method: "POST",
+                  body: formData,
+                  credentials: "same-origin",
+                  headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                });
+                const payload = await response.json();
+                if (!response.ok || !payload.ok) {
+                  throw new Error((payload && payload.detail) || "Failed to send audit email.");
+                }
+                auditEmailStatus.textContent = "Sent: " + (payload.detail || "Audit log emailed.");
+              } catch (err) {
+                auditEmailStatus.textContent = "Failed: " + ((err && err.message) || "Unknown error.");
+              }
+            });
+          }
+          // ── End Audit Email panel ───────────────────────────────────────────
 
           const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
           const panels = Array.from(document.querySelectorAll(".tool-panel"));
@@ -10676,6 +10739,72 @@ def send_mobile_jabber_email_route(
         return JSONResponse({"ok": True, "detail": notify_details})
     else:
         return JSONResponse({"ok": False, "detail": notify_details}, status_code=400)
+
+
+@app.post("/send/audit-trail-email")
+def send_audit_trail_email_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+):
+    session = _get_auth_session(request)
+    if not session:
+      return JSONResponse({"ok": False, "detail": "Authentication required."}, status_code=401)
+
+    operator_username = (session.get("username") or "").strip()
+    if not operator_username:
+      return JSONResponse({"ok": False, "detail": "Could not resolve logged-in username."}, status_code=400)
+
+    recipient = _derive_admin_audit_email(operator_username)
+    if not recipient:
+      return JSONResponse({"ok": False, "detail": "Could not derive recipient email from username."}, status_code=400)
+
+    try:
+      with AUDIT_LOG_LOCK:
+        _ensure_audit_log()
+        _prune_audit_log_locked()
+        with open(AUDIT_LOG_PATH, "rb") as handle:
+          audit_csv = handle.read()
+
+      sender = (SMTP_DEFAULT_FROM or MOBILE_JABBER_EMAIL_FROM or "").strip()
+      if not sender:
+        return JSONResponse({"ok": False, "detail": "SMTP sender is not configured."}, status_code=400)
+
+      ts = _audit_now().strftime("%Y-%m-%d %H:%M:%S")
+      subject = f"CUCM Audit Trail - {ts}"
+      body = (
+        "Attached is the current CUCM portal audit trail CSV.\n\n"
+        f"Requested by: {operator_username}\n"
+        f"Recipient: {recipient}\n"
+      )
+
+      _send_smtp_email(
+        sender=sender,
+        recipients=[recipient],
+        subject=subject,
+        body=body,
+        attachments=[("audit_trail.csv", audit_csv, "text/csv")],
+      )
+
+      try:
+        resolved_host = (cucm_host or "").strip() or (session.get("cucm_host") or "")
+        resolved_user = (cucm_user or "").strip() or operator_username
+        _append_audit_event(
+          action="send_audit_trail_email",
+          cucm_host=resolved_host,
+          operator=resolved_user,
+          target=recipient,
+          account=operator_username,
+          output_filename="audit_trail.csv",
+          inline_mode=True,
+        )
+      except Exception:
+        pass
+
+      return JSONResponse({"ok": True, "detail": f"Audit trail emailed to {recipient}."})
+    except Exception as exc:
+      return JSONResponse({"ok": False, "detail": str(exc)}, status_code=500)
 
 
 @app.post("/lookup/person")
