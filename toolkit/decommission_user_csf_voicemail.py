@@ -371,6 +371,82 @@ def _write_error_csv(message):
     return out.getvalue().encode("utf-8"), f"decommission_user_csf_error_{ts}.csv"
 
 
+# Toll-free prefix numbers that may hold a user's translation pattern
+TOLLFREE_PREFIXES = ("800", "833", "844", "855", "866", "877", "888")
+# Transform mask used to mark a released translation pattern as available
+AVAILABLE_TRANSFORM_MASK = "2481001"
+
+
+def _search_trans_patterns_by_description(session, cucm_ip, description_fragment):
+    """Search CUCM translation patterns whose description contains the given fragment."""
+    soap = f"""<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:listTransPattern sequence="1">
+      <searchCriteria>
+        <description>%{escape(description_fragment.strip())}%</description>
+      </searchCriteria>
+      <returnedTags>
+        <pattern/>
+        <routePartitionName/>
+        <description/>
+        <calledPartyTransformationMask/>
+      </returnedTags>
+    </axl:listTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+    response = _axl_post(session, cucm_ip, soap)
+    if response.status_code != 200:
+        raise RuntimeError(
+            f"listTransPattern failed with HTTP {response.status_code}: {response.text[:800]}"
+        )
+    results = []
+    root = ET.fromstring(response.text)
+    for elem in root.iter():
+        if _strip_ns(elem.tag) == "transPattern":
+            pattern_val = ""
+            partition_val = ""
+            description_val = ""
+            mask_val = ""
+            for child in elem:
+                tag = _strip_ns(child.tag)
+                if tag == "pattern":
+                    pattern_val = (child.text or "").strip()
+                elif tag == "routePartitionName":
+                    partition_val = (child.text or "").strip()
+                elif tag == "description":
+                    description_val = (child.text or "").strip()
+                elif tag == "calledPartyTransformationMask":
+                    mask_val = (child.text or "").strip()
+            if pattern_val:
+                results.append({
+                    "pattern": pattern_val,
+                    "partition": partition_val,
+                    "description": description_val,
+                    "calledPartyTransformationMask": mask_val,
+                })
+    return results
+
+
+def _update_trans_pattern_release(session, cucm_ip, pattern, partition, new_description):
+    """Mark a translation pattern as available by updating description and resetting transform mask."""
+    soap = f"""<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:updateTransPattern>
+      <pattern>{escape(pattern)}</pattern>
+      <routePartitionName>{escape(partition)}</routePartitionName>
+      <description>{escape(new_description)}</description>
+      <calledPartyTransformationMask>{escape(AVAILABLE_TRANSFORM_MASK)}</calledPartyTransformationMask>
+    </axl:updateTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+    response = _axl_post(session, cucm_ip, soap)
+    return response.status_code == 200, response
+
+
 def decommission_user_csf_voicemail(
     cucm_host,
     cucm_user,
@@ -645,6 +721,66 @@ def decommission_user_csf_voicemail(
             "Success" if ad_ok else "Failed",
             ad_message,
         ])
+
+        # --- Translation Pattern Release Step ---
+        # Search for a toll-free translation pattern whose description contains the user's
+        # first and last name, and whose Called Party Transform Mask matches the removed extension.
+        first_name = (user_details.get("firstName", "") or "").strip()
+        last_name = (user_details.get("lastName", "") or "").strip()
+        removed_dn = removed_dn_for_presence  # e.g. "9451234567"
+        try:
+            if first_name and last_name and removed_dn:
+                # Search by first + last name in description
+                search_fragment = f"{first_name} {last_name}"
+                candidates = _search_trans_patterns_by_description(session, cucm_host, search_fragment)
+
+                # Filter: pattern starts with a toll-free prefix AND mask matches the removed DN
+                matched = [
+                    c for c in candidates
+                    if any(c["pattern"].startswith(p) for p in TOLLFREE_PREFIXES)
+                    and c["calledPartyTransformationMask"] == removed_dn
+                ]
+
+                if not matched:
+                    log_writer.writerow([
+                        "Release Translation Pattern",
+                        "Skipped",
+                        f"No toll-free translation pattern found with description containing '{search_fragment}' and transform mask {removed_dn}",
+                    ])
+                else:
+                    for tp in matched:
+                        tp_pattern = tp["pattern"]
+                        tp_partition = tp["partition"]
+                        new_desc = f"{tp_pattern} Available"
+                        ok, update_resp = _update_trans_pattern_release(
+                            session, cucm_host, tp_pattern, tp_partition, new_desc
+                        )
+                        if ok:
+                            log_writer.writerow([
+                                "Release Translation Pattern",
+                                "Success",
+                                (
+                                    f"Updated {tp_pattern}/{tp_partition}: "
+                                    f"description='{new_desc}'; "
+                                    f"calledPartyTransformationMask={AVAILABLE_TRANSFORM_MASK} "
+                                    f"(was {tp['calledPartyTransformationMask']}; "
+                                    f"matched user '{search_fragment}' / ext {removed_dn})"
+                                ),
+                            ])
+                        else:
+                            log_writer.writerow([
+                                "Release Translation Pattern",
+                                "Failed",
+                                f"{tp_pattern}/{tp_partition} -> HTTP {update_resp.status_code}: {update_resp.text[:600]}",
+                            ])
+            else:
+                log_writer.writerow([
+                    "Release Translation Pattern",
+                    "Skipped",
+                    "Skipped: user first/last name or removed DN not available for pattern search",
+                ])
+        except Exception as tp_err:
+            log_writer.writerow(["Release Translation Pattern", "Failed", str(tp_err)])
 
     except Exception as e:
         log_writer.writerow(["Script", "Error", str(e)])
