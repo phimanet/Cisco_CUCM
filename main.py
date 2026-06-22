@@ -7176,7 +7176,6 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM (Main Ops)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=linegroup'">Update Hunt List Line Group (Main Ops)</button>
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
-            <button type="button" class="portal-nav-btn" data-panel="auditemail">Email Audit Logs</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">⚙️ DN Prefix Settings</button>
@@ -7484,18 +7483,6 @@ def menu_admin_page(request: Request):
         <p id="jabbernotify-send-status" style="margin-top:14px; font-weight:700; min-height:18px;"></p>
       </section>
 
-      <section class="panel tool-panel" data-panel="auditemail">
-        <h3>Email Audit Logs</h3>
-        <p>Send the current audit trail CSV to the logged-in admin email. Recipient is built from your username by removing trailing <strong>.ad</strong>/<strong>.adm</strong> and appending <strong>@amnheathcare.com</strong>.</p>
-        <form id="audit-email-form">
-          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
-          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
-          <input type="hidden" name="cucm_pass" value="">
-          <button type="submit">Email Audit Trail CSV</button>
-        </form>
-        <p id="audit-email-status" style="margin-top:14px; min-height:18px; color:#2c5c8a;">Click the button to send the latest audit log attachment.</p>
-      </section>
-
       <section class="panel tool-panel" data-panel="bulkperson">
         <h3>Bulk Person Lookup (CSV Upload)</h3>
         <p>Upload CSV with columns like <strong>last_name, first_name</strong> (or first column as last name).</p>
@@ -7683,34 +7670,6 @@ def menu_admin_page(request: Request):
             });
           }
           // ── End Jabber Notify panel ──────────────────────────────────────────
-
-          // ── Audit Email panel ───────────────────────────────────────────────
-          const auditEmailForm = document.getElementById("audit-email-form");
-          const auditEmailStatus = document.getElementById("audit-email-status");
-          if (auditEmailForm && auditEmailStatus) {
-            auditEmailForm.addEventListener("submit", async function (event) {
-              event.preventDefault();
-              auditEmailStatus.textContent = "Sending audit log email...";
-
-              try {
-                const formData = new FormData(auditEmailForm);
-                const response = await fetch("/send/audit-trail-email", {
-                  method: "POST",
-                  body: formData,
-                  credentials: "same-origin",
-                  headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
-                });
-                const payload = await response.json();
-                if (!response.ok || !payload.ok) {
-                  throw new Error((payload && payload.detail) || "Failed to send audit email.");
-                }
-                auditEmailStatus.textContent = "Sent: " + (payload.detail || "Audit log emailed.");
-              } catch (err) {
-                auditEmailStatus.textContent = "Failed: " + ((err && err.message) || "Unknown error.");
-              }
-            });
-          }
-          // ── End Audit Email panel ───────────────────────────────────────────
 
           const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
           const panels = Array.from(document.querySelectorAll(".tool-panel"));
@@ -9625,6 +9584,7 @@ def audit_trail_page():
       .toolbar {{ display:flex; flex-wrap:wrap; gap:10px; margin: 14px 0 18px; }}
       .toolbar a {{ color:#fff; background:var(--amn-blue); padding:10px 14px; border-radius:8px; text-decoration:none; font-weight:700; }}
       .toolbar a.secondary {{ background:#385977; }}
+      .toolbar button {{ color:#fff; background:#237741; padding:10px 14px; border-radius:8px; border:none; font-weight:700; cursor:pointer; }}
       .table-wrap {{ overflow-x:auto; border:1px solid var(--amn-border); border-radius:12px; }}
       table {{ width:100%; border-collapse:collapse; font-size:13px; }}
       thead th {{ position:sticky; top:0; background:var(--amn-navy); color:#fff; text-align:left; padding:10px 12px; white-space:nowrap; }}
@@ -9649,9 +9609,11 @@ def audit_trail_page():
         </div>
         <div class="toolbar">
           <a href="/download/audit-trail">Download Audit CSV</a>
+          <button type="button" id="email-audit-log-btn">Email Audit CSV</button>
           <a class="secondary" href="/audit-trail/stats">View Audit Stats JSON</a>
           <a class="secondary" href="/menu">Back to Main Menu</a>
         </div>
+        <p id="email-audit-log-status" class="muted" style="min-height:18px; margin:-8px 0 12px;">Use Email Audit CSV to send the current audit trail attachment to your admin email.</p>
         <div class="meta-grid">
           {summary_cards}
         </div>
@@ -9675,6 +9637,40 @@ def audit_trail_page():
         </div>
       </section>
     </main>
+    <script>
+      (function () {{
+        const btn = document.getElementById("email-audit-log-btn");
+        const statusEl = document.getElementById("email-audit-log-status");
+        if (!btn || !statusEl) return;
+
+        btn.addEventListener("click", async function () {{
+          const originalLabel = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = "Sending...";
+          statusEl.textContent = "Sending audit log email...";
+
+          try {{
+            const fd = new FormData();
+            const response = await fetch("/send/audit-trail-email", {{
+              method: "POST",
+              body: fd,
+              credentials: "same-origin",
+              headers: {{ "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" }},
+            }});
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {{
+              throw new Error((payload && payload.detail) || "Failed to send audit email.");
+            }}
+            statusEl.textContent = "Sent: " + (payload.detail || "Audit log emailed.");
+            btn.textContent = "Sent";
+          }} catch (err) {{
+            statusEl.textContent = "Failed: " + ((err && err.message) || "Unknown error.");
+            btn.textContent = originalLabel;
+            btn.disabled = false;
+          }}
+        }});
+      }})();
+    </script>
   </body>
 </html>
 """
