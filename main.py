@@ -96,7 +96,7 @@ SMTP_USE_STARTTLS = (os.getenv("SMTP_USE_STARTTLS", "false") or "false").strip()
   "on",
 }
 SMTP_DEFAULT_FROM = (os.getenv("SMTP_DEFAULT_FROM", "") or "").strip()
-AUDIT_LOG_EMAIL_DOMAIN = (os.getenv("AUDIT_LOG_EMAIL_DOMAIN", "amnheathcare.com") or "amnheathcare.com").strip().lstrip("@")
+AUDIT_LOG_EMAIL_DOMAIN = (os.getenv("AUDIT_LOG_EMAIL_DOMAIN", "amnhealthcare.com") or "amnhealthcare.com").strip().lstrip("@")
 MOBILE_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 MOBILE_JABBER_EMAIL_SUBJECT = "Jabber on iPhone or Android - Ready to install"
 MOBILE_JABBER_EMAIL_BODY = (
