@@ -7145,7 +7145,7 @@ def menu_admin_page(request: Request):
         
         <hr style="margin:16px 0; border:none; border-top:1px solid #ddd;">
         <h4 style="margin-top:16px; color:#002f6c;">Upload CSV to Create Patterns</h4>
-        <form id="strikemask-upload-form" enctype="multipart/form-data">
+        <form id="strikemask-upload-form" method="post" action="/strike-mask-translation/upload" enctype="multipart/form-data">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
           <input type="hidden" name="cucm_host" value="">
@@ -7155,7 +7155,7 @@ def menu_admin_page(request: Request):
           <button type="submit">Create Translation Patterns</button>
         </form>
         
-        <p id="strikemask-upload-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;"></p>
+        <p id="strikemask-upload-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Upload a CSV and click Create Translation Patterns. Detailed errors will appear here.</p>
         <div id="strikemask-upload-results" style="overflow-x:auto;"></div>
       </section>
 
@@ -8572,12 +8572,21 @@ def menu_admin_page(request: Request):
                 headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
               });
 
-              const payload = await resp.json();
-              if (!resp.ok) {
-                throw new Error((payload && payload.detail) || "Upload failed.");
+              const rawText = await resp.text();
+              let payload = {};
+              try {
+                payload = rawText ? JSON.parse(rawText) : {};
+              } catch (_parseErr) {
+                payload = {};
               }
 
-              statusEl.textContent = `Created: ${payload.filename || "strike_mask_translation_create_results.csv"}`;
+              if (!resp.ok) {
+                const backendMsg = (payload && payload.detail) || rawText || "Upload failed.";
+                throw new Error(backendMsg);
+              }
+
+              const summary = payload.summary || {};
+              statusEl.textContent = `Completed: ${summary.success_count || 0} succeeded, ${summary.failed_count || 0} failed, ${summary.total_rows || 0} total.`;
               
               const outputText = (payload.output_text || "").split("\n").filter(l => l.trim());
               let resultHtml = "<pre style='background:#f5f5f5; padding:10px; border-radius:4px; overflow-x:auto; font-size:12px; font-family:Consolas,monospace;'>";
@@ -8595,8 +8604,11 @@ def menu_admin_page(request: Request):
               form.reset();
             } catch (err) {
               statusEl.textContent = "Upload failed: " + ((err && err.message) || "Unknown error.");
+              statusEl.style.color = "#8b1e1e";
               resultsEl.innerHTML = "";
+              return;
             }
+            statusEl.style.color = "#1e5f2a";
           });
         })();
       </script>
@@ -8928,8 +8940,22 @@ def strike_mask_translation_upload(
     writer = csv.writer(csv_output)
     writer.writerows(output_rows)
     csv_bytes = csv_output.getvalue().encode("utf-8")
+
+    success_count = 0
+    failed_count = 0
+    for result_row in output_rows[1:]:
+      row_status = (result_row[3] if len(result_row) > 3 else "").strip().lower()
+      if row_status == "success":
+        success_count += 1
+      elif row_status == "failed":
+        failed_count += 1
     
     job_result = _prepare_job_output(csv_bytes, "strike_mask_translation_create_results.csv")
+    job_result["summary"] = {
+      "total_rows": len(rows_to_create),
+      "success_count": success_count,
+      "failed_count": failed_count,
+    }
     
     _audit_log(
       request=request,
