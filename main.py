@@ -7133,13 +7133,30 @@ def menu_admin_page(request: Request):
         <h3>Add Translation for Strike Mask Use (CSV Template)</h3>
         <p>Download a ready-to-fill CSV template for pre-staging Strike Mask translation patterns in bulk. This template is not tied to 945 only; you can use any numbering range.</p>
         <p style="margin-top:8px; color:#355978;"><strong>Fixed constants applied for every row:</strong> route partition <strong>ENT_DEVICE_PT</strong> and called party transform mask <strong>2481001</strong>.</p>
+        
         <p><a href="/download/strike-mask-translation-template" style="font-weight:700;">Download Strike Mask Translation Upload Template</a></p>
+        
         <p style="margin-top:10px; color:#355978;">Template notes:</p>
         <ul style="margin-top:6px; color:#355978;">
           <li><strong>pattern</strong>: the Strike Mask translation pattern number to create.</li>
           <li><strong>description</strong>: use a standard available marker like <em>Strike Mask - &lt;pattern&gt; Available</em>.</li>
           <li><strong>notes</strong>: optional internal tracking note.</li>
         </ul>
+        
+        <hr style="margin:16px 0; border:none; border-top:1px solid #ddd;">
+        <h4 style="margin-top:16px; color:#002f6c;">Upload CSV to Create Patterns</h4>
+        <form id="strikemask-upload-form" enctype="multipart/form-data">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <input type="hidden" name="cucm_host" value="">
+          
+          CSV File:<br>
+          <input type="file" name="csv_file" accept=".csv" required><br><br>
+          <button type="submit">Create Translation Patterns</button>
+        </form>
+        
+        <p id="strikemask-upload-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;"></p>
+        <div id="strikemask-upload-results" style="overflow-x:auto;"></div>
       </section>
 
       <section class="panel tool-panel" data-panel="verasmart-lab">
@@ -8533,6 +8550,59 @@ def menu_admin_page(request: Request):
 
       <script>
         (function () {
+          const form = document.getElementById("strikemask-upload-form");
+          const statusEl = document.getElementById("strikemask-upload-status");
+          const resultsEl = document.getElementById("strikemask-upload-results");
+
+          if (!form || !statusEl || !resultsEl) {
+            return;
+          }
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Creating translation patterns...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(form);
+              const resp = await fetch("/strike-mask-translation/upload", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+              });
+
+              const payload = await resp.json();
+              if (!resp.ok) {
+                throw new Error((payload && payload.detail) || "Upload failed.");
+              }
+
+              statusEl.textContent = `Created: ${payload.filename || "strike_mask_translation_create_results.csv"}`;
+              
+              const outputText = (payload.output_text || "").split("\n").filter(l => l.trim());
+              let resultHtml = "<pre style='background:#f5f5f5; padding:10px; border-radius:4px; overflow-x:auto; font-size:12px; font-family:Consolas,monospace;'>";
+              resultHtml += outputText.slice(0, 50).join("\\n");
+              if (outputText.length > 50) {
+                resultHtml += "\\n... (showing first 50 lines)";
+              }
+              resultHtml += "</pre>";
+              
+              if (payload.job_id) {
+                resultHtml += `<p><a href="/job-output/${payload.job_id}" style="font-weight:700;">Download Full Results CSV</a></p>`;
+              }
+              
+              resultsEl.innerHTML = resultHtml;
+              form.reset();
+            } catch (err) {
+              statusEl.textContent = "Upload failed: " + ((err && err.message) || "Unknown error.");
+              resultsEl.innerHTML = "";
+            }
+          });
+        })();
+      </script>
+
+      <script>
+        (function () {
           const form = document.getElementById("verasmart-lab-queue-form");
           const statusEl = document.getElementById("verasmart-lab-status");
           const runsEl = document.getElementById("verasmart-lab-runs");
@@ -8773,6 +8843,107 @@ def download_strike_mask_translation_template():
     media_type="text/csv",
     headers={"Content-Disposition": 'attachment; filename="strike_mask_translation_upload_template.csv"'}
   )
+
+
+@app.post("/strike-mask-translation/upload")
+def strike_mask_translation_upload(
+  request: Request,
+  csv_file: UploadFile = File(...),
+):
+  try:
+    session, username = _require_admin_session(request)
+    cucm_host = (session.get("cucm_host", "") or "").strip()
+    cucm_user = (session.get("cucm_user", "") or "").strip()
+    cucm_pass = (session.get("cucm_pass", "") or "").strip()
+
+    if not all([cucm_host, cucm_user, cucm_pass]):
+      raise RuntimeError("CUCM credentials not found in session")
+
+    csv_content = csv_file.file.read().decode("utf-8", errors="replace")
+    reader = csv.DictReader(io.StringIO(csv_content))
+    
+    rows_to_create = []
+    for raw_row in reader:
+      if not raw_row:
+        continue
+      row = {k.lower().strip(): (v or "").strip() for k, v in (raw_row or {}).items()}
+      pattern = row.get("pattern", "").strip()
+      description = row.get("description", "").strip()
+      notes = row.get("notes", "").strip()
+      
+      if pattern and description:
+        rows_to_create.append({
+          "pattern": pattern,
+          "description": description,
+          "notes": notes,
+          "status": "",
+          "error": "",
+        })
+    
+    if not rows_to_create:
+      raise RuntimeError("No valid rows found in CSV (pattern and description required)")
+    
+    session_obj = requests.Session()
+    session_obj.verify = False
+    session_obj.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+    
+    output_rows = []
+    output_rows.append(["pattern", "description", "notes", "status", "error"])
+    
+    for row in rows_to_create:
+      pattern = row["pattern"]
+      description = row["description"]
+      notes = row["notes"]
+      
+      try:
+        soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:addTransPattern sequence=\"1\">
+      <pattern>{xml_escape(pattern)}</pattern>
+      <routePartitionName>{xml_escape(STRIKE_MASK_ROUTE_PARTITION)}</routePartitionName>
+      <description>{xml_escape(description)}</description>
+      <calledPartyTransformationMask>{xml_escape(STRIKE_MASK_AVAILABLE_TRANSFORM_MASK)}</calledPartyTransformationMask>
+    </axl:addTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+        
+        response = session_obj.post(
+          f"https://{cucm_host}:8443/axl/",
+          data=soap_xml.encode("utf-8"),
+          headers={"Content-Type": "text/xml"},
+          timeout=60,
+        )
+        
+        if response.status_code == 200:
+          output_rows.append([pattern, description, notes, "Success", ""])
+        else:
+          error_msg = response.text[:200] if response.text else f"HTTP {response.status_code}"
+          output_rows.append([pattern, description, notes, "Failed", error_msg])
+      except Exception as e:
+        output_rows.append([pattern, description, notes, "Failed", str(e)[:200]])
+    
+    csv_output = io.StringIO()
+    writer = csv.writer(csv_output)
+    writer.writerows(output_rows)
+    csv_bytes = csv_output.getvalue().encode("utf-8")
+    
+    job_result = _prepare_job_output(csv_bytes, "strike_mask_translation_create_results.csv")
+    
+    _audit_log(
+      request=request,
+      action="strike_mask_translation_upload",
+      resource=cucm_host,
+      resource_type="cucm",
+      detail=f"Uploaded {len(rows_to_create)} patterns",
+    )
+    
+    return JSONResponse(job_result)
+  except RuntimeError as re:
+    return JSONResponse({"detail": str(re)}, status_code=400)
+  except Exception as e:
+    return JSONResponse({"detail": f"Error: {str(e)[:400]}"}, status_code=500)
 
 
 @app.get("/healthz")
