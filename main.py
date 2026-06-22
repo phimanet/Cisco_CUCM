@@ -942,10 +942,12 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
     }
 
   try:
+    # Authenticate against the same account SID being queried.
+    auth_sid = lookup_sid
     resp = requests.get(
       f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers.json",
       params={"PhoneNumber": e164, "PageSize": 20},
-      auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+      auth=(auth_sid, TWILIO_AUTH_TOKEN),
       timeout=20,
     )
     if resp.status_code != 200:
