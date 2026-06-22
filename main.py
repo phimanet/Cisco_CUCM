@@ -4289,9 +4289,9 @@ __ADMIN_CARD__
 
         DN Type:<br>
         <select name="dn_type">
-          <option value="recruiter">Recruiter (469)</option>
-          <option value="general" selected>General FTE (945)</option>
-          <option value="strike">Strike (945)</option>
+          <option value="recruiter">Recruiter</option>
+          <option value="general" selected>General FTE</option>
+          <option value="strike">Strike</option>
         </select><br><br>
 
         <div class="action-row">
