@@ -7319,7 +7319,6 @@ def menu_admin_page(request: Request):
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
           <input type="hidden" name="include_teams_status" value="1">
-          <input type="hidden" name="include_twilio_lookup" value="1">
           <div class="search-filter-row">
             <input name="last_name" placeholder="Last Name *" required>
             <input name="first_name" placeholder="First Name (optional)">
@@ -7651,15 +7650,19 @@ def menu_admin_page(request: Request):
 
       <section class="panel tool-panel" data-panel="twilio-lookup">
         <h3>Twilio Number Lookup - AMIEWeb</h3>
-        <p>Search for a Twilio incoming phone number.</p>
-        <form id="twilio-direct-lookup-form">
+        <p>Search employees by name, then lookup their Twilio number information.</p>
+        <form id="twilio-lookup-search-form">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
           <div class="search-filter-row">
-            <input name="phone_number" placeholder="Phone Number (e.g., +12015550123)" required>
-            <button type="submit">Lookup</button>
+            <input name="last_name" placeholder="Last Name *" required>
+            <input name="first_name" placeholder="First Name (optional)">
+            <button type="submit">Search</button>
           </div>
         </form>
-        <p id="twilio-direct-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a phone number and click Lookup.</p>
-        <div id="twilio-direct-results" style="overflow-x:auto;"></div>
+        <p id="twilio-lookup-search-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name to find employees.</p>
+        <div id="twilio-lookup-search-results" style="overflow-x:auto;"></div>
       </section>
 
       <script>
@@ -7870,16 +7873,7 @@ def menu_admin_page(request: Request):
                 return;
               }
 
-              const twilioFoundCount = results.filter(function (r) {
-                return !!(r.twilio_lookup && r.twilio_lookup.found);
-              }).length;
-              const twilioEnabledCount = results.filter(function (r) {
-                return !!(r.twilio_lookup && r.twilio_lookup.enabled);
-              }).length;
-              const twilioNotFoundCount = Math.max(0, twilioEnabledCount - twilioFoundCount);
-              const twilioUnavailableCount = Math.max(0, results.length - twilioEnabledCount);
-
-              statusEl.textContent = `Found ${results.length} user(s). Twilio: ${twilioFoundCount} found, ${twilioNotFoundCount} not found, ${twilioUnavailableCount} unavailable.`;
+              statusEl.textContent = `Found ${results.length} user(s).`;
 
               let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
               html += '<thead><tr style="background:#005eb8; color:#fff;">';
@@ -7888,8 +7882,6 @@ def menu_admin_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Number</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio SID</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
               html += '<th style="padding:8px 10px; text-align:left;">Jabber Devices</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
@@ -7902,9 +7894,6 @@ def menu_admin_page(request: Request):
                 const email = r.email || "\u2014";
                 const telephone = r.telephone || "\u2014";
                 const uid = r.userid || "";
-                const twilio = r.twilio_lookup || {};
-                const twilioNumber = twilio.phone_number || "\u2014";
-                const twilioSid = twilio.sid || (twilio.status || "\u2014");
                 const teams = r.teams_telephony || {};
                 const teamsIsUser = !!teams.is_teams_user;
                 const teamsState = teams.status || (teamsIsUser ? "Yes" : "Not Found");
@@ -7933,8 +7922,6 @@ def menu_admin_page(request: Request):
                 html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
                 html += '<td style="padding:7px 10px;">' + telephone + '</td>';
-                html += '<td style="padding:7px 10px;">' + twilioNumber + '</td>';
-                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + twilioSid + '</td>';
                 html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
                 html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
                 html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(3,max-content);gap:4px;align-items:start;">' + actionBtn + '</div></td>';
@@ -9152,20 +9139,21 @@ def menu_admin_page(request: Request):
 
       <script>
         (function () {
-          const form = document.getElementById("twilio-direct-lookup-form");
-          const statusEl = document.getElementById("twilio-direct-status");
-          const resultsEl = document.getElementById("twilio-direct-results");
+          const form = document.getElementById("twilio-lookup-search-form");
+          const statusEl = document.getElementById("twilio-lookup-search-status");
+          const resultsEl = document.getElementById("twilio-lookup-search-results");
 
           if (!form || !statusEl || !resultsEl) return;
 
           form.addEventListener("submit", async function (event) {
             event.preventDefault();
-            statusEl.textContent = "Looking up...";
+            statusEl.textContent = "Searching...";
             resultsEl.innerHTML = "";
 
             try {
               const formData = new FormData(form);
-              const response = await fetch("/lookup/twilio-direct", {
+              formData.append("include_twilio_lookup", "1");
+              const response = await fetch("/lookup/person", {
                 method: "POST",
                 body: formData,
                 credentials: "same-origin",
@@ -9173,35 +9161,51 @@ def menu_admin_page(request: Request):
 
               const payload = await response.json();
               if (!response.ok || !payload.ok) {
-                throw new Error((payload && payload.detail) || "Lookup failed.");
+                throw new Error((payload && payload.detail) || "Search failed.");
               }
 
-              const result = payload.result || {};
-              if (!result.found) {
-                statusEl.textContent = `Not found: ${result.status || "Unknown"}`;
+              const results = payload.results || [];
+              if (!results.length) {
+                statusEl.textContent = "No users found matching that name.";
                 return;
               }
 
-              statusEl.textContent = `Found: ${result.phone_number}`;
+              statusEl.textContent = `Found ${results.length} user(s) with Twilio lookup.`;
 
               let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
-              html += '<tbody>';
-              html += '<tr style="background:#f7fbff; border-bottom:1px solid #c8dbee;">';
-              html += '<td style="padding:8px 10px; font-weight:700; width:150px;">Phone Number</td>';
-              html += '<td style="padding:8px 10px;">' + (result.phone_number || "—") + '</td>';
-              html += '</tr>';
-              html += '<tr style="background:#ffffff; border-bottom:1px solid #c8dbee;">';
-              html += '<td style="padding:8px 10px; font-weight:700;">SID</td>';
-              html += '<td style="padding:8px 10px; font-family:Consolas,monospace;">' + (result.sid || "—") + '</td>';
-              html += '</tr>';
-              html += '<tr style="background:#f7fbff; border-bottom:1px solid #c8dbee;">';
-              html += '<td style="padding:8px 10px; font-weight:700;">Status</td>';
-              html += '<td style="padding:8px 10px;">' + (result.status || "—") + '</td>';
-              html += '</tr>';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Number</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio SID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Status</th>';
+              html += '</tr></thead><tbody>';
+
+              results.forEach(function (r, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+                const uid = r.userid || "";
+                const telephone = r.telephone || "—";
+                const twilio = r.twilio_lookup || {};
+                const twilioNumber = twilio.phone_number || "—";
+                const twilioSid = twilio.sid || "—";
+                const twilioStatus = twilio.status || "—";
+
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px;">' + name + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+                html += '<td style="padding:7px 10px;">' + telephone + '</td>';
+                html += '<td style="padding:7px 10px;">' + twilioNumber + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + twilioSid + '</td>';
+                html += '<td style="padding:7px 10px;">' + twilioStatus + '</td>';
+                html += '</tr>';
+              });
+
               html += '</tbody></table>';
               resultsEl.innerHTML = html;
             } catch (err) {
-              statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+              statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
             }
           });
         })();
@@ -11081,26 +11085,6 @@ def lookup_person_route(
       raise
     except Exception as exc:
       raise RuntimeError(f"Person lookup failed: {exc}") from exc
-
-
-@app.post("/lookup/twilio-direct")
-def lookup_twilio_direct_route(
-    request: Request,
-    phone_number: str = Form(...),
-):
-    try:
-      clean_phone = (phone_number or "").strip()
-      if not clean_phone:
-        raise RuntimeError("Phone number is required.")
-      result = _lookup_twilio_number_by_phone(clean_phone)
-      return JSONResponse({
-          "ok": True,
-          "result": result,
-      })
-    except RuntimeError:
-      raise
-    except Exception as exc:
-      raise RuntimeError(f"Twilio lookup failed: {exc}") from exc
 
 
 @app.post("/check/jabber-status")
