@@ -10771,7 +10771,7 @@ def send_audit_trail_email_route(
       subject = f"CUCM Audit Trail - {ts}"
       audit_csv_text = audit_csv.decode("utf-8", errors="replace")
       body = (
-        "Current CUCM portal audit trail CSV is included below.\n\n"
+        "Current CUCM portal audit trail CSV is included below (inline body only).\n\n"
         f"Requested by: {operator_username}\n"
         f"Recipient: {recipient}\n"
         "\n"
@@ -10785,7 +10785,6 @@ def send_audit_trail_email_route(
         recipients=[recipient],
         subject=subject,
         body=body,
-        attachments=[("audit_trail.csv", audit_csv, "text/csv")],
       )
 
       try:
@@ -10797,7 +10796,7 @@ def send_audit_trail_email_route(
           operator=resolved_user,
           target=recipient,
           account=operator_username,
-          output_filename="audit_trail.csv",
+          output_filename="inline_audit_csv_body",
           inline_mode=True,
         )
       except Exception:
