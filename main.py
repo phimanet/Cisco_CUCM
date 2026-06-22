@@ -830,14 +830,45 @@ def _extract_soap_error(response_text: str) -> str:
       text = match.group(1).strip()
       if text and len(text) > 2:
         return text[:250]
-    
-    # Strategy 2: Find faultcode and use that as error indicator
-    match = re.search(r'<\w*:?faultcode[^>]*>([^<]+)<', response_text, re.IGNORECASE)
-    if match:
-      text = match.group(1).strip()
-      if text and len(text) > 2:
-        return text[:250]
-    
+
+    # Strategy 2: Extract nested CUCM AXL fault fields.
+    faultcode_match = re.search(r'<\w*:?faultcode[^>]*>([^<]*)<', response_text, re.IGNORECASE)
+    axlcode_match = re.search(r'<\w*:?axlcode[^>]*>([^<]*)<', response_text, re.IGNORECASE)
+    axlmessage_match = re.search(r'<\w*:?axlmessage[^>]*>([^<]*)<', response_text, re.IGNORECASE)
+    request_match = re.search(r'<\w*:?request[^>]*>([^<]*)<', response_text, re.IGNORECASE)
+
+    faultcode = (faultcode_match.group(1).strip() if faultcode_match else "")
+    axlcode = (axlcode_match.group(1).strip() if axlcode_match else "")
+    axlmessage = (axlmessage_match.group(1).strip() if axlmessage_match else "")
+    request_name = (request_match.group(1).strip() if request_match else "")
+
+    if axlmessage:
+      parts = [axlmessage]
+      if axlcode:
+        parts.append(f"AXL code {axlcode}")
+      if request_name:
+        parts.append(f"request {request_name}")
+      return " | ".join(parts)[:250]
+
+    if axlcode or request_name or faultcode:
+      if request_name == "addTransPattern" and axlcode == "-1":
+        return (
+          "CUCM rejected addTransPattern (AXL code -1). "
+          "Check route partition ENT_DEVICE_PT, called-party transformation mask 2481001, "
+          "and AXL permissions for this account."
+        )[:250]
+
+      parts = []
+      if request_name:
+        parts.append(f"CUCM rejected {request_name}")
+      else:
+        parts.append("CUCM returned SOAP fault")
+      if axlcode:
+        parts.append(f"AXL code {axlcode}")
+      if faultcode:
+        parts.append(faultcode)
+      return " | ".join(parts)[:250]
+
     # Strategy 3: Find any element with text content between tags (prefer longer content)
     matches = re.findall(r'<\w*:?\w+[^>]*>([^<]{15,})<', response_text)
     if matches:
@@ -845,25 +876,51 @@ def _extract_soap_error(response_text: str) -> str:
       longest = max(matches, key=len)
       if longest.strip():
         return longest.strip()[:250]
-    
+
     # Strategy 4: Try basic XML parsing as last resort
     try:
       root = ET.fromstring(response_text)
+      fault_data: dict[str, str] = {}
       for elem in root.iter():
         tag = elem.tag.split('}')[-1] if '}' in elem.tag else elem.tag
-        if tag.lower() == 'faultstring' and elem.text:
+        lowered_tag = tag.lower()
+        if lowered_tag == 'faultstring' and elem.text and elem.text.strip():
           return elem.text.strip()[:250]
+        if lowered_tag in {'faultcode', 'axlcode', 'axlmessage', 'request'}:
+          fault_data[lowered_tag] = (elem.text or '').strip()
+
+      if fault_data:
+        request_name = fault_data.get('request', '')
+        axlcode = fault_data.get('axlcode', '')
+        axlmessage = fault_data.get('axlmessage', '')
+        faultcode = fault_data.get('faultcode', '')
+        if axlmessage:
+          return axlmessage[:250]
+        if request_name == 'addTransPattern' and axlcode == '-1':
+          return (
+            "CUCM rejected addTransPattern (AXL code -1). "
+            "Check route partition ENT_DEVICE_PT, called-party transformation mask 2481001, "
+            "and AXL permissions for this account."
+          )[:250]
+        parts = []
+        if request_name:
+          parts.append(f"CUCM rejected {request_name}")
+        if axlcode:
+          parts.append(f"AXL code {axlcode}")
+        if faultcode:
+          parts.append(faultcode)
+        if parts:
+          return " | ".join(parts)[:250]
     except Exception:
       pass
-    
+
   except Exception:
     pass
-  
+
   # Fallback: return a more user-friendly message if extraction fails
   if 'Fault' in response_text:
-    # We detected a SOAP fault but couldn't extract message - return hint for CUCM admin
-    return "CUCM returned SOAP fault. Check: (1) route partition exists, (2) transform mask is valid, (3) user has admin rights"
-  
+    return "CUCM returned SOAP fault. Check route partition, transform mask, and AXL permissions."
+
   # Last resort: truncate raw response
   return response_text[:150]
 
@@ -8984,8 +9041,7 @@ def strike_mask_translation_upload(
         
         # Check for SOAP fault in response (even on HTTP 200)
         if response.status_code != 200 or "Fault" in response.text:
-          # DEBUG: Output first 500 chars to diagnose SOAP structure
-          error_msg = f"[DEBUG] HTTP {response.status_code} | Response (first 500 chars):\n{response.text[:500]}"
+          error_msg = _extract_soap_error(response.text)
           output_rows.append([pattern, description, notes, "Failed", error_msg])
         else:
           output_rows.append([pattern, description, notes, "Success", ""])
