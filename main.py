@@ -941,6 +941,7 @@ def _build_add_translation_pattern_soap(
         <description>{xml_escape(description)}</description>
         <usage>Translation</usage>
         <routePartitionName>{xml_escape(route_partition)}</routePartitionName>
+        <callingSearchSpaceName>Route_Internal_CSS</callingSearchSpaceName>
         <calledPartyTransformationMask>{xml_escape(called_party_transform_mask)}</calledPartyTransformationMask>
       </transPattern>
     </axl:addTransPattern>
