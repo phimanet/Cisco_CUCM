@@ -97,6 +97,10 @@ SMTP_USE_STARTTLS = (os.getenv("SMTP_USE_STARTTLS", "false") or "false").strip()
 }
 SMTP_DEFAULT_FROM = (os.getenv("SMTP_DEFAULT_FROM", "") or "").strip()
 AUDIT_LOG_EMAIL_DOMAIN = (os.getenv("AUDIT_LOG_EMAIL_DOMAIN", "amnhealthcare.com") or "amnhealthcare.com").strip().lstrip("@")
+TWILIO_ACCOUNT_SID = (os.getenv("TWILIO_ACCOUNT_SID", "") or "").strip()
+TWILIO_AUTH_TOKEN = (os.getenv("TWILIO_AUTH_TOKEN", "") or "").strip()
+TWILIO_SUBACCOUNT_SID = (os.getenv("TWILIO_SUBACCOUNT_SID", "") or "").strip()
+TWILIO_SUBACCOUNT_NAME = (os.getenv("TWILIO_SUBACCOUNT_NAME", "AMNOne-Notification-PROD") or "AMNOne-Notification-PROD").strip()
 MOBILE_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 MOBILE_JABBER_EMAIL_SUBJECT = "Jabber on iPhone or Android - Ready to install"
 MOBILE_JABBER_EMAIL_BODY = (
@@ -860,6 +864,126 @@ def _derive_admin_audit_email(username: str) -> str:
   if not clean_user:
     return ""
   return f"{clean_user}@{AUDIT_LOG_EMAIL_DOMAIN}"
+
+
+def _normalize_phone_to_e164(phone_number: str) -> str:
+  raw = (phone_number or "").strip()
+  if not raw:
+    return ""
+  digits = "".join(ch for ch in raw if ch.isdigit())
+  if not digits:
+    return ""
+  if len(digits) == 11 and digits.startswith("1"):
+    return f"+{digits}"
+  if len(digits) == 10:
+    return f"+1{digits}"
+  return f"+{digits}" if not raw.startswith("+") else raw
+
+
+def _resolve_twilio_lookup_account_sid() -> str:
+  """Choose subaccount SID for lookup if configured, else use primary account SID."""
+  if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+    return ""
+
+  if TWILIO_SUBACCOUNT_SID:
+    return TWILIO_SUBACCOUNT_SID
+
+  if not TWILIO_SUBACCOUNT_NAME:
+    return TWILIO_ACCOUNT_SID
+
+  try:
+    resp = requests.get(
+      f"https://api.twilio.com/2010-04-01/Accounts.json",
+      params={"FriendlyName": TWILIO_SUBACCOUNT_NAME, "Status": "active", "PageSize": 20},
+      auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+      timeout=20,
+    )
+    if resp.status_code != 200:
+      return TWILIO_ACCOUNT_SID
+    payload = resp.json() if resp.text else {}
+    for acct in payload.get("accounts", []) or []:
+      if str(acct.get("friendly_name", "")).strip() == TWILIO_SUBACCOUNT_NAME:
+        return str(acct.get("sid", "")).strip() or TWILIO_ACCOUNT_SID
+  except Exception:
+    pass
+
+  return TWILIO_ACCOUNT_SID
+
+
+def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
+  """Lookup Twilio IncomingPhoneNumbers by phone number; returns sid/number if found."""
+  e164 = _normalize_phone_to_e164(phone_number)
+  if not e164:
+    return {
+      "enabled": bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN),
+      "found": False,
+      "phone_number": "",
+      "sid": "",
+      "status": "No telephone",
+    }
+
+  if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+    return {
+      "enabled": False,
+      "found": False,
+      "phone_number": e164,
+      "sid": "",
+      "status": "Twilio credentials not configured",
+    }
+
+  lookup_sid = _resolve_twilio_lookup_account_sid()
+  if not lookup_sid:
+    return {
+      "enabled": False,
+      "found": False,
+      "phone_number": e164,
+      "sid": "",
+      "status": "Twilio account not configured",
+    }
+
+  try:
+    resp = requests.get(
+      f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers.json",
+      params={"PhoneNumber": e164, "PageSize": 20},
+      auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+      timeout=20,
+    )
+    if resp.status_code != 200:
+      return {
+        "enabled": True,
+        "found": False,
+        "phone_number": e164,
+        "sid": "",
+        "status": f"Lookup failed HTTP {resp.status_code}",
+      }
+
+    payload = resp.json() if resp.text else {}
+    numbers = payload.get("incoming_phone_numbers", []) or []
+    if not numbers:
+      return {
+        "enabled": True,
+        "found": False,
+        "phone_number": e164,
+        "sid": "",
+        "status": "Not Found",
+      }
+
+    first = numbers[0]
+    return {
+      "enabled": True,
+      "found": True,
+      "phone_number": str(first.get("phone_number", "")).strip() or e164,
+      "sid": str(first.get("sid", "")).strip(),
+      "status": "Found",
+    }
+  except Exception as exc:
+    return {
+      "enabled": True,
+      "found": False,
+      "phone_number": e164,
+      "sid": "",
+      "status": f"Lookup error: {exc}",
+    }
 
 
 def _store_job_output(csv_data: bytes, filename: str) -> str:
@@ -7192,6 +7316,7 @@ def menu_admin_page(request: Request):
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
           <input type="hidden" name="include_teams_status" value="1">
+          <input type="hidden" name="include_twilio_lookup" value="1">
           <div class="search-filter-row">
             <input name="last_name" placeholder="Last Name *" required>
             <input name="first_name" placeholder="First Name (optional)">
@@ -7738,6 +7863,8 @@ def menu_admin_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Number</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio SID</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
               html += '<th style="padding:8px 10px; text-align:left;">Jabber Devices</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
@@ -7750,6 +7877,9 @@ def menu_admin_page(request: Request):
                 const email = r.email || "\u2014";
                 const telephone = r.telephone || "\u2014";
                 const uid = r.userid || "";
+                const twilio = r.twilio_lookup || {};
+                const twilioNumber = twilio.phone_number || "\u2014";
+                const twilioSid = twilio.sid || (twilio.status || "\u2014");
                 const teams = r.teams_telephony || {};
                 const teamsIsUser = !!teams.is_teams_user;
                 const teamsState = teams.status || (teamsIsUser ? "Yes" : "Not Found");
@@ -7778,6 +7908,8 @@ def menu_admin_page(request: Request):
                 html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
                 html += '<td style="padding:7px 10px;">' + telephone + '</td>';
+                html += '<td style="padding:7px 10px;">' + twilioNumber + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + twilioSid + '</td>';
                 html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
                 html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
                 html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(3,max-content);gap:4px;align-items:start;">' + actionBtn + '</div></td>';
@@ -10817,6 +10949,7 @@ def lookup_person_route(
     last_name: str = Form(...),
     first_name: str = Form(""),
   include_teams_status: str = Form(""),
+  include_twilio_lookup: str = Form(""),
 ):
     try:
       cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
@@ -10824,6 +10957,7 @@ def lookup_person_route(
       clean_last = (last_name or "").strip()
       clean_first = (first_name or "").strip()
       include_teams = str(include_teams_status or "").strip().lower() in {"1", "true", "yes", "on"}
+      include_twilio = str(include_twilio_lookup or "").strip().lower() in {"1", "true", "yes", "on"}
       if not clean_last:
           raise RuntimeError("Last Name is required.")
       results = search_persons_by_name(cucm_host, cucm_user, cucm_pass, clean_last, clean_first)
@@ -10851,6 +10985,10 @@ def lookup_person_route(
               "is_teams_user": False,
               "status": "Unknown",
             }
+      if include_twilio:
+        for user in results:
+          telephone = (user.get("telephone") or "").strip()
+          user["twilio_lookup"] = _lookup_twilio_number_by_phone(telephone)
       return JSONResponse({
           "ok": True,
           "count": len(results),
