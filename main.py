@@ -7294,8 +7294,6 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="transtemplate">Translation Pattern Template</button>
             <button type="button" class="portal-nav-btn" data-panel="strikemask-template">Add Translation for Strike Mask Use (CSV Template)</button>
             <button type="button" class="portal-nav-btn" data-panel="verasmart-lab">VeraSMART Automation (v1.01 LAB)</button>
-            <button type="button" class="portal-nav-btn" data-panel="twilioverify-phimane">Twilio Number Lookup - AMIEWeb</button>
-            <button type="button" class="portal-nav-btn" data-panel="twilioverify-lauraa">Twilio-Inbound-Verificaton-LauraA</button>
             <button type="button" class="portal-nav-btn" data-panel="strikemask">Strike Mask - Masked Calling</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=teams-telephony'">Create Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=teams-telephony-remove'">Remove Teams Telephony User (Main Ops)</button>
@@ -7304,7 +7302,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
-            <button type="button" class="portal-nav-btn" data-panel="twilio-lookup" style="background:#0369a1;border-color:#0369a1;">Twilio Number Lookup - AMIEWeb</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3'">📞 Twilio Items (Page 3)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">⚙️ DN Prefix Settings</button>
           </div>
         </aside>
@@ -7506,44 +7504,6 @@ def menu_admin_page(request: Request):
         <div id="verasmart-lab-runs" style="overflow-x:auto;"></div>
       </section>
 
-      <section class="panel tool-panel" data-panel="twilioverify-phimane">
-        <h3>Twilio-Inbound-Verificaton-Phimane</h3>
-        <p>Targets only the translation pattern with exact description <strong>Twilio Number Verification to Phimane 8585236648</strong>. No other translation pattern fields are changed.</p>
-        <form id="admin-twilio-verify-phimane-form">
-          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
-          <input type="hidden" name="cucm_pass" value="">
-          <input type="hidden" name="profile_key" value="phimane">
-
-          Set Translation Pattern to:<br>
-          <input name="target_pattern" placeholder="Enter target pattern" required><br><br>
-
-          <button type="submit">Apply Target Pattern</button>
-          <button type="button" id="admin-twilio-verify-phimane-restore" style="margin-left:8px; background:linear-gradient(180deg,#19743a,#145c2e);">Restore to 8585236648</button>
-        </form>
-
-        <p id="admin-twilio-verify-phimane-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Use Apply to switch temporarily, then Restore to return to 8585236648.</p>
-        <p id="admin-twilio-verify-phimane-summary" style="color:#355978; min-height:18px;"></p>
-      </section>
-
-      <section class="panel tool-panel" data-panel="twilioverify-lauraa">
-        <h3>Twilio-Inbound-Verificaton-LauraA</h3>
-        <p>Targets only the translation pattern with exact description <strong>Twilio Number Verification to LauraA 8583503289</strong>. No other translation pattern fields are changed.</p>
-        <form id="admin-twilio-verify-lauraa-form">
-          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
-          <input type="hidden" name="cucm_pass" value="">
-          <input type="hidden" name="profile_key" value="lauraa">
-
-          Set Translation Pattern to:<br>
-          <input name="target_pattern" placeholder="Enter target pattern" required><br><br>
-
-          <button type="submit">Apply Target Pattern</button>
-          <button type="button" id="admin-twilio-verify-lauraa-restore" style="margin-left:8px; background:linear-gradient(180deg,#19743a,#145c2e);">Restore to 8583503289</button>
-        </form>
-
-        <p id="admin-twilio-verify-lauraa-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Use Apply to switch temporarily, then Restore to return to 8583503289.</p>
-        <p id="admin-twilio-verify-lauraa-summary" style="color:#355978; min-height:18px;"></p>
-      </section>
-
       <section class="panel tool-panel" data-panel="strikemask">
         <h3>Strike Mask - Masked Calling (Page 2)</h3>
         <p>Apply or reverse Strike Mask for masked calling. Strike Mask uses a 945-series translation pattern to mask the caller's Jabber extension when making calls.</p>
@@ -7646,23 +7606,6 @@ def menu_admin_page(request: Request):
         <p id="admin-bulk-extension-summary" style="color:#355978; min-height:18px;"></p>
         <p><a id="admin-bulk-extension-download" href="#" style="display:none; font-weight:700;">Download CSV Output</a></p>
         <textarea id="admin-bulk-extension-preview" rows="10" readonly style="width:100%;"></textarea>
-      </section>
-
-      <section class="panel tool-panel" data-panel="twilio-lookup">
-        <h3>Twilio Number Lookup - AMIEWeb</h3>
-        <p>Search employees by name, then lookup their Twilio number information.</p>
-        <form id="twilio-lookup-search-form">
-          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
-          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
-          <input type="hidden" name="cucm_pass" value="">
-          <div class="search-filter-row">
-            <input name="last_name" placeholder="Last Name *" required>
-            <input name="first_name" placeholder="First Name (optional)">
-            <button type="submit">Search</button>
-          </div>
-        </form>
-        <p id="twilio-lookup-search-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name to find employees.</p>
-        <div id="twilio-lookup-search-results" style="overflow-x:auto;"></div>
       </section>
 
       <script>
@@ -8330,119 +8273,6 @@ def menu_admin_page(request: Request):
 
       <script>
         (function () {
-          function initTwilioInboundVerificationPanel(config) {
-            const form = document.getElementById(config.formId);
-            const statusEl = document.getElementById(config.statusId);
-            const summaryEl = document.getElementById(config.summaryId);
-            const restoreBtn = document.getElementById(config.restoreButtonId);
-            if (!form || !statusEl || !summaryEl || !restoreBtn) {
-              return;
-            }
-
-            let countdownTimer = null;
-
-            function stopCountdown() {
-              if (countdownTimer) {
-                window.clearInterval(countdownTimer);
-                countdownTimer = null;
-              }
-            }
-
-            function formatCountdown(msLeft) {
-              const safeMs = Math.max(0, Math.floor(msLeft));
-              const totalSeconds = Math.floor(safeMs / 1000);
-              const minutes = Math.floor(totalSeconds / 60);
-              const seconds = totalSeconds % 60;
-              return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
-            }
-
-            function startCountdown(restoreAtEpochMs) {
-              stopCountdown();
-              if (!restoreAtEpochMs) {
-                return;
-              }
-
-              const render = () => {
-                const msLeft = restoreAtEpochMs - Date.now();
-                if (msLeft <= 0) {
-                  stopCountdown();
-                  summaryEl.textContent = "Fail-safe timer elapsed. Pattern should now be auto-restored to the original number.";
-                  return;
-                }
-                summaryEl.textContent = `Auto-restore in ${formatCountdown(msLeft)}. Fail-safe will revert to original if no manual restore is pressed.`;
-              };
-
-              render();
-              countdownTimer = window.setInterval(render, 1000);
-            }
-
-            async function submitRequest(mode) {
-              statusEl.textContent = mode === "restore" ? "Restoring default pattern..." : "Updating pattern...";
-              if (mode === "restore") {
-                stopCountdown();
-              }
-              summaryEl.textContent = "";
-
-              const formData = new FormData(form);
-              if (mode === "restore") {
-                formData.set("restore_default", "1");
-              } else {
-                formData.set("restore_default", "0");
-              }
-
-              try {
-                const response = await fetch("/translation-pattern/twilio-inbound-verification", {
-                  method: "POST",
-                  body: formData,
-                  credentials: "same-origin",
-                });
-
-                const payload = await response.json();
-                if (!response.ok || !payload.ok) {
-                  const msg = (payload.error && payload.error.message) || "Update failed.";
-                  throw new Error(msg);
-                }
-
-                const changeWord = payload.changed ? "Updated" : "No change";
-                statusEl.textContent = `${changeWord}: ${payload.old_pattern || ""} -> ${payload.new_pattern || ""}`;
-                const detailSummary = `Description: ${payload.description || ""} | Partition: ${payload.route_partition || ""} | Called Party Transform Mask: ${payload.called_party_transform_mask || ""}`;
-
-                if (payload.auto_restore_enabled && payload.auto_restore_at_epoch_ms) {
-                  startCountdown(payload.auto_restore_at_epoch_ms);
-                } else {
-                  stopCountdown();
-                  summaryEl.textContent = `No auto-restore timer active. ${detailSummary}`;
-                }
-              } catch (err) {
-                statusEl.textContent = "Action failed: " + ((err && err.message) || "Unknown error.");
-                stopCountdown();
-              }
-            }
-
-            form.addEventListener("submit", async function (event) {
-              event.preventDefault();
-              await submitRequest("apply");
-            });
-
-            restoreBtn.addEventListener("click", async function () {
-              await submitRequest("restore");
-            });
-          }
-
-          initTwilioInboundVerificationPanel({
-            formId: "admin-twilio-verify-phimane-form",
-            statusId: "admin-twilio-verify-phimane-status",
-            summaryId: "admin-twilio-verify-phimane-summary",
-            restoreButtonId: "admin-twilio-verify-phimane-restore",
-          });
-
-          initTwilioInboundVerificationPanel({
-            formId: "admin-twilio-verify-lauraa-form",
-            statusId: "admin-twilio-verify-lauraa-status",
-            summaryId: "admin-twilio-verify-lauraa-summary",
-            restoreButtonId: "admin-twilio-verify-lauraa-restore",
-          });
-
           const strikeMaskLookupForm = document.getElementById("admin-strikemask-lookup-form");
           if (strikeMaskLookupForm) {
             strikeMaskLookupForm.addEventListener("submit", async function (event) {
@@ -9136,8 +8966,583 @@ def menu_admin_page(request: Request):
           });
         })();
       </script>
+        </section>
+      </div>
+    </main>
+  </body>
+</html>
+""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
 
-      <script>
+  return HTMLResponse(
+    content=html,
+    headers={
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    },
+  )
+
+
+@app.get("/page3", response_class=HTMLResponse)
+def page3_twilio_items(request: Request):
+  session = _get_auth_session(request) or {}
+  now_epoch = time.time()
+  session_username = str(session.get("username", ""))
+  if not _is_admin_user(session_username):
+    return HTMLResponse(
+      content="<h3>403 Forbidden</h3><p>You are not authorized to access Twilio Items.</p>",
+      status_code=403,
+    )
+
+  auth_user = escape(session_username)
+  auth_cucm_host = str(session.get("cucm_host", ""))
+  has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
+  if not has_cached_cucm_pass:
+    _page3_sid = request.cookies.get(SESSION_COOKIE_NAME, "")
+    if _page3_sid:
+      has_cached_cucm_pass = bool((AUTH_SESSION_SECRETS.get(_page3_sid, {}).get("cucm_pass", "") or "").strip())
+  credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
+  credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
+  env_text, env_css_class = _get_environment_label(auth_cucm_host)
+
+  html = """
+<html>
+  <head>
+    <title>Twilio Items - Voice Operations Portal</title>
+    <style>
+      :root {
+        --primary-color: #0369a1;
+        --primary-dark: #0c4a6e;
+        --primary-light: #06b6d4;
+        --danger-color: #b00020;
+        --success-color: #2e7d32;
+        --warning-color: #f57f17;
+        --info-color: #2196f3;
+        --gray-dark: #333;
+        --gray-medium: #666;
+        --gray-light: #e0e0e0;
+        --gray-lighter: #f5f5f5;
+        --border-radius: 8px;
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        background: linear-gradient(135deg, #f7fbff 0%, #e3f2fd 100%);
+        color: var(--gray-dark);
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        background: linear-gradient(90deg, var(--primary-dark) 0%, var(--primary-color) 100%);
+        color: #fff;
+        padding: 12px 20px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+      }
+
+      .topbar h1 {
+        font-size: 18px;
+        font-weight: 700;
+        margin: 0;
+      }
+
+      .topbar-right {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+      }
+
+      .session-timer {
+        font-size: 12px;
+        padding: 4px 8px;
+        background: rgba(255,255,255,0.2);
+        border-radius: 4px;
+        display: none;
+      }
+
+      .env-label {
+        font-size: 11px;
+        font-weight: 700;
+        padding: 4px 8px;
+        border-radius: 4px;
+        background: rgba(255,255,255,0.3);
+      }
+
+      .env-label.prod {
+        background: rgba(255, 0, 0, 0.3);
+        color: #ffcccc;
+      }
+
+      .logout-btn {
+        padding: 6px 12px;
+        background: rgba(255,255,255,0.3);
+        color: #fff;
+        border: 1px solid rgba(255,255,255,0.5);
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 12px;
+        transition: 0.2s;
+      }
+
+      .logout-btn:hover {
+        background: rgba(255,255,255,0.5);
+      }
+
+      .container {
+        display: flex;
+        flex-wrap: wrap;
+        height: calc(100vh - 50px);
+      }
+
+      .portal-sidebar {
+        width: 280px;
+        background: #fff;
+        box-shadow: 2px 0 8px rgba(0,0,0,0.1);
+        overflow-y: auto;
+        padding: 16px 0;
+        flex-shrink: 0;
+      }
+
+      .portal-nav {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 0 8px;
+      }
+
+      .portal-nav-btn {
+        width: 100%;
+        padding: 10px 12px;
+        text-align: left;
+        background: #f0f0f0;
+        color: var(--gray-dark);
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 500;
+        transition: 0.2s;
+        white-space: normal;
+        word-break: break-word;
+      }
+
+      .portal-nav-btn:hover {
+        background: #e0e0e0;
+        border-color: #999;
+      }
+
+      .portal-nav-btn.active {
+        background: var(--primary-color);
+        color: #fff;
+        border-color: var(--primary-color);
+      }
+
+      .portal-main {
+        flex: 1;
+        overflow-y: auto;
+        padding: 20px;
+      }
+
+      .panel {
+        display: none;
+        background: #fff;
+        border-radius: var(--border-radius);
+        padding: 20px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        margin-bottom: 20px;
+      }
+
+      .panel.active {
+        display: block;
+      }
+
+      .panel h3 {
+        color: var(--primary-color);
+        font-size: 18px;
+        margin-bottom: 10px;
+        border-bottom: 2px solid var(--primary-color);
+        padding-bottom: 8px;
+      }
+
+      .panel h4 {
+        color: var(--primary-dark);
+        font-size: 14px;
+        margin-top: 16px;
+        margin-bottom: 8px;
+      }
+
+      .panel p {
+        color: var(--gray-medium);
+        font-size: 13px;
+        line-height: 1.5;
+        margin-bottom: 12px;
+      }
+
+      form {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        margin-bottom: 12px;
+      }
+
+      input[type="text"],
+      input[type="email"],
+      input[type="password"],
+      input[type="number"],
+      textarea,
+      select {
+        padding: 8px 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        font-size: 13px;
+        font-family: inherit;
+      }
+
+      input:focus,
+      textarea:focus,
+      select:focus {
+        outline: none;
+        border-color: var(--primary-color);
+        box-shadow: 0 0 4px rgba(3, 105, 161, 0.3);
+      }
+
+      button[type="submit"],
+      button[type="button"] {
+        padding: 8px 12px;
+        background: var(--primary-color);
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 600;
+        transition: 0.2s;
+      }
+
+      button[type="submit"]:hover,
+      button[type="button"]:hover {
+        background: var(--primary-dark);
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+        margin-top: 12px;
+      }
+
+      th {
+        background: var(--primary-color);
+        color: #fff;
+        padding: 8px 10px;
+        text-align: left;
+        font-weight: 600;
+      }
+
+      td {
+        padding: 7px 10px;
+        border-bottom: 1px solid #e0e0e0;
+      }
+
+      tr:nth-child(even) {
+        background: #f7fbff;
+      }
+
+      .search-filter-row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .search-filter-row input,
+      .search-filter-row button {
+        flex: 1;
+        min-width: 120px;
+      }
+
+      @media (max-width: 768px) {
+        .container {
+          flex-direction: column;
+          height: auto;
+        }
+
+        .portal-sidebar {
+          width: 100%;
+          max-height: 200px;
+        }
+
+        .portal-main {
+          flex: 1;
+        }
+
+        .search-filter-row {
+          flex-direction: column;
+        }
+
+        .search-filter-row input,
+        .search-filter-row button {
+          width: 100%;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="topbar">
+      <h1>☎️ Twilio Items - Voice Operations Portal</h1>
+      <div class="topbar-right">
+        <div id="session-timer-banner" class="session-timer">
+          Credential expires in: <span id="session-timer-remaining">--:--:--</span>
+        </div>
+        <div class="env-label __ENV_CLASS__">__ENV_TEXT__</div>
+        <div style="font-size:12px;">__AUTH_USER__</div>
+        <button type="button" class="logout-btn" onclick="window.location.href='/logout'">Logout</button>
+      </div>
+    </div>
+
+    <div class="container">
+      <aside class="portal-sidebar">
+        <div class="portal-nav">
+          <button type="button" class="portal-nav-btn" onclick="window.location.href='/page2'">← Back to Administrative Items</button>
+          <hr style="margin:8px 0; border:none; border-top:1px solid #ddd;">
+          <button type="button" class="portal-nav-btn active" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-lookup">Twilio Number Lookup</button>
+        </div>
+      </aside>
+
+      <section class="portal-main">
+        <section class="panel active" data-panel="twilio-phimane">
+          <h3>Twilio-Inbound-Verificaton-Phimane</h3>
+          <p>Targets only the translation pattern with exact description <strong>Twilio Number Verification to Phimane 8585236648</strong>. No other translation pattern fields are changed.</p>
+          <form id="admin-twilio-verify-phimane-form">
+            <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+            <input type="hidden" name="cucm_pass" value="">
+            <input type="hidden" name="profile_key" value="phimane">
+
+            Set Translation Pattern to:<br>
+            <input name="target_pattern" placeholder="Enter target pattern" required><br><br>
+
+            <button type="submit">Apply Target Pattern</button>
+            <button type="button" id="admin-twilio-verify-phimane-restore" style="margin-left:8px; background:linear-gradient(180deg,#19743a,#145c2e);">Restore to 8585236648</button>
+          </form>
+
+          <p id="admin-twilio-verify-phimane-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Use Apply to switch temporarily, then Restore to return to 8585236648.</p>
+          <p id="admin-twilio-verify-phimane-summary" style="color:#355978; min-height:18px;"></p>
+        </section>
+
+        <section class="panel" data-panel="twilio-lauraa">
+          <h3>Twilio-Inbound-Verificaton-LauraA</h3>
+          <p>Targets only the translation pattern with exact description <strong>Twilio Number Verification to LauraA 8583503289</strong>. No other translation pattern fields are changed.</p>
+          <form id="admin-twilio-verify-lauraa-form">
+            <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+            <input type="hidden" name="cucm_pass" value="">
+            <input type="hidden" name="profile_key" value="lauraa">
+
+            Set Translation Pattern to:<br>
+            <input name="target_pattern" placeholder="Enter target pattern" required><br><br>
+
+            <button type="submit">Apply Target Pattern</button>
+            <button type="button" id="admin-twilio-verify-lauraa-restore" style="margin-left:8px; background:linear-gradient(180deg,#19743a,#145c2e);">Restore to 8583503289</button>
+          </form>
+
+          <p id="admin-twilio-verify-lauraa-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Use Apply to switch temporarily, then Restore to return to 8583503289.</p>
+          <p id="admin-twilio-verify-lauraa-summary" style="color:#355978; min-height:18px;"></p>
+        </section>
+
+        <section class="panel" data-panel="twilio-lookup">
+          <h3>Twilio Number Lookup - AMIEWeb</h3>
+          <p>Search employees by name, then lookup their Twilio number information.</p>
+          <form id="twilio-lookup-search-form">
+            <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+            <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+            <input type="hidden" name="cucm_pass" value="">
+            <div class="search-filter-row">
+              <input name="last_name" placeholder="Last Name *" required>
+              <input name="first_name" placeholder="First Name (optional)">
+              <button type="submit">Search</button>
+            </div>
+          </form>
+          <p id="twilio-lookup-search-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name to find employees.</p>
+          <div id="twilio-lookup-search-results" style="overflow-x:auto;"></div>
+        </section>
+      </section>
+    </div>
+
+    <script>
+      (function () {
+        const hasCachedCucmPassword = __HAS_CACHED_CUCM_PASS__;
+        const credentialExpiresAtMs = __CREDENTIAL_EXPIRES_AT_MS__;
+        const sessionTimerBanner = document.getElementById("session-timer-banner");
+        const sessionTimerRemaining = document.getElementById("session-timer-remaining");
+
+        function formatTimerValue(totalSeconds) {
+          const safe = Math.max(0, Math.floor(totalSeconds));
+          const hours = Math.floor(safe / 3600);
+          const minutes = Math.floor((safe % 3600) / 60);
+          const seconds = safe % 60;
+          return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+        }
+
+        function startCredentialTimer() {
+          if (!hasCachedCucmPassword || !sessionTimerBanner || !sessionTimerRemaining || !credentialExpiresAtMs) {
+            return;
+          }
+
+          sessionTimerBanner.style.display = "flex";
+
+          const updateTimer = () => {
+            const remainingMs = credentialExpiresAtMs - Date.now();
+            if (remainingMs <= 0) {
+              sessionTimerRemaining.textContent = "Expired";
+              window.location.href = "/logout";
+              return;
+            }
+            sessionTimerRemaining.textContent = formatTimerValue(remainingMs / 1000);
+          };
+
+          updateTimer();
+          window.setInterval(updateTimer, 1000);
+        }
+
+        startCredentialTimer();
+
+        // Panel navigation
+        document.querySelectorAll("[data-panel]").forEach(btn => {
+          if (btn.classList.contains("portal-nav-btn")) {
+            btn.addEventListener("click", function () {
+              const panelName = this.getAttribute("data-panel");
+              document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
+              document.querySelectorAll(".portal-nav-btn").forEach(b => b.classList.remove("active"));
+              
+              document.querySelector(`[data-panel="${panelName}"].panel`)?.classList.add("active");
+              this.classList.add("active");
+            });
+          }
+        });
+
+        // Twilio Inbound Verification Panel Handler
+        function initTwilioInboundVerificationPanel(config) {
+          const form = document.getElementById(config.formId);
+          const statusEl = document.getElementById(config.statusId);
+          const summaryEl = document.getElementById(config.summaryId);
+          const restoreBtn = document.getElementById(config.restoreButtonId);
+          if (!form || !statusEl || !summaryEl || !restoreBtn) {
+            return;
+          }
+
+          let countdownTimer = null;
+
+          function stopCountdown() {
+            if (countdownTimer) {
+              window.clearInterval(countdownTimer);
+              countdownTimer = null;
+            }
+          }
+
+          function formatCountdown(msLeft) {
+            const safeMs = Math.max(0, Math.floor(msLeft));
+            const totalSeconds = Math.floor(safeMs / 1000);
+            const minutes = Math.floor(totalSeconds / 60);
+            const seconds = totalSeconds % 60;
+            return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+          }
+
+          function startCountdown(restoreAtEpochMs) {
+            stopCountdown();
+            if (!restoreAtEpochMs) {
+              return;
+            }
+
+            const render = () => {
+              const msLeft = restoreAtEpochMs - Date.now();
+              if (msLeft <= 0) {
+                stopCountdown();
+                summaryEl.textContent = "Fail-safe timer elapsed. Pattern should now be auto-restored to the original number.";
+                return;
+              }
+              summaryEl.textContent = `Auto-restore in ${formatCountdown(msLeft)}. Fail-safe will revert to original if no manual restore is pressed.`;
+            };
+
+            render();
+            countdownTimer = window.setInterval(render, 1000);
+          }
+
+          async function submitRequest(mode) {
+            statusEl.textContent = mode === "restore" ? "Restoring default pattern..." : "Updating pattern...";
+            if (mode === "restore") {
+              stopCountdown();
+            }
+            summaryEl.textContent = "";
+
+            const formData = new FormData(form);
+            if (mode === "restore") {
+              formData.set("restore_default", "1");
+            } else {
+              formData.set("restore_default", "0");
+            }
+
+            try {
+              const response = await fetch("/translation-pattern/twilio-inbound-verification", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                const msg = (payload.error && payload.error.message) || "Update failed.";
+                throw new Error(msg);
+              }
+
+              const changeWord = payload.changed ? "Updated" : "No change";
+              statusEl.textContent = `${changeWord}: ${payload.old_pattern || ""} -> ${payload.new_pattern || ""}`;
+              const detailSummary = `Description: ${payload.description || ""} | Partition: ${payload.route_partition || ""} | Called Party Transform Mask: ${payload.called_party_transform_mask || ""}`;
+
+              if (payload.auto_restore_enabled && payload.auto_restore_at_epoch_ms) {
+                startCountdown(payload.auto_restore_at_epoch_ms);
+              } else {
+                stopCountdown();
+                summaryEl.textContent = `No auto-restore timer active. ${detailSummary}`;
+              }
+            } catch (err) {
+              statusEl.textContent = "Action failed: " + ((err && err.message) || "Unknown error.");
+              stopCountdown();
+            }
+          }
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            await submitRequest("apply");
+          });
+
+          restoreBtn.addEventListener("click", async function () {
+            await submitRequest("restore");
+          });
+        }
+
+        initTwilioInboundVerificationPanel({
+          formId: "admin-twilio-verify-phimane-form",
+          statusId: "admin-twilio-verify-phimane-status",
+          summaryId: "admin-twilio-verify-phimane-summary",
+          restoreButtonId: "admin-twilio-verify-phimane-restore",
+        });
+
+        initTwilioInboundVerificationPanel({
+          formId: "admin-twilio-verify-lauraa-form",
+          statusId: "admin-twilio-verify-lauraa-status",
+          summaryId: "admin-twilio-verify-lauraa-summary",
+          restoreButtonId: "admin-twilio-verify-lauraa-restore",
+        });
+
+        // Twilio Lookup Form Handler
         (function () {
           const form = document.getElementById("twilio-lookup-search-form");
           const statusEl = document.getElementById("twilio-lookup-search-status");
@@ -9209,10 +9614,8 @@ def menu_admin_page(request: Request):
             }
           });
         })();
-      </script>
-        </section>
-      </div>
-    </main>
+      })();
+    </script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
