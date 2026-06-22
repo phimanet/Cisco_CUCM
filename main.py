@@ -8958,12 +8958,14 @@ def strike_mask_translation_upload(
       "failed_count": failed_count,
     }
     
-    _audit_log(
-      request=request,
+    csv_name = csv_file.filename or "uploaded.csv"
+    _append_audit_event(
       action="strike_mask_translation_upload",
-      resource=cucm_host,
-      resource_type="cucm",
-      detail=f"Uploaded {len(rows_to_create)} patterns",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=csv_name,
+      output_filename="strike_mask_translation_create_results.csv",
+      inline_mode=False,
     )
     
     return JSONResponse(job_result)
