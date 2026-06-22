@@ -7276,6 +7276,10 @@ def menu_admin_page(request: Request):
             <strong>Action History</strong>
             <span>Review recent portal actions and download the audit CSV.</span>
           </a>
+          <a class="hero-link-card" href="/page3">
+            <strong>📞 Twilio Items</strong>
+            <span>Manage Twilio number verification and lookup operations.</span>
+          </a>
         </div>
       </section>
 
