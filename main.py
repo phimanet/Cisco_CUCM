@@ -1,6 +1,7 @@
 import csv
 import datetime
 import io
+import json
 import os
 import re
 from collections import Counter
@@ -177,6 +178,16 @@ STRIKE_MASK_HISTORY_PATH = os.path.join(
   "logs",
   "strike_mask_history.csv",
 )
+SETTINGS_FILE_PATH = os.path.join(
+  os.path.dirname(os.path.abspath(__file__)),
+  "settings.json",
+)
+DEFAULT_SETTINGS = {
+  "general_fte_prefix": "945",
+  "strike_prefix": "817",
+  "recruiter_prefix": "469",
+}
+SETTINGS_LOCK = threading.Lock()
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -359,6 +370,42 @@ def _update_cached_credentials(
     _cache_secret(session, "unity_pass", unity_pass)
     if secret_store is not None:
       secret_store["unity_pass"] = (unity_pass or "").strip()
+
+
+def _load_settings():
+  """Load DN prefix settings from settings.json, or return defaults if not found."""
+  try:
+    if os.path.exists(SETTINGS_FILE_PATH):
+      with open(SETTINGS_FILE_PATH, "r") as f:
+        settings = json.load(f)
+        # Merge with defaults to ensure all keys exist
+        return {**DEFAULT_SETTINGS, **settings}
+  except Exception:
+    pass
+  return DEFAULT_SETTINGS.copy()
+
+
+def _save_settings(settings: dict):
+  """Save DN prefix settings to settings.json."""
+  try:
+    with SETTINGS_LOCK:
+      os.makedirs(os.path.dirname(SETTINGS_FILE_PATH), exist_ok=True)
+      with open(SETTINGS_FILE_PATH, "w") as f:
+        json.dump(settings, f, indent=2)
+      return True
+  except Exception as e:
+    print(f"Error saving settings: {e}")
+    return False
+
+
+def _get_dn_mapping():
+  """Get the current DN prefix mapping from settings."""
+  settings = _load_settings()
+  return {
+    "recruiter": (settings.get("recruiter_prefix", "469"), "Recruiter"),
+    "general": (settings.get("general_fte_prefix", "945"), "General FTE"),
+    "strike": (settings.get("strike_prefix", "817"), "Strike"),
+  }
 
 
 def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, cucm_pass: str):
@@ -7109,6 +7156,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
+            <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">⚙️ DN Prefix Settings</button>
           </div>
         </aside>
 
@@ -8937,6 +8985,307 @@ def menu_admin_page(request: Request):
       "Expires": "0",
     },
   )
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(request: Request):
+  """Admin settings page for configuring phone prefixes."""
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", ""))
+  if not _is_admin_user(session_username):
+    return HTMLResponse(
+      content="<h3>403 Forbidden</h3><p>You are not authorized to access Settings.</p>",
+      status_code=403,
+    )
+  
+  settings = _load_settings()
+  auth_user = escape(session_username)
+  
+  html = f"""
+<html>
+  <head>
+    <title>DN Prefix Settings - Voice Operations Portal</title>
+    <style>
+      :root {{
+        --amn-blue: #005eb8;
+        --amn-navy: #002f6c;
+        --amn-text: #12304a;
+        --amn-text-soft: #4e6a84;
+        --amn-border: #c8dbee;
+      }}
+      body {{
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        background: linear-gradient(135deg, #f6fbff 0%, #eaf4ff 100%);
+        margin: 0;
+        padding: 20px;
+        color: var(--amn-text);
+      }}
+      .container {{
+        max-width: 600px;
+        margin: 0 auto;
+        background: white;
+        border-radius: 8px;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        overflow: hidden;
+      }}
+      .header {{
+        background: linear-gradient(135deg, var(--amn-blue) 0%, var(--amn-navy) 100%);
+        color: white;
+        padding: 30px;
+        text-align: center;
+      }}
+      .header h1 {{
+        margin: 0;
+        font-size: 28px;
+      }}
+      .header p {{
+        margin: 8px 0 0 0;
+        opacity: 0.95;
+        font-size: 14px;
+      }}
+      .content {{
+        padding: 30px;
+      }}
+      .form-group {{
+        margin-bottom: 24px;
+      }}
+      label {{
+        display: block;
+        font-weight: 600;
+        margin-bottom: 8px;
+        color: var(--amn-text);
+        font-size: 14px;
+      }}
+      input[type="text"] {{
+        width: 100%;
+        padding: 10px 12px;
+        border: 1px solid var(--amn-border);
+        border-radius: 4px;
+        font-size: 14px;
+        box-sizing: border-box;
+      }}
+      input[type="text"]:focus {{
+        outline: none;
+        border-color: var(--amn-blue);
+        box-shadow: 0 0 0 3px rgba(0,94,184,0.1);
+      }}
+      .help-text {{
+        font-size: 12px;
+        color: var(--amn-text-soft);
+        margin-top: 4px;
+      }}
+      .button-group {{
+        display: flex;
+        gap: 12px;
+        margin-top: 30px;
+      }}
+      button {{
+        flex: 1;
+        padding: 12px;
+        border: none;
+        border-radius: 4px;
+        font-size: 14px;
+        font-weight: 600;
+        cursor: pointer;
+        transition: all 0.2s;
+      }}
+      .btn-save {{
+        background: var(--amn-blue);
+        color: white;
+      }}
+      .btn-save:hover {{
+        background: var(--amn-navy);
+      }}
+      .btn-cancel {{
+        background: #e8ecf1;
+        color: var(--amn-text);
+      }}
+      .btn-cancel:hover {{
+        background: #d4dce5;
+      }}
+      .alert {{
+        padding: 12px;
+        border-radius: 4px;
+        margin-bottom: 20px;
+        font-size: 14px;
+      }}
+      .alert-success {{
+        background: #d4edda;
+        color: #155724;
+        border: 1px solid #c3e6cb;
+      }}
+      .alert-error {{
+        background: #f8d7da;
+        color: #721c24;
+        border: 1px solid #f5c6cb;
+      }}
+      .footer {{
+        padding: 20px 30px;
+        background: #f8fafc;
+        border-top: 1px solid var(--amn-border);
+        font-size: 12px;
+        color: var(--amn-text-soft);
+        text-align: center;
+      }}
+      a {{
+        color: var(--amn-blue);
+        text-decoration: none;
+      }}
+      a:hover {{
+        text-decoration: underline;
+      }}
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <div class="header">
+        <h1>DN Prefix Settings</h1>
+        <p>Manage phone number prefixes for Jabber builds</p>
+      </div>
+      
+      <div class="content">
+        <div id="message"></div>
+        
+        <form id="settingsForm">
+          <div class="form-group">
+            <label for="general_fte_prefix">General FTE Prefix</label>
+            <input type="text" id="general_fte_prefix" name="general_fte_prefix" value="{escape(settings.get('general_fte_prefix', '945'))}" maxlength="10" required>
+            <div class="help-text">Used when building General FTE Jabber phones</div>
+          </div>
+          
+          <div class="form-group">
+            <label for="strike_prefix">Strike Prefix</label>
+            <input type="text" id="strike_prefix" name="strike_prefix" value="{escape(settings.get('strike_prefix', '817'))}" maxlength="10" required>
+            <div class="help-text">Used when building Strike Jabber phones</div>
+          </div>
+          
+          <div class="form-group">
+            <label for="recruiter_prefix">Recruiter Prefix</label>
+            <input type="text" id="recruiter_prefix" name="recruiter_prefix" value="{escape(settings.get('recruiter_prefix', '469'))}" maxlength="10" required>
+            <div class="help-text">Used when building Recruiter Jabber phones</div>
+          </div>
+          
+          <div class="button-group">
+            <button type="submit" class="btn-save">Save Changes</button>
+            <button type="button" class="btn-cancel" onclick="window.location.href='/menu-admin'">Cancel</button>
+          </div>
+        </form>
+      </div>
+      
+      <div class="footer">
+        Logged in as: <strong>{auth_user}</strong> | 
+        <a href="/logout">Logout</a>
+      </div>
+    </div>
+    
+    <script>
+      document.getElementById('settingsForm').addEventListener('submit', async (e) => {{
+        e.preventDefault();
+        const messageEl = document.getElementById('message');
+        
+        const formData = {{
+          general_fte_prefix: document.getElementById('general_fte_prefix').value.trim(),
+          strike_prefix: document.getElementById('strike_prefix').value.trim(),
+          recruiter_prefix: document.getElementById('recruiter_prefix').value.trim(),
+        }};
+        
+        if (!formData.general_fte_prefix || !formData.strike_prefix || !formData.recruiter_prefix) {{
+          messageEl.innerHTML = '<div class="alert alert-error">All fields are required.</div>';
+          return;
+        }}
+        
+        try {{
+          const resp = await fetch('/api/settings', {{
+            method: 'POST',
+            headers: {{'Content-Type': 'application/json'}},
+            body: JSON.stringify(formData),
+            credentials: 'same-origin',
+          }});
+          
+          const result = await resp.json();
+          
+          if (result.ok) {{
+            messageEl.innerHTML = '<div class="alert alert-success">Settings saved successfully!</div>';
+            setTimeout(() => window.location.href='/menu-admin', 1500);
+          }} else {{
+            messageEl.innerHTML = '<div class="alert alert-error">Error: ' + escape(result.error || 'Unknown error') + '</div>';
+          }}
+        }} catch (err) {{
+          messageEl.innerHTML = '<div class="alert alert-error">Network error: ' + escape(err.message) + '</div>';
+        }}
+      }});
+    </script>
+  </body>
+</html>
+"""
+  
+  return HTMLResponse(content=html)
+
+
+@app.get("/api/settings")
+def get_settings_api(request: Request):
+  """Get current DN prefix settings."""
+  session = _get_auth_session(request)
+  if not session:
+    return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+  
+  if not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  
+  settings = _load_settings()
+  return JSONResponse({"ok": True, "settings": settings})
+
+
+@app.post("/api/settings")
+def update_settings_api(request: Request, body: dict = None):
+  """Update DN prefix settings."""
+  session = _get_auth_session(request)
+  if not session:
+    return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+  
+  if not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  
+  try:
+    import asyncio
+    loop = asyncio.new_event_loop()
+    
+    async def get_body():
+      return await request.json()
+    
+    try:
+      body = loop.run_until_complete(get_body())
+    finally:
+      loop.close()
+    
+    if not body:
+      return JSONResponse({"ok": False, "error": "No data provided"}, status_code=400)
+    
+    # Validate and extract fields
+    general_fte_prefix = (body.get("general_fte_prefix", "") or "").strip()
+    strike_prefix = (body.get("strike_prefix", "") or "").strip()
+    recruiter_prefix = (body.get("recruiter_prefix", "") or "").strip()
+    
+    if not general_fte_prefix or not strike_prefix or not recruiter_prefix:
+      return JSONResponse({"ok": False, "error": "All fields are required"}, status_code=400)
+    
+    # Validate that all are numeric
+    if not (general_fte_prefix.isdigit() and strike_prefix.isdigit() and recruiter_prefix.isdigit()):
+      return JSONResponse({"ok": False, "error": "All prefixes must be numeric"}, status_code=400)
+    
+    new_settings = {
+      "general_fte_prefix": general_fte_prefix,
+      "strike_prefix": strike_prefix,
+      "recruiter_prefix": recruiter_prefix,
+    }
+    
+    if _save_settings(new_settings):
+      return JSONResponse({"ok": True, "message": "Settings saved successfully"})
+    else:
+      return JSONResponse({"ok": False, "error": "Failed to save settings"}, status_code=500)
+  
+  except Exception as e:
+    return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
 
 @app.get("/download/add-directorynumbers-template")

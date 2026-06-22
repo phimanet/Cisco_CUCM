@@ -25,6 +25,25 @@ UNITY_LAB_SERVER = "LASCUTYPL01.ahs.int"
 UNITY_PROD_SERVER = "SANCUTYP01.ahs.int"
 DEFAULT_VM_PIN = "56219"
 LDAP_INTEGRATION_ENABLED = True
+
+# Load settings from settings.json if available
+def _load_dn_settings():
+    """Load DN prefix settings from settings.json, or return defaults."""
+    settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "settings.json")
+    defaults = {
+        "general_fte_prefix": "945",
+        "strike_prefix": "817",
+        "recruiter_prefix": "469",
+    }
+    try:
+        if os.path.exists(settings_path):
+            with open(settings_path, "r") as f:
+                settings = json.load(f)
+                return {**defaults, **settings}
+    except Exception:
+        pass
+    return defaults
+
 UNITY_ENV_SETTINGS = {
     "LAB": {
         "server": UNITY_LAB_SERVER,
@@ -865,12 +884,13 @@ def build_user_csf_phone_from_template(
     ad_password="",
     preferred_dn="",
 ):
+    settings = _load_dn_settings()
     dn_map = {
-        "recruiter": ("469", "Recruiter"),
-        "general": ("945", "General FTE"),
-        "strike": ("817", "Strike"),
+        "recruiter": (settings.get("recruiter_prefix", "469"), "Recruiter"),
+        "general": (settings.get("general_fte_prefix", "945"), "General FTE"),
+        "strike": (settings.get("strike_prefix", "817"), "Strike"),
     }
-    dn_prefix, dn_type_name = dn_map.get((dn_type or "").strip().lower(), ("945", "General FTE"))
+    dn_prefix, dn_type_name = dn_map.get((dn_type or "").strip().lower(), (settings.get("general_fte_prefix", "945"), "General FTE"))
 
     env_name = "PRODUCTION" if (cucm_host or "").strip().lower() == PROD_CUCM_IP else "LAB"
     unity_config = UNITY_ENV_SETTINGS[env_name]

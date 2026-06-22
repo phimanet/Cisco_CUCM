@@ -1,6 +1,7 @@
 import csv
 import datetime
 import io
+import json
 import os
 import smtplib
 import xml.etree.ElementTree as ET
@@ -20,7 +21,35 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 AXL_NS = "http://www.cisco.com/AXL/API/15.0"
 DN_ROUTE_PARTITION = "ENT_DEVICE_PT"
-AUTO_DN_PREFIXES = ("945", "469", "817")
+
+# Load settings from settings.json if available
+def _load_dn_prefixes():
+    """Load DN prefixes from settings.json, or return defaults."""
+    settings_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "settings.json")
+    defaults = {
+        "general_fte_prefix": "945",
+        "strike_prefix": "817",
+        "recruiter_prefix": "469",
+    }
+    try:
+        if os.path.exists(settings_path):
+            with open(settings_path, "r") as f:
+                settings = json.load(f)
+                return {**defaults, **settings}
+    except Exception:
+        pass
+    return defaults
+
+def _get_auto_dn_prefixes():
+    """Get tuple of all DN prefixes for validation."""
+    settings = _load_dn_prefixes()
+    return (
+        settings.get("general_fte_prefix", "945"),
+        settings.get("recruiter_prefix", "469"),
+        settings.get("strike_prefix", "817"),
+    )
+
+AUTO_DN_PREFIXES = _get_auto_dn_prefixes()
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp1.ahs.int").strip() or "smtp1.ahs.int"
 SMTP_PORT = int(os.getenv("SMTP_PORT", "25") or "25")
 SMTP_TIMEOUT_SECONDS = int(os.getenv("SMTP_TIMEOUT_SECONDS", "12") or "12")
