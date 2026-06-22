@@ -815,6 +815,29 @@ def _prepare_job_output(csv_data, filename: str) -> dict:
     }
 
 
+def _extract_soap_error(response_text: str) -> str:
+  """Extract friendly error message from SOAP fault response, or return truncated text."""
+  try:
+    root = ET.fromstring(response_text)
+    # Define namespace
+    ns = {"soapenv": "http://schemas.xmlsoap.org/soap/envelope/"}
+    # Find Fault element
+    fault = root.find(".//soapenv:Fault", ns)
+    if fault is not None:
+      # Try to extract faultstring
+      fault_string_elem = fault.find("faultstring")
+      if fault_string_elem is not None and fault_string_elem.text:
+        return fault_string_elem.text.strip()
+      # Try to extract detail
+      detail_elem = fault.find("detail")
+      if detail_elem is not None and detail_elem.text:
+        return detail_elem.text.strip()[:150]
+  except Exception:
+    pass
+  # Fallback: truncate raw response
+  return response_text[:150]
+
+
 def _require_admin_session(request: Request) -> tuple[dict, str]:
   session = _get_auth_session(request)
   if not session:
@@ -8929,11 +8952,12 @@ def strike_mask_translation_upload(
           timeout=60,
         )
         
-        if response.status_code == 200:
-          output_rows.append([pattern, description, notes, "Success", ""])
-        else:
-          error_msg = response.text[:200] if response.text else f"HTTP {response.status_code}"
+        # Check for SOAP fault in response (even on HTTP 200)
+        if response.status_code != 200 or "Fault" in response.text:
+          error_msg = _extract_soap_error(response.text)
           output_rows.append([pattern, description, notes, "Failed", error_msg])
+        else:
+          output_rows.append([pattern, description, notes, "Success", ""])
       except Exception as e:
         output_rows.append([pattern, description, notes, "Failed", str(e)[:200]])
     
