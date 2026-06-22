@@ -7148,10 +7148,12 @@ def menu_admin_page(request: Request):
         <form id="strikemask-upload-form" method="post" action="/strike-mask-translation/upload" enctype="multipart/form-data">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
-          <input type="hidden" name="cucm_host" value="">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
           
           CSV File:<br>
           <input type="file" name="csv_file" accept=".csv" required><br><br>
+          CUCM Password (only if prompted / session expired):<br>
+          <input type="password" name="cucm_pass" placeholder="Optional - enter only if needed"><br><br>
           <button type="submit">Create Translation Patterns</button>
         </form>
         
@@ -8860,16 +8862,15 @@ def download_strike_mask_translation_template():
 @app.post("/strike-mask-translation/upload")
 def strike_mask_translation_upload(
   request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
   csv_file: UploadFile = File(...),
 ):
   try:
-    session, username = _require_admin_session(request)
-    cucm_host = (session.get("cucm_host", "") or "").strip()
-    cucm_user = (session.get("cucm_user", "") or "").strip()
-    cucm_pass = (session.get("cucm_pass", "") or "").strip()
-
-    if not all([cucm_host, cucm_user, cucm_pass]):
-      raise RuntimeError("CUCM credentials not found in session")
+    _require_admin_session(request)
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
 
     csv_content = csv_file.file.read().decode("utf-8", errors="replace")
     reader = csv.DictReader(io.StringIO(csv_content))
