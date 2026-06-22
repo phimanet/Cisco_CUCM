@@ -7854,7 +7854,16 @@ def menu_admin_page(request: Request):
                 return;
               }
 
-              statusEl.textContent = `Found ${results.length} user(s).`;
+              const twilioFoundCount = results.filter(function (r) {
+                return !!(r.twilio_lookup && r.twilio_lookup.found);
+              }).length;
+              const twilioEnabledCount = results.filter(function (r) {
+                return !!(r.twilio_lookup && r.twilio_lookup.enabled);
+              }).length;
+              const twilioNotFoundCount = Math.max(0, twilioEnabledCount - twilioFoundCount);
+              const twilioUnavailableCount = Math.max(0, results.length - twilioEnabledCount);
+
+              statusEl.textContent = `Found ${results.length} user(s). Twilio: ${twilioFoundCount} found, ${twilioNotFoundCount} not found, ${twilioUnavailableCount} unavailable.`;
 
               let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
               html += '<thead><tr style="background:#005eb8; color:#fff;">';
