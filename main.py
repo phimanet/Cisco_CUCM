@@ -817,24 +817,54 @@ def _prepare_job_output(csv_data, filename: str) -> dict:
 
 def _extract_soap_error(response_text: str) -> str:
   """Extract friendly error message from SOAP fault response, or return truncated text."""
+  import re
+  
+  # If empty or very short, just truncate
+  if not response_text or len(response_text) < 20:
+    return response_text[:150]
+  
   try:
-    root = ET.fromstring(response_text)
-    # Define namespace
-    ns = {"soapenv": "http://schemas.xmlsoap.org/soap/envelope/"}
-    # Find Fault element
-    fault = root.find(".//soapenv:Fault", ns)
-    if fault is not None:
-      # Try to extract faultstring
-      fault_string_elem = fault.find("faultstring")
-      if fault_string_elem is not None and fault_string_elem.text:
-        return fault_string_elem.text.strip()
-      # Try to extract detail
-      detail_elem = fault.find("detail")
-      if detail_elem is not None and detail_elem.text:
-        return detail_elem.text.strip()[:150]
+    # Strategy 1: Find faultstring (with optional namespace prefix like soapenv:)
+    match = re.search(r'<\w*:?faultstring[^>]*>([^<]+)<', response_text, re.IGNORECASE)
+    if match:
+      text = match.group(1).strip()
+      if text and len(text) > 2:
+        return text[:250]
+    
+    # Strategy 2: Find faultcode and use that as error indicator
+    match = re.search(r'<\w*:?faultcode[^>]*>([^<]+)<', response_text, re.IGNORECASE)
+    if match:
+      text = match.group(1).strip()
+      if text and len(text) > 2:
+        return text[:250]
+    
+    # Strategy 3: Find any element with text content between tags (prefer longer content)
+    matches = re.findall(r'<\w*:?\w+[^>]*>([^<]{15,})<', response_text)
+    if matches:
+      # Return the longest match (usually the most informative)
+      longest = max(matches, key=len)
+      if longest.strip():
+        return longest.strip()[:250]
+    
+    # Strategy 4: Try basic XML parsing as last resort
+    try:
+      root = ET.fromstring(response_text)
+      for elem in root.iter():
+        tag = elem.tag.split('}')[-1] if '}' in elem.tag else elem.tag
+        if tag.lower() == 'faultstring' and elem.text:
+          return elem.text.strip()[:250]
+    except Exception:
+      pass
+    
   except Exception:
     pass
-  # Fallback: truncate raw response
+  
+  # Fallback: return a more user-friendly message if extraction fails
+  if 'Fault' in response_text:
+    # We detected a SOAP fault but couldn't extract message - return hint for CUCM admin
+    return "CUCM returned SOAP fault. Check: (1) route partition exists, (2) transform mask is valid, (3) user has admin rights"
+  
+  # Last resort: truncate raw response
   return response_text[:150]
 
 
@@ -8954,7 +8984,8 @@ def strike_mask_translation_upload(
         
         # Check for SOAP fault in response (even on HTTP 200)
         if response.status_code != 200 or "Fault" in response.text:
-          error_msg = _extract_soap_error(response.text)
+          # DEBUG: Output first 500 chars to diagnose SOAP structure
+          error_msg = f"[DEBUG] HTTP {response.status_code} | Response (first 500 chars):\n{response.text[:500]}"
           output_rows.append([pattern, description, notes, "Failed", error_msg])
         else:
           output_rows.append([pattern, description, notes, "Success", ""])
