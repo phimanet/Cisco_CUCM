@@ -20,7 +20,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 AXL_NS = "http://www.cisco.com/AXL/API/15.0"
 DN_ROUTE_PARTITION = "ENT_DEVICE_PT"
-AUTO_DN_PREFIXES = ("214", "469", "945")
+AUTO_DN_PREFIXES = ("945", "469", "817")
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp1.ahs.int").strip() or "smtp1.ahs.int"
 SMTP_PORT = int(os.getenv("SMTP_PORT", "25") or "25")
 SMTP_TIMEOUT_SECONDS = int(os.getenv("SMTP_TIMEOUT_SECONDS", "12") or "12")

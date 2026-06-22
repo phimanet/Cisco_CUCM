@@ -867,10 +867,10 @@ def build_user_csf_phone_from_template(
 ):
     dn_map = {
         "recruiter": ("469", "Recruiter"),
-        "general": ("214", "General FTE"),
-        "strike": ("945", "Strike"),
+        "general": ("945", "General FTE"),
+        "strike": ("817", "Strike"),
     }
-    dn_prefix, dn_type_name = dn_map.get((dn_type or "").strip().lower(), ("214", "General FTE"))
+    dn_prefix, dn_type_name = dn_map.get((dn_type or "").strip().lower(), ("945", "General FTE"))
 
     env_name = "PRODUCTION" if (cucm_host or "").strip().lower() == PROD_CUCM_IP else "LAB"
     unity_config = UNITY_ENV_SETTINGS[env_name]

@@ -2190,7 +2190,7 @@ def _extract_mobile_shared_dn_from_output(csv_data) -> str:
         return dn
 
     # Alternate success row emitted when a mobile device is actually created.
-    # Example: "Created TCT214... with shared DN 2142100994"
+    # Example: "Created TCT945... with shared DN 9451234567"
     if step in {"Add TCT Device", "Add BOT Device"} or "shared DN" in details:
       dn = _find_dn(details)
       if dn and not fallback_dn:
@@ -4243,7 +4243,7 @@ __ADMIN_CARD__
         DN Type:<br>
         <select name="dn_type">
           <option value="recruiter">Recruiter (469)</option>
-          <option value="general" selected>General FTE (214)</option>
+          <option value="general" selected>General FTE (945)</option>
           <option value="strike">Strike (945)</option>
         </select><br><br>
 
