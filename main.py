@@ -7292,7 +7292,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="transtemplate">Translation Pattern Template</button>
             <button type="button" class="portal-nav-btn" data-panel="strikemask-template">Add Translation for Strike Mask Use (CSV Template)</button>
             <button type="button" class="portal-nav-btn" data-panel="verasmart-lab">VeraSMART Automation (v1.01 LAB)</button>
-            <button type="button" class="portal-nav-btn" data-panel="twilioverify-phimane">Twilio-Inbound-Verificaton-Phimane</button>
+            <button type="button" class="portal-nav-btn" data-panel="twilioverify-phimane">Twilio Number Lookup - AMIEWeb</button>
             <button type="button" class="portal-nav-btn" data-panel="twilioverify-lauraa">Twilio-Inbound-Verificaton-LauraA</button>
             <button type="button" class="portal-nav-btn" data-panel="strikemask">Strike Mask - Masked Calling</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=teams-telephony'">Create Teams Telephony User (Main Ops)</button>
