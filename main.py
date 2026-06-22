@@ -7304,6 +7304,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
+            <button type="button" class="portal-nav-btn" data-panel="twilio-lookup" style="background:#0369a1;border-color:#0369a1;">Twilio Number Lookup - AMIEWeb</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">⚙️ DN Prefix Settings</button>
           </div>
         </aside>
@@ -7646,6 +7647,19 @@ def menu_admin_page(request: Request):
         <p id="admin-bulk-extension-summary" style="color:#355978; min-height:18px;"></p>
         <p><a id="admin-bulk-extension-download" href="#" style="display:none; font-weight:700;">Download CSV Output</a></p>
         <textarea id="admin-bulk-extension-preview" rows="10" readonly style="width:100%;"></textarea>
+      </section>
+
+      <section class="panel tool-panel" data-panel="twilio-lookup">
+        <h3>Twilio Number Lookup - AMIEWeb</h3>
+        <p>Search for a Twilio incoming phone number.</p>
+        <form id="twilio-direct-lookup-form">
+          <div class="search-filter-row">
+            <input name="phone_number" placeholder="Phone Number (e.g., +12015550123)" required>
+            <button type="submit">Lookup</button>
+          </div>
+        </form>
+        <p id="twilio-direct-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a phone number and click Lookup.</p>
+        <div id="twilio-direct-results" style="overflow-x:auto;"></div>
       </section>
 
       <script>
@@ -9132,6 +9146,63 @@ def menu_admin_page(request: Request):
             runningText: "Running bulk extension lookup...",
             failedText: "Bulk extension lookup failed.",
             defaultFilename: "bulk_extension_lookup.csv",
+          });
+        })();
+      </script>
+
+      <script>
+        (function () {
+          const form = document.getElementById("twilio-direct-lookup-form");
+          const statusEl = document.getElementById("twilio-direct-status");
+          const resultsEl = document.getElementById("twilio-direct-results");
+
+          if (!form || !statusEl || !resultsEl) return;
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Looking up...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(form);
+              const response = await fetch("/lookup/twilio-direct", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload && payload.detail) || "Lookup failed.");
+              }
+
+              const result = payload.result || {};
+              if (!result.found) {
+                statusEl.textContent = `Not found: ${result.status || "Unknown"}`;
+                return;
+              }
+
+              statusEl.textContent = `Found: ${result.phone_number}`;
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<tbody>';
+              html += '<tr style="background:#f7fbff; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:8px 10px; font-weight:700; width:150px;">Phone Number</td>';
+              html += '<td style="padding:8px 10px;">' + (result.phone_number || "—") + '</td>';
+              html += '</tr>';
+              html += '<tr style="background:#ffffff; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:8px 10px; font-weight:700;">SID</td>';
+              html += '<td style="padding:8px 10px; font-family:Consolas,monospace;">' + (result.sid || "—") + '</td>';
+              html += '</tr>';
+              html += '<tr style="background:#f7fbff; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:8px 10px; font-weight:700;">Status</td>';
+              html += '<td style="padding:8px 10px;">' + (result.status || "—") + '</td>';
+              html += '</tr>';
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+            } catch (err) {
+              statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+            }
           });
         })();
       </script>
@@ -11010,6 +11081,26 @@ def lookup_person_route(
       raise
     except Exception as exc:
       raise RuntimeError(f"Person lookup failed: {exc}") from exc
+
+
+@app.post("/lookup/twilio-direct")
+def lookup_twilio_direct_route(
+    request: Request,
+    phone_number: str = Form(...),
+):
+    try:
+      clean_phone = (phone_number or "").strip()
+      if not clean_phone:
+        raise RuntimeError("Phone number is required.")
+      result = _lookup_twilio_number_by_phone(clean_phone)
+      return JSONResponse({
+          "ok": True,
+          "result": result,
+      })
+    except RuntimeError:
+      raise
+    except Exception as exc:
+      raise RuntimeError(f"Twilio lookup failed: {exc}") from exc
 
 
 @app.post("/check/jabber-status")
