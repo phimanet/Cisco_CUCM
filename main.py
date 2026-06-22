@@ -925,6 +925,29 @@ def _extract_soap_error(response_text: str) -> str:
   return response_text[:150]
 
 
+def _build_add_translation_pattern_soap(
+  pattern: str,
+  description: str,
+  route_partition: str,
+  called_party_transform_mask: str,
+) -> str:
+  return f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:addTransPattern sequence=\"1\">
+      <transPattern>
+        <pattern>{xml_escape(pattern)}</pattern>
+        <description>{xml_escape(description)}</description>
+        <usage>Translation</usage>
+        <routePartitionName>{xml_escape(route_partition)}</routePartitionName>
+        <calledPartyTransformationMask>{xml_escape(called_party_transform_mask)}</calledPartyTransformationMask>
+      </transPattern>
+    </axl:addTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+
 def _require_admin_session(request: Request) -> tuple[dict, str]:
   session = _get_auth_session(request)
   if not session:
@@ -9019,18 +9042,12 @@ def strike_mask_translation_upload(
       notes = row["notes"]
       
       try:
-        soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
-<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
-  <soapenv:Header/>
-  <soapenv:Body>
-    <axl:addTransPattern sequence=\"1\">
-      <pattern>{xml_escape(pattern)}</pattern>
-      <routePartitionName>{xml_escape(STRIKE_MASK_ROUTE_PARTITION)}</routePartitionName>
-      <description>{xml_escape(description)}</description>
-      <calledPartyTransformationMask>{xml_escape(STRIKE_MASK_AVAILABLE_TRANSFORM_MASK)}</calledPartyTransformationMask>
-    </axl:addTransPattern>
-  </soapenv:Body>
-</soapenv:Envelope>"""
+        soap_xml = _build_add_translation_pattern_soap(
+          pattern=pattern,
+          description=description,
+          route_partition=STRIKE_MASK_ROUTE_PARTITION,
+          called_party_transform_mask=STRIKE_MASK_AVAILABLE_TRANSFORM_MASK,
+        )
         
         response = session_obj.post(
           f"https://{cucm_host}:8443/axl/",
