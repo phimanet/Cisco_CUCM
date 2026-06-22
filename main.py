@@ -10769,10 +10769,15 @@ def send_audit_trail_email_route(
 
       ts = _audit_now().strftime("%Y-%m-%d %H:%M:%S")
       subject = f"CUCM Audit Trail - {ts}"
+      audit_csv_text = audit_csv.decode("utf-8", errors="replace")
       body = (
-        "Attached is the current CUCM portal audit trail CSV.\n\n"
+        "Current CUCM portal audit trail CSV is included below.\n\n"
         f"Requested by: {operator_username}\n"
         f"Recipient: {recipient}\n"
+        "\n"
+        "===== BEGIN AUDIT TRAIL CSV =====\n"
+        f"{audit_csv_text}\n"
+        "===== END AUDIT TRAIL CSV =====\n"
       )
 
       _send_smtp_email(
