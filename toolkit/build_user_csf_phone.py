@@ -132,7 +132,7 @@ def _extract_object_id_from_location(response):
 def _get_unity_user_by_alias(session, unity_server, alias):
     query = f"(Alias is {alias})"
     url = _make_unity_url(unity_server, "/vmrest/users")
-    response = session.get(url, headers=_unity_headers(), params={"query": query}, timeout=120)
+    response = session.get(url, headers=_unity_headers(), params={"query": query}, timeout=120, verify=False)
 
     if response.status_code != 200:
         raise RuntimeError(f"Unity user lookup failed: {_parse_unity_error_text(response)}")
@@ -170,7 +170,7 @@ def _get_unity_user_by_extension(session, unity_server, extension):
     ]
 
     for query in queries:
-        response = session.get(url, headers=_unity_headers(), params={"query": query}, timeout=120)
+        response = session.get(url, headers=_unity_headers(), params={"query": query}, timeout=120, verify=False)
         if response.status_code != 200 or not response.text:
             continue
 
@@ -199,7 +199,7 @@ def _get_unity_user_by_extension(session, unity_server, extension):
 
 def _get_unity_user_by_object_id(session, unity_server, object_id):
     url = _make_unity_url(unity_server, f"/vmrest/users/{object_id}")
-    response = session.get(url, headers=_unity_headers(), timeout=120)
+    response = session.get(url, headers=_unity_headers(), timeout=120, verify=False)
     if response.status_code != 200:
         raise RuntimeError(f"Unity user detail lookup failed: {_parse_unity_error_text(response)}")
 
@@ -240,7 +240,7 @@ def _get_import_user_by_alias(session, unity_server, alias):
     ]
 
     for query in queries:
-        response = session.get(endpoint, headers=_unity_headers(), params={"query": query}, timeout=120)
+        response = session.get(endpoint, headers=_unity_headers(), params={"query": query}, timeout=120, verify=False)
         if response.status_code == 404:
             raise RuntimeError("Unity import endpoint /vmrest/import/users/ldap is not available.")
         if response.status_code in {401, 403}:
@@ -350,7 +350,7 @@ def _update_existing_unity_user_mailbox(session, unity_server, object_id, extens
         "DtmfAccessId": extension,
         "EmailAddress": email_address,
     }
-    response = session.put(url, headers=_unity_headers(), json=payload, timeout=120)
+    response = session.put(url, headers=_unity_headers(), json=payload, timeout=120, verify=False)
     if response.status_code not in {200, 204}:
         raise RuntimeError(f"Unity mailbox update failed: {_parse_unity_error_text(response)}")
 
@@ -361,14 +361,14 @@ def _set_unity_pin(session, unity_server, object_id, pin):
         "Credentials": pin,
         "CredMustChange": "true",
     }
-    response = session.put(url, headers=_unity_headers(), json=payload, timeout=120)
+    response = session.put(url, headers=_unity_headers(), json=payload, timeout=120, verify=False)
     if response.status_code not in {200, 201, 204}:
         raise RuntimeError(f"Unity PIN update failed: {_parse_unity_error_text(response)}")
 
 
 def _delete_unity_user(session, unity_server, object_id):
     url = _make_unity_url(unity_server, f"/vmrest/users/{object_id}")
-    response = session.delete(url, headers=_unity_headers(), timeout=120)
+    response = session.delete(url, headers=_unity_headers(), timeout=120, verify=False)
     if response.status_code not in {200, 202, 204, 404}:
         raise RuntimeError(f"Unity mailbox delete failed: {_parse_unity_error_text(response)}")
 
