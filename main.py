@@ -920,6 +920,7 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
       "phone_number": "",
       "sid": "",
       "messaging_service_sid": "",
+      "messaging_service_debug": "",
       "status": "No telephone",
     }
 
@@ -930,6 +931,7 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
       "phone_number": e164,
       "sid": "",
       "messaging_service_sid": "",
+      "messaging_service_debug": "",
       "status": "Twilio credentials not configured",
     }
 
@@ -941,6 +943,7 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
       "phone_number": e164,
       "sid": "",
       "messaging_service_sid": "",
+      "messaging_service_debug": "",
       "status": "Twilio account not configured",
     }
 
@@ -959,6 +962,7 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
         "phone_number": e164,
         "sid": "",
         "messaging_service_sid": "",
+        "messaging_service_debug": "",
         "status": f"Lookup failed HTTP {resp.status_code}",
       }
 
@@ -971,12 +975,17 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
         "phone_number": e164,
         "sid": "",
         "messaging_service_sid": "",
+        "messaging_service_debug": "",
         "status": "Not Found",
       }
 
     first = numbers[0]
     messaging_service_sid_raw = str(first.get("messaging_service_sid", "")).strip()
     messaging_service_display = ""
+    debug_msg = ""
+    
+    # Debug: what did we get from IncomingPhoneNumbers
+    debug_msg = f"[IncomingPhoneNumbers] messaging_service_sid_raw='{messaging_service_sid_raw}'"
     
     # If we have a messaging_service_sid, fetch its friendly name
     if messaging_service_sid_raw:
@@ -986,13 +995,20 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
           auth=(auth_sid, TWILIO_AUTH_TOKEN),
           timeout=10,
         )
+        debug_msg += f" | [MessagingServices] HTTP {msg_svc_resp.status_code}"
         if msg_svc_resp.status_code == 200:
           msg_svc_payload = msg_svc_resp.json() or {}
-          messaging_service_display = str(msg_svc_payload.get("friendly_name", messaging_service_sid_raw)).strip() or messaging_service_sid_raw
+          friendly_name = str(msg_svc_payload.get("friendly_name", "")).strip()
+          debug_msg += f" friendly_name='{friendly_name}'"
+          messaging_service_display = friendly_name or messaging_service_sid_raw
         else:
+          debug_msg += f" (failed, using SID)"
           messaging_service_display = messaging_service_sid_raw
-      except Exception:
+      except Exception as e:
+        debug_msg += f" | [MessagingServices] Exception: {str(e)}"
         messaging_service_display = messaging_service_sid_raw
+    else:
+      debug_msg += " (empty SID)"
     
     return {
       "enabled": True,
@@ -1000,6 +1016,7 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
       "phone_number": str(first.get("phone_number", "")).strip() or e164,
       "sid": str(first.get("sid", "")).strip(),
       "messaging_service_sid": messaging_service_display,
+      "messaging_service_debug": debug_msg,
       "status": "Found",
     }
   except Exception as exc:
@@ -1009,6 +1026,7 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
       "phone_number": e164,
       "sid": "",
       "messaging_service_sid": "",
+      "messaging_service_debug": f"Exception: {str(exc)}",
       "status": f"Lookup error: {exc}",
     }
 
@@ -9823,6 +9841,7 @@ def page3_twilio_items(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Number</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio SID</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Messaging Service</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Debug Info</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Status</th>';
               html += '</tr></thead><tbody>';
 
@@ -9835,6 +9854,7 @@ def page3_twilio_items(request: Request):
                 const twilioNumber = twilio.phone_number || "—";
                 const twilioSid = twilio.sid || "—";
                 const messagingServiceSid = twilio.messaging_service_sid || "—";
+                const debugInfo = twilio.messaging_service_debug || "—";
                 const twilioStatus = twilio.status || "—";
 
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
@@ -9844,6 +9864,7 @@ def page3_twilio_items(request: Request):
                 html += '<td style="padding:7px 10px;">' + twilioNumber + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + twilioSid + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + messagingServiceSid + '</td>';
+                html += '<td style="padding:7px 10px; font-size:11px; color:#555; font-family:Consolas,monospace;">' + debugInfo + '</td>';
                 html += '<td style="padding:7px 10px;">' + twilioStatus + '</td>';
                 html += '</tr>';
               });
