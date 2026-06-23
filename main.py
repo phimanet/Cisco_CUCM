@@ -985,7 +985,8 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
     debug_msg = ""
     
     # Debug: what did we get from IncomingPhoneNumbers
-    debug_msg = f"[IncomingPhoneNumbers] messaging_service_sid_raw='{messaging_service_sid_raw}'"
+    phone_sid = str(first.get("sid", "")).strip()
+    debug_msg = f"[IncomingPhoneNumbers] sid='{phone_sid}' | messaging_service_sid_raw='{messaging_service_sid_raw}' | phone_number='{str(first.get('phone_number', '')).strip()}' | Full Response Keys: {list(first.keys())}"
     
     # If we have a messaging_service_sid, fetch its friendly name
     if messaging_service_sid_raw:
@@ -9865,7 +9866,7 @@ def page3_twilio_items(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Number</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio SID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Phone SID</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Messaging Service</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Status</th>';
               html += '</tr></thead><tbody>';
