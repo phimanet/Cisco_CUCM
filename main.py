@@ -103,6 +103,10 @@ TWILIO_SUBACCOUNT_SID = (os.getenv("TWILIO_SUBACCOUNT_SID", "") or "").strip()
 TWILIO_SUBACCOUNT_NAME = (os.getenv("TWILIO_SUBACCOUNT_NAME", "AMNOne-Notification-PROD") or "AMNOne-Notification-PROD").strip()
 TWILIO_SALESFORCE_SUBACCOUNT_SID = (os.getenv("TWILIO_SALESFORCE_SUBACCOUNT_SID", "") or "").strip()
 TWILIO_SALESFORCE_SUBACCOUNT_NAME = (os.getenv("TWILIO_SALESFORCE_SUBACCOUNT_NAME", "Enterprise Org Prod") or "Enterprise Org Prod").strip()
+AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aerialink.net/v5") or "https://apix5.aerialink.net/v5").strip().rstrip("/")
+AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
+AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
+AERIALINK_ACCOUNT_CODE_LOOKUP_PATH = (os.getenv("AERIALINK_ACCOUNT_CODE_LOOKUP_PATH", "/codes") or "/codes").strip()
 MOBILE_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 MOBILE_JABBER_EMAIL_SUBJECT = "Jabber on iPhone or Android - Ready to install"
 MOBILE_JABBER_EMAIL_BODY = (
@@ -1028,6 +1032,122 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default") 
       "phone_number": e164,
       "sid": "",
       "status": f"Lookup error: {exc}",
+    }
+
+
+def _lookup_aerialink_account_code_by_phone(phone_number: str) -> dict:
+  """Lookup whether the number is provisioned in Aerialink account code inventory."""
+  e164 = _normalize_phone_to_e164(phone_number)
+  if not e164:
+    return {
+      "enabled": bool(AERIALINK_V5_BASE_URL and AERIALINK_USERNAME and AERIALINK_PASSWORD),
+      "found": False,
+      "provisioned": False,
+      "requested_number": "",
+      "matched_number": "",
+      "status": "No telephone",
+    }
+
+  if not AERIALINK_V5_BASE_URL:
+    return {
+      "enabled": False,
+      "found": False,
+      "provisioned": False,
+      "requested_number": e164,
+      "matched_number": "",
+      "status": "Aerialink base URL not configured",
+    }
+
+  if not AERIALINK_USERNAME or not AERIALINK_PASSWORD:
+    return {
+      "enabled": False,
+      "found": False,
+      "provisioned": False,
+      "requested_number": e164,
+      "matched_number": "",
+      "status": "Aerialink credentials not configured",
+    }
+
+  endpoint_path = AERIALINK_ACCOUNT_CODE_LOOKUP_PATH or "/codes"
+  endpoint_path = endpoint_path if endpoint_path.startswith("/") else f"/{endpoint_path}"
+  url = f"{AERIALINK_V5_BASE_URL}{endpoint_path}"
+
+  number_digits = "".join(ch for ch in e164 if ch.isdigit())
+  candidates = {e164, number_digits}
+  if len(number_digits) == 11 and number_digits.startswith("1"):
+    candidates.add(number_digits[1:])
+    candidates.add(f"+{number_digits[1:]}")
+
+  try:
+    response = requests.get(
+      url,
+      params={"codes": e164},
+      headers={"Accept": "application/json"},
+      auth=HTTPBasicAuth(AERIALINK_USERNAME, AERIALINK_PASSWORD),
+      timeout=25,
+    )
+    if response.status_code != 200:
+      return {
+        "enabled": True,
+        "found": False,
+        "provisioned": False,
+        "requested_number": e164,
+        "matched_number": "",
+        "status": f"Aerialink lookup failed HTTP {response.status_code}",
+      }
+
+    payload = response.json() if response.text else {}
+    records = []
+    if isinstance(payload, list):
+      records = payload
+    elif isinstance(payload, dict):
+      for key in ["codes", "data", "results", "items"]:
+        value = payload.get(key)
+        if isinstance(value, list):
+          records = value
+          break
+
+    matched = ""
+    for record in records:
+      if not isinstance(record, dict):
+        continue
+      for field in ["code", "phoneNumber", "phone_number", "number", "msisdn"]:
+        candidate = str(record.get(field) or "").strip()
+        if not candidate:
+          continue
+        candidate_digits = "".join(ch for ch in candidate if ch.isdigit())
+        if candidate in candidates or candidate_digits in candidates:
+          matched = candidate
+          break
+      if matched:
+        break
+
+    if not records or not matched:
+      return {
+        "enabled": True,
+        "found": False,
+        "provisioned": False,
+        "requested_number": e164,
+        "matched_number": "",
+        "status": "Not provisioned on Aerialink account",
+      }
+
+    return {
+      "enabled": True,
+      "found": True,
+      "provisioned": True,
+      "requested_number": e164,
+      "matched_number": matched,
+      "status": "Provisioned on Aerialink account",
+    }
+  except Exception as exc:
+    return {
+      "enabled": True,
+      "found": False,
+      "provisioned": False,
+      "requested_number": e164,
+      "matched_number": "",
+      "status": f"Aerialink lookup error: {exc}",
     }
 
 
@@ -9573,6 +9693,7 @@ def page3_twilio_items(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
+          <button type="button" class="portal-nav-btn" data-panel="aerialink-amieclassic">Aerialink SMS-AMIEClassic Lookup</button>
         </div>
       </aside>
 
@@ -9652,6 +9773,25 @@ def page3_twilio_items(request: Request):
             </form>
             <p id="admin-twilio-verify-lauraa-status" style="color:#2c5c8a; min-height:18px;">Use Apply to switch temporarily, then Restore to return to 8583503289.</p>
             <p id="admin-twilio-verify-lauraa-summary" style="color:#355978; min-height:18px;"></p>
+          </div>
+        </section>
+
+        <section class="tool-panel" data-panel="aerialink-amieclassic">
+          <div class="panel">
+            <h3>Aerialink SMS-AMIEClassic Lookup</h3>
+            <p>Search CUCM users by name, then check if their telephone number is provisioned on your Aerialink account.</p>
+            <form id="aerialink-amieclassic-search-form">
+              <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+              <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+              <input type="hidden" name="cucm_pass" value="">
+              <div class="search-filter-row">
+                <input name="last_name" placeholder="Last Name *" required>
+                <input name="first_name" placeholder="First Name (optional)">
+                <button type="submit">Search</button>
+              </div>
+            </form>
+            <p id="aerialink-amieclassic-search-status" style="color:#2c5c8a; min-height:18px;">Enter a last name to find employees.</p>
+            <div id="aerialink-amieclassic-search-results" style="overflow-x:auto;"></div>
           </div>
         </section>
       </section>
@@ -9960,6 +10100,83 @@ def page3_twilio_items(request: Request):
                 html += '<td style="padding:7px 10px;">' + twilioNumber + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + twilioSid + '</td>';
                 html += '<td style="padding:7px 10px;">' + twilioStatus + '</td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+            } catch (err) {
+              statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        })();
+
+        // Aerialink SMS-AMIEClassic Lookup Handler
+        (function () {
+          const form = document.getElementById("aerialink-amieclassic-search-form");
+          const statusEl = document.getElementById("aerialink-amieclassic-search-status");
+          const resultsEl = document.getElementById("aerialink-amieclassic-search-results");
+
+          if (!form || !statusEl || !resultsEl) return;
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Searching...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(form);
+              formData.append("include_aerialink_lookup", "1");
+
+              const response = await fetch("/lookup/person", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload && payload.detail) || "Search failed.");
+              }
+
+              const results = payload.results || [];
+              if (!results.length) {
+                statusEl.textContent = "No users found matching that name.";
+                return;
+              }
+
+              statusEl.textContent = `Found ${results.length} user(s) with Aerialink lookup.`;
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Requested Number</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Matched Account Code</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Provisioned</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Aerialink Status</th>';
+              html += '</tr></thead><tbody>';
+
+              results.forEach(function (r, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+                const uid = r.userid || "";
+                const telephone = r.telephone || "—";
+                const aerialink = r.aerialink_lookup || {};
+                const requested = aerialink.requested_number || "—";
+                const matched = aerialink.matched_number || "—";
+                const provisioned = aerialink.provisioned ? "Yes" : "No";
+                const lookupStatus = aerialink.status || "—";
+
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px;">' + name + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+                html += '<td style="padding:7px 10px;">' + telephone + '</td>';
+                html += '<td style="padding:7px 10px;">' + requested + '</td>';
+                html += '<td style="padding:7px 10px;">' + matched + '</td>';
+                html += '<td style="padding:7px 10px;">' + provisioned + '</td>';
+                html += '<td style="padding:7px 10px;">' + lookupStatus + '</td>';
                 html += '</tr>';
               });
 
@@ -11799,6 +12016,7 @@ def lookup_person_route(
     first_name: str = Form(""),
   include_teams_status: str = Form(""),
   include_twilio_lookup: str = Form(""),
+  include_aerialink_lookup: str = Form(""),
   twilio_lookup_account: str = Form("default"),
 ):
     try:
@@ -11808,6 +12026,7 @@ def lookup_person_route(
       clean_first = (first_name or "").strip()
       include_teams = str(include_teams_status or "").strip().lower() in {"1", "true", "yes", "on"}
       include_twilio = str(include_twilio_lookup or "").strip().lower() in {"1", "true", "yes", "on"}
+      include_aerialink = str(include_aerialink_lookup or "").strip().lower() in {"1", "true", "yes", "on"}
       twilio_acct = str(twilio_lookup_account or "default").strip().lower()
       if not clean_last:
           raise RuntimeError("Last Name is required.")
@@ -11840,6 +12059,10 @@ def lookup_person_route(
         for user in results:
           telephone = (user.get("telephone") or "").strip()
           user["twilio_lookup"] = _lookup_twilio_number_by_phone(telephone, account=twilio_acct)
+      if include_aerialink:
+        for user in results:
+          telephone = (user.get("telephone") or "").strip()
+          user["aerialink_lookup"] = _lookup_aerialink_account_code_by_phone(telephone)
       return JSONResponse({
           "ok": True,
           "count": len(results),
