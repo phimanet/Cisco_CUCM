@@ -311,7 +311,7 @@ def _get_line_state(session, cucm_ip, pattern, route_partition):
 def _get_unity_user_by_alias(session, unity_server, alias):
     query = f"(Alias is {alias})"
     url = _make_unity_url(unity_server, "/vmrest/users")
-    response = session.get(url, headers=_unity_headers(), params={"query": query}, timeout=120)
+    response = session.get(url, headers=_unity_headers(), params={"query": query}, timeout=120, verify=False)
 
     if response.status_code != 200:
         raise RuntimeError(f"Unity user lookup failed: {_parse_unity_error_text(response)}")
@@ -339,7 +339,7 @@ def _get_unity_user_by_alias(session, unity_server, alias):
 
 def _delete_unity_user_by_object_id(session, unity_server, object_id):
     url = _make_unity_url(unity_server, f"/vmrest/users/{object_id}")
-    response = session.delete(url, headers=_unity_headers(), timeout=120)
+    response = session.delete(url, headers=_unity_headers(), timeout=120, verify=False)
     if response.status_code not in {200, 202, 204}:
         raise RuntimeError(f"Unity mailbox delete failed: {_parse_unity_error_text(response)}")
 
