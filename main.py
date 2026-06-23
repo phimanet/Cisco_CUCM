@@ -101,6 +101,8 @@ TWILIO_ACCOUNT_SID = (os.getenv("TWILIO_ACCOUNT_SID", "") or "").strip()
 TWILIO_AUTH_TOKEN = (os.getenv("TWILIO_AUTH_TOKEN", "") or "").strip()
 TWILIO_SUBACCOUNT_SID = (os.getenv("TWILIO_SUBACCOUNT_SID", "") or "").strip()
 TWILIO_SUBACCOUNT_NAME = (os.getenv("TWILIO_SUBACCOUNT_NAME", "AMNOne-Notification-PROD") or "AMNOne-Notification-PROD").strip()
+TWILIO_SALESFORCE_SUBACCOUNT_SID = (os.getenv("TWILIO_SALESFORCE_SUBACCOUNT_SID", "") or "").strip()
+TWILIO_SALESFORCE_SUBACCOUNT_NAME = (os.getenv("TWILIO_SALESFORCE_SUBACCOUNT_NAME", "Enterprise Org Prod") or "Enterprise Org Prod").strip()
 MOBILE_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 MOBILE_JABBER_EMAIL_SUBJECT = "Jabber on iPhone or Android - Ready to install"
 MOBILE_JABBER_EMAIL_BODY = (
@@ -909,9 +911,43 @@ def _resolve_twilio_lookup_account_sid() -> str:
 
   return TWILIO_ACCOUNT_SID
 
+def _resolve_twilio_salesforce_account_sid() -> str:
+  """Choose Salesforce Enterprise Org Prod sub-account SID if configured."""
+  if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+    return ""
 
-def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
-  """Lookup Twilio IncomingPhoneNumbers by phone number; returns sid/number if found."""
+  if TWILIO_SALESFORCE_SUBACCOUNT_SID:
+    return TWILIO_SALESFORCE_SUBACCOUNT_SID
+
+  if not TWILIO_SALESFORCE_SUBACCOUNT_NAME:
+    return TWILIO_ACCOUNT_SID
+
+  try:
+    resp = requests.get(
+      f"https://api.twilio.com/2010-04-01/Accounts.json",
+      params={"FriendlyName": TWILIO_SALESFORCE_SUBACCOUNT_NAME, "Status": "active", "PageSize": 20},
+      auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+      timeout=20,
+    )
+    if resp.status_code != 200:
+      return TWILIO_ACCOUNT_SID
+    payload = resp.json() if resp.text else {}
+    for acct in payload.get("accounts", []) or []:
+      if str(acct.get("friendly_name", "")).strip() == TWILIO_SALESFORCE_SUBACCOUNT_NAME:
+        return str(acct.get("sid", "")).strip() or TWILIO_ACCOUNT_SID
+  except Exception:
+    pass
+
+  return TWILIO_ACCOUNT_SID
+
+
+def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default") -> dict:
+  """Lookup Twilio IncomingPhoneNumbers by phone number; returns sid/number if found.
+  
+  Args:
+    phone_number: The phone number to lookup
+    account: Which account to query - "default" (AMIEWeb) or "salesforce" (Enterprise Org Prod)
+  """
   e164 = _normalize_phone_to_e164(phone_number)
   if not e164:
     return {
@@ -931,7 +967,12 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
       "status": "Twilio credentials not configured",
     }
 
-  lookup_sid = _resolve_twilio_lookup_account_sid()
+  # Determine which account SID to use
+  if account == "salesforce":
+    lookup_sid = _resolve_twilio_salesforce_account_sid()
+  else:
+    lookup_sid = _resolve_twilio_lookup_account_sid()
+    
   if not lookup_sid:
     return {
       "enabled": False,
@@ -9526,6 +9567,7 @@ def page3_twilio_items(request: Request):
         <h4>Twilio Menu</h4>
         <div class="portal-nav">
           <button type="button" class="portal-nav-btn active" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
         </div>
@@ -9548,6 +9590,25 @@ def page3_twilio_items(request: Request):
             </form>
             <p id="twilio-lookup-search-status" style="color:#2c5c8a; min-height:18px;">Enter a last name to find employees.</p>
             <div id="twilio-lookup-search-results" style="overflow-x:auto;"></div>
+          </div>
+        </section>
+
+        <section class="tool-panel" data-panel="twilio-lookup-sfdc">
+          <div class="panel">
+            <h3>Twilio Number Lookup - Salesforce Enterprise Org Prod</h3>
+            <p>Search employees by name, then lookup their Twilio number information from the Salesforce Enterprise Org Prod sub-account.</p>
+            <form id="twilio-lookup-sfdc-search-form">
+              <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+              <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+              <input type="hidden" name="cucm_pass" value="">
+              <div class="search-filter-row">
+                <input name="last_name" placeholder="Last Name *" required>
+                <input name="first_name" placeholder="First Name (optional)">
+                <button type="submit">Search</button>
+              </div>
+            </form>
+            <p id="twilio-lookup-sfdc-search-status" style="color:#2c5c8a; min-height:18px;">Enter a last name to find employees.</p>
+            <div id="twilio-lookup-sfdc-search-results" style="overflow-x:auto;"></div>
           </div>
         </section>
 
@@ -9773,6 +9834,80 @@ def page3_twilio_items(request: Request):
             try {
               const formData = new FormData(form);
               formData.append("include_twilio_lookup", "1");
+              const response = await fetch("/lookup/person", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload && payload.detail) || "Search failed.");
+              }
+
+              const results = payload.results || [];
+              if (!results.length) {
+                statusEl.textContent = "No users found matching that name.";
+                return;
+              }
+
+              statusEl.textContent = `Found ${results.length} user(s) with Twilio lookup.`;
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Number</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Phone SID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Status</th>';
+              html += '</tr></thead><tbody>';
+
+              results.forEach(function (r, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+                const uid = r.userid || "";
+                const telephone = r.telephone || "—";
+                const twilio = r.twilio_lookup || {};
+                const twilioNumber = twilio.phone_number || "—";
+                const twilioSid = twilio.sid || "—";
+                const twilioStatus = twilio.status || "—";
+
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px;">' + name + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+                html += '<td style="padding:7px 10px;">' + telephone + '</td>';
+                html += '<td style="padding:7px 10px;">' + twilioNumber + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + twilioSid + '</td>';
+                html += '<td style="padding:7px 10px;">' + twilioStatus + '</td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+            } catch (err) {
+              statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        })();
+
+        // Twilio Lookup Form Handler - Salesforce Enterprise Org Prod
+        (function () {
+          const form = document.getElementById("twilio-lookup-sfdc-search-form");
+          const statusEl = document.getElementById("twilio-lookup-sfdc-search-status");
+          const resultsEl = document.getElementById("twilio-lookup-sfdc-search-results");
+
+          if (!form || !statusEl || !resultsEl) return;
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Searching...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(form);
+              formData.append("include_twilio_lookup", "1");
+              formData.append("twilio_lookup_account", "salesforce");
               const response = await fetch("/lookup/person", {
                 method: "POST",
                 body: formData,
@@ -11658,6 +11793,7 @@ def lookup_person_route(
     first_name: str = Form(""),
   include_teams_status: str = Form(""),
   include_twilio_lookup: str = Form(""),
+  twilio_lookup_account: str = Form("default"),
 ):
     try:
       cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
@@ -11666,6 +11802,7 @@ def lookup_person_route(
       clean_first = (first_name or "").strip()
       include_teams = str(include_teams_status or "").strip().lower() in {"1", "true", "yes", "on"}
       include_twilio = str(include_twilio_lookup or "").strip().lower() in {"1", "true", "yes", "on"}
+      twilio_acct = str(twilio_lookup_account or "default").strip().lower()
       if not clean_last:
           raise RuntimeError("Last Name is required.")
       results = search_persons_by_name(cucm_host, cucm_user, cucm_pass, clean_last, clean_first)
@@ -11696,7 +11833,7 @@ def lookup_person_route(
       if include_twilio:
         for user in results:
           telephone = (user.get("telephone") or "").strip()
-          user["twilio_lookup"] = _lookup_twilio_number_by_phone(telephone)
+          user["twilio_lookup"] = _lookup_twilio_number_by_phone(telephone, account=twilio_acct)
       return JSONResponse({
           "ok": True,
           "count": len(results),
