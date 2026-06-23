@@ -18,7 +18,7 @@ TARGET_DEVICE_PREFIXES = ("CSF", "BOT", "TCT")
 def _axl_post(session, cucm_host, soap_xml):
     url = f"https://{cucm_host}:8443/axl/"
     headers = {"Content-Type": "text/xml"}
-    return session.post(url, data=soap_xml.encode("utf-8"), headers=headers, timeout=120)
+    return session.post(url, data=soap_xml.encode("utf-8"), headers=headers, timeout=120, verify=False)
 
 
 def _strip_ns(tag):

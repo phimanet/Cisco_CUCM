@@ -32,7 +32,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
   - [ ] FTP unencrypted (CVSSv3 7.5) — vsftpd stopped; blocked on Sean Beavers identifying 10.241.17.165 before disabling
   - [ ] SSH Weak MACs (CVSSv3 7.5) — umac-64 removed; next step is controlled removal test of hmac-sha1-etm and hmac-sha1 to verify Cisco systems negotiate stronger MACs
   - [ ] CVE-2025-61984 (CVSSv3 3.6) — Not started
-- [ ] [P1][Idea] Before creating Jabber devices or voicemail, always verify whether the target resource already exists to prevent duplicate provisioning and resource waste.
+- [x] [P1][Done] Offboard (Separate Employee) workflow now auto-releases toll-free translation pattern: searches description for First Last name + verifies Called Party Transform Mask matches removed extension; if found, sets description to "{pattern} Available" and resets mask to 2481001. Skips silently if no match found.
 - [ ] [P1][Planned] v1.01 enhancement: add VeraSMART (Calero on-prem) LAB-only automation module scaffold in portal (queue intake, run status, audit/log placeholders; no production rollout yet).
 - [ ] [P1][Planned] On Jabber build workflows (Page 1 and Page 2), detect Unity voicemail failure due to AD inactive account, prompt admin for start date, auto-schedule voicemail creation for that user at 10:00 AM PST on start date, then email the build operator on success (operator email derived from username with trailing `.ad`/`.adm` removed + `@amnhealthcare.com`).
 - [x] [P2][Done] After job submission, clear the "User ID for person..." input field to prevent accidental repeat Jabber creation.

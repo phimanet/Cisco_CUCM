@@ -64,7 +64,7 @@ def _axl_post(session, cucm_ip, soap_xml):
     url = f"https://{cucm_ip}:8443/axl/"
     print(f"DEBUG AXL POST to {url}", flush=True)
     headers = {"Content-Type": "text/xml"}
-    r = session.post(url, data=soap_xml.encode("utf-8"), headers=headers, timeout=120)
+    r = session.post(url, data=soap_xml.encode("utf-8"), headers=headers, timeout=120, verify=False)
     print(f"DEBUG AXL response status {r.status_code}", flush=True)
     return r
 
@@ -281,6 +281,7 @@ def _import_ldap_user_with_new_vm(session, unity_server, import_pkid, extension,
         params={"templateAlias": template_alias},
         json=payload,
         timeout=120,
+        verify=False,
     )
     if response.status_code not in {200, 201, 204}:
         raise RuntimeError(f"Unity LDAP import failed: {_parse_unity_error_text(response)}")
@@ -311,7 +312,7 @@ def _create_local_unity_user_with_mailbox(
         "TemplateAlias": template_alias,
     }
 
-    response = session.post(url, headers=_unity_headers(), json=payload, timeout=120)
+    response = session.post(url, headers=_unity_headers(), json=payload, timeout=120, verify=False)
     if response.status_code not in {200, 201}:
         retry = session.post(
             url,
@@ -327,6 +328,7 @@ def _create_local_unity_user_with_mailbox(
                 "IsLdapIntegrated": LDAP_INTEGRATION_ENABLED,
             },
             timeout=120,
+            verify=False,
         )
         if retry.status_code not in {200, 201}:
             raise RuntimeError(f"Unity local user create failed: {_parse_unity_error_text(retry)}")

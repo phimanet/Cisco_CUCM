@@ -2634,6 +2634,7 @@ def _lookup_user_contact(cucm_host: str, cucm_user: str, cucm_pass: str, target_
       data=soap.encode("utf-8"),
       headers={"Content-Type": "text/xml"},
       timeout=60,
+      verify=False,
     )
     if response.status_code != 200:
       raise RuntimeError(f"getUser failed HTTP {response.status_code}")
@@ -2689,6 +2690,7 @@ def _lookup_user_primary_extension(cucm_host: str, cucm_user: str, cucm_pass: st
       data=soap.encode("utf-8"),
       headers={"Content-Type": "text/xml"},
       timeout=60,
+      verify=False,
     )
     if response.status_code != 200:
       return ""
