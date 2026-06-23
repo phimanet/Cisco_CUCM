@@ -919,6 +919,7 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
       "found": False,
       "phone_number": "",
       "sid": "",
+      "messaging_service_sid": "",
       "status": "No telephone",
     }
 
@@ -928,6 +929,7 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
       "found": False,
       "phone_number": e164,
       "sid": "",
+      "messaging_service_sid": "",
       "status": "Twilio credentials not configured",
     }
 
@@ -938,13 +940,7 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
       "found": False,
       "phone_number": e164,
       "sid": "",
-      "status": "Twilio account not configured",
-    }
-
-  try:
-    # Authenticate against the same account SID being queried.
-    auth_sid = lookup_sid
-    resp = requests.get(
+        "messaging_service_sid": "",
       f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers.json",
       params={"PhoneNumber": e164, "PageSize": 20},
       auth=(auth_sid, TWILIO_AUTH_TOKEN),
@@ -956,6 +952,7 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
         "found": False,
         "phone_number": e164,
         "sid": "",
+        "messaging_service_sid": "",
         "status": f"Lookup failed HTTP {resp.status_code}",
       }
 
@@ -967,6 +964,7 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
         "found": False,
         "phone_number": e164,
         "sid": "",
+        "messaging_service_sid": "",
         "status": "Not Found",
       }
 
@@ -976,6 +974,7 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
       "found": True,
       "phone_number": str(first.get("phone_number", "")).strip() or e164,
       "sid": str(first.get("sid", "")).strip(),
+      "messaging_service_sid": str(first.get("messaging_service_sid", "")).strip() or "",
       "status": "Found",
     }
   except Exception as exc:
@@ -9292,7 +9291,8 @@ def page3_twilio_items(request: Request):
       <aside class="portal-sidebar">
         <h4>Twilio Menu</h4>
         <div class="portal-nav">
-          <button type="button" class="portal-nav-btn active" data-panel="twilio-lookup">Twilio Number Lookup</button>
+          <button type="button" class="portal-nav-btn" onclick="window.location.href='/page2'" style="margin-bottom:12px; background:rgba(255,255,255,0.12); border-color:rgba(255,255,255,0.2);">← Back to Administrative Items</button>
+          <button type="button" class="portal-nav-btn active" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
         </div>
@@ -9566,6 +9566,7 @@ def page3_twilio_items(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Number</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio SID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Messaging Services</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Status</th>';
               html += '</tr></thead><tbody>';
 
@@ -9577,6 +9578,7 @@ def page3_twilio_items(request: Request):
                 const twilio = r.twilio_lookup || {};
                 const twilioNumber = twilio.phone_number || "—";
                 const twilioSid = twilio.sid || "—";
+                const messagingServiceSid = twilio.messaging_service_sid || "—";
                 const twilioStatus = twilio.status || "—";
 
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
@@ -9585,6 +9587,7 @@ def page3_twilio_items(request: Request):
                 html += '<td style="padding:7px 10px;">' + telephone + '</td>';
                 html += '<td style="padding:7px 10px;">' + twilioNumber + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + twilioSid + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + messagingServiceSid + '</td>';
                 html += '<td style="padding:7px 10px;">' + twilioStatus + '</td>';
                 html += '</tr>';
               });
