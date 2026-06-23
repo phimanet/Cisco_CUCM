@@ -5186,7 +5186,7 @@ __ADMIN_CARD__
 
     <section class="tool-panel" data-panel="pin">
 
-    <h3>Reset Unity Voicemail PIN (Option 2)</h3>
+    <h3>Reset Unity Voicemail PIN - with email notification</h3>
 
     <div class="secondary-layout">
       <form id="reset-pin-form" class="secondary-form" action="/reset/unity-voicemail-pin" method="post">
@@ -5206,14 +5206,14 @@ __ADMIN_CARD__
         <input type="password" name="confirm_voicemail_pin" placeholder="minimum 5 digits" required><br><br>
 
         <div class="action-row">
-          <button type="submit">Run Reset Unity Voicemail PIN (Option 2)</button>
+          <button type="submit">Run Reset Unity Voicemail PIN - with email notification</button>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
       </form>
 
       <section class="secondary-output" aria-live="polite">
-        <h4>Option 2 Output Preview</h4>
-        <p id="reset-pin-status" class="secondary-status">Run Option 2 to view output here.</p>
+        <h4>Reset Voicemail PIN Output</h4>
+        <p id="reset-pin-status" class="secondary-status">Run Reset Voicemail PIN to view output here.</p>
         <p>
           <a id="reset-pin-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">
             Download CSV Output
@@ -5939,7 +5939,7 @@ __ADMIN_CARD__
         const outputEl = document.getElementById("reset-pin-preview");
         const downloadEl = document.getElementById("reset-pin-download");
 
-        statusEl.textContent = "Running Option 2...";
+        statusEl.textContent = "Running Reset Voicemail PIN...";
         outputEl.value = "";
         downloadEl.style.display = "none";
         downloadEl.removeAttribute("href");
@@ -5972,7 +5972,7 @@ __ADMIN_CARD__
           if (newPinInput) newPinInput.value = "";
           if (confirmPinInput) confirmPinInput.value = "";
         } catch (error) {
-          statusEl.textContent = "Option 2 failed. Review output and retry.";
+          statusEl.textContent = "Reset Voicemail PIN failed. Review output and retry.";
           outputEl.value = error.message || "Unknown error.";
         }
       }
@@ -12075,7 +12075,7 @@ def reset_unity_voicemail_pin_route(
         "email_status": email_status,
       })
 
-    return _render_job_result("Reset Unity Voicemail PIN (Option 2)", data, filename)
+    return _render_job_result("Reset Unity Voicemail PIN - with email notification", data, filename)
 
 
 @app.post("/update/ad-phone-fields")
