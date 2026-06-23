@@ -9700,7 +9700,7 @@ def page3_twilio_items(request: Request):
             document.querySelectorAll(".tool-panel").forEach(p => p.classList.remove("active"));
             document.querySelectorAll(".portal-nav-btn").forEach(b => b.classList.remove("active"));
             
-            const targetPanel = document.querySelector(`[data-panel="${panelName}"]`);
+            const targetPanel = document.querySelector(`.tool-panel[data-panel="${panelName}"]`);
             console.log("Target panel found:", !!targetPanel);
             targetPanel?.classList.add("active");
             this.classList.add("active");
