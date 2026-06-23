@@ -129,11 +129,12 @@ def reset_unity_voicemail_pin(unity_server, unity_user, unity_pass, target_alias
         extension = str(detail.get("DtmfAccessId") or "").strip()
         first_name = str(detail.get("FirstName") or "").strip()
         last_name = str(detail.get("LastName") or "").strip()
+        email_address = str(detail.get("EmailAddress") or "").strip()
 
         writer.writerow([
             "Lookup Mailbox",
             "Success",
-            f"Alias={mailbox_alias}; Extension={extension}; FirstName={first_name}; LastName={last_name}",
+            f"Alias={mailbox_alias}; Extension={extension}; FirstName={first_name}; LastName={last_name}; Email={email_address}",
         ])
 
         _set_user_pin(session, unity_server, object_id, new_pin.strip(), must_change=True)
@@ -143,7 +144,14 @@ def reset_unity_voicemail_pin(unity_server, unity_user, unity_pass, target_alias
             f"Reset voicemail PIN for {mailbox_alias}; must-change at next login enabled",
         ])
 
+        return out.getvalue().encode("utf-8"), filename, {
+            "reset_success": True,
+            "email": email_address,
+            "extension": extension,
+            "display_name": f"{first_name} {last_name}".strip() or mailbox_alias,
+        }
+
     except Exception as exc:
         writer.writerow(["Script", "Error", str(exc)])
 
-    return out.getvalue().encode("utf-8"), filename
+    return out.getvalue().encode("utf-8"), filename, {"reset_success": False}

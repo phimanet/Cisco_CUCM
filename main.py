@@ -5199,11 +5199,11 @@ __ADMIN_CARD__
         Voicemail Username to Reset PIN for:<br>
         <input name="voicemail_user" placeholder="john.doe" required><br><br>
 
-        New Voicemail PIN:<br>
-        <input type="password" name="new_voicemail_pin" required><br><br>
+        New Voicemail PIN (5 digits minimum):<br>
+        <input type="password" name="new_voicemail_pin" placeholder="minimum 5 digits" required><br><br>
 
         Confirm New Voicemail PIN:<br>
-        <input type="password" name="confirm_voicemail_pin" required><br><br>
+        <input type="password" name="confirm_voicemail_pin" placeholder="minimum 5 digits" required><br><br>
 
         <div class="action-row">
           <button type="submit">Run Reset Unity Voicemail PIN (Option 2)</button>
@@ -5783,14 +5783,14 @@ __ADMIN_CARD__
         new_voicemail_pin: {
           required: true,
           requiredMessage: "New Voicemail PIN is required.",
-          pattern: /^\\d{4,20}$/,
-          patternMessage: "Voicemail PIN must be numeric and 4-20 digits.",
+          pattern: /^\\d{5,20}$/,
+          patternMessage: "Voicemail PIN must be numeric and 5-20 digits.",
         },
         confirm_voicemail_pin: {
           required: true,
           requiredMessage: "Confirm Voicemail PIN is required.",
-          pattern: /^\\d{4,20}$/,
-          patternMessage: "Voicemail PIN must be numeric and 4-20 digits.",
+          pattern: /^\\d{5,20}$/,
+          patternMessage: "Voicemail PIN must be numeric and 5-20 digits.",
         },
         dn_contains: {
           required: true,
@@ -5959,6 +5959,9 @@ __ADMIN_CARD__
           const result = await response.json();
           outputEl.value = result.output_text || "";
           statusEl.textContent = `Completed: ${result.filename || "option2_output.csv"}`;
+          if (result.email_status) {
+            statusEl.textContent += " — " + result.email_status;
+          }
           downloadEl.href = result.download_url;
           downloadEl.style.display = "inline";
 
@@ -12011,14 +12014,47 @@ def reset_unity_voicemail_pin_route(
     if new_voicemail_pin != confirm_voicemail_pin:
       data = b"Step,Status,Details\nValidation,Failed,Voicemail PIN values must match\n"
       filename = "reset_unity_voicemail_pin_validation_error.csv"
+      pin_reset_meta = {"reset_success": False}
     else:
-      data, filename = reset_unity_voicemail_pin(
+      data, filename, pin_reset_meta = reset_unity_voicemail_pin(
         unity_server=unity_server,
         unity_user=unity_user,
         unity_pass=unity_pass,
         target_alias=voicemail_user,
         new_pin=new_voicemail_pin,
       )
+
+    email_status = ""
+    if pin_reset_meta.get("reset_success"):
+      target_email = pin_reset_meta.get("email", "")
+      extension = pin_reset_meta.get("extension", "")
+      ext_digits = "".join(c for c in extension if c.isdigit())
+      if len(ext_digits) == 10:
+        ext_display = f"{ext_digits[:3]}-{ext_digits[3:6]}-{ext_digits[6:]}"
+      elif len(ext_digits) == 11 and ext_digits.startswith("1"):
+        ext_display = f"{ext_digits[1:4]}-{ext_digits[4:7]}-{ext_digits[7:]}"
+      else:
+        ext_display = extension or voicemail_user
+      if target_email:
+        try:
+          _send_smtp_email(
+            sender="noreply@amnhealthcare.com",
+            recipients=[target_email],
+            subject=f"Voicemail PIN reset for Jabber Extension {ext_display}",
+            body=(
+              f"A voicemail PIN reset was initiated. Your new voicemail pin is {new_voicemail_pin}#.\n\n"
+              f"If this request was not initiated by you, please contact our IT Service Desk at 855-435-7822."
+            ),
+            html_body=(
+              f"<p>A voicemail PIN reset was initiated. Your new voicemail pin is <strong>{new_voicemail_pin}#</strong>.</p>"
+              f"<p>If this request was not initiated by you, please contact our IT Service Desk at <strong>855-435-7822</strong>.</p>"
+            ),
+          )
+          email_status = f"Notification email sent to {target_email}."
+        except Exception as _email_exc:
+          email_status = f"PIN reset succeeded but email notification failed: {_email_exc}"
+      else:
+        email_status = "PIN reset succeeded. No email address on file; notification not sent."
 
     _append_audit_event(
       action="reset_unity_voicemail_pin_option_2",
@@ -12036,6 +12072,7 @@ def reset_unity_voicemail_pin_route(
         "filename": job_output["filename"],
         "output_text": job_output["output_text"],
         "download_url": f"/download/job-output/{job_output['job_id']}",
+        "email_status": email_status,
       })
 
     return _render_job_result("Reset Unity Voicemail PIN (Option 2)", data, filename)
