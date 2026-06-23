@@ -9711,11 +9711,22 @@ def page3_twilio_items(request: Request):
               <div class="search-filter-row">
                 <input name="last_name" placeholder="Last Name *" required>
                 <input name="first_name" placeholder="First Name (optional)">
-                <button type="submit">Search</button>
+                <button type="submit">Search by Name</button>
               </div>
             </form>
             <p id="twilio-lookup-search-status" style="color:#2c5c8a; min-height:18px;">Enter a last name to find employees.</p>
             <div id="twilio-lookup-search-results" style="overflow-x:auto;"></div>
+
+            <hr style="margin: 20px 0; border: none; border-top: 1px solid #ddd;">
+            <h4 style="margin-bottom: 10px; color: #2c5c8a;">Direct Number Lookup</h4>
+            <form id="twilio-number-lookup-form">
+              <div class="search-filter-row">
+                <input name="phone_number" placeholder="Telephone (10 digits)" pattern="^\d{10}$" title="Enter exactly 10 digits" required>
+                <button type="submit">Check Twilio Status</button>
+              </div>
+            </form>
+            <p id="twilio-number-lookup-status" style="color:#2c5c8a; min-height:18px;"></p>
+            <div id="twilio-number-lookup-results" style="overflow-x:auto;"></div>
           </div>
         </section>
 
@@ -10046,6 +10057,67 @@ def page3_twilio_items(request: Request):
               resultsEl.innerHTML = html;
             } catch (err) {
               statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        })();
+
+        // Twilio Direct Number Lookup Handler
+        (function () {
+          const form = document.getElementById("twilio-number-lookup-form");
+          const statusEl = document.getElementById("twilio-number-lookup-status");
+          const resultsEl = document.getElementById("twilio-number-lookup-results");
+
+          if (!form || !statusEl || !resultsEl) return;
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Looking up...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(form);
+
+              const response = await fetch("/lookup/twilio-by-number", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload && payload.error) || "Lookup failed.");
+              }
+
+              const result = payload.result || {};
+              const phoneNumber = payload.phone_number || "";
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left;">Property</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Value</th>';
+              html += '</tr></thead><tbody>';
+
+              const rows = [
+                { label: "Phone Number", value: phoneNumber },
+                { label: "Found", value: result.found ? "Yes" : "No" },
+                { label: "Twilio Number", value: result.phone_number || "—" },
+                { label: "Phone SID", value: result.sid || "—" },
+                { label: "Status", value: result.status || "—" },
+              ];
+
+              rows.forEach(function (row, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px; font-weight:bold;">' + row.label + '</td>';
+                html += '<td style="padding:7px 10px;">' + row.value + '</td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              statusEl.textContent = result.found ? "✓ Found in Twilio" : "✗ Not found in Twilio";
+              resultsEl.innerHTML = html;
+            } catch (err) {
+              statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
             }
           });
         })();
@@ -12149,6 +12221,32 @@ def lookup_person_route(
       raise
     except Exception as exc:
       raise RuntimeError(f"Person lookup failed: {exc}") from exc
+
+
+@app.post("/lookup/twilio-by-number")
+def lookup_twilio_by_number_route(phone_number: str = Form(...)):
+    """Lookup Twilio provisioning status for a phone number."""
+    try:
+      clean_number = (phone_number or "").strip()
+      if not clean_number:
+        return JSONResponse({
+            "ok": False,
+            "error": "Phone number is required.",
+            "result": None,
+        }, status_code=400)
+      
+      result = _lookup_twilio_number_by_phone(clean_number, account="default")
+      return JSONResponse({
+          "ok": True,
+          "phone_number": clean_number,
+          "result": result,
+      })
+    except Exception as exc:
+      return JSONResponse({
+          "ok": False,
+          "error": str(exc),
+          "result": None,
+      }, status_code=500)
 
 
 @app.post("/lookup/aerialink-by-number")
