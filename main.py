@@ -9036,10 +9036,7 @@ def page3_twilio_items(request: Request):
       body {
         font-family: "Segoe UI", Tahoma, Arial, sans-serif;
         margin: 0;
-        background:
-          radial-gradient(circle at top left, rgba(0, 94, 184, 0.18), transparent 26%),
-          radial-gradient(circle at top right, rgba(198, 138, 18, 0.16), transparent 22%),
-          linear-gradient(180deg, #f4f9fe 0%, #e8f1f9 42%, #edf5fc 100%);
+        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
         color: var(--amn-text);
       }
 
@@ -9049,21 +9046,26 @@ def page3_twilio_items(request: Request):
         justify-content: space-between;
         gap: 12px;
         padding: 10px 16px;
-        background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94));
+        background:
+          linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)),
+          linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
         color: #fff;
-        box-shadow: 0 12px 28px rgba(0, 47, 108, 0.2);
+        box-shadow: 0 12px 28px rgba(0, 47, 108, 0.22);
         border-bottom: 1px solid rgba(255, 255, 255, 0.16);
       }
 
-      .brand-fallback {
-        font-weight: 700;
-        letter-spacing: 0.6px;
-        text-transform: uppercase;
-        font-size: 12px;
-        opacity: 0.86;
+      .topbar-brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
       }
 
-      .topbar-brand {
+      .topbar-brand strong {
+        font-size: 16px;
+        letter-spacing: 0.2px;
+      }
+
+      .topbar-actions {
         display: flex;
         align-items: center;
         gap: 10px;
@@ -9108,6 +9110,13 @@ def page3_twilio_items(request: Request):
         box-shadow: 0 6px 12px rgba(198, 138, 18, 0.22);
       }
 
+      .topbar-status .env-banner.env-banner-prod,
+      .topbar-status .env-banner.env-banner-lab {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+        border-color: rgba(255, 255, 255, 0.35);
+      }
+
       .topbar-btn {
         display: inline-block;
         padding: 7px 12px;
@@ -9117,15 +9126,25 @@ def page3_twilio_items(request: Request):
         text-decoration: none;
         border: 1px solid rgba(255, 255, 255, 0.65);
         transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+      }
+
+      .topbar-btn-logout {
         color: #fff;
         background: linear-gradient(180deg, #cb3b2f, #9f2018);
         border-color: #f0a79c;
-        cursor: pointer;
       }
 
       .topbar-btn:hover {
         transform: translateY(-1px);
         box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
+      }
+
+      .brand-fallback {
+        font-weight: 700;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+        font-size: 12px;
+        opacity: 0.86;
       }
 
       .content {
@@ -9147,57 +9166,114 @@ def page3_twilio_items(request: Request):
         box-shadow: var(--amn-shadow);
       }
 
-      .hero-links {
+      .page-hero::after {
+        content: none;
+        position: absolute;
+        right: -80px;
+        top: -60px;
+        width: 280px;
+        height: 280px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(0, 94, 184, 0.18), transparent 68%);
+        pointer-events: none;
+      }
+
+      .page-kicker {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 5px 9px;
+        border-radius: 999px;
+        background: rgba(0, 94, 184, 0.08);
+        color: var(--amn-blue);
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.4px;
+        text-transform: uppercase;
+      }
+
+      .page-title-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 6px;
+      }
+
+      .page-title-block {
+        max-width: 780px;
+      }
+
+      .page-title {
+        margin: 0;
+        color: var(--amn-navy);
+        font-size: 22px;
+        line-height: 1.1;
+      }
+
+      .page-subtitle {
+        margin: 4px 0 0 0;
+        color: var(--amn-text-soft);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .hero-link-grid {
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-        gap: 12px;
-        margin-top: 10px;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 8px;
+        margin-top: 8px;
       }
 
       .hero-link-card {
-        display: flex;
-        flex-direction: column;
-        gap: 6px;
-        padding: 12px 14px;
+        display: block;
+        padding: 7px 10px;
         border-radius: 10px;
-        border: 1px solid var(--amn-border);
-        background: linear-gradient(135deg, rgba(5, 94, 184, 0.08), rgba(0, 47, 108, 0.04));
-        text-decoration: none;
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid rgba(0, 47, 108, 0.1);
         color: inherit;
-        transition: transform 0.18s ease, box-shadow 0.18s ease;
+        text-decoration: none;
+        box-shadow: 0 10px 20px rgba(0, 47, 108, 0.06);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
       }
 
       .hero-link-card:hover {
         transform: translateY(-2px);
-        box-shadow: 0 10px 20px rgba(0, 47, 108, 0.12);
+        border-color: rgba(0, 94, 184, 0.3);
+        box-shadow: 0 14px 28px rgba(0, 47, 108, 0.11);
       }
 
       .hero-link-card strong {
+        display: block;
         color: var(--amn-navy);
-        font-size: 14px;
+        margin-bottom: 0;
+        font-size: 12px;
       }
 
       .hero-link-card span {
-        color: var(--amn-text-soft);
+        display: none;
         font-size: 12px;
-        line-height: 1.4;
+        color: var(--amn-text-soft);
+        line-height: 1.5;
       }
 
       .portal-shell {
         display: grid;
-        grid-template-columns: 240px minmax(0, 1fr);
-        gap: 14px;
+        grid-template-columns: 244px minmax(0, 1fr);
+        gap: 10px;
         align-items: start;
+        margin-top: 8px;
       }
 
       .portal-sidebar {
         position: sticky;
-        top: 10px;
+        top: 54px;
         background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 12px;
+        padding: 8px;
         box-shadow: 0 18px 36px rgba(0, 47, 108, 0.18);
-        padding: 10px;
       }
 
       .portal-sidebar h4 {
@@ -9208,23 +9284,22 @@ def page3_twilio_items(request: Request):
       }
 
       .portal-nav {
-        display: grid;
-        gap: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
       }
 
       .portal-nav-btn {
-        text-align: left;
         width: 100%;
-        border-radius: 8px;
-        border: 1px solid rgba(255, 255, 255, 0.12);
+        text-align: left;
         background: rgba(255, 255, 255, 0.09);
         color: rgba(255, 255, 255, 0.94);
-        padding: 7px 9px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 8px;
+        padding: 7px 8px;
         font-size: 12px;
         line-height: 1.25;
         font-weight: 600;
-        cursor: pointer;
-        box-shadow: none;
         transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
       }
 
@@ -9253,20 +9328,22 @@ def page3_twilio_items(request: Request):
         display: block;
       }
 
-      .panel {
+      form,
+      .build-user-output,
+      .offboard-output,
+      .secondary-output {
         background: rgba(255, 255, 255, 0.93);
         border: 1px solid var(--amn-panel-border);
-        border-radius: 12px;
-        padding: 12px;
+        border-radius: 14px;
+        padding: 10px;
         box-shadow: var(--amn-shadow);
         backdrop-filter: blur(6px);
-        margin: 0 0 12px 0;
       }
 
       h3 {
-        margin: 4px 0 8px 0;
+        margin: 10px 0 6px 0;
         color: var(--amn-navy);
-        font-size: 17px;
+        font-size: 18px;
       }
 
       p {
@@ -9282,10 +9359,33 @@ def page3_twilio_items(request: Request):
       }
 
       input, textarea {
-        min-height: 36px;
-        padding: 7px 10px;
-        width: min(700px, 100%);
+        min-height: 32px;
+        padding: 5px 9px;
+        width: min(520px, 100%);
         background: rgba(255, 255, 255, 0.96);
+      }
+
+      input:focus, textarea:focus {
+        outline: none;
+        border-color: rgba(0, 94, 184, 0.55);
+        box-shadow: 0 0 0 4px rgba(0, 94, 184, 0.12);
+      }
+
+      button {
+        background: linear-gradient(180deg, #0c77d8, #005eb8);
+        color: #fff;
+        border: none;
+        padding: 7px 11px;
+        font-weight: 700;
+        cursor: pointer;
+        box-shadow: 0 8px 18px rgba(0, 94, 184, 0.16);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+      }
+
+      button:hover {
+        filter: brightness(1.04);
+        transform: translateY(-1px);
+        box-shadow: 0 12px 22px rgba(0, 94, 184, 0.2);
       }
 
       .search-filter-row {
@@ -9300,34 +9400,25 @@ def page3_twilio_items(request: Request):
         flex: 0 0 auto;
         width: 180px;
         padding: 8px 10px;
+        border: 1px solid rgba(0, 47, 108, 0.2);
+        border-radius: 6px;
+        font-size: 14px;
       }
 
       .search-filter-row button {
         flex: 0 0 auto;
         padding: 8px 20px;
-      }
-
-      input:focus, textarea:focus {
-        outline: none;
-        border-color: rgba(0, 94, 184, 0.55);
-        box-shadow: 0 0 0 4px rgba(0, 94, 184, 0.12);
-      }
-
-      button {
-        background: linear-gradient(180deg, #0c77d8, #005eb8);
-        color: #fff;
+        background: linear-gradient(135deg, #0f5db8 0%, #0a3f7d 100%);
+        color: white;
         border: none;
-        padding: 9px 13px;
-        font-weight: 700;
+        border-radius: 6px;
         cursor: pointer;
-        box-shadow: 0 8px 18px rgba(0, 94, 184, 0.16);
-        transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
+        font-weight: 600;
+        font-size: 14px;
       }
 
-      button:hover {
-        filter: brightness(1.04);
-        transform: translateY(-1px);
-        box-shadow: 0 12px 22px rgba(0, 94, 184, 0.2);
+      .search-filter-row button:hover {
+        background: linear-gradient(135deg, #0a3f7d 0%, #072f5f 100%);
       }
 
       table {
@@ -9361,6 +9452,28 @@ def page3_twilio_items(request: Request):
         background: #ffffff;
       }
 
+      .env-action-pill {
+        display: inline-block;
+        margin: 4px 0 0 0;
+        padding: 6px 10px;
+        border-radius: 10px;
+        font-weight: 700;
+        letter-spacing: 0.1px;
+        box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.3);
+      }
+
+      .env-banner-prod {
+        color: #083252;
+        background: #d8ecff;
+        border: 1px solid #8bb9e2;
+      }
+
+      .env-banner-lab {
+        color: #5c2700;
+        background: #ffe6cc;
+        border: 1px solid #f7b267;
+      }
+
       @media (max-width: 980px) {
         .portal-shell {
           grid-template-columns: 1fr;
@@ -9387,34 +9500,42 @@ def page3_twilio_items(request: Request):
       <div class="topbar-status">
         <span class="topbar-auth-pill">Authenticated Operator: __AUTH_USER__</span>
         <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
-        <div id="session-timer-banner" class="session-timer" style="display:none;">
-          Credential expires in: <span id="session-timer-remaining">--:--:--</span>
+        <div id="session-timer-banner" class="session-timer" aria-live="polite" style="display:none;">
+          <span class="timer-label">Auto logout in:</span>
+          <span id="session-timer-remaining" class="timer-value"></span>
         </div>
-        <button type="button" class="topbar-btn" onclick="window.location.href='/logout'">Logout</button>
+      </div>
+      <div class="topbar-actions">
+        <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
       </div>
     </header>
 
-    <div class="content">
-      <section class="page-hero">
-        <div class="hero-links">
-          <a class="hero-link-card" href="/page2">
-            <strong>← Back to Administrative Items</strong>
-            <span>Return to the main Administrative Items page.</span>
-          </a>
+    <main class="content">
+    <section class="page-hero">
+      <div class="page-title-row">
+        <div class="page-title-block">
+          <h2 class="page-title">Twilio Items</h2>
+          <p class="page-subtitle">Manage Twilio numbers and inbound verification patterns for the organization.</p>
         </div>
-      </section>
+      </div>
+      <div class="hero-link-grid">
+        <a class="hero-link-card" href="/page2">
+          <strong>← Back to Administrative Items</strong>
+        </a>
+      </div>
+    </section>
 
-      <div class="portal-shell">
-        <aside class="portal-sidebar">
-          <h4>Twilio Menu</h4>
-          <div class="portal-nav">
-            <button type="button" class="portal-nav-btn active" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
-            <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
-            <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
-          </div>
-        </aside>
+    <div class="portal-shell">
+      <aside class="portal-sidebar">
+        <h4>Twilio Menu</h4>
+        <div class="portal-nav">
+          <button type="button" class="portal-nav-btn active" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
+        </div>
+      </aside>
 
-        <section class="portal-main">
+      <section class="portal-main">
         <section class="tool-panel active" data-panel="twilio-lookup">
           <div class="panel">
             <h3>Twilio Number Lookup - AMIEWeb</h3>
@@ -9682,7 +9803,7 @@ def page3_twilio_items(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Number</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio SID</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Mixed A2P Messaging Service</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Messaging Service</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Status</th>';
               html += '</tr></thead><tbody>';
 
@@ -9717,6 +9838,10 @@ def page3_twilio_items(request: Request):
         })();
       })();
     </script>
+
+      </section>
+    </div>
+    </main>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
