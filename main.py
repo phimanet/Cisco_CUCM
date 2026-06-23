@@ -1079,9 +1079,11 @@ def _lookup_aerialink_account_code_by_phone(phone_number: str) -> dict:
     candidates.add(f"+{number_digits[1:]}")
 
   try:
+    # Aerialink expects digits only, not E.164 format (+1...)
+    digits_only = "".join(ch for ch in e164 if ch.isdigit())
     response = requests.get(
       url,
-      params={"codes": e164},
+      params={"codes": digits_only},
       headers={"Accept": "application/json"},
       auth=HTTPBasicAuth(AERIALINK_USERNAME, AERIALINK_PASSWORD),
       timeout=25,
