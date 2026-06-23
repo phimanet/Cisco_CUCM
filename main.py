@@ -1025,43 +1025,59 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default") 
       "enabled": True,
       "found": True,
       "phone_number": phone_number,
-      "sid": phone_sid,
-      "status": "Found",
-    }
-  except Exception as exc:
-    return {
-      "enabled": True,
-      "found": False,
-      "phone_number": e164,
-      "sid": "",
-      "status": f"Lookup error: {exc}",
-    }
+        url = f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers.json"
+        next_url = url
+        next_params = {"PageSize": 100}
+        phone_number_digits = "".join(ch for ch in e164 if ch.isdigit())
+        while next_url:
+          resp = requests.get(
+            next_url,
+            params=next_params,
+            auth=(auth_sid, lookup_token),
+            verify=False,
+            timeout=20,
+          )
+          if resp.status_code != 200:
+            return {
+              "enabled": True,
+              "found": False,
+              "phone_number": e164,
+              "sid": "",
+              "status": f"Lookup failed HTTP {resp.status_code}",
+            }
 
+          payload = resp.json() if resp.text else {}
+          numbers = payload.get("incoming_phone_numbers", []) or []
+          for number_item in numbers:
+            candidate = str(number_item.get("phone_number", "")).strip()
+            candidate_digits = "".join(ch for ch in candidate if ch.isdigit())
+            if candidate == e164 or candidate_digits == phone_number_digits or candidate_digits == phone_number_digits.lstrip("1"):
+              phone_sid = str(number_item.get("sid", "")).strip()
+              phone_number = candidate or e164
+              return {
+                "enabled": True,
+                "found": True,
+                "phone_number": phone_number,
+                "sid": phone_sid,
+                "status": "Found",
+              }
 
-def _lookup_aerialink_account_code_by_phone(phone_number: str) -> dict:
-  """Lookup whether the number is provisioned in Aerialink account code inventory."""
-  e164 = _normalize_phone_to_e164(phone_number)
-  if not e164:
-    return {
-      "enabled": bool(AERIALINK_V5_BASE_URL and AERIALINK_USERNAME and AERIALINK_PASSWORD),
-      "found": False,
-      "provisioned": False,
-      "requested_number": "",
-      "matched_number": "",
-      "status": "No telephone",
-    }
+          next_uri = str(payload.get("next_page_uri", "") or "").strip()
+          if next_uri:
+            next_url = f"https://api.twilio.com{next_uri}" if next_uri.startswith("/") else next_uri
+            next_params = None
+          else:
+            next_url = None
 
-  if not AERIALINK_V5_BASE_URL:
-    return {
-      "enabled": False,
-      "found": False,
+        phone_sid = ""
+        phone_number = e164
       "provisioned": False,
       "requested_number": e164,
       "matched_number": "",
-      "status": "Aerialink base URL not configured",
+          "found": False,
     }
-
-  if not AERIALINK_USERNAME or not AERIALINK_PASSWORD:
+          "sid": phone_sid,
+          "status": "Not Found",
     return {
       "enabled": False,
       "found": False,
