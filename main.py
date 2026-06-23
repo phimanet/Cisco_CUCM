@@ -102,6 +102,7 @@ TWILIO_AUTH_TOKEN = (os.getenv("TWILIO_AUTH_TOKEN", "") or "").strip()
 TWILIO_SUBACCOUNT_SID = (os.getenv("TWILIO_SUBACCOUNT_SID", "") or "").strip()
 TWILIO_SUBACCOUNT_NAME = (os.getenv("TWILIO_SUBACCOUNT_NAME", "AMNOne-Notification-PROD") or "AMNOne-Notification-PROD").strip()
 TWILIO_SALESFORCE_SUBACCOUNT_SID = (os.getenv("TWILIO_SALESFORCE_SUBACCOUNT_SID", "") or "").strip()
+TWILIO_SALESFORCE_AUTH_TOKEN = (os.getenv("TWILIO_SALESFORCE_AUTH_TOKEN", "") or "").strip()
 TWILIO_SALESFORCE_SUBACCOUNT_NAME = (os.getenv("TWILIO_SALESFORCE_SUBACCOUNT_NAME", "Enterprise Org Prod") or "Enterprise Org Prod").strip()
 AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aerialink.net/v5") or "https://apix5.aerialink.net/v5").strip().rstrip("/")
 AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
@@ -974,8 +975,10 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default") 
   # Determine which account SID to use
   if account == "salesforce":
     lookup_sid = _resolve_twilio_salesforce_account_sid()
+    lookup_token = TWILIO_SALESFORCE_AUTH_TOKEN or TWILIO_AUTH_TOKEN
   else:
     lookup_sid = _resolve_twilio_lookup_account_sid()
+    lookup_token = TWILIO_AUTH_TOKEN
     
   if not lookup_sid:
     return {
@@ -991,7 +994,7 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default") 
     resp = requests.get(
       f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers.json",
       params={"PhoneNumber": e164, "PageSize": 20},
-      auth=(auth_sid, TWILIO_AUTH_TOKEN),
+      auth=(auth_sid, lookup_token),
       timeout=20,
     )
     if resp.status_code != 200:
