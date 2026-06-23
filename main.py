@@ -9789,11 +9789,22 @@ def page3_twilio_items(request: Request):
               <div class="search-filter-row">
                 <input name="last_name" placeholder="Last Name *" required>
                 <input name="first_name" placeholder="First Name (optional)">
-                <button type="submit">Search</button>
+                <button type="submit">Search by Name</button>
               </div>
             </form>
             <p id="aerialink-amieclassic-search-status" style="color:#2c5c8a; min-height:18px;">Enter a last name to find employees.</p>
             <div id="aerialink-amieclassic-search-results" style="overflow-x:auto;"></div>
+
+            <hr style="margin: 20px 0; border: none; border-top: 1px solid #ddd;">
+            <h4 style="margin-bottom: 10px; color: #2c5c8a;">Direct Number Lookup</h4>
+            <form id="aerialink-number-lookup-form">
+              <div class="search-filter-row">
+                <input name="phone_number" placeholder="Telephone (10 digits)" pattern="^\d{10}$" title="Enter exactly 10 digits" required>
+                <button type="submit">Check Aerialink Status</button>
+              </div>
+            </form>
+            <p id="aerialink-number-lookup-status" style="color:#2c5c8a; min-height:18px;"></p>
+            <div id="aerialink-number-lookup-results" style="overflow-x:auto;"></div>
           </div>
         </section>
       </section>
@@ -10186,6 +10197,69 @@ def page3_twilio_items(request: Request):
               resultsEl.innerHTML = html;
             } catch (err) {
               statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        })();
+
+        // Aerialink Direct Number Lookup Handler
+        (function () {
+          const form = document.getElementById("aerialink-number-lookup-form");
+          const statusEl = document.getElementById("aerialink-number-lookup-status");
+          const resultsEl = document.getElementById("aerialink-number-lookup-results");
+
+          if (!form || !statusEl || !resultsEl) return;
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Looking up...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(form);
+
+              const response = await fetch("/lookup/aerialink-by-number", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload && payload.error) || "Lookup failed.");
+              }
+
+              const result = payload.result || {};
+              const phoneNumber = payload.phone_number || "";
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left;">Property</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Value</th>';
+              html += '</tr></thead><tbody>';
+
+              const rows = [
+                { label: "Phone Number", value: phoneNumber },
+                { label: "Enabled", value: result.enabled ? "Yes" : "No" },
+                { label: "Found", value: result.found ? "Yes" : "No" },
+                { label: "Provisioned", value: result.provisioned ? "Yes" : "No" },
+                { label: "Requested Number", value: result.requested_number || "—" },
+                { label: "Matched Number", value: result.matched_number || "—" },
+                { label: "Status", value: result.status || "—" },
+              ];
+
+              rows.forEach(function (row, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px; font-weight:bold;">' + row.label + '</td>';
+                html += '<td style="padding:7px 10px;">' + row.value + '</td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              statusEl.textContent = result.provisioned ? "✓ Provisioned in Aerialink" : "✗ Not provisioned in Aerialink";
+              resultsEl.innerHTML = html;
+            } catch (err) {
+              statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
             }
           });
         })();
@@ -12075,6 +12149,32 @@ def lookup_person_route(
       raise
     except Exception as exc:
       raise RuntimeError(f"Person lookup failed: {exc}") from exc
+
+
+@app.post("/lookup/aerialink-by-number")
+def lookup_aerialink_by_number_route(phone_number: str = Form(...)):
+    """Lookup Aerialink provisioning status for a phone number."""
+    try:
+      clean_number = (phone_number or "").strip()
+      if not clean_number:
+        return JSONResponse({
+            "ok": False,
+            "error": "Phone number is required.",
+            "result": None,
+        }, status_code=400)
+      
+      result = _lookup_aerialink_account_code_by_phone(clean_number)
+      return JSONResponse({
+          "ok": True,
+          "phone_number": clean_number,
+          "result": result,
+      })
+    except Exception as exc:
+      return JSONResponse({
+          "ok": False,
+          "error": str(exc),
+          "result": None,
+      }, status_code=500)
 
 
 @app.post("/check/jabber-status")
