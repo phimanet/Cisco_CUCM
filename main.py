@@ -9055,18 +9055,57 @@ def page3_twilio_items(request: Request):
         border-bottom: 1px solid rgba(255, 255, 255, 0.16);
       }
 
+      .brand-fallback {
+        font-weight: 700;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+        font-size: 12px;
+        opacity: 0.86;
+      }
+
       .topbar-brand {
         display: flex;
         align-items: center;
         gap: 10px;
-        font-weight: 700;
-        font-size: 14px;
       }
 
-      .topbar-actions {
+      .topbar-status {
         display: flex;
         align-items: center;
-        gap: 10px;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+
+      .topbar-status > * {
+        display: inline-flex;
+        align-items: center;
+        min-height: 32px;
+        padding: 6px 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        box-sizing: border-box;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.1;
+      }
+
+      .topbar-auth-pill {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+      }
+
+      .topbar-status .env-banner {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+        box-shadow: none;
+      }
+
+      .topbar-status .session-timer {
+        background: linear-gradient(180deg, #fff4df, #ffdca3);
+        color: #6a3c00;
+        border-color: #f0b44a;
+        box-shadow: 0 6px 12px rgba(198, 138, 18, 0.22);
       }
 
       .topbar-btn {
@@ -9075,30 +9114,73 @@ def page3_twilio_items(request: Request):
         border-radius: 10px;
         font-size: 12px;
         font-weight: 700;
-        background: rgba(255, 255, 255, 0.16);
+        text-decoration: none;
+        border: 1px solid rgba(255, 255, 255, 0.65);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
         color: #fff;
-        border: 1px solid rgba(255, 255, 255, 0.2);
+        background: linear-gradient(180deg, #cb3b2f, #9f2018);
+        border-color: #f0a79c;
         cursor: pointer;
-        transition: 0.18s;
       }
 
       .topbar-btn:hover {
-        background: rgba(255, 255, 255, 0.26);
-        border-color: rgba(255, 255, 255, 0.4);
+        transform: translateY(-1px);
+        box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16);
       }
 
-      .session-timer {
+      .content {
+        max-width: 1400px;
+        margin: 8px auto 14px auto;
+        padding: 0 12px 12px 12px;
+      }
+
+      .page-hero {
+        position: relative;
+        overflow: hidden;
+        padding: 12px 14px;
+        margin-bottom: 10px;
+        border-radius: 12px;
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95)),
+          linear-gradient(180deg, #ffffff, #eef6ff);
+        border: 1px solid rgba(0, 47, 108, 0.1);
+        box-shadow: var(--amn-shadow);
+      }
+
+      .hero-links {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 12px;
+        margin-top: 10px;
+      }
+
+      .hero-link-card {
         display: flex;
-        align-items: center;
+        flex-direction: column;
         gap: 6px;
-        font-size: 11px;
-        opacity: 0.92;
-        display: none;
+        padding: 12px 14px;
+        border-radius: 10px;
+        border: 1px solid var(--amn-border);
+        background: linear-gradient(135deg, rgba(5, 94, 184, 0.08), rgba(0, 47, 108, 0.04));
+        text-decoration: none;
+        color: inherit;
+        transition: transform 0.18s ease, box-shadow 0.18s ease;
       }
 
-      .session-timer .timer-value {
-        font-family: Consolas, monospace;
-        font-weight: 700;
+      .hero-link-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 20px rgba(0, 47, 108, 0.12);
+      }
+
+      .hero-link-card strong {
+        color: var(--amn-navy);
+        font-size: 14px;
+      }
+
+      .hero-link-card span {
+        color: var(--amn-text-soft);
+        font-size: 12px;
+        line-height: 1.4;
       }
 
       .portal-shell {
@@ -9278,34 +9360,61 @@ def page3_twilio_items(request: Request):
       tbody tr:nth-child(even) {
         background: #ffffff;
       }
+
+      @media (max-width: 980px) {
+        .portal-shell {
+          grid-template-columns: 1fr;
+        }
+
+        .portal-sidebar {
+          position: static;
+        }
+
+        .portal-nav {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
     </style>
   </head>
 
   <body>
-    <div class="topbar">
-      <div class="topbar-brand">☎️ Twilio Items</div>
-      <div class="topbar-actions">
-        <div id="session-timer-banner" class="session-timer">
+    <header class="topbar">
+      <div class="topbar-brand">
+        <span class="brand-fallback">AMN Healthcare</span>
+        <strong>Voice Operations Portal</strong>
+      </div>
+      <div class="topbar-status">
+        <span class="topbar-auth-pill">Authenticated Operator: __AUTH_USER__</span>
+        <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
+        <div id="session-timer-banner" class="session-timer" style="display:none;">
           Credential expires in: <span id="session-timer-remaining">--:--:--</span>
         </div>
-        <button class="topbar-btn __ENV_CLASS__">__ENV_TEXT__</button>
-        <span style="font-size:12px; opacity:0.9;">__AUTH_USER__</span>
         <button type="button" class="topbar-btn" onclick="window.location.href='/logout'">Logout</button>
       </div>
-    </div>
+    </header>
 
-    <div style="display:grid; grid-template-columns:240px minmax(0,1fr); gap:14px; align-items:start; padding:14px;">
-      <aside class="portal-sidebar">
-        <h4>Twilio Menu</h4>
-        <div class="portal-nav">
-          <button type="button" class="portal-nav-btn" onclick="window.location.href='/page2'" style="margin-bottom:12px; background:rgba(255,255,255,0.12); border-color:rgba(255,255,255,0.2);">← Back to Administrative Items</button>
-          <button type="button" class="portal-nav-btn active" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
-          <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
-          <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
+    <div class="content">
+      <section class="page-hero">
+        <div class="hero-links">
+          <a class="hero-link-card" href="/page2">
+            <strong>← Back to Administrative Items</strong>
+            <span>Return to the main Administrative Items page.</span>
+          </a>
         </div>
-      </aside>
+      </section>
 
-      <section class="portal-main">
+      <div class="portal-shell">
+        <aside class="portal-sidebar">
+          <h4>Twilio Menu</h4>
+          <div class="portal-nav">
+            <button type="button" class="portal-nav-btn active" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
+            <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
+            <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
+          </div>
+        </aside>
+
+        <section class="portal-main">
         <section class="tool-panel active" data-panel="twilio-lookup">
           <div class="panel">
             <h3>Twilio Number Lookup - AMIEWeb</h3>
@@ -9573,7 +9682,7 @@ def page3_twilio_items(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Number</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio SID</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Messaging Services</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Mixed A2P Messaging Service</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Status</th>';
               html += '</tr></thead><tbody>';
 
