@@ -42,7 +42,13 @@ def _find_first_text(elem, path_tags):
 def _axl_post(session, cucm_host, soap_xml):
     url = f"https://{cucm_host}:8443/axl/"
     headers = {"Content-Type": "text/xml"}
-    resp = session.post(url, data=soap_xml.encode("utf-8"), headers=headers, timeout=60)
+    resp = session.post(
+        url,
+        data=soap_xml.encode("utf-8"),
+        headers=headers,
+        timeout=60,
+        verify=False,
+    )
     resp.raise_for_status()
     return resp.text
 
@@ -157,6 +163,7 @@ def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_nam
         raise ValueError("last_name is required")
 
     session = requests.Session()
+    session.trust_env = False
     session.verify = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
