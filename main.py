@@ -988,31 +988,82 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
     import json
     first_json_str = json.dumps(first, indent=2)
     phone_sid = str(first.get("sid", "")).strip()
-    debug_msg = f"[IncomingPhoneNumbers] sid='{phone_sid}' | messaging_service_sid='{messaging_service_sid_raw}' | FULL RESPONSE:\n{first_json_str}"
+    phone_number = str(first.get("phone_number", "")).strip() or e164
+    debug_msg = f"[IncomingPhoneNumbers] sid='{phone_sid}' | messaging_service_sid_raw='{messaging_service_sid_raw}' | phone_number='{phone_number}'\n"
     
-    # If we have a messaging_service_sid, fetch its friendly name
-    if messaging_service_sid_raw:
+    # If messaging_service_sid is empty, query all Messaging Services to find one with this number
+    if not messaging_service_sid_raw:
+      try:
+        msg_services_resp = requests.get(
+          "https://messaging.twilio.com/v1/Services",
+          auth=(auth_sid, TWILIO_AUTH_TOKEN),
+          timeout=20,
+        )
+        debug_msg += f"[MessagingServices LIST] HTTP {msg_services_resp.status_code}\n"
+        
+        if msg_services_resp.status_code == 200:
+          services_payload = msg_services_resp.json() or {}
+          services_list = services_payload.get("services", []) or []
+          debug_msg += f"Found {len(services_list)} messaging services\n"
+          
+          # Search each service for this phone number
+          for svc in services_list:
+            svc_sid = str(svc.get("sid", "")).strip()
+            svc_friendly = str(svc.get("friendly_name", "")).strip()
+            
+            if not svc_sid:
+              continue
+            
+            # Check if this phone number is in this service
+            try:
+              phone_numbers_resp = requests.get(
+                f"https://messaging.twilio.com/v1/Services/{svc_sid}/PhoneNumbers",
+                auth=(auth_sid, TWILIO_AUTH_TOKEN),
+                timeout=10,
+              )
+              if phone_numbers_resp.status_code == 200:
+                phone_nums_payload = phone_numbers_resp.json() or {}
+                phone_nums_list = phone_nums_payload.get("phone_numbers", []) or []
+                
+                for pn in phone_nums_list:
+                  pn_number = str(pn.get("phone_number", "")).strip()
+                  if pn_number == phone_number:
+                    messaging_service_sid_raw = svc_sid
+                    messaging_service_display = svc_friendly or svc_sid
+                    debug_msg += f"MATCHED: Phone number found in service '{svc_friendly}' ({svc_sid})\n"
+                    break
+                    
+                if messaging_service_sid_raw:
+                  break
+            except Exception as e:
+              debug_msg += f"Exception checking service {svc_sid}: {str(e)}\n"
+      except Exception as e:
+        debug_msg += f"[MessagingServices LIST] Exception: {str(e)}\n"
+    
+    # If we found a messaging_service_sid (either from IncomingPhoneNumbers or from service list), get details
+    if messaging_service_sid_raw and not messaging_service_display:
       try:
         msg_svc_resp = requests.get(
           f"https://messaging.twilio.com/v1/Services/{messaging_service_sid_raw}",
           auth=(auth_sid, TWILIO_AUTH_TOKEN),
           timeout=10,
         )
-        debug_msg += f"\n[MessagingServices] HTTP {msg_svc_resp.status_code}"
+        debug_msg += f"[MessagingServices DETAIL] HTTP {msg_svc_resp.status_code}\n"
         if msg_svc_resp.status_code == 200:
           msg_svc_payload = msg_svc_resp.json() or {}
           friendly_name = str(msg_svc_payload.get("friendly_name", "")).strip()
           msg_svc_json_str = json.dumps(msg_svc_payload, indent=2)
-          debug_msg += f" friendly_name='{friendly_name}'\nFULL RESPONSE:\n{msg_svc_json_str}"
+          debug_msg += f"friendly_name='{friendly_name}'\n"
           messaging_service_display = friendly_name or messaging_service_sid_raw
         else:
-          debug_msg += f" (failed, using SID)\nRESPONSE: {msg_svc_resp.text}"
+          debug_msg += f"Failed to fetch service details\n"
           messaging_service_display = messaging_service_sid_raw
       except Exception as e:
-        debug_msg += f"\n[MessagingServices] Exception: {str(e)}"
+        debug_msg += f"[MessagingServices DETAIL] Exception: {str(e)}\n"
         messaging_service_display = messaging_service_sid_raw
-    else:
-      debug_msg += "\n[MessagingServices] messaging_service_sid is empty (no service assigned)"
+    
+    if not messaging_service_display and not messaging_service_sid_raw:
+      debug_msg += "[MessagingServices] No messaging service found or assigned\n"
     
     return {
       "enabled": True,
