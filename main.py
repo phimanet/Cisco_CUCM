@@ -940,7 +940,13 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
       "found": False,
       "phone_number": e164,
       "sid": "",
-        "messaging_service_sid": "",
+      "messaging_service_sid": "",
+      "status": "Twilio account not configured",
+    }
+
+  try:
+    auth_sid = lookup_sid
+    resp = requests.get(
       f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers.json",
       params={"PhoneNumber": e164, "PageSize": 20},
       auth=(auth_sid, TWILIO_AUTH_TOKEN),
@@ -983,6 +989,7 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
       "found": False,
       "phone_number": e164,
       "sid": "",
+      "messaging_service_sid": "",
       "status": f"Lookup error: {exc}",
     }
 
