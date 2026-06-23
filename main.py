@@ -12336,7 +12336,7 @@ def lookup_twilio_by_number_sfdc_route(phone_number: str = Form(...)):
             "result": None,
         }, status_code=400)
       
-      result = _lookup_twilio_number_by_phone(clean_number, account="sfdc")
+      result = _lookup_twilio_number_by_phone(clean_number, account="salesforce")
       return JSONResponse({
           "ok": True,
           "phone_number": clean_number,
