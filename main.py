@@ -12272,7 +12272,7 @@ def lookup_person_route(
     cucm_host: str = Form(""),
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
-    last_name: str = Form(...),
+  last_name: str = Form(""),
     first_name: str = Form(""),
   include_teams_status: str = Form(""),
   include_twilio_lookup: str = Form(""),
