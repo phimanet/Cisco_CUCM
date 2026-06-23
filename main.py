@@ -9015,367 +9015,347 @@ def page3_twilio_items(request: Request):
     <title>Twilio Items - Voice Operations Portal</title>
     <style>
       :root {
-        --primary-color: #0369a1;
-        --primary-dark: #0c4a6e;
-        --primary-light: #06b6d4;
-        --danger-color: #b00020;
-        --success-color: #2e7d32;
-        --warning-color: #f57f17;
-        --info-color: #2196f3;
-        --gray-dark: #333;
-        --gray-medium: #666;
-        --gray-light: #e0e0e0;
-        --gray-lighter: #f5f5f5;
-        --border-radius: 8px;
-      }
-
-      * {
-        margin: 0;
-        padding: 0;
-        box-sizing: border-box;
+        --amn-blue: #005eb8;
+        --amn-navy: #002f6c;
+        --amn-sky: #eaf4ff;
+        --amn-ice: #f6fbff;
+        --amn-gold: #c68a12;
+        --amn-text: #12304a;
+        --amn-text-soft: #4e6a84;
+        --amn-border: #c8dbee;
+        --amn-panel-border: rgba(0, 47, 108, 0.12);
+        --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
       }
 
       body {
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-        background: linear-gradient(135deg, #f7fbff 0%, #e3f2fd 100%);
-        color: var(--gray-dark);
+        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        margin: 0;
+        background:
+          radial-gradient(circle at top left, rgba(0, 94, 184, 0.18), transparent 26%),
+          radial-gradient(circle at top right, rgba(198, 138, 18, 0.16), transparent 22%),
+          linear-gradient(180deg, #f4f9fe 0%, #e8f1f9 42%, #edf5fc 100%);
+        color: var(--amn-text);
       }
 
       .topbar {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        background: linear-gradient(90deg, var(--primary-dark) 0%, var(--primary-color) 100%);
-        color: #fff;
-        padding: 12px 20px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.15);
-      }
-
-      .topbar h1 {
-        font-size: 18px;
-        font-weight: 700;
-        margin: 0;
-      }
-
-      .topbar-right {
-        display: flex;
         gap: 12px;
+        padding: 10px 16px;
+        background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94));
+        color: #fff;
+        box-shadow: 0 12px 28px rgba(0, 47, 108, 0.2);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+      }
+
+      .topbar-brand {
+        display: flex;
         align-items: center;
+        gap: 10px;
+        font-weight: 700;
+        font-size: 14px;
+      }
+
+      .topbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .topbar-btn {
+        display: inline-block;
+        padding: 7px 12px;
+        border-radius: 10px;
+        font-size: 12px;
+        font-weight: 700;
+        background: rgba(255, 255, 255, 0.16);
+        color: #fff;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        cursor: pointer;
+        transition: 0.18s;
+      }
+
+      .topbar-btn:hover {
+        background: rgba(255, 255, 255, 0.26);
+        border-color: rgba(255, 255, 255, 0.4);
       }
 
       .session-timer {
-        font-size: 12px;
-        padding: 4px 8px;
-        background: rgba(255,255,255,0.2);
-        border-radius: 4px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        opacity: 0.92;
         display: none;
       }
 
-      .env-label {
-        font-size: 11px;
+      .session-timer .timer-value {
+        font-family: Consolas, monospace;
         font-weight: 700;
-        padding: 4px 8px;
-        border-radius: 4px;
-        background: rgba(255,255,255,0.3);
       }
 
-      .env-label.prod {
-        background: rgba(255, 0, 0, 0.3);
-        color: #ffcccc;
-      }
-
-      .logout-btn {
-        padding: 6px 12px;
-        background: rgba(255,255,255,0.3);
-        color: #fff;
-        border: 1px solid rgba(255,255,255,0.5);
-        border-radius: 4px;
-        cursor: pointer;
-        font-size: 12px;
-        transition: 0.2s;
-      }
-
-      .logout-btn:hover {
-        background: rgba(255,255,255,0.5);
-      }
-
-      .container {
-        display: flex;
-        flex-wrap: wrap;
-        height: calc(100vh - 50px);
+      .portal-shell {
+        display: grid;
+        grid-template-columns: 240px minmax(0, 1fr);
+        gap: 14px;
+        align-items: start;
       }
 
       .portal-sidebar {
-        width: 280px;
-        background: #fff;
-        box-shadow: 2px 0 8px rgba(0,0,0,0.1);
-        overflow-y: auto;
-        padding: 16px 0;
-        flex-shrink: 0;
+        position: sticky;
+        top: 10px;
+        background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        box-shadow: 0 18px 36px rgba(0, 47, 108, 0.18);
+        padding: 10px;
+      }
+
+      .portal-sidebar h4 {
+        margin: 4px 6px 8px 6px;
+        color: #fff;
+        font-size: 13px;
+        letter-spacing: 0.3px;
       }
 
       .portal-nav {
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-        padding: 0 8px;
+        display: grid;
+        gap: 8px;
       }
 
       .portal-nav-btn {
-        width: 100%;
-        padding: 10px 12px;
         text-align: left;
-        background: #f0f0f0;
-        color: var(--gray-dark);
-        border: 1px solid #ddd;
-        border-radius: 4px;
+        width: 100%;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.09);
+        color: rgba(255, 255, 255, 0.94);
+        padding: 7px 9px;
+        font-size: 12px;
+        line-height: 1.25;
+        font-weight: 600;
         cursor: pointer;
-        font-size: 13px;
-        font-weight: 500;
-        transition: 0.2s;
-        white-space: normal;
-        word-break: break-word;
+        box-shadow: none;
+        transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
       }
 
       .portal-nav-btn:hover {
-        background: #e0e0e0;
-        border-color: #999;
+        background: rgba(255, 255, 255, 0.16);
+        border-color: rgba(255, 255, 255, 0.24);
+        transform: translateX(2px);
       }
 
       .portal-nav-btn.active {
-        background: var(--primary-color);
-        color: #fff;
-        border-color: var(--primary-color);
+        background: linear-gradient(90deg, #ffffff, #ecf6ff);
+        color: var(--amn-navy);
+        border-color: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
       }
 
       .portal-main {
-        flex: 1;
-        overflow-y: auto;
-        padding: 20px;
+        min-width: 0;
       }
 
-      .panel {
+      .tool-panel {
         display: none;
-        background: #fff;
-        border-radius: var(--border-radius);
-        padding: 20px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        margin-bottom: 20px;
       }
 
-      .panel.active {
+      .tool-panel.active {
         display: block;
       }
 
-      .panel h3 {
-        color: var(--primary-color);
-        font-size: 18px;
-        margin-bottom: 10px;
-        border-bottom: 2px solid var(--primary-color);
-        padding-bottom: 8px;
+      .panel {
+        background: rgba(255, 255, 255, 0.93);
+        border: 1px solid var(--amn-panel-border);
+        border-radius: 12px;
+        padding: 12px;
+        box-shadow: var(--amn-shadow);
+        backdrop-filter: blur(6px);
+        margin: 0 0 12px 0;
       }
 
-      .panel h4 {
-        color: var(--primary-dark);
-        font-size: 14px;
-        margin-top: 16px;
-        margin-bottom: 8px;
+      h3 {
+        margin: 4px 0 8px 0;
+        color: var(--amn-navy);
+        font-size: 17px;
       }
 
-      .panel p {
-        color: var(--gray-medium);
+      p {
+        margin: 0 0 8px 0;
+        color: var(--amn-text-soft);
         font-size: 13px;
         line-height: 1.5;
-        margin-bottom: 12px;
       }
 
-      form {
+      input, textarea, button {
+        border-radius: 10px;
+        border: 1px solid var(--amn-border);
+      }
+
+      input, textarea {
+        min-height: 36px;
+        padding: 7px 10px;
+        width: min(700px, 100%);
+        background: rgba(255, 255, 255, 0.96);
+      }
+
+      .search-filter-row {
         display: flex;
-        flex-direction: column;
-        gap: 12px;
-        margin-bottom: 12px;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 14px;
       }
 
-      input[type="text"],
-      input[type="email"],
-      input[type="password"],
-      input[type="number"],
-      textarea,
-      select {
+      .search-filter-row input {
+        flex: 0 0 auto;
+        width: 180px;
         padding: 8px 10px;
-        border: 1px solid #ccc;
-        border-radius: 4px;
-        font-size: 13px;
-        font-family: inherit;
       }
 
-      input:focus,
-      textarea:focus,
-      select:focus {
+      .search-filter-row button {
+        flex: 0 0 auto;
+        padding: 8px 20px;
+      }
+
+      input:focus, textarea:focus {
         outline: none;
-        border-color: var(--primary-color);
-        box-shadow: 0 0 4px rgba(3, 105, 161, 0.3);
+        border-color: rgba(0, 94, 184, 0.55);
+        box-shadow: 0 0 0 4px rgba(0, 94, 184, 0.12);
       }
 
-      button[type="submit"],
-      button[type="button"] {
-        padding: 8px 12px;
-        background: var(--primary-color);
+      button {
+        background: linear-gradient(180deg, #0c77d8, #005eb8);
         color: #fff;
         border: none;
-        border-radius: 4px;
+        padding: 9px 13px;
+        font-weight: 700;
         cursor: pointer;
-        font-size: 13px;
-        font-weight: 600;
-        transition: 0.2s;
+        box-shadow: 0 8px 18px rgba(0, 94, 184, 0.16);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, filter 0.18s ease;
       }
 
-      button[type="submit"]:hover,
-      button[type="button"]:hover {
-        background: var(--primary-dark);
+      button:hover {
+        filter: brightness(1.04);
+        transform: translateY(-1px);
+        box-shadow: 0 12px 22px rgba(0, 94, 184, 0.2);
       }
 
       table {
         width: 100%;
         border-collapse: collapse;
         font-size: 13px;
-        margin-top: 12px;
+        margin: 8px 0;
+      }
+
+      thead tr {
+        background: var(--amn-blue);
+        color: #fff;
       }
 
       th {
-        background: var(--primary-color);
-        color: #fff;
         padding: 8px 10px;
         text-align: left;
-        font-weight: 600;
+        font-weight: 700;
       }
 
       td {
         padding: 7px 10px;
-        border-bottom: 1px solid #e0e0e0;
+        border-bottom: 1px solid var(--amn-border);
       }
 
-      tr:nth-child(even) {
-        background: #f7fbff;
+      tbody tr {
+        background: var(--amn-ice);
       }
 
-      .search-filter-row {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-
-      .search-filter-row input,
-      .search-filter-row button {
-        flex: 1;
-        min-width: 120px;
-      }
-
-      @media (max-width: 768px) {
-        .container {
-          flex-direction: column;
-          height: auto;
-        }
-
-        .portal-sidebar {
-          width: 100%;
-          max-height: 200px;
-        }
-
-        .portal-main {
-          flex: 1;
-        }
-
-        .search-filter-row {
-          flex-direction: column;
-        }
-
-        .search-filter-row input,
-        .search-filter-row button {
-          width: 100%;
-        }
+      tbody tr:nth-child(even) {
+        background: #ffffff;
       }
     </style>
   </head>
 
   <body>
     <div class="topbar">
-      <h1>☎️ Twilio Items - Voice Operations Portal</h1>
-      <div class="topbar-right">
+      <div class="topbar-brand">☎️ Twilio Items</div>
+      <div class="topbar-actions">
         <div id="session-timer-banner" class="session-timer">
           Credential expires in: <span id="session-timer-remaining">--:--:--</span>
         </div>
-        <div class="env-label __ENV_CLASS__">__ENV_TEXT__</div>
-        <div style="font-size:12px;">__AUTH_USER__</div>
-        <button type="button" class="logout-btn" onclick="window.location.href='/logout'">Logout</button>
+        <button class="topbar-btn __ENV_CLASS__">__ENV_TEXT__</button>
+        <span style="font-size:12px; opacity:0.9;">__AUTH_USER__</span>
+        <button type="button" class="topbar-btn" onclick="window.location.href='/logout'">Logout</button>
       </div>
     </div>
 
-    <div class="container">
+    <div style="display:grid; grid-template-columns:240px minmax(0,1fr); gap:14px; align-items:start; padding:14px;">
       <aside class="portal-sidebar">
+        <h4>Twilio Menu</h4>
         <div class="portal-nav">
-          <button type="button" class="portal-nav-btn" onclick="window.location.href='/page2'">← Back to Administrative Items</button>
-          <hr style="margin:8px 0; border:none; border-top:1px solid #ddd;">
-          <button type="button" class="portal-nav-btn active" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
+          <button type="button" class="portal-nav-btn active" data-panel="twilio-lookup">Twilio Number Lookup</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
-          <button type="button" class="portal-nav-btn" data-panel="twilio-lookup">Twilio Number Lookup</button>
         </div>
       </aside>
 
       <section class="portal-main">
-        <section class="panel active" data-panel="twilio-phimane">
-          <h3>Twilio-Inbound-Verificaton-Phimane</h3>
-          <p>Targets only the translation pattern with exact description <strong>Twilio Number Verification to Phimane 8585236648</strong>. No other translation pattern fields are changed.</p>
-          <form id="admin-twilio-verify-phimane-form">
-            <input type="hidden" name="cucm_user" value="__AUTH_USER__">
-            <input type="hidden" name="cucm_pass" value="">
-            <input type="hidden" name="profile_key" value="phimane">
-
-            Set Translation Pattern to:<br>
-            <input name="target_pattern" placeholder="Enter target pattern" required><br><br>
-
-            <button type="submit">Apply Target Pattern</button>
-            <button type="button" id="admin-twilio-verify-phimane-restore" style="margin-left:8px; background:linear-gradient(180deg,#19743a,#145c2e);">Restore to 8585236648</button>
-          </form>
-
-          <p id="admin-twilio-verify-phimane-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Use Apply to switch temporarily, then Restore to return to 8585236648.</p>
-          <p id="admin-twilio-verify-phimane-summary" style="color:#355978; min-height:18px;"></p>
+        <section class="tool-panel active" data-panel="twilio-lookup">
+          <div class="panel">
+            <h3>Twilio Number Lookup - AMIEWeb</h3>
+            <p>Search employees by name, then lookup their Twilio number information.</p>
+            <form id="twilio-lookup-search-form">
+              <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+              <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+              <input type="hidden" name="cucm_pass" value="">
+              <div class="search-filter-row">
+                <input name="last_name" placeholder="Last Name *" required>
+                <input name="first_name" placeholder="First Name (optional)">
+                <button type="submit">Search</button>
+              </div>
+            </form>
+            <p id="twilio-lookup-search-status" style="color:#2c5c8a; min-height:18px;">Enter a last name to find employees.</p>
+            <div id="twilio-lookup-search-results" style="overflow-x:auto;"></div>
+          </div>
         </section>
 
-        <section class="panel" data-panel="twilio-lauraa">
-          <h3>Twilio-Inbound-Verificaton-LauraA</h3>
-          <p>Targets only the translation pattern with exact description <strong>Twilio Number Verification to LauraA 8583503289</strong>. No other translation pattern fields are changed.</p>
-          <form id="admin-twilio-verify-lauraa-form">
-            <input type="hidden" name="cucm_user" value="__AUTH_USER__">
-            <input type="hidden" name="cucm_pass" value="">
-            <input type="hidden" name="profile_key" value="lauraa">
-
-            Set Translation Pattern to:<br>
-            <input name="target_pattern" placeholder="Enter target pattern" required><br><br>
-
-            <button type="submit">Apply Target Pattern</button>
-            <button type="button" id="admin-twilio-verify-lauraa-restore" style="margin-left:8px; background:linear-gradient(180deg,#19743a,#145c2e);">Restore to 8583503289</button>
-          </form>
-
-          <p id="admin-twilio-verify-lauraa-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Use Apply to switch temporarily, then Restore to return to 8583503289.</p>
-          <p id="admin-twilio-verify-lauraa-summary" style="color:#355978; min-height:18px;"></p>
+        <section class="tool-panel" data-panel="twilio-phimane">
+          <div class="panel">
+            <h3>Twilio-Inbound-Verificaton-Phimane</h3>
+            <p>Targets only the translation pattern with exact description <strong>Twilio Number Verification to Phimane 8585236648</strong>. No other translation pattern fields are changed.</p>
+            <form id="admin-twilio-verify-phimane-form">
+              <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+              <input type="hidden" name="cucm_pass" value="">
+              <input type="hidden" name="profile_key" value="phimane">
+              <p>Set Translation Pattern to:</p>
+              <input name="target_pattern" placeholder="Enter target pattern" required>
+              <div style="display:flex; gap:8px;">
+                <button type="submit">Apply Target Pattern</button>
+                <button type="button" id="admin-twilio-verify-phimane-restore" style="background:linear-gradient(180deg,#19743a,#145c2e);">Restore to 8585236648</button>
+              </div>
+            </form>
+            <p id="admin-twilio-verify-phimane-status" style="color:#2c5c8a; min-height:18px;">Use Apply to switch temporarily, then Restore to return to 8585236648.</p>
+            <p id="admin-twilio-verify-phimane-summary" style="color:#355978; min-height:18px;"></p>
+          </div>
         </section>
 
-        <section class="panel" data-panel="twilio-lookup">
-          <h3>Twilio Number Lookup - AMIEWeb</h3>
-          <p>Search employees by name, then lookup their Twilio number information.</p>
-          <form id="twilio-lookup-search-form">
-            <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
-            <input type="hidden" name="cucm_user" value="__AUTH_USER__">
-            <input type="hidden" name="cucm_pass" value="">
-            <div class="search-filter-row">
-              <input name="last_name" placeholder="Last Name *" required>
-              <input name="first_name" placeholder="First Name (optional)">
-              <button type="submit">Search</button>
-            </div>
-          </form>
-          <p id="twilio-lookup-search-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name to find employees.</p>
-          <div id="twilio-lookup-search-results" style="overflow-x:auto;"></div>
+        <section class="tool-panel" data-panel="twilio-lauraa">
+          <div class="panel">
+            <h3>Twilio-Inbound-Verificaton-LauraA</h3>
+            <p>Targets only the translation pattern with exact description <strong>Twilio Number Verification to LauraA 8583503289</strong>. No other translation pattern fields are changed.</p>
+            <form id="admin-twilio-verify-lauraa-form">
+              <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+              <input type="hidden" name="cucm_pass" value="">
+              <input type="hidden" name="profile_key" value="lauraa">
+              <p>Set Translation Pattern to:</p>
+              <input name="target_pattern" placeholder="Enter target pattern" required>
+              <div style="display:flex; gap:8px;">
+                <button type="submit">Apply Target Pattern</button>
+                <button type="button" id="admin-twilio-verify-lauraa-restore" style="background:linear-gradient(180deg,#19743a,#145c2e);">Restore to 8583503289</button>
+              </div>
+            </form>
+            <p id="admin-twilio-verify-lauraa-status" style="color:#2c5c8a; min-height:18px;">Use Apply to switch temporarily, then Restore to return to 8583503289.</p>
+            <p id="admin-twilio-verify-lauraa-summary" style="color:#355978; min-height:18px;"></p>
+          </div>
         </section>
       </section>
     </div>
@@ -9419,17 +9399,15 @@ def page3_twilio_items(request: Request):
         startCredentialTimer();
 
         // Panel navigation
-        document.querySelectorAll("[data-panel]").forEach(btn => {
-          if (btn.classList.contains("portal-nav-btn")) {
-            btn.addEventListener("click", function () {
-              const panelName = this.getAttribute("data-panel");
-              document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
-              document.querySelectorAll(".portal-nav-btn").forEach(b => b.classList.remove("active"));
-              
-              document.querySelector(`[data-panel="${panelName}"].panel`)?.classList.add("active");
-              this.classList.add("active");
-            });
-          }
+        document.querySelectorAll(".portal-nav-btn").forEach(btn => {
+          btn.addEventListener("click", function () {
+            const panelName = this.getAttribute("data-panel");
+            document.querySelectorAll(".tool-panel").forEach(p => p.classList.remove("active"));
+            document.querySelectorAll(".portal-nav-btn").forEach(b => b.classList.remove("active"));
+            
+            document.querySelector(`[data-panel="${panelName}"]`)?.classList.add("active");
+            this.classList.add("active");
+          });
         });
 
         // Twilio Inbound Verification Panel Handler
