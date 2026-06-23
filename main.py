@@ -975,12 +975,31 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
       }
 
     first = numbers[0]
+    messaging_service_sid_raw = str(first.get("messaging_service_sid", "")).strip()
+    messaging_service_display = ""
+    
+    # If we have a messaging_service_sid, fetch its friendly name
+    if messaging_service_sid_raw:
+      try:
+        msg_svc_resp = requests.get(
+          f"https://messaging.twilio.com/v1/Services/{messaging_service_sid_raw}",
+          auth=(auth_sid, TWILIO_AUTH_TOKEN),
+          timeout=10,
+        )
+        if msg_svc_resp.status_code == 200:
+          msg_svc_payload = msg_svc_resp.json() or {}
+          messaging_service_display = str(msg_svc_payload.get("friendly_name", messaging_service_sid_raw)).strip() or messaging_service_sid_raw
+        else:
+          messaging_service_display = messaging_service_sid_raw
+      except Exception:
+        messaging_service_display = messaging_service_sid_raw
+    
     return {
       "enabled": True,
       "found": True,
       "phone_number": str(first.get("phone_number", "")).strip() or e164,
       "sid": str(first.get("sid", "")).strip(),
-      "messaging_service_sid": str(first.get("messaging_service_sid", "")).strip() or "",
+      "messaging_service_sid": messaging_service_display,
       "status": "Found",
     }
   except Exception as exc:
