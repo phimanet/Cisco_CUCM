@@ -9696,10 +9696,13 @@ def page3_twilio_items(request: Request):
         document.querySelectorAll(".portal-nav-btn").forEach(btn => {
           btn.addEventListener("click", function () {
             const panelName = this.getAttribute("data-panel");
+            console.log("Button clicked, panel:", panelName);
             document.querySelectorAll(".tool-panel").forEach(p => p.classList.remove("active"));
             document.querySelectorAll(".portal-nav-btn").forEach(b => b.classList.remove("active"));
             
-            document.querySelector(`[data-panel="${panelName}"]`)?.classList.add("active");
+            const targetPanel = document.querySelector(`[data-panel="${panelName}"]`);
+            console.log("Target panel found:", !!targetPanel);
+            targetPanel?.classList.add("active");
             this.classList.add("active");
           });
         });
