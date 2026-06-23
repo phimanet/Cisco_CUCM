@@ -9833,7 +9833,33 @@ def page3_twilio_items(request: Request):
 
               statusEl.textContent = `Found ${results.length} user(s) with Twilio lookup.`;
 
-              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              // Collect all debug info for display
+              let debugBox = '<div style="background:#f0f4f8; border:2px solid #d32f2f; border-radius:6px; padding:12px; margin-bottom:16px; font-family:Consolas,monospace; font-size:12px; line-height:1.5; color:#222; max-height:300px; overflow-y:auto;">';
+              debugBox += '<div style="font-weight:bold; color:#d32f2f; margin-bottom:8px;">🔍 DEBUG OUTPUT - Messaging Service API Calls:</div>';
+              
+              let hasDebug = false;
+              results.forEach(function (r, i) {
+                const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+                const twilio = r.twilio_lookup || {};
+                const debugInfo = twilio.messaging_service_debug || "";
+                
+                if (debugInfo && debugInfo !== "—") {
+                  hasDebug = true;
+                  debugBox += '<div style="margin-bottom:10px; padding-bottom:10px; border-bottom:1px solid #bbb;">';
+                  debugBox += '<div style="color:#005eb8; font-weight:bold;">' + name + ':</div>';
+                  debugBox += '<div style="color:#333; word-break:break-all; white-space:pre-wrap;">' + debugInfo + '</div>';
+                  debugBox += '</div>';
+                }
+              });
+              
+              if (!hasDebug) {
+                debugBox += '<div style="color:#999;">No debug information available (API calls may not have been made)</div>';
+              }
+              debugBox += '</div>';
+
+              let html = debugBox;
+              
+              html += '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
               html += '<thead><tr style="background:#005eb8; color:#fff;">';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
@@ -9841,7 +9867,6 @@ def page3_twilio_items(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Number</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio SID</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Messaging Service</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Debug Info</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Status</th>';
               html += '</tr></thead><tbody>';
 
@@ -9854,7 +9879,6 @@ def page3_twilio_items(request: Request):
                 const twilioNumber = twilio.phone_number || "—";
                 const twilioSid = twilio.sid || "—";
                 const messagingServiceSid = twilio.messaging_service_sid || "—";
-                const debugInfo = twilio.messaging_service_debug || "—";
                 const twilioStatus = twilio.status || "—";
 
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
@@ -9864,7 +9888,6 @@ def page3_twilio_items(request: Request):
                 html += '<td style="padding:7px 10px;">' + twilioNumber + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + twilioSid + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + messagingServiceSid + '</td>';
-                html += '<td style="padding:7px 10px; font-size:11px; color:#555; font-family:Consolas,monospace;">' + debugInfo + '</td>';
                 html += '<td style="padding:7px 10px;">' + twilioStatus + '</td>';
                 html += '</tr>';
               });
