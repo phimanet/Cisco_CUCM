@@ -984,9 +984,11 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
     messaging_service_display = ""
     debug_msg = ""
     
-    # Debug: what did we get from IncomingPhoneNumbers
+    # Debug: capture ENTIRE first number object as JSON
+    import json
+    first_json_str = json.dumps(first, indent=2)
     phone_sid = str(first.get("sid", "")).strip()
-    debug_msg = f"[IncomingPhoneNumbers] sid='{phone_sid}' | messaging_service_sid_raw='{messaging_service_sid_raw}' | phone_number='{str(first.get('phone_number', '')).strip()}' | Full Response Keys: {list(first.keys())}"
+    debug_msg = f"[IncomingPhoneNumbers] sid='{phone_sid}' | messaging_service_sid='{messaging_service_sid_raw}' | FULL RESPONSE:\n{first_json_str}"
     
     # If we have a messaging_service_sid, fetch its friendly name
     if messaging_service_sid_raw:
@@ -996,20 +998,21 @@ def _lookup_twilio_number_by_phone(phone_number: str) -> dict:
           auth=(auth_sid, TWILIO_AUTH_TOKEN),
           timeout=10,
         )
-        debug_msg += f" | [MessagingServices] HTTP {msg_svc_resp.status_code}"
+        debug_msg += f"\n[MessagingServices] HTTP {msg_svc_resp.status_code}"
         if msg_svc_resp.status_code == 200:
           msg_svc_payload = msg_svc_resp.json() or {}
           friendly_name = str(msg_svc_payload.get("friendly_name", "")).strip()
-          debug_msg += f" friendly_name='{friendly_name}'"
+          msg_svc_json_str = json.dumps(msg_svc_payload, indent=2)
+          debug_msg += f" friendly_name='{friendly_name}'\nFULL RESPONSE:\n{msg_svc_json_str}"
           messaging_service_display = friendly_name or messaging_service_sid_raw
         else:
-          debug_msg += f" (failed, using SID)"
+          debug_msg += f" (failed, using SID)\nRESPONSE: {msg_svc_resp.text}"
           messaging_service_display = messaging_service_sid_raw
       except Exception as e:
-        debug_msg += f" | [MessagingServices] Exception: {str(e)}"
+        debug_msg += f"\n[MessagingServices] Exception: {str(e)}"
         messaging_service_display = messaging_service_sid_raw
     else:
-      debug_msg += " (empty SID)"
+      debug_msg += "\n[MessagingServices] messaging_service_sid is empty (no service assigned)"
     
     return {
       "enabled": True,
