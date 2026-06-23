@@ -68,6 +68,9 @@ STRIKE_MASK_LOCK = threading.Lock()
 STRIKE_MASK_MAX_OPERATIONS = 200
 AUTH_SESSIONS = {}
 AUTH_SESSION_SECRETS = {}
+TWILIO_INCOMING_PHONE_NUMBER_CACHE = {}
+TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK = threading.Lock()
+TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS = 5 * 60
 SESSION_COOKIE_NAME = "cucm_web_session"
 SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
 CREDENTIAL_CACHE_TTL_SECONDS = 60 * 60
@@ -990,94 +993,135 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default") 
     }
 
   try:
-    auth_sid = lookup_sid
-    resp = requests.get(
-      f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers.json",
-      params={"PhoneNumber": e164, "PageSize": 20},
-      auth=(auth_sid, lookup_token),
-      timeout=20,
-    )
-    if resp.status_code != 200:
-      return {
-        "enabled": True,
-        "found": False,
-        "phone_number": e164,
-        "sid": "",
-        "status": f"Lookup failed HTTP {resp.status_code}",
-      }
+    cache_key = lookup_sid
+    now = time.time()
+    cached_numbers = []
+    with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
+      cache_entry = TWILIO_INCOMING_PHONE_NUMBER_CACHE.get(cache_key, {})
+      cached_at = float(cache_entry.get("cached_at", 0) or 0)
+      if cached_at and (now - cached_at) < TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS:
+        cached_numbers = list(cache_entry.get("numbers", []) or [])
 
-    payload = resp.json() if resp.text else {}
-    numbers = payload.get("incoming_phone_numbers", []) or []
-    if not numbers:
-      return {
-        "enabled": True,
-        "found": False,
-        "phone_number": e164,
-        "sid": "",
-        "status": "Not Found",
-      }
+    if not cached_numbers:
+      cached_numbers = []
+      next_url = f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers.json"
+      next_params = {"PageSize": 100}
+      while next_url:
+        resp = requests.get(
+          next_url,
+          params=next_params,
+          auth=(lookup_sid, lookup_token),
+          verify=False,
+          timeout=20,
+        )
+        if resp.status_code != 200:
+          return {
+            "enabled": True,
+            "found": False,
+            "phone_number": e164,
+            "sid": "",
+            "status": f"Lookup failed HTTP {resp.status_code}",
+          }
 
-    first = numbers[0]
-    phone_sid = str(first.get("sid", "")).strip()
-    phone_number = str(first.get("phone_number", "")).strip() or e164
-    
+        payload = resp.json() if resp.text else {}
+        cached_numbers.extend(payload.get("incoming_phone_numbers", []) or [])
+
+        next_uri = str(payload.get("next_page_uri", "") or "").strip()
+        if next_uri:
+          next_url = f"https://api.twilio.com{next_uri}" if next_uri.startswith("/") else next_uri
+          next_params = None
+        else:
+          next_url = None
+
+      with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
+        TWILIO_INCOMING_PHONE_NUMBER_CACHE[cache_key] = {
+          "cached_at": now,
+          "numbers": cached_numbers,
+        }
+
+    phone_number_digits = "".join(ch for ch in e164 if ch.isdigit())
+    candidates = {e164, phone_number_digits}
+    if len(phone_number_digits) == 11 and phone_number_digits.startswith("1"):
+      candidates.add(phone_number_digits[1:])
+      candidates.add(f"+{phone_number_digits[1:]}")
+
+    for number_item in cached_numbers:
+      if not isinstance(number_item, dict):
+        continue
+      candidate = str(number_item.get("phone_number", "")).strip()
+      candidate_digits = "".join(ch for ch in candidate if ch.isdigit())
+      if candidate in candidates or candidate_digits in candidates:
+        return {
+          "enabled": True,
+          "found": True,
+          "phone_number": candidate or e164,
+          "sid": str(number_item.get("sid", "")).strip(),
+          "status": "Found",
+        }
+
     return {
       "enabled": True,
-      "found": True,
-      "phone_number": phone_number,
-        url = f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers.json"
-        next_url = url
-        next_params = {"PageSize": 100}
-        phone_number_digits = "".join(ch for ch in e164 if ch.isdigit())
-        while next_url:
-          resp = requests.get(
-            next_url,
-            params=next_params,
-            auth=(auth_sid, lookup_token),
-            verify=False,
-            timeout=20,
-          )
-          if resp.status_code != 200:
-            return {
-              "enabled": True,
-              "found": False,
-              "phone_number": e164,
-              "sid": "",
-              "status": f"Lookup failed HTTP {resp.status_code}",
-            }
+      "found": False,
+      "phone_number": e164,
+      "sid": "",
+      "status": "Not Found",
+    }
+  except Exception as exc:
+    return {
+      "enabled": True,
+      "found": False,
+      "phone_number": e164,
+      "sid": "",
+      "status": f"Lookup error: {exc}",
+    }
 
-          payload = resp.json() if resp.text else {}
-          numbers = payload.get("incoming_phone_numbers", []) or []
-          for number_item in numbers:
-            candidate = str(number_item.get("phone_number", "")).strip()
-            candidate_digits = "".join(ch for ch in candidate if ch.isdigit())
-            if candidate == e164 or candidate_digits == phone_number_digits or candidate_digits == phone_number_digits.lstrip("1"):
-              phone_sid = str(number_item.get("sid", "")).strip()
-              phone_number = candidate or e164
-              return {
-                "enabled": True,
-                "found": True,
-                "phone_number": phone_number,
-                "sid": phone_sid,
-                "status": "Found",
-              }
 
-          next_uri = str(payload.get("next_page_uri", "") or "").strip()
-          if next_uri:
-            next_url = f"https://api.twilio.com{next_uri}" if next_uri.startswith("/") else next_uri
-            next_params = None
-          else:
-            next_url = None
+def _store_job_output(csv_data: bytes, filename: str) -> str:
+    job_id = str(uuid4())
+    JOB_OUTPUTS[job_id] = {"data": csv_data, "filename": filename}
 
-        phone_sid = ""
-        phone_number = e164
+    # Keep an in-memory cap so older outputs naturally roll off.
+    if len(JOB_OUTPUTS) > 100:
+        oldest_key = next(iter(JOB_OUTPUTS))
+        JOB_OUTPUTS.pop(oldest_key, None)
+
+    return job_id
+
+
+def _prepare_job_output(csv_data, filename: str) -> dict:
+    csv_bytes = _to_bytes(csv_data)
+    job_id = _store_job_output(csv_bytes, filename)
+    return {
+        "job_id": job_id,
+        "filename": filename,
+        "output_text": csv_bytes.decode("utf-8", errors="replace"),
+    }
+
+
+def _lookup_aerialink_account_code_by_phone(phone_number: str) -> dict:
+  """Lookup whether the number is provisioned in Aerialink account code inventory."""
+  e164 = _normalize_phone_to_e164(phone_number)
+  if not e164:
+    return {
+      "enabled": bool(AERIALINK_V5_BASE_URL and AERIALINK_USERNAME and AERIALINK_PASSWORD),
+      "found": False,
+      "provisioned": False,
+      "requested_number": "",
+      "matched_number": "",
+      "status": "No telephone",
+    }
+
+  if not AERIALINK_V5_BASE_URL:
+    return {
+      "enabled": False,
+      "found": False,
       "provisioned": False,
       "requested_number": e164,
       "matched_number": "",
-          "found": False,
+      "status": "Aerialink base URL not configured",
     }
-          "sid": phone_sid,
-          "status": "Not Found",
+
+  if not AERIALINK_USERNAME or not AERIALINK_PASSWORD:
     return {
       "enabled": False,
       "found": False,
@@ -1098,11 +1142,9 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default") 
     candidates.add(f"+{number_digits[1:]}")
 
   try:
-    # Aerialink expects digits only, not E.164 format (+1...)
-    digits_only = "".join(ch for ch in e164 if ch.isdigit())
     response = requests.get(
       url,
-      params={"codes": digits_only},
+      params={"codes": number_digits},
       headers={"Accept": "application/json"},
       auth=HTTPBasicAuth(AERIALINK_USERNAME, AERIALINK_PASSWORD),
       verify=False,
@@ -1170,28 +1212,6 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default") 
       "requested_number": e164,
       "matched_number": "",
       "status": f"Aerialink lookup error: {exc}",
-    }
-
-
-def _store_job_output(csv_data: bytes, filename: str) -> str:
-    job_id = str(uuid4())
-    JOB_OUTPUTS[job_id] = {"data": csv_data, "filename": filename}
-
-    # Keep an in-memory cap so older outputs naturally roll off.
-    if len(JOB_OUTPUTS) > 100:
-        oldest_key = next(iter(JOB_OUTPUTS))
-        JOB_OUTPUTS.pop(oldest_key, None)
-
-    return job_id
-
-
-def _prepare_job_output(csv_data, filename: str) -> dict:
-    csv_bytes = _to_bytes(csv_data)
-    job_id = _store_job_output(csv_bytes, filename)
-    return {
-        "job_id": job_id,
-        "filename": filename,
-        "output_text": csv_bytes.decode("utf-8", errors="replace"),
     }
 
 
@@ -9741,7 +9761,7 @@ def page3_twilio_items(request: Request):
             <h4 style="margin-bottom: 10px; color: #2c5c8a;">Direct Number Lookup</h4>
             <form id="twilio-number-lookup-form">
               <div class="search-filter-row">
-                <input name="phone_number" placeholder="Telephone (10 digits)" pattern="^\d{10}$" title="Enter exactly 10 digits" required>
+                <input name="phone_number" placeholder="Telephone (10 digits)" pattern="^\\d{10}$" title="Enter exactly 10 digits" required>
                 <button type="submit">Check Twilio Status</button>
               </div>
             </form>
@@ -9771,7 +9791,7 @@ def page3_twilio_items(request: Request):
             <h4 style="margin-bottom: 10px; color: #2c5c8a;">Direct Number Lookup</h4>
             <form id="twilio-number-lookup-sfdc-form">
               <div class="search-filter-row">
-                <input name="phone_number" placeholder="Telephone (10 digits)" pattern="^\d{10}$" title="Enter exactly 10 digits" required>
+                <input name="phone_number" placeholder="Telephone (10 digits)" pattern="^\\d{10}$" title="Enter exactly 10 digits" required>
                 <button type="submit">Check Twilio Status</button>
               </div>
             </form>
@@ -9841,7 +9861,7 @@ def page3_twilio_items(request: Request):
             <h4 style="margin-bottom: 10px; color: #2c5c8a;">Direct Number Lookup</h4>
             <form id="aerialink-number-lookup-form">
               <div class="search-filter-row">
-                <input name="phone_number" placeholder="Telephone (10 digits)" pattern="^\d{10}$" title="Enter exactly 10 digits" required>
+                <input name="phone_number" placeholder="Telephone (10 digits)" pattern="^\\d{10}$" title="Enter exactly 10 digits" required>
                 <button type="submit">Check Aerialink Status</button>
               </div>
             </form>
