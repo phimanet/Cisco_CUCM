@@ -1089,6 +1089,7 @@ def _lookup_aerialink_account_code_by_phone(phone_number: str) -> dict:
       params={"codes": digits_only},
       headers={"Accept": "application/json"},
       auth=HTTPBasicAuth(AERIALINK_USERNAME, AERIALINK_PASSWORD),
+      verify=False,
       timeout=25,
     )
     if response.status_code != 200:
