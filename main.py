@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import socket
 from collections import Counter
 import smtplib
 import ssl
@@ -591,7 +592,38 @@ def _get_environment_label(cucm_host: str):
   return "Production Voice Servers", "env-banner-prod"
 
 
+def _is_lab_runtime_host():
+  host_candidates = {
+    (os.getenv("HOSTNAME", "") or "").strip().lower(),
+    (os.getenv("COMPUTERNAME", "") or "").strip().lower(),
+  }
+  try:
+    host_candidates.add((socket.gethostname() or "").strip().lower())
+  except Exception:
+    pass
+  try:
+    host_candidates.add((socket.getfqdn() or "").strip().lower())
+  except Exception:
+    pass
+
+  for host in host_candidates:
+    if not host:
+      continue
+    if "lascrtmp01" in host:
+      return True
+    if "ciscoadminp01" in host:
+      return False
+
+  return None
+
+
 def _get_unity_server_for_session(request: Request):
+  runtime_is_lab = _is_lab_runtime_host()
+  if runtime_is_lab is True:
+    return LAB_UNITY_HOST
+  if runtime_is_lab is False:
+    return PROD_UNITY_HOST
+
   session = _get_auth_session(request)
   if not session:
     raise RuntimeError("Authentication required.")
@@ -12854,7 +12886,7 @@ def admin_unity_ldap_sync_route(
   unity_server = _get_unity_server_for_session(request)
 
   now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-  unity_label = "LAB" if _is_lab_host(cucm_host) else "PROD"
+  unity_label = "LAB" if (unity_server or "").strip().lower() == LAB_UNITY_HOST.lower() else "PROD"
   filename = f"unity_ldap_sync_{unity_label}_{now}.csv"
 
   env_text, _ = _get_environment_label(cucm_host)
