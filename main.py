@@ -2,6 +2,7 @@ import csv
 import datetime
 import io
 import json
+import logging
 import os
 import re
 import socket
@@ -58,6 +59,8 @@ from toolkit.remove_teams_telephony_user import (
   lookup_teams_telephony_removal_candidate,
   remove_teams_telephony_user,
 )
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 JOB_OUTPUTS = {}
@@ -783,6 +786,7 @@ async def runtime_error_handler(request: Request, exc: RuntimeError):
 
 @app.exception_handler(Exception)
 async def unhandled_error_handler(request: Request, exc: Exception):
+  logger.exception("Unhandled exception on %s", request.url.path, exc_info=exc)
   message = "Unexpected server error. Retry the request and contact support if it continues."
 
   if _wants_json_response(request):
@@ -1458,6 +1462,41 @@ def _extract_soap_error(response_text: str) -> str:
   return response_text[:150]
 
 
+def _strip_invalid_xml_chars(text: str) -> str:
+  """Remove XML-invalid control characters that can break ElementTree parsing."""
+  if not text:
+    return ""
+
+  cleaned = []
+  for ch in text:
+    code = ord(ch)
+    if (
+      code == 0x9
+      or code == 0xA
+      or code == 0xD
+      or 0x20 <= code <= 0xD7FF
+      or 0xE000 <= code <= 0xFFFD
+      or 0x10000 <= code <= 0x10FFFF
+    ):
+      cleaned.append(ch)
+  return "".join(cleaned)
+
+
+def _parse_xml_or_runtime_error(response_text: str, operation_label: str):
+  """Parse XML defensively and return RuntimeError with context on failure."""
+  try:
+    return ET.fromstring(response_text)
+  except ET.ParseError:
+    cleaned = _strip_invalid_xml_chars(response_text or "")
+    if cleaned != (response_text or ""):
+      try:
+        return ET.fromstring(cleaned)
+      except ET.ParseError as exc:
+        raise RuntimeError(f"{operation_label} returned malformed XML: {exc}") from exc
+
+    raise RuntimeError(f"{operation_label} returned malformed XML")
+
+
 def _build_add_translation_pattern_soap(
   pattern: str,
   description: str,
@@ -1583,7 +1622,7 @@ def _get_line_external_number_mask(cucm_host: str, cucm_user: str, cucm_pass: st
   if response.status_code != 200:
     return pattern
 
-  root = ET.fromstring(response.text)
+  root = _parse_xml_or_runtime_error(response.text or "", "getUser")
   for elem in root.iter():
     tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
     if tag == "externalPhoneNumberMask":
@@ -1644,7 +1683,7 @@ def _find_jabber_extension(cucm_host: str, cucm_user: str, cucm_pass: str, targe
   if response.status_code != 200:
     raise RuntimeError(f"getUser failed: {response.status_code}")
 
-  root = ET.fromstring(response.text)
+  root = _parse_xml_or_runtime_error(response.text or "", "listTransPattern")
   primary_ext = ""
   jabber_devices = []
 
@@ -1704,7 +1743,7 @@ def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str)
   if response.status_code != 200:
     raise RuntimeError(f"listTransPattern failed: {response.status_code}")
 
-  root = ET.fromstring(response.text)
+  root = _parse_xml_or_runtime_error(response.text or "", "listTransPattern")
   patterns = []
 
   for elem in root.iter():
@@ -11947,8 +11986,14 @@ def strike_mask_options_route(
     if not clean_target:
       raise RuntimeError("target_user is required")
 
-    jabber_extension, jabber_devices = _find_jabber_extension(cucm_host, cucm_user, cucm_pass, clean_target)
-    available_patterns = _find_available_945_patterns(cucm_host, cucm_user, cucm_pass)
+    try:
+      jabber_extension, jabber_devices = _find_jabber_extension(cucm_host, cucm_user, cucm_pass, clean_target)
+      available_patterns = _find_available_945_patterns(cucm_host, cucm_user, cucm_pass)
+    except RuntimeError:
+      raise
+    except Exception as exc:
+      raise RuntimeError(f"Unable to load Strike Mask options for {clean_target}: {exc}") from exc
+
     available_patterns.sort(key=lambda item: (item.get("pattern") or ""))
 
     return JSONResponse(
