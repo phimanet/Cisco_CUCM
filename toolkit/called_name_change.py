@@ -208,7 +208,7 @@ def _get_phone_details(session, cucm_host, phone_name):
 def _get_unity_user_by_alias(session, unity_server, alias):
     query = f"(Alias is {alias})"
     url = _make_unity_url(unity_server, "/vmrest/users")
-    response = session.get(url, headers=_unity_headers(), params={"query": query}, timeout=120)
+    response = session.get(url, headers=_unity_headers(), params={"query": query}, timeout=120, verify=False)
 
     if response.status_code != 200:
         raise RuntimeError(f"Unity user lookup failed: {_parse_unity_error_text(response)}")
@@ -236,7 +236,7 @@ def _get_unity_user_by_alias(session, unity_server, alias):
 
 def _get_unity_user_by_object_id(session, unity_server, object_id):
     url = _make_unity_url(unity_server, f"/vmrest/users/{object_id}")
-    response = session.get(url, headers=_unity_headers(), timeout=120)
+    response = session.get(url, headers=_unity_headers(), timeout=120, verify=False)
     if response.status_code != 200:
         raise RuntimeError(f"Unity user detail lookup failed: {_parse_unity_error_text(response)}")
 
@@ -269,7 +269,7 @@ def _update_unity_user_profile(session, unity_server, object_id, display_name, s
         # Update Unity SMTP Address field only; do not modify EmailAddress.
         "SmtpAddress": smtp_address,
     }
-    response = session.put(url, headers=_unity_headers(), json=payload, timeout=120)
+    response = session.put(url, headers=_unity_headers(), json=payload, timeout=120, verify=False)
     if response.status_code not in {200, 204}:
         raise RuntimeError(f"Unity profile update failed: {_parse_unity_error_text(response)}")
 

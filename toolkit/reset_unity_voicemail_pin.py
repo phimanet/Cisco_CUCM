@@ -35,7 +35,7 @@ def _parse_error_text(response):
 def _get_user_by_alias(session, unity_server, alias):
     query = f"(Alias is {alias})"
     url = _make_unity_url(unity_server, "/vmrest/users")
-    response = session.get(url, headers=_unity_headers(), params={"query": query}, timeout=120)
+    response = session.get(url, headers=_unity_headers(), params={"query": query}, timeout=120, verify=False)
 
     if response.status_code != 200:
         raise RuntimeError(f"User lookup failed: {_parse_error_text(response)}")
@@ -63,7 +63,7 @@ def _get_user_by_alias(session, unity_server, alias):
 
 def _get_user_by_object_id(session, unity_server, object_id):
     url = _make_unity_url(unity_server, f"/vmrest/users/{object_id}")
-    response = session.get(url, headers=_unity_headers(), timeout=120)
+    response = session.get(url, headers=_unity_headers(), timeout=120, verify=False)
 
     if response.status_code != 200:
         raise RuntimeError(f"User detail lookup failed: {_parse_error_text(response)}")
@@ -86,7 +86,7 @@ def _set_user_pin(session, unity_server, object_id, pin, must_change=True):
         "CredMustChange": str(bool(must_change)).lower(),
     }
 
-    response = session.put(url, headers=_unity_headers(), json=payload, timeout=120)
+    response = session.put(url, headers=_unity_headers(), json=payload, timeout=120, verify=False)
     if response.status_code not in {200, 201, 204}:
         raise RuntimeError(f"Set PIN failed: {_parse_error_text(response)}")
 
