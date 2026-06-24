@@ -1710,8 +1710,10 @@ def _twilio_add_sms_hosted_number(
 
   attempt_errors = []
   hosted_order_endpoints = [
-    "https://preview.twilio.com/HostedNumbers/HostedNumberOrders.json",
-    "https://preview.twilio.com/HostedNumbers/HostedNumberOrders",
+    f"https://api.twilio.com/2010-04-01/Accounts/{primary_sid}/IncomingPhoneNumbers/HostedNumberOrders.json",
+    f"https://api.twilio.com/2010-04-01/Accounts/{primary_sid}/IncomingPhoneNumbers/HostedNumberOrders",
+    "https://api.twilio.com/2010-04-01/IncomingPhoneNumbers/HostedNumberOrders.json",
+    "https://api.twilio.com/2010-04-01/IncomingPhoneNumbers/HostedNumberOrders",
   ]
   for endpoint in hosted_order_endpoints:
     try:
