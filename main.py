@@ -4328,7 +4328,7 @@ def genesys_admin_placeholder(request: Request):
         <section class="portal-main">
           <div class="panel">
             <h3 style="margin-top:0;">Extract User by Name</h3>
-            <p style="margin-top:0; color:#4e6a84;">Region defaults to US West (`usw2`). Enter OAuth client ID/secret, last name, and optional first name. If Genesys lookup requires email alignment, CUCM name lookup is used to collect email targets from the existing workflow context.</p>
+            <p style="margin-top:0; color:#4e6a84;">Region defaults to US West (`usw2`). OAuth credentials are loaded from server environment variables by default (recommended). Optional form fields below can override for testing. If Genesys lookup requires email alignment, CUCM name lookup is used to collect email targets from the existing workflow context.</p>
 
             <form id="genesys-user-search-form">
               <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
@@ -4336,8 +4336,8 @@ def genesys_admin_placeholder(request: Request):
               <input type="hidden" name="cucm_pass" value="">
               <div class="search-filter-row">
                 <input name="region" placeholder="Genesys Region" value="__GENESYS_REGION__" style="width:120px;">
-                <input name="client_id" placeholder="OAuth Client ID" value="__GENESYS_CLIENT_ID__" style="width:320px;" required>
-                <input type="password" name="client_secret" placeholder="OAuth Client Secret" style="width:320px;" required>
+                <input name="client_id" placeholder="OAuth Client ID (optional override)" style="width:320px;">
+                <input type="password" name="client_secret" placeholder="OAuth Client Secret (optional override)" style="width:320px;">
               </div>
               <div class="search-filter-row">
                 <input name="last_name" placeholder="Last Name *" style="width:220px;" required>
@@ -4412,7 +4412,6 @@ def genesys_admin_placeholder(request: Request):
 </html>
 """
   html = html.replace("__GENESYS_REGION__", escape(GENESYS_CLOUD_REGION or "usw2"))
-  html = html.replace("__GENESYS_CLIENT_ID__", escape(GENESYS_CLIENT_ID or ""))
   html = html.replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host))
   html = html.replace("__AUTH_USER__", escape(auth_user))
   return HTMLResponse(html)
