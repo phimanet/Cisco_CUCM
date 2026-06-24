@@ -1617,12 +1617,13 @@ def _get_line_external_number_mask(cucm_host: str, cucm_user: str, cucm_pass: st
     f"https://{cucm_host}:8443/axl/",
     data=soap.encode("utf-8"),
     headers={"Content-Type": "text/xml"},
+    verify=False,
     timeout=60,
   )
   if response.status_code != 200:
     return pattern
 
-  root = _parse_xml_or_runtime_error(response.text or "", "getUser")
+  root = _parse_xml_or_runtime_error(response.text or "", "getLine")
   for elem in root.iter():
     tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
     if tag == "externalPhoneNumberMask":
@@ -1678,12 +1679,13 @@ def _find_jabber_extension(cucm_host: str, cucm_user: str, cucm_pass: str, targe
     f"https://{cucm_host}:8443/axl/",
     data=soap.encode("utf-8"),
     headers={"Content-Type": "text/xml"},
+    verify=False,
     timeout=60,
   )
   if response.status_code != 200:
     raise RuntimeError(f"getUser failed: {response.status_code}")
 
-  root = _parse_xml_or_runtime_error(response.text or "", "listTransPattern")
+  root = _parse_xml_or_runtime_error(response.text or "", "getUser")
   primary_ext = ""
   jabber_devices = []
 
@@ -1738,6 +1740,7 @@ def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str)
     f"https://{cucm_host}:8443/axl/",
     data=soap.encode("utf-8"),
     headers={"Content-Type": "text/xml"},
+    verify=False,
     timeout=60,
   )
   if response.status_code != 200:
@@ -1817,6 +1820,7 @@ def _list_in_use_strike_mask_patterns(cucm_host: str, cucm_user: str, cucm_pass:
     f"https://{cucm_host}:8443/axl/",
     data=soap.encode("utf-8"),
     headers={"Content-Type": "text/xml"},
+    verify=False,
     timeout=60,
   )
   if response.status_code != 200:
