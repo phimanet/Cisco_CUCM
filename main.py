@@ -113,6 +113,10 @@ TWILIO_SUBACCOUNT_NAME = (os.getenv("TWILIO_SUBACCOUNT_NAME", "AMNOne-Notificati
 TWILIO_SALESFORCE_SUBACCOUNT_SID = (os.getenv("TWILIO_SALESFORCE_SUBACCOUNT_SID", "") or "").strip()
 TWILIO_SALESFORCE_AUTH_TOKEN = (os.getenv("TWILIO_SALESFORCE_AUTH_TOKEN", "") or "").strip()
 TWILIO_SALESFORCE_SUBACCOUNT_NAME = (os.getenv("TWILIO_SALESFORCE_SUBACCOUNT_NAME", "Enterprise Org Prod") or "Enterprise Org Prod").strip()
+TWILIO_AMIEWEB_DEFAULT_SMS_URL = (
+  os.getenv("TWILIO_AMIEWEB_DEFAULT_SMS_URL", "https://api.amnhealthcare.io/listener/notification/v1/twilio/listener")
+  or "https://api.amnhealthcare.io/listener/notification/v1/twilio/listener"
+).strip()
 AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aerialink.net/v5") or "https://apix5.aerialink.net/v5").strip().rstrip("/")
 AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
 AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
@@ -10154,13 +10158,13 @@ def page3_twilio_items(request: Request):
         <section class="tool-panel" data-panel="twilio-sms-hosting">
           <div class="panel">
             <h3>Twilio SMS Hosting - AMIEWeb</h3>
-            <p>Host SMS for one or more Twilio numbers in AMIEWeb. This updates SMS webhook fields only and does not modify voice webhook settings.</p>
+              <p>Host SMS for one or more Twilio numbers in AMIEWeb. This updates SMS webhook fields only and does not modify voice webhook settings. If SMS URL is left blank, the default AMN listener URL is used.</p>
             <form id="twilio-sms-host-form">
               <div class="search-filter-row" style="align-items:flex-start;">
                 <textarea name="phone_numbers" rows="5" placeholder="Phone numbers (one or more), separated by commas or new lines&#10;Example: 8585236648" required></textarea>
               </div>
               <div class="search-filter-row">
-                <input name="sms_url" placeholder="SMS URL (https://...) *" required>
+                  <input name="sms_url" placeholder="SMS URL (optional; blank uses default)" value="__DEFAULT_TWILIO_SMS_URL__">
                 <input name="sms_method" placeholder="SMS Method (POST/GET)" value="POST">
               </div>
               <div class="search-filter-row">
@@ -10173,7 +10177,7 @@ def page3_twilio_items(request: Request):
                 <button type="submit">Apply SMS Hosting</button>
               </div>
             </form>
-            <p id="twilio-sms-host-status" style="color:#2c5c8a; min-height:18px;">Required fields: phone number(s), SMS URL, SMS method.</p>
+            <p id="twilio-sms-host-status" style="color:#2c5c8a; min-height:18px;">Required fields: phone number(s), SMS method. Leave SMS URL blank to use the default AMN listener URL.</p>
             <div id="twilio-sms-host-results" style="overflow-x:auto;"></div>
           </div>
         </section>
@@ -11061,7 +11065,7 @@ def page3_twilio_items(request: Request):
     </main>
   </body>
 </html>
-""".replace("__SMS_LOOK_MENU__", sms_look_menu_html).replace("__SMS_LOOK_PANEL__", sms_look_panel_html).replace("__TWILIO_LOOKUP_ACTIVE_CLASS__", twilio_lookup_btn_active_class).replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
+""".replace("__SMS_LOOK_MENU__", sms_look_menu_html).replace("__SMS_LOOK_PANEL__", sms_look_panel_html).replace("__TWILIO_LOOKUP_ACTIVE_CLASS__", twilio_lookup_btn_active_class).replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DEFAULT_TWILIO_SMS_URL__", escape(TWILIO_AMIEWEB_DEFAULT_SMS_URL))
 
   return HTMLResponse(
     content=html,
@@ -13012,12 +13016,11 @@ def twilio_amieweb_sms_host_route(
     try:
       required_fields = [
         "phone_numbers (one or more, comma/newline separated)",
-        "sms_url (HTTPS endpoint for inbound SMS webhook)",
         "sms_method (GET or POST)",
       ]
 
       numbers = _parse_phone_number_input_list(phone_numbers)
-      clean_sms_url = (sms_url or "").strip()
+      clean_sms_url = (sms_url or "").strip() or TWILIO_AMIEWEB_DEFAULT_SMS_URL
       if not numbers:
         return JSONResponse({
           "ok": False,
@@ -13025,17 +13028,10 @@ def twilio_amieweb_sms_host_route(
           "required_fields": required_fields,
           "results": [],
         }, status_code=400)
-      if not clean_sms_url:
-        return JSONResponse({
-          "ok": False,
-          "error": "sms_url is required.",
-          "required_fields": required_fields,
-          "results": [],
-        }, status_code=400)
       if not clean_sms_url.lower().startswith("https://"):
         return JSONResponse({
           "ok": False,
-          "error": "sms_url must be an HTTPS URL.",
+          "error": "sms_url must be an HTTPS URL (or blank to use default).",
           "required_fields": required_fields,
           "results": [],
         }, status_code=400)
