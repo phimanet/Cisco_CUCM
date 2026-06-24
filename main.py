@@ -129,7 +129,7 @@ MOBILE_JABBER_EMAIL_BODY = (
 )
 STRIKE_MASK_PATTERN_PREFIX = (os.getenv("STRIKE_MASK_PATTERN_PREFIX", "945") or "945").strip()
 STRIKE_MASK_ROUTE_PARTITION = "ENT_DEVICE_PT"
-STRIKE_MASK_AVAILABLE_TRANSFORM_MASK = "2481001"
+STRIKE_MASK_AVAILABLE_TRANSFORM_MASK = "248101"
 CSF_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 TWILIO_INBOUND_VERIFICATION_PROFILES = {
   "phimane": {
@@ -1677,14 +1677,13 @@ def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str)
   session.verify = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
-  pattern_prefix = STRIKE_MASK_PATTERN_PREFIX
   soap = f"""<?xml version="1.0" encoding="utf-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
   <soapenv:Header/>
   <soapenv:Body>
     <axl:listTransPattern sequence="1">
       <searchCriteria>
-        <pattern>{xml_escape(pattern_prefix)}%</pattern>
+        <pattern>%</pattern>
       </searchCriteria>
       <returnedTags>
         <pattern/>
@@ -1735,7 +1734,7 @@ def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str)
     mask_clean = (mask or "").strip()
     is_available = (
       (
-        "available" in desc_lower
+        desc_lower.startswith("strike mask -")
         or desc_lower == expected_simple_desc
       )
       and mask_clean == STRIKE_MASK_AVAILABLE_TRANSFORM_MASK
@@ -1757,14 +1756,13 @@ def _list_in_use_strike_mask_patterns(cucm_host: str, cucm_user: str, cucm_pass:
   session.verify = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
-  pattern_prefix = STRIKE_MASK_PATTERN_PREFIX
   soap = f"""<?xml version="1.0" encoding="utf-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
   <soapenv:Header/>
   <soapenv:Body>
     <axl:listTransPattern sequence="1">
       <searchCriteria>
-        <pattern>{xml_escape(pattern_prefix)}%</pattern>
+        <pattern>%</pattern>
       </searchCriteria>
       <returnedTags>
         <pattern/>
@@ -1814,7 +1812,7 @@ def _list_in_use_strike_mask_patterns(cucm_host: str, cucm_user: str, cucm_pass:
     expected_simple_desc = f"strike mask - {pattern}".lower()
     is_available = (
       (
-        "available" in desc_lower
+        desc_lower.startswith("strike mask -")
         or desc_lower == expected_simple_desc
       )
       and (mask or "").strip() == STRIKE_MASK_AVAILABLE_TRANSFORM_MASK
@@ -2140,7 +2138,7 @@ def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, t
 
   available_patterns = _find_available_945_patterns(cucm_host, cucm_user, cucm_pass)
   if not available_patterns:
-    raise RuntimeError(f"No available {STRIKE_MASK_PATTERN_PREFIX} Strike Mask patterns were found")
+    raise RuntimeError("No available Strike Mask patterns were found")
 
   selected = None
   requested_pattern = (selected_pattern or "").strip()
