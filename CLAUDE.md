@@ -109,6 +109,8 @@ Priority keys:
 - SMS Hosting route now requires: phone number(s), `sms_url` (HTTPS), and `sms_method` (`POST`/`GET`); optional fallback/status-callback fields supported.
 - Confirmed implementation intent: SMS-only update path modifies Twilio IncomingPhoneNumber messaging webhooks and does not alter voice webhook settings.
 - Current operator workflow paused at input collection stage: POST confirmed; awaiting final SMS URL and first test number for live run.
+- Operator provided SMS POST endpoint for Twilio hosting: `https://api.amnhealthcare.io/listener/notification/v1/twilio/listener`.
+- Session paused for workstation reboot before collecting first target number and running SMS-hosting test.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.
