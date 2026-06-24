@@ -4328,14 +4328,13 @@ def genesys_admin_placeholder(request: Request):
         <section class="portal-main">
           <div class="panel">
             <h3 style="margin-top:0;">Extract User by Name</h3>
-            <p style="margin-top:0; color:#4e6a84;">Region defaults to US West (`usw2`). OAuth credentials are loaded from server environment variables by default (recommended). Optional form fields below can override for testing. If Genesys lookup requires email alignment, CUCM name lookup is used to collect email targets from the existing workflow context.</p>
+            <p style="margin-top:0; color:#4e6a84;">Region is fixed to US West (`usw2`). OAuth credentials are loaded from server environment variables by default (recommended). Optional form fields below can override for testing. If Genesys lookup requires email alignment, CUCM name lookup is used to collect email targets from the existing workflow context.</p>
 
             <form id="genesys-user-search-form">
               <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
               <input type="hidden" name="cucm_user" value="__AUTH_USER__">
               <input type="hidden" name="cucm_pass" value="">
               <div class="search-filter-row">
-                <input name="region" placeholder="Genesys Region" value="__GENESYS_REGION__" style="width:120px;">
                 <input name="client_id" placeholder="OAuth Client ID (optional override)" style="width:320px;">
                 <input type="password" name="client_secret" placeholder="OAuth Client Secret (optional override)" style="width:320px;">
               </div>
@@ -4411,7 +4410,6 @@ def genesys_admin_placeholder(request: Request):
   </body>
 </html>
 """
-  html = html.replace("__GENESYS_REGION__", escape(GENESYS_CLOUD_REGION or "usw2"))
   html = html.replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host))
   html = html.replace("__AUTH_USER__", escape(auth_user))
   return HTMLResponse(html)
@@ -4420,7 +4418,7 @@ def genesys_admin_placeholder(request: Request):
 @app.post("/genesys/users/extract")
 def genesys_extract_users_route(
   request: Request,
-  region: str = Form("usw2"),
+  region: str = Form(""),
   client_id: str = Form(""),
   client_secret: str = Form(""),
   last_name: str = Form(""),
@@ -4430,7 +4428,7 @@ def genesys_extract_users_route(
   cucm_pass: str = Form(""),
 ):
   session = _get_auth_session(request) or {}
-  clean_region = (region or "").strip().lower() or "usw2"
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
   clean_client_id = (client_id or "").strip() or GENESYS_CLIENT_ID
   clean_client_secret = (client_secret or "").strip() or GENESYS_CLIENT_SECRET
   clean_last = (last_name or "").strip()
