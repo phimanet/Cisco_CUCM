@@ -218,6 +218,9 @@ DEFAULT_SETTINGS = {
   "general_fte_prefix": "945",
   "strike_prefix": "817",
   "recruiter_prefix": "469",
+  "twilio_loa_recipient_name": "Laura Alvarez",
+  "twilio_loa_recipient_email": "laura.alvarez@amnhealthare.com",
+  "twilio_loa_recipient_phone": "+18583503289",
 }
 SETTINGS_LOCK = threading.Lock()
 
@@ -1323,6 +1326,89 @@ def _parse_phone_number_input_list(raw_text: str) -> list[str]:
   return values
 
 
+def _lookup_twilio_number_in_subaccount(phone_number: str, force_refresh: bool = True) -> dict:
+  e164 = _normalize_phone_to_e164(phone_number)
+  if not e164:
+    return {
+      "enabled": bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN),
+      "found": False,
+      "phone_number": "",
+      "sid": "",
+      "lookup_account_sid": "",
+      "lookup_auth_token": "",
+      "status": "No telephone",
+    }
+
+  lookup_sid = _resolve_twilio_lookup_account_sid()
+  lookup_token = _resolve_twilio_lookup_auth_token_for_sid(lookup_sid)
+  if not lookup_sid or not lookup_token:
+    return {
+      "enabled": False,
+      "found": False,
+      "phone_number": e164,
+      "sid": "",
+      "lookup_account_sid": "",
+      "lookup_auth_token": "",
+      "status": "Twilio subaccount is not configured",
+    }
+
+  # Enforce subaccount-only behavior for hosting flow.
+  if TWILIO_ACCOUNT_SID and lookup_sid == TWILIO_ACCOUNT_SID:
+    return {
+      "enabled": False,
+      "found": False,
+      "phone_number": e164,
+      "sid": "",
+      "lookup_account_sid": "",
+      "lookup_auth_token": "",
+      "status": "Twilio subaccount SID is required; parent account is not allowed for hosting",
+    }
+
+  listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token, force_refresh=force_refresh)
+  if not listed.get("ok"):
+    return {
+      "enabled": True,
+      "found": False,
+      "phone_number": e164,
+      "sid": "",
+      "lookup_account_sid": lookup_sid,
+      "lookup_auth_token": lookup_token,
+      "status": str(listed.get("status", "Lookup failed")),
+    }
+
+  digits = "".join(ch for ch in e164 if ch.isdigit())
+  candidates = {e164, digits}
+  if len(digits) == 11 and digits.startswith("1"):
+    candidates.add(digits[1:])
+    candidates.add(f"+{digits[1:]}")
+
+  for number_item in listed.get("numbers", []) or []:
+    if not isinstance(number_item, dict):
+      continue
+    candidate = str(number_item.get("phone_number", "")).strip()
+    candidate_digits = "".join(ch for ch in candidate if ch.isdigit())
+    if candidate in candidates or candidate_digits in candidates:
+      return {
+        "enabled": True,
+        "found": True,
+        "phone_number": candidate or e164,
+        "sid": str(number_item.get("sid", "") or "").strip(),
+        "lookup_account_sid": lookup_sid,
+        "lookup_auth_token": lookup_token,
+        "status": "Found",
+      }
+
+  return {
+    "enabled": True,
+    "found": False,
+    "phone_number": e164,
+    "sid": "",
+    "lookup_account_sid": lookup_sid,
+    "lookup_auth_token": lookup_token,
+    "status": "Not Found",
+  }
+
+
 def _build_twilio_sms_only_update_payload(
   sms_url: str,
   sms_method: str,
@@ -1355,7 +1441,7 @@ def _build_twilio_sms_only_update_payload(
 
 
 def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict:
-  lookup = _lookup_twilio_number_by_phone(phone_number, account="default", force_refresh=True)
+  lookup = _lookup_twilio_number_in_subaccount(phone_number, force_refresh=True)
   if not lookup.get("enabled"):
     return {
       "ok": False,
@@ -1440,11 +1526,19 @@ def _twilio_add_sms_hosted_number(phone_number: str, payload: dict, lookup_statu
       "status": "Twilio AMIEWeb account is not configured for add/provision",
     }
 
+  if TWILIO_ACCOUNT_SID and primary_sid == TWILIO_ACCOUNT_SID:
+    return {
+      "ok": False,
+      "action": "Failed",
+      "input": phone_number,
+      "normalized": normalized,
+      "sid": "",
+      "status": "Twilio subaccount SID is required; parent account is not allowed for hosting",
+    }
+
   candidate_accounts: list[tuple[str, str, str]] = [
     (primary_sid, primary_token, "AMIEWeb subaccount"),
   ]
-  if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_ACCOUNT_SID != primary_sid:
-    candidate_accounts.append((TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, "Parent account"))
 
   create_payload = dict(payload)
   create_payload["PhoneNumber"] = normalized
@@ -9711,6 +9805,10 @@ def page3_twilio_items(request: Request):
   credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
   credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
+  settings = _load_settings()
+  default_twilio_loa_recipient_name = (settings.get("twilio_loa_recipient_name", "") or "").strip()
+  default_twilio_loa_recipient_email = (settings.get("twilio_loa_recipient_email", "") or "").strip()
+  default_twilio_loa_recipient_phone = (settings.get("twilio_loa_recipient_phone", "") or "").strip()
   sms_look_enabled = SMS_NUMBER_LOOKUP_ENABLED
 
   sms_look_menu_html = ""
@@ -10326,6 +10424,13 @@ def page3_twilio_items(request: Request):
                 <input name="friendly_name" placeholder="Friendly Name (optional custom). Blank = auto YYYYMMDD_X">
               </div>
               <div class="search-filter-row">
+                <input name="loa_recipient_name" placeholder="LOA Recipient Name (default from Settings)" value="__DEFAULT_TWILIO_LOA_RECIPIENT_NAME__">
+                <input name="loa_recipient_email" placeholder="LOA Recipient Email (default from Settings)" value="__DEFAULT_TWILIO_LOA_RECIPIENT_EMAIL__">
+              </div>
+              <div class="search-filter-row">
+                <input name="loa_recipient_phone" placeholder="LOA Recipient Phone (default from Settings)" value="__DEFAULT_TWILIO_LOA_RECIPIENT_PHONE__">
+              </div>
+              <div class="search-filter-row">
                 <input name="sms_fallback_url" placeholder="SMS Fallback URL (optional)">
                 <input name="sms_fallback_method" placeholder="SMS Fallback Method (POST/GET)" value="POST">
               </div>
@@ -10335,7 +10440,7 @@ def page3_twilio_items(request: Request):
                 <button type="submit">Apply SMS Hosting</button>
               </div>
             </form>
-            <p id="twilio-sms-host-status" style="color:#2c5c8a; min-height:18px;">Required fields: phone number(s), SMS method. Friendly Name can be custom, or blank for auto YYYYMMDD_X.</p>
+            <p id="twilio-sms-host-status" style="color:#2c5c8a; min-height:18px;">Required fields: phone number(s), SMS method. Friendly Name can be custom, or blank for auto YYYYMMDD_X. LOA contact defaults come from Settings.</p>
             <div id="twilio-sms-host-results" style="overflow-x:auto;"></div>
           </div>
         </section>
@@ -10908,7 +11013,10 @@ def page3_twilio_items(request: Request):
               const friendlyNote = (submitted.friendly_name_mode === "custom")
                 ? (`FriendlyName: ${submitted.friendly_name || ""}`)
                 : (`FriendlyName auto-seed: ${submitted.friendly_name_auto_seed || ""}`);
-              statusEl.textContent = `Requested: ${summary.requested || 0} | Updated: ${summary.updated || 0} | Failed: ${summary.failed || 0} | ${friendlyNote}`;
+              const loaNote = submitted.loa_recipient_email
+                ? (`LOA contact: ${submitted.loa_recipient_name || ""} <${submitted.loa_recipient_email}>`)
+                : "LOA contact: not set";
+              statusEl.textContent = `Requested: ${summary.requested || 0} | Updated: ${summary.updated || 0} | Failed: ${summary.failed || 0} | ${friendlyNote} | ${loaNote}`;
 
               const rows = payload.results || [];
               if (!rows.length) {
@@ -11229,7 +11337,7 @@ def page3_twilio_items(request: Request):
     </main>
   </body>
 </html>
-""".replace("__SMS_LOOK_MENU__", sms_look_menu_html).replace("__SMS_LOOK_PANEL__", sms_look_panel_html).replace("__TWILIO_LOOKUP_ACTIVE_CLASS__", twilio_lookup_btn_active_class).replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DEFAULT_TWILIO_SMS_URL__", escape(TWILIO_AMIEWEB_DEFAULT_SMS_URL))
+""".replace("__SMS_LOOK_MENU__", sms_look_menu_html).replace("__SMS_LOOK_PANEL__", sms_look_panel_html).replace("__TWILIO_LOOKUP_ACTIVE_CLASS__", twilio_lookup_btn_active_class).replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DEFAULT_TWILIO_SMS_URL__", escape(TWILIO_AMIEWEB_DEFAULT_SMS_URL)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_NAME__", escape(default_twilio_loa_recipient_name)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_EMAIL__", escape(default_twilio_loa_recipient_email)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_PHONE__", escape(default_twilio_loa_recipient_phone))
 
   return HTMLResponse(
     content=html,
@@ -11243,7 +11351,7 @@ def page3_twilio_items(request: Request):
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request):
-  """Admin settings page for configuring phone prefixes."""
+  """Admin settings page for configuring phone prefixes and Twilio LOA defaults."""
   session = _get_auth_session(request) or {}
   session_username = str(session.get("username", ""))
   if not _is_admin_user(session_username):
@@ -11394,7 +11502,7 @@ def settings_page(request: Request):
     <div class="container">
       <div class="header">
         <h1>DN Prefix Settings</h1>
-        <p>Manage phone number prefixes for Jabber builds</p>
+        <p>Manage phone number prefixes and Twilio LOA defaults</p>
       </div>
       
       <div class="content">
@@ -11417,6 +11525,24 @@ def settings_page(request: Request):
             <label for="recruiter_prefix">Recruiter Prefix</label>
             <input type="text" id="recruiter_prefix" name="recruiter_prefix" value="{escape(settings.get('recruiter_prefix', '469'))}" maxlength="10" required>
             <div class="help-text">Used when building Recruiter Jabber phones</div>
+          </div>
+
+          <div class="form-group">
+            <label for="twilio_loa_recipient_name">Twilio LOA Recipient Name</label>
+            <input type="text" id="twilio_loa_recipient_name" name="twilio_loa_recipient_name" value="{escape(settings.get('twilio_loa_recipient_name', 'Laura Alvarez'))}" maxlength="120">
+            <div class="help-text">Default person for LOA handoff during Twilio hosted-number onboarding</div>
+          </div>
+
+          <div class="form-group">
+            <label for="twilio_loa_recipient_email">Twilio LOA Recipient Email</label>
+            <input type="text" id="twilio_loa_recipient_email" name="twilio_loa_recipient_email" value="{escape(settings.get('twilio_loa_recipient_email', 'laura.alvarez@amnhealthare.com'))}" maxlength="254">
+            <div class="help-text">Default LOA email target used by Twilio SMS Hosting form</div>
+          </div>
+
+          <div class="form-group">
+            <label for="twilio_loa_recipient_phone">Twilio LOA Recipient Phone</label>
+            <input type="text" id="twilio_loa_recipient_phone" name="twilio_loa_recipient_phone" value="{escape(settings.get('twilio_loa_recipient_phone', '+18583503289'))}" maxlength="32">
+            <div class="help-text">Default LOA phone for operator reference</div>
           </div>
           
           <div class="button-group">
@@ -11441,6 +11567,9 @@ def settings_page(request: Request):
           general_fte_prefix: document.getElementById('general_fte_prefix').value.trim(),
           strike_prefix: document.getElementById('strike_prefix').value.trim(),
           recruiter_prefix: document.getElementById('recruiter_prefix').value.trim(),
+          twilio_loa_recipient_name: document.getElementById('twilio_loa_recipient_name').value.trim(),
+          twilio_loa_recipient_email: document.getElementById('twilio_loa_recipient_email').value.trim(),
+          twilio_loa_recipient_phone: document.getElementById('twilio_loa_recipient_phone').value.trim(),
         }};
         
         if (!formData.general_fte_prefix || !formData.strike_prefix || !formData.recruiter_prefix) {{
@@ -11492,7 +11621,7 @@ def get_settings_api(request: Request):
 
 @app.post("/api/settings")
 def update_settings_api(request: Request, body: dict = None):
-  """Update DN prefix settings."""
+  """Update DN prefix settings and Twilio LOA defaults."""
   session = _get_auth_session(request)
   if not session:
     return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
@@ -11519,6 +11648,9 @@ def update_settings_api(request: Request, body: dict = None):
     general_fte_prefix = (body.get("general_fte_prefix", "") or "").strip()
     strike_prefix = (body.get("strike_prefix", "") or "").strip()
     recruiter_prefix = (body.get("recruiter_prefix", "") or "").strip()
+    twilio_loa_recipient_name = (body.get("twilio_loa_recipient_name", "") or "").strip()
+    twilio_loa_recipient_email = (body.get("twilio_loa_recipient_email", "") or "").strip()
+    twilio_loa_recipient_phone = (body.get("twilio_loa_recipient_phone", "") or "").strip()
     
     if not general_fte_prefix or not strike_prefix or not recruiter_prefix:
       return JSONResponse({"ok": False, "error": "All fields are required"}, status_code=400)
@@ -11531,6 +11663,9 @@ def update_settings_api(request: Request, body: dict = None):
       "general_fte_prefix": general_fte_prefix,
       "strike_prefix": strike_prefix,
       "recruiter_prefix": recruiter_prefix,
+      "twilio_loa_recipient_name": twilio_loa_recipient_name,
+      "twilio_loa_recipient_email": twilio_loa_recipient_email,
+      "twilio_loa_recipient_phone": twilio_loa_recipient_phone,
     }
     
     if _save_settings(new_settings):
@@ -13173,6 +13308,9 @@ def twilio_amieweb_sms_host_route(
     sms_url: str = Form(""),
     sms_method: str = Form("POST"),
   friendly_name: str = Form(""),
+    loa_recipient_name: str = Form(""),
+    loa_recipient_email: str = Form(""),
+    loa_recipient_phone: str = Form(""),
     sms_fallback_url: str = Form(""),
     sms_fallback_method: str = Form("POST"),
     status_callback_url: str = Form(""),
@@ -13185,8 +13323,12 @@ def twilio_amieweb_sms_host_route(
       ]
 
       numbers = _parse_phone_number_input_list(phone_numbers)
+      settings = _load_settings()
       clean_sms_url = (sms_url or "").strip() or TWILIO_AMIEWEB_DEFAULT_SMS_URL
       custom_friendly_name = (friendly_name or "").strip()
+      clean_loa_recipient_name = (loa_recipient_name or "").strip() or (settings.get("twilio_loa_recipient_name", "") or "").strip()
+      clean_loa_recipient_email = (loa_recipient_email or "").strip() or (settings.get("twilio_loa_recipient_email", "") or "").strip()
+      clean_loa_recipient_phone = (loa_recipient_phone or "").strip() or (settings.get("twilio_loa_recipient_phone", "") or "").strip()
       if not numbers:
         return JSONResponse({
           "ok": False,
@@ -13246,6 +13388,9 @@ def twilio_amieweb_sms_host_route(
           "friendly_name": custom_friendly_name,
           "friendly_name_mode": "custom" if custom_friendly_name else "auto",
           "friendly_name_auto_seed": f"{auto_prefix}_{auto_index}",
+          "loa_recipient_name": clean_loa_recipient_name,
+          "loa_recipient_email": clean_loa_recipient_email,
+          "loa_recipient_phone": clean_loa_recipient_phone,
           "sms_fallback_url": payload.get("SmsFallbackUrl", ""),
           "sms_fallback_method": payload.get("SmsFallbackMethod", ""),
           "status_callback_url": payload.get("StatusCallback", ""),
