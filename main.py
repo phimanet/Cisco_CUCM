@@ -9428,6 +9428,47 @@ def page3_twilio_items(request: Request):
   credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
   credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
+  sms_look_enabled = _is_lab_runtime_host() is True
+
+  sms_look_menu_html = ""
+  sms_look_panel_html = ""
+  if sms_look_enabled:
+    sms_look_menu_html = '<button type="button" class="portal-nav-btn" data-panel="sms-number-look">SMS Number Look</button>'
+    sms_look_panel_html = """
+      <section class="tool-panel active" data-panel="sms-number-look">
+          <div class="panel">
+            <h3>SMS Number Look</h3>
+            <p>Lookup by name or number. This checks all platforms: Twilio AMIEWeb, Twilio Salesforce Enterprise Org Prod, and Aerialink Classic.</p>
+
+            <form id="sms-look-name-form">
+              <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+              <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+              <input type="hidden" name="cucm_pass" value="">
+              <div class="search-filter-row">
+                <input name="last_name" placeholder="Last Name *" required>
+                <input name="first_name" placeholder="First Name (optional)">
+                <button type="submit">Lookup by Name</button>
+              </div>
+            </form>
+            <p id="sms-look-name-status" style="color:#2c5c8a; min-height:18px;">Enter a last name to search SMS platform presence.</p>
+
+            <hr style="margin: 18px 0; border: none; border-top: 1px solid #ddd;">
+
+            <form id="sms-look-number-form">
+              <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+              <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+              <input type="hidden" name="cucm_pass" value="">
+              <div class="search-filter-row">
+                <input name="phone_number" placeholder="Telephone (10 digits)" pattern="^\\d{10}$" title="Enter exactly 10 digits" required>
+                <button type="submit">Lookup by Number</button>
+              </div>
+            </form>
+            <p id="sms-look-number-status" style="color:#2c5c8a; min-height:18px;"></p>
+
+            <div id="sms-look-results" style="overflow-x:auto;"></div>
+          </div>
+        </section>
+"""
 
   html = """
 <html>
@@ -9943,6 +9984,7 @@ def page3_twilio_items(request: Request):
       <aside class="portal-sidebar">
         <h4>Twilio Menu</h4>
         <div class="portal-nav">
+          __SMS_LOOK_MENU__
           <button type="button" class="portal-nav-btn active" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
@@ -9952,7 +9994,8 @@ def page3_twilio_items(request: Request):
       </aside>
 
       <section class="portal-main">
-        <section class="tool-panel active" data-panel="twilio-lookup">
+        __SMS_LOOK_PANEL__
+        <section class="tool-panel" data-panel="twilio-lookup">
           <div class="panel">
             <h3>Twilio Number Lookup - AMIEWeb</h3>
             <p>Search employees by name, then lookup their Twilio number information.</p>
@@ -10250,6 +10293,105 @@ def page3_twilio_items(request: Request):
           summaryId: "admin-twilio-verify-lauraa-summary",
           restoreButtonId: "admin-twilio-verify-lauraa-restore",
         });
+
+        // SMS Number Look - unified lookup across Twilio AMIEWeb, Twilio Salesforce, and Aerialink.
+        (function () {
+          const nameForm = document.getElementById("sms-look-name-form");
+          const numberForm = document.getElementById("sms-look-number-form");
+          const nameStatusEl = document.getElementById("sms-look-name-status");
+          const numberStatusEl = document.getElementById("sms-look-number-status");
+          const resultsEl = document.getElementById("sms-look-results");
+
+          if (!nameForm || !numberForm || !nameStatusEl || !numberStatusEl || !resultsEl) {
+            return;
+          }
+
+          function renderRows(rows) {
+            if (!rows || !rows.length) {
+              resultsEl.innerHTML = "";
+              return;
+            }
+
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">SMS Number</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Configured In</th>';
+            html += '</tr></thead><tbody>';
+
+            rows.forEach(function (row, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px;">' + (row.display_name || "-") + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.extension || "-") + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.sms_number || "-") + '</td>';
+              html += '<td style="padding:7px 10px;">' + (row.configured_in || "Not Found") + '</td>';
+              html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            resultsEl.innerHTML = html;
+          }
+
+          nameForm.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            nameStatusEl.textContent = "Searching by name across all SMS platforms...";
+            numberStatusEl.textContent = "";
+            resultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(nameForm);
+              const response = await fetch("/lookup/sms-number-look", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload.error && payload.error.message) || payload.detail || "Lookup failed.");
+              }
+
+              const rows = payload.results || [];
+              if (!rows.length) {
+                nameStatusEl.textContent = "No users found.";
+                renderRows([]);
+                return;
+              }
+
+              nameStatusEl.textContent = `Found ${rows.length} result(s).`;
+              renderRows(rows);
+            } catch (err) {
+              nameStatusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+
+          numberForm.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            numberStatusEl.textContent = "Searching by number across all SMS platforms...";
+            nameStatusEl.textContent = "";
+            resultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(numberForm);
+              const response = await fetch("/lookup/sms-number-look", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload.error && payload.error.message) || payload.detail || "Lookup failed.");
+              }
+
+              const rows = payload.results || [];
+              numberStatusEl.textContent = rows.length ? `Found ${rows.length} result(s).` : "Number not found in SMS platforms.";
+              renderRows(rows);
+            } catch (err) {
+              numberStatusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        })();
 
         // Twilio Lookup Form Handler
         (function () {
@@ -10667,7 +10809,7 @@ def page3_twilio_items(request: Request):
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
+""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__SMS_LOOK_MENU__", sms_look_menu_html).replace("__SMS_LOOK_PANEL__", sms_look_panel_html)
 
   return HTMLResponse(
     content=html,
@@ -12629,6 +12771,82 @@ def lookup_aerialink_by_number_route(phone_number: str = Form(...)):
           "error": str(exc),
           "result": None,
       }, status_code=500)
+
+
+@app.post("/lookup/sms-number-look")
+def lookup_sms_number_look_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    last_name: str = Form(""),
+    first_name: str = Form(""),
+    phone_number: str = Form(""),
+):
+    if _is_lab_runtime_host() is not True:
+      raise RuntimeError("SMS Number Look is LAB-only for now.")
+
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+    clean_phone = (phone_number or "").strip()
+    clean_last = (last_name or "").strip()
+    clean_first = (first_name or "").strip()
+
+    def _build_platform_row(display_name: str, extension: str, telephone: str) -> dict:
+      twilio_default = _lookup_twilio_number_by_phone(telephone, account="default")
+      twilio_sfdc = _lookup_twilio_number_by_phone(telephone, account="salesforce")
+      aerialink = _lookup_aerialink_account_code_by_phone(telephone)
+
+      found_in = []
+      if twilio_default.get("found"):
+        found_in.append("Twilio - AMIEWeb")
+      if twilio_sfdc.get("found"):
+        found_in.append("Twilio - Salesforce")
+      if aerialink.get("provisioned"):
+        found_in.append("Aerialink Classic")
+
+      sms_number = (
+        (twilio_default.get("phone_number") or "").strip()
+        or (twilio_sfdc.get("phone_number") or "").strip()
+        or (aerialink.get("matched_number") or "").strip()
+        or _normalize_phone_to_e164(telephone)
+        or (telephone or "").strip()
+      )
+
+      return {
+        "display_name": display_name or "-",
+        "extension": extension or "-",
+        "sms_number": sms_number or "-",
+        "configured_in": ", ".join(found_in) if found_in else "Not Found",
+      }
+
+    results = []
+    mode = ""
+
+    if clean_phone:
+      mode = "number"
+      results.append(_build_platform_row(display_name="(Direct Number Lookup)", extension="-", telephone=clean_phone))
+    else:
+      mode = "name"
+      if not clean_last:
+        raise RuntimeError("Last Name is required when phone number is not provided.")
+
+      users = search_persons_by_name(cucm_host, cucm_user, cucm_pass, clean_last, clean_first)
+      for user in users:
+        display_name = (user.get("display_name") or "").strip() or (
+          (user.get("first_name") or "") + " " + (user.get("last_name") or "")
+        ).strip() or (user.get("userid") or "")
+        extension = (user.get("primary_extension") or "").strip()
+        telephone = (user.get("telephone") or "").strip()
+        results.append(_build_platform_row(display_name=display_name, extension=extension, telephone=telephone))
+
+    return JSONResponse({
+      "ok": True,
+      "mode": mode,
+      "count": len(results),
+      "results": results,
+    })
 
 
 @app.post("/check/jabber-status")
