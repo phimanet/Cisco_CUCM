@@ -35,6 +35,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [x] [P1][Done] Offboard (Separate Employee) workflow now auto-releases toll-free translation pattern: searches description for First Last name + verifies Called Party Transform Mask matches removed extension; if found, sets description to "{pattern} Available" and resets mask to 2481001. Skips silently if no match found.
 - [ ] [P1][Planned] v1.01 enhancement: add VeraSMART (Calero on-prem) LAB-only automation module scaffold in portal (queue intake, run status, audit/log placeholders; no production rollout yet).
 - [ ] [P1][Planned] On Jabber build workflows (Page 1 and Page 2), detect Unity voicemail failure due to AD inactive account, prompt admin for start date, auto-schedule voicemail creation for that user at 10:00 AM PST on start date, then email the build operator on success (operator email derived from username with trailing `.ad`/`.adm` removed + `@amnhealthcare.com`).
+- [ ] [P1][In Progress] Twilio AMIEWeb SMS-only hosting workflow on Page 3: supports one or more numbers, updates SMS webhook fields only (no voice changes), LAB validated for panel visibility and awaiting operator-provided POST endpoint values for live update test.
 - [x] [P2][Done] After job submission, clear the "User ID for person..." input field to prevent accidental repeat Jabber creation.
 - [x] [P2][Done] Refresh the web portal theme to align with AMN Healthcare visual style (brand colors, typography, spacing, and overall look/feel).
 - [x] [P2][Done] Add per-option success/failure summary panel in the UI after CSV generation.
@@ -103,6 +104,11 @@ Priority keys:
 - Final rule confirmed: available Strike Mask translation patterns must have description beginning with `Strike Mask -` and Called Party Transform Mask exactly `2481001`.
 - Updated Strike Mask apply/reverse/template paths to consistently use `2481001` for available-state mask handling.
 - Git operation on local Windows workspace hit repeated interactive prompt (`Deletion of directory '.git/objects/*' failed. Should I try again?`), causing commit/push flow interruption during this session.
+- Enabled SMS Number Lookup menu item and route behavior for PROD using `SMS_NUMBER_LOOKUP_ENABLED` feature flag defaulting to enabled.
+- Added new Page 3 function: **Twilio SMS Hosting - AMIEWeb** with bulk number input and backend route `/twilio/amieweb/sms-host`.
+- SMS Hosting route now requires: phone number(s), `sms_url` (HTTPS), and `sms_method` (`POST`/`GET`); optional fallback/status-callback fields supported.
+- Confirmed implementation intent: SMS-only update path modifies Twilio IncomingPhoneNumber messaging webhooks and does not alter voice webhook settings.
+- Current operator workflow paused at input collection stage: POST confirmed; awaiting final SMS URL and first test number for live run.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.
