@@ -129,12 +129,7 @@ MOBILE_JABBER_EMAIL_BODY = (
 )
 STRIKE_MASK_PATTERN_PREFIX = (os.getenv("STRIKE_MASK_PATTERN_PREFIX", "945") or "945").strip()
 STRIKE_MASK_ROUTE_PARTITION = "ENT_DEVICE_PT"
-STRIKE_MASK_AVAILABLE_TRANSFORM_MASKS = {
-  v.strip()
-  for v in (os.getenv("STRIKE_MASK_AVAILABLE_TRANSFORM_MASKS", "2481001,248101") or "2481001,248101").split(",")
-  if v.strip()
-}
-STRIKE_MASK_DEFAULT_AVAILABLE_TRANSFORM_MASK = sorted(STRIKE_MASK_AVAILABLE_TRANSFORM_MASKS)[0] if STRIKE_MASK_AVAILABLE_TRANSFORM_MASKS else "2481001"
+STRIKE_MASK_AVAILABLE_TRANSFORM_MASK = "2481001"
 CSF_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 TWILIO_INBOUND_VERIFICATION_PROFILES = {
   "phimane": {
@@ -1742,7 +1737,7 @@ def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str)
         desc_lower.startswith("strike mask -")
         or desc_lower == expected_simple_desc
       )
-      and mask_clean in STRIKE_MASK_AVAILABLE_TRANSFORM_MASKS
+      and mask_clean == STRIKE_MASK_AVAILABLE_TRANSFORM_MASK
     )
 
     if pattern and is_available:
@@ -1820,7 +1815,7 @@ def _list_in_use_strike_mask_patterns(cucm_host: str, cucm_user: str, cucm_pass:
         desc_lower.startswith("strike mask -")
         or desc_lower == expected_simple_desc
       )
-      and (mask or "").strip() in STRIKE_MASK_AVAILABLE_TRANSFORM_MASKS
+      and (mask or "").strip() == STRIKE_MASK_AVAILABLE_TRANSFORM_MASK
     )
 
     if pattern and desc_lower.startswith("strike mask -") and not is_available:
@@ -1905,7 +1900,7 @@ def _reverse_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str,
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   new_description = f"Strike Mask - {trans_pattern} Available"
-  new_transform_mask = STRIKE_MASK_DEFAULT_AVAILABLE_TRANSFORM_MASK
+  new_transform_mask = STRIKE_MASK_AVAILABLE_TRANSFORM_MASK
 
   soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
@@ -2166,7 +2161,7 @@ def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, t
   original_description = (selected.get("description") or "").strip()
   original_transform_mask = (selected.get("called_party_transform_mask") or "").strip()
   if not original_transform_mask:
-    original_transform_mask = STRIKE_MASK_DEFAULT_AVAILABLE_TRANSFORM_MASK
+    original_transform_mask = STRIKE_MASK_AVAILABLE_TRANSFORM_MASK
 
   selected_devices = _enrich_devices_with_original_masks(cucm_host, cucm_user, cucm_pass, selected_jabber_devices, jabber_extension)
 
@@ -11042,7 +11037,7 @@ def strike_mask_translation_upload(
           pattern=pattern,
           description=description,
           route_partition=STRIKE_MASK_ROUTE_PARTITION,
-          called_party_transform_mask=STRIKE_MASK_DEFAULT_AVAILABLE_TRANSFORM_MASK,
+          called_party_transform_mask=STRIKE_MASK_AVAILABLE_TRANSFORM_MASK,
         )
         
         response = session_obj.post(
