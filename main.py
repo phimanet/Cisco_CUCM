@@ -225,6 +225,9 @@ TWILIO_SMS_HOSTING_AUDIT_PATH = os.path.join(
   "logs",
   "twilio_sms_hosting_audit.csv",
 )
+TWILIO_SMS_HOSTING_AUDIT_RETENTION_DAYS = int(
+  (os.getenv("TWILIO_SMS_HOSTING_AUDIT_RETENTION_DAYS", "90") or "90").strip()
+)
 STRIKE_MASK_HISTORY_LOCK = threading.Lock()
 STRIKE_MASK_HISTORY_FIELDS = [
   "timestamp",
@@ -959,15 +962,48 @@ def _append_twilio_sms_hosting_audit_rows(rows: list[dict]):
 
   with TWILIO_SMS_HOSTING_AUDIT_LOCK:
     _ensure_twilio_sms_hosting_audit_log()
+    _prune_twilio_sms_hosting_audit_locked()
     with open(TWILIO_SMS_HOSTING_AUDIT_PATH, "a", newline="", encoding="utf-8") as handle:
       writer = csv.DictWriter(handle, fieldnames=TWILIO_SMS_HOSTING_AUDIT_FIELDS)
       for row in rows:
         writer.writerow({field: row.get(field, "") for field in TWILIO_SMS_HOSTING_AUDIT_FIELDS})
 
 
+def _prune_twilio_sms_hosting_audit_locked():
+  _ensure_twilio_sms_hosting_audit_log()
+
+  with open(TWILIO_SMS_HOSTING_AUDIT_PATH, "r", newline="", encoding="utf-8") as handle:
+    reader = csv.DictReader(handle)
+    rows = list(reader)
+
+  cutoff = _audit_now() - datetime.timedelta(days=TWILIO_SMS_HOSTING_AUDIT_RETENTION_DAYS)
+  kept_rows = []
+  for row in rows:
+    ts_text = (row.get("timestamp") or "").strip()
+    if not ts_text:
+      continue
+
+    try:
+      ts = datetime.datetime.strptime(ts_text, AUDIT_TIMESTAMP_FORMAT)
+    except ValueError:
+      # Keep malformed legacy rows to avoid destructive data loss.
+      kept_rows.append(row)
+      continue
+
+    if ts >= cutoff:
+      kept_rows.append(row)
+
+  with open(TWILIO_SMS_HOSTING_AUDIT_PATH, "w", newline="", encoding="utf-8") as handle:
+    writer = csv.DictWriter(handle, fieldnames=TWILIO_SMS_HOSTING_AUDIT_FIELDS)
+    writer.writeheader()
+    for row in kept_rows:
+      writer.writerow({field: row.get(field, "") for field in TWILIO_SMS_HOSTING_AUDIT_FIELDS})
+
+
 def _load_twilio_sms_hosting_audit_rows(limit: int | None = None) -> list[dict]:
   with TWILIO_SMS_HOSTING_AUDIT_LOCK:
     _ensure_twilio_sms_hosting_audit_log()
+    _prune_twilio_sms_hosting_audit_locked()
     with open(TWILIO_SMS_HOSTING_AUDIT_PATH, "r", newline="", encoding="utf-8") as handle:
       rows = list(csv.DictReader(handle))
 
@@ -13980,6 +14016,7 @@ def twilio_amieweb_sms_host_route(
 def download_twilio_sms_hosting_audit():
   with TWILIO_SMS_HOSTING_AUDIT_LOCK:
     _ensure_twilio_sms_hosting_audit_log()
+    _prune_twilio_sms_hosting_audit_locked()
     with open(TWILIO_SMS_HOSTING_AUDIT_PATH, "rb") as handle:
       data = handle.read()
 
