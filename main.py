@@ -1098,6 +1098,103 @@ def _resolve_twilio_salesforce_account_sid() -> str:
   return TWILIO_ACCOUNT_SID
 
 
+def _list_twilio_incoming_phone_numbers(lookup_sid: str, lookup_token: str) -> dict:
+  if not lookup_sid or not lookup_token:
+    return {"ok": False, "status": "Twilio account not configured", "numbers": []}
+
+  try:
+    cache_key = lookup_sid
+    now = time.time()
+    cached_numbers = []
+    with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
+      cache_entry = TWILIO_INCOMING_PHONE_NUMBER_CACHE.get(cache_key, {})
+      cached_at = float(cache_entry.get("cached_at", 0) or 0)
+      if cached_at and (now - cached_at) < TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS:
+        cached_numbers = list(cache_entry.get("numbers", []) or [])
+
+    if not cached_numbers:
+      cached_numbers = []
+      next_url = f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers.json"
+      next_params = {"PageSize": 100}
+      while next_url:
+        resp = requests.get(
+          next_url,
+          params=next_params,
+          auth=(lookup_sid, lookup_token),
+          verify=False,
+          timeout=20,
+        )
+        if resp.status_code != 200:
+          return {
+            "ok": False,
+            "status": f"Lookup failed HTTP {resp.status_code}",
+            "numbers": [],
+          }
+
+        payload = resp.json() if resp.text else {}
+        cached_numbers.extend(payload.get("incoming_phone_numbers", []) or [])
+
+        next_uri = str(payload.get("next_page_uri", "") or "").strip()
+        if next_uri:
+          next_url = f"https://api.twilio.com{next_uri}" if next_uri.startswith("/") else next_uri
+          next_params = None
+        else:
+          next_url = None
+
+      with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
+        TWILIO_INCOMING_PHONE_NUMBER_CACHE[cache_key] = {
+          "cached_at": now,
+          "numbers": cached_numbers,
+        }
+
+    return {"ok": True, "status": "OK", "numbers": cached_numbers}
+  except Exception as exc:
+    return {"ok": False, "status": f"Lookup error: {exc}", "numbers": []}
+
+
+def _get_twilio_next_friendly_name_seed(account: str = "default") -> dict:
+  if account == "salesforce":
+    lookup_sid = _resolve_twilio_salesforce_account_sid()
+    lookup_token = TWILIO_SALESFORCE_AUTH_TOKEN or TWILIO_AUTH_TOKEN
+  else:
+    lookup_sid = _resolve_twilio_lookup_account_sid()
+    lookup_token = TWILIO_AUTH_TOKEN
+
+  if not lookup_sid or not lookup_token:
+    return {"ok": False, "status": "Twilio account not configured", "date_prefix": "", "next_index": 1}
+
+  try:
+    now_dt = datetime.datetime.now(ZoneInfo(AUDIT_TIMEZONE))
+  except Exception:
+    now_dt = datetime.datetime.now()
+  date_prefix = now_dt.strftime("%Y%m%d")
+
+  listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token)
+  if not listed.get("ok"):
+    return {
+      "ok": False,
+      "status": str(listed.get("status", "Unable to list Twilio numbers")),
+      "date_prefix": date_prefix,
+      "next_index": 1,
+    }
+
+  pattern = re.compile(rf"^{re.escape(date_prefix)}_(\d+)$")
+  max_index = 0
+  for item in listed.get("numbers", []) or []:
+    if not isinstance(item, dict):
+      continue
+    friendly = str(item.get("friendly_name", "") or "").strip()
+    match = pattern.match(friendly)
+    if not match:
+      continue
+    try:
+      max_index = max(max_index, int(match.group(1)))
+    except Exception:
+      continue
+
+  return {"ok": True, "status": "OK", "date_prefix": date_prefix, "next_index": max_index + 1}
+
+
 def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default") -> dict:
   """Lookup Twilio IncomingPhoneNumbers by phone number; returns sid/number if found.
   
@@ -1248,6 +1345,7 @@ def _build_twilio_sms_only_update_payload(
   sms_fallback_method: str,
   status_callback_url: str,
   status_callback_method: str,
+  friendly_name: str,
 ) -> dict:
   payload = {
     "SmsUrl": (sms_url or "").strip(),
@@ -1263,6 +1361,10 @@ def _build_twilio_sms_only_update_payload(
   if callback_url:
     payload["StatusCallback"] = callback_url
     payload["StatusCallbackMethod"] = "POST" if (status_callback_method or "").strip().upper() not in {"GET", "POST"} else (status_callback_method or "").strip().upper()
+
+  clean_friendly_name = (friendly_name or "").strip()
+  if clean_friendly_name:
+    payload["FriendlyName"] = clean_friendly_name
 
   return payload
 
@@ -1326,6 +1428,7 @@ def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict
       "normalized": _normalize_phone_to_e164(phone_number),
       "twilio_number": (body.get("phone_number") or lookup.get("phone_number") or "").strip(),
       "sid": phone_sid,
+      "friendly_name": str(body.get("friendly_name", "") or payload.get("FriendlyName", "")).strip(),
       "sms_url": str(body.get("sms_url", "") or "").strip(),
       "sms_method": str(body.get("sms_method", "") or "").strip(),
       "status_callback": str(body.get("status_callback", "") or "").strip(),
@@ -10168,6 +10271,9 @@ def page3_twilio_items(request: Request):
                 <input name="sms_method" placeholder="SMS Method (POST/GET)" value="POST">
               </div>
               <div class="search-filter-row">
+                <input name="friendly_name" placeholder="Friendly Name (optional custom). Blank = auto YYYYMMDD_X">
+              </div>
+              <div class="search-filter-row">
                 <input name="sms_fallback_url" placeholder="SMS Fallback URL (optional)">
                 <input name="sms_fallback_method" placeholder="SMS Fallback Method (POST/GET)" value="POST">
               </div>
@@ -10177,7 +10283,7 @@ def page3_twilio_items(request: Request):
                 <button type="submit">Apply SMS Hosting</button>
               </div>
             </form>
-            <p id="twilio-sms-host-status" style="color:#2c5c8a; min-height:18px;">Required fields: phone number(s), SMS method. Leave SMS URL blank to use the default AMN listener URL.</p>
+            <p id="twilio-sms-host-status" style="color:#2c5c8a; min-height:18px;">Required fields: phone number(s), SMS method. Friendly Name can be custom, or blank for auto YYYYMMDD_X.</p>
             <div id="twilio-sms-host-results" style="overflow-x:auto;"></div>
           </div>
         </section>
@@ -10746,7 +10852,11 @@ def page3_twilio_items(request: Request):
               }
 
               const summary = payload.summary || {};
-              statusEl.textContent = `Requested: ${summary.requested || 0} | Updated: ${summary.updated || 0} | Failed: ${summary.failed || 0}`;
+              const submitted = payload.submitted || {};
+              const friendlyNote = (submitted.friendly_name_mode === "custom")
+                ? (`FriendlyName: ${submitted.friendly_name || ""}`)
+                : (`FriendlyName auto-seed: ${submitted.friendly_name_auto_seed || ""}`);
+              statusEl.textContent = `Requested: ${summary.requested || 0} | Updated: ${summary.updated || 0} | Failed: ${summary.failed || 0} | ${friendlyNote}`;
 
               const rows = payload.results || [];
               if (!rows.length) {
@@ -10759,6 +10869,7 @@ def page3_twilio_items(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Input</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Normalized</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Phone SID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Friendly Name</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Result</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Status</th>';
               html += '</tr></thead><tbody>';
@@ -10770,6 +10881,7 @@ def page3_twilio_items(request: Request):
                 html += '<td style="padding:7px 10px;">' + (row.input || "") + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.normalized || "") + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.sid || "—") + '</td>';
+                html += '<td style="padding:7px 10px;">' + (row.friendly_name || "—") + '</td>';
                 html += '<td style="padding:7px 10px; font-weight:700; color:' + (row.ok ? '#145c2e' : '#a01818') + ';">' + result + '</td>';
                 html += '<td style="padding:7px 10px;">' + (row.status || "") + '</td>';
                 html += '</tr>';
@@ -13008,6 +13120,7 @@ def twilio_amieweb_sms_host_route(
     phone_numbers: str = Form(""),
     sms_url: str = Form(""),
     sms_method: str = Form("POST"),
+  friendly_name: str = Form(""),
     sms_fallback_url: str = Form(""),
     sms_fallback_method: str = Form("POST"),
     status_callback_url: str = Form(""),
@@ -13021,6 +13134,7 @@ def twilio_amieweb_sms_host_route(
 
       numbers = _parse_phone_number_input_list(phone_numbers)
       clean_sms_url = (sms_url or "").strip() or TWILIO_AMIEWEB_DEFAULT_SMS_URL
+      custom_friendly_name = (friendly_name or "").strip()
       if not numbers:
         return JSONResponse({
           "ok": False,
@@ -13043,12 +13157,25 @@ def twilio_amieweb_sms_host_route(
         sms_fallback_method=sms_fallback_method,
         status_callback_url=status_callback_url,
         status_callback_method=status_callback_method,
+        friendly_name=custom_friendly_name,
       )
+
+      seed = _get_twilio_next_friendly_name_seed(account="default")
+      auto_prefix = str(seed.get("date_prefix", "") or "")
+      auto_index = int(seed.get("next_index", 1) or 1)
+      if not auto_prefix:
+        auto_prefix = datetime.datetime.now().strftime("%Y%m%d")
 
       results = []
       success_count = 0
-      for number in numbers:
-        row = _twilio_update_sms_only_for_number(number, payload)
+      for idx, number in enumerate(numbers):
+        row_payload = dict(payload)
+        if not custom_friendly_name:
+          row_payload["FriendlyName"] = f"{auto_prefix}_{auto_index + idx}"
+
+        row = _twilio_update_sms_only_for_number(number, row_payload)
+        if not row.get("friendly_name"):
+          row["friendly_name"] = str(row_payload.get("FriendlyName", "") or "").strip()
         if row.get("ok"):
           success_count += 1
         results.append(row)
@@ -13064,6 +13191,9 @@ def twilio_amieweb_sms_host_route(
         "submitted": {
           "sms_url": payload.get("SmsUrl", ""),
           "sms_method": payload.get("SmsMethod", "POST"),
+          "friendly_name": custom_friendly_name,
+          "friendly_name_mode": "custom" if custom_friendly_name else "auto",
+          "friendly_name_auto_seed": f"{auto_prefix}_{auto_index}",
           "sms_fallback_url": payload.get("SmsFallbackUrl", ""),
           "sms_fallback_method": payload.get("SmsFallbackMethod", ""),
           "status_callback_url": payload.get("StatusCallback", ""),
