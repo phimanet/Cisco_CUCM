@@ -109,6 +109,7 @@ AUDIT_LOG_EMAIL_DOMAIN = (os.getenv("AUDIT_LOG_EMAIL_DOMAIN", "amnhealthcare.com
 TWILIO_ACCOUNT_SID = (os.getenv("TWILIO_ACCOUNT_SID", "") or "").strip()
 TWILIO_AUTH_TOKEN = (os.getenv("TWILIO_AUTH_TOKEN", "") or "").strip()
 TWILIO_SUBACCOUNT_SID = (os.getenv("TWILIO_SUBACCOUNT_SID", "") or "").strip()
+TWILIO_SUBACCOUNT_AUTH_TOKEN = (os.getenv("TWILIO_SUBACCOUNT_AUTH_TOKEN", "") or "").strip()
 TWILIO_SUBACCOUNT_NAME = (os.getenv("TWILIO_SUBACCOUNT_NAME", "AMNOne-Notification-PROD") or "AMNOne-Notification-PROD").strip()
 TWILIO_SALESFORCE_SUBACCOUNT_SID = (os.getenv("TWILIO_SALESFORCE_SUBACCOUNT_SID", "") or "").strip()
 TWILIO_SALESFORCE_AUTH_TOKEN = (os.getenv("TWILIO_SALESFORCE_AUTH_TOKEN", "") or "").strip()
@@ -1098,6 +1099,13 @@ def _resolve_twilio_salesforce_account_sid() -> str:
   return TWILIO_ACCOUNT_SID
 
 
+def _resolve_twilio_lookup_auth_token_for_sid(account_sid: str) -> str:
+  sid = (account_sid or "").strip()
+  if sid and TWILIO_SUBACCOUNT_SID and sid == TWILIO_SUBACCOUNT_SID and TWILIO_SUBACCOUNT_AUTH_TOKEN:
+    return TWILIO_SUBACCOUNT_AUTH_TOKEN
+  return TWILIO_AUTH_TOKEN
+
+
 def _list_twilio_incoming_phone_numbers(lookup_sid: str, lookup_token: str, force_refresh: bool = False) -> dict:
   if not lookup_sid or not lookup_token:
     return {"ok": False, "status": "Twilio account not configured", "numbers": []}
@@ -1158,7 +1166,7 @@ def _get_twilio_next_friendly_name_seed(account: str = "default") -> dict:
     lookup_token = TWILIO_SALESFORCE_AUTH_TOKEN or TWILIO_AUTH_TOKEN
   else:
     lookup_sid = _resolve_twilio_lookup_account_sid()
-    lookup_token = TWILIO_AUTH_TOKEN
+    lookup_token = _resolve_twilio_lookup_auth_token_for_sid(lookup_sid)
 
   if not lookup_sid or not lookup_token:
     return {"ok": False, "status": "Twilio account not configured", "date_prefix": "", "next_index": 1}
@@ -1227,7 +1235,7 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
     lookup_token = TWILIO_SALESFORCE_AUTH_TOKEN or TWILIO_AUTH_TOKEN
   else:
     lookup_sid = _resolve_twilio_lookup_account_sid()
-    lookup_token = TWILIO_AUTH_TOKEN
+    lookup_token = _resolve_twilio_lookup_auth_token_for_sid(lookup_sid)
     
   if not lookup_sid:
     return {
@@ -1361,7 +1369,7 @@ def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict
     return _twilio_add_sms_hosted_number(phone_number, payload, str(lookup.get("status", "Not Found")))
 
   lookup_sid = str(lookup.get("lookup_account_sid", "") or _resolve_twilio_lookup_account_sid())
-  lookup_token = str(lookup.get("lookup_auth_token", "") or TWILIO_AUTH_TOKEN)
+  lookup_token = str(lookup.get("lookup_auth_token", "") or _resolve_twilio_lookup_auth_token_for_sid(lookup_sid))
   if not lookup_sid:
     return {
       "ok": False,
@@ -1421,7 +1429,8 @@ def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict
 def _twilio_add_sms_hosted_number(phone_number: str, payload: dict, lookup_status: str = "") -> dict:
   normalized = _normalize_phone_to_e164(phone_number)
   lookup_sid = _resolve_twilio_lookup_account_sid()
-  if not lookup_sid or not TWILIO_AUTH_TOKEN:
+  lookup_token = _resolve_twilio_lookup_auth_token_for_sid(lookup_sid)
+  if not lookup_sid or not lookup_token:
     return {
       "ok": False,
       "action": "Failed",
@@ -1438,7 +1447,7 @@ def _twilio_add_sms_hosted_number(phone_number: str, payload: dict, lookup_statu
     response = requests.post(
       f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers.json",
       data=create_payload,
-      auth=(lookup_sid, TWILIO_AUTH_TOKEN),
+      auth=(lookup_sid, lookup_token),
       verify=False,
       timeout=20,
     )
