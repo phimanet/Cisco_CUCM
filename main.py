@@ -122,6 +122,12 @@ TWILIO_AMIEWEB_MESSAGING_SERVICE_SID = (
   os.getenv("TWILIO_AMIEWEB_MESSAGING_SERVICE_SID", "MGdd208368e216d6c6cbd79a90ee4320b8")
   or "MGdd208368e216d6c6cbd79a90ee4320b8"
 ).strip()
+TWILIO_HOSTED_NUMBERS_ACTIVE = (os.getenv("TWILIO_HOSTED_NUMBERS_ACTIVE", "false") or "false").strip().lower() in {
+  "1",
+  "true",
+  "yes",
+  "on",
+}
 AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aerialink.net/v5") or "https://apix5.aerialink.net/v5").strip().rstrip("/")
 AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
 AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
@@ -10594,7 +10600,7 @@ def page3_twilio_items(request: Request):
         <div class="portal-nav">
           __SMS_LOOK_MENU__
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
-          <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
@@ -10636,7 +10642,8 @@ def page3_twilio_items(request: Request):
 
         <section class="tool-panel" data-panel="twilio-sms-hosting">
           <div class="panel">
-            <h3>Twilio SMS Hosting - AMIEWeb</h3>
+            <h3>Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</h3>
+              <p style="color:#a01818; font-weight:700;">This function is currently not active pending Twilio Developer Preview enablement.</p>
               <p>Host SMS for one or more Twilio numbers in AMIEWeb. This updates SMS webhook fields only and does not modify voice webhook settings. If SMS URL is left blank, the default AMN listener URL is used.</p>
             <form id="twilio-sms-host-form">
               <div class="search-filter-row" style="align-items:flex-start;">
@@ -13822,6 +13829,13 @@ def twilio_amieweb_sms_host_route(
     status_callback_method: str = Form("POST"),
 ):
     try:
+      if not TWILIO_HOSTED_NUMBERS_ACTIVE:
+        return JSONResponse({
+          "ok": False,
+          "error": "Twilio SMS Hosting - AMIEWeb is NOT ACTIVE YET. Hosted Numbers API is in Developer Preview and currently disabled for this workflow.",
+          "results": [],
+        }, status_code=503)
+
       required_fields = [
         "phone_numbers (one or more, comma/newline separated)",
         "sms_method (GET or POST)",
