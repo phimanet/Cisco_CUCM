@@ -694,6 +694,7 @@ def _wants_json_response(request: Request) -> bool:
     "/strike-mask/reverse",
     "/strike-mask/options",
     "/strike-mask/in-use",
+    "/lookup/sms-number-look",
   }:
     return True
   return False
@@ -9433,11 +9434,11 @@ def page3_twilio_items(request: Request):
   sms_look_menu_html = ""
   sms_look_panel_html = ""
   if sms_look_enabled:
-    sms_look_menu_html = '<button type="button" class="portal-nav-btn" data-panel="sms-number-look">SMS Number Look</button>'
+    sms_look_menu_html = '<button type="button" class="portal-nav-btn" data-panel="sms-number-look">SMS Number Lookup</button>'
     sms_look_panel_html = """
       <section class="tool-panel active" data-panel="sms-number-look">
           <div class="panel">
-            <h3>SMS Number Look</h3>
+            <h3>SMS Number Lookup</h3>
             <p>Lookup by name or number. This checks all platforms: Twilio AMIEWeb, Twilio Salesforce Enterprise Org Prod, and Aerialink Classic.</p>
 
             <form id="sms-look-name-form">
@@ -10294,7 +10295,7 @@ def page3_twilio_items(request: Request):
           restoreButtonId: "admin-twilio-verify-lauraa-restore",
         });
 
-        // SMS Number Look - unified lookup across Twilio AMIEWeb, Twilio Salesforce, and Aerialink.
+        // SMS Number Lookup - unified lookup across Twilio AMIEWeb, Twilio Salesforce, and Aerialink.
         (function () {
           const nameForm = document.getElementById("sms-look-name-form");
           const numberForm = document.getElementById("sms-look-number-form");
@@ -10346,6 +10347,7 @@ def page3_twilio_items(request: Request):
                 method: "POST",
                 body: formData,
                 credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
               });
               const payload = await response.json();
               if (!response.ok || !payload.ok) {
@@ -10378,6 +10380,7 @@ def page3_twilio_items(request: Request):
                 method: "POST",
                 body: formData,
                 credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
               });
               const payload = await response.json();
               if (!response.ok || !payload.ok) {
@@ -12784,7 +12787,7 @@ def lookup_sms_number_look_route(
     phone_number: str = Form(""),
 ):
     if _is_lab_runtime_host() is not True:
-      raise RuntimeError("SMS Number Look is LAB-only for now.")
+      raise RuntimeError("SMS Number Lookup is LAB-only for now.")
 
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
     _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
