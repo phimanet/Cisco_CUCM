@@ -1358,13 +1358,7 @@ def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict
     }
 
   if not lookup.get("found") or not (lookup.get("sid") or "").strip():
-    return {
-      "ok": False,
-      "input": phone_number,
-      "normalized": _normalize_phone_to_e164(phone_number),
-      "sid": "",
-      "status": str(lookup.get("status", "Phone number not found in Twilio account")),
-    }
+    return _twilio_add_sms_hosted_number(phone_number, payload, str(lookup.get("status", "Not Found")))
 
   lookup_sid = str(lookup.get("lookup_account_sid", "") or _resolve_twilio_lookup_account_sid())
   lookup_token = str(lookup.get("lookup_auth_token", "") or TWILIO_AUTH_TOKEN)
@@ -1402,6 +1396,7 @@ def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict
 
     return {
       "ok": True,
+      "action": "Updated",
       "input": phone_number,
       "normalized": _normalize_phone_to_e164(phone_number),
       "twilio_number": (body.get("phone_number") or lookup.get("phone_number") or "").strip(),
@@ -1415,10 +1410,76 @@ def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict
   except Exception as exc:
     return {
       "ok": False,
+      "action": "Failed",
       "input": phone_number,
       "normalized": _normalize_phone_to_e164(phone_number),
       "sid": phone_sid,
       "status": f"Twilio update error: {exc}",
+    }
+
+
+def _twilio_add_sms_hosted_number(phone_number: str, payload: dict, lookup_status: str = "") -> dict:
+  normalized = _normalize_phone_to_e164(phone_number)
+  lookup_sid = _resolve_twilio_lookup_account_sid()
+  if not lookup_sid or not TWILIO_AUTH_TOKEN:
+    return {
+      "ok": False,
+      "action": "Failed",
+      "input": phone_number,
+      "normalized": normalized,
+      "sid": "",
+      "status": "Twilio AMIEWeb account is not configured for add/provision",
+    }
+
+  create_payload = dict(payload)
+  create_payload["PhoneNumber"] = normalized
+
+  try:
+    response = requests.post(
+      f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers.json",
+      data=create_payload,
+      auth=(lookup_sid, TWILIO_AUTH_TOKEN),
+      verify=False,
+      timeout=20,
+    )
+    body = response.json() if response.text else {}
+    if response.status_code not in {200, 201}:
+      err_message = str(body.get("message", "")).strip() or f"Twilio add failed HTTP {response.status_code}"
+      prefix = f"{lookup_status}; " if lookup_status else ""
+      return {
+        "ok": False,
+        "action": "Failed",
+        "input": phone_number,
+        "normalized": normalized,
+        "sid": "",
+        "status": f"{prefix}{err_message}",
+      }
+
+    with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
+      TWILIO_INCOMING_PHONE_NUMBER_CACHE.pop(lookup_sid, None)
+
+    return {
+      "ok": True,
+      "action": "Added",
+      "input": phone_number,
+      "normalized": normalized,
+      "twilio_number": str(body.get("phone_number", "") or normalized).strip(),
+      "sid": str(body.get("sid", "") or "").strip(),
+      "friendly_name": str(body.get("friendly_name", "") or payload.get("FriendlyName", "")).strip(),
+      "sms_url": str(body.get("sms_url", "") or payload.get("SmsUrl", "")).strip(),
+      "sms_method": str(body.get("sms_method", "") or payload.get("SmsMethod", "")).strip(),
+      "status_callback": str(body.get("status_callback", "") or payload.get("StatusCallback", "")).strip(),
+      "status": "Added and Hosted",
+    }
+  except Exception as exc:
+    prefix = f"{lookup_status}; " if lookup_status else ""
+    return {
+      "ok": False,
+      "action": "Failed",
+      "input": phone_number,
+      "normalized": normalized,
+      "sid": "",
+      "status": f"{prefix}Twilio add error: {exc}",
     }
 
 
@@ -10854,7 +10915,7 @@ def page3_twilio_items(request: Request):
 
               rows.forEach(function (row, i) {
                 const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
-                const result = row.ok ? "Updated" : "Failed";
+                const result = row.action || (row.ok ? "Updated" : "Failed");
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
                 html += '<td style="padding:7px 10px;">' + (row.input || "") + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.normalized || "") + '</td>';
