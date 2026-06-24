@@ -701,6 +701,7 @@ def _wants_json_response(request: Request) -> bool:
     "/strike-mask/options",
     "/strike-mask/in-use",
     "/lookup/sms-number-look",
+    "/twilio/amieweb/sms-host",
   }:
     return True
   return False
@@ -1217,6 +1218,122 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default") 
       "phone_number": e164,
       "sid": "",
       "status": f"Lookup error: {exc}",
+    }
+
+
+def _parse_phone_number_input_list(raw_text: str) -> list[str]:
+  values = []
+  seen = set()
+  for token in re.split(r"[\s,;]+", (raw_text or "").strip()):
+    clean = (token or "").strip()
+    if not clean:
+      continue
+    normalized = _normalize_phone_to_e164(clean)
+    key = normalized or clean
+    if key in seen:
+      continue
+    seen.add(key)
+    values.append(clean)
+  return values
+
+
+def _build_twilio_sms_only_update_payload(
+  sms_url: str,
+  sms_method: str,
+  sms_fallback_url: str,
+  sms_fallback_method: str,
+  status_callback_url: str,
+  status_callback_method: str,
+) -> dict:
+  payload = {
+    "SmsUrl": (sms_url or "").strip(),
+    "SmsMethod": "POST" if (sms_method or "").strip().upper() not in {"GET", "POST"} else (sms_method or "").strip().upper(),
+  }
+
+  fallback_url = (sms_fallback_url or "").strip()
+  if fallback_url:
+    payload["SmsFallbackUrl"] = fallback_url
+    payload["SmsFallbackMethod"] = "POST" if (sms_fallback_method or "").strip().upper() not in {"GET", "POST"} else (sms_fallback_method or "").strip().upper()
+
+  callback_url = (status_callback_url or "").strip()
+  if callback_url:
+    payload["StatusCallback"] = callback_url
+    payload["StatusCallbackMethod"] = "POST" if (status_callback_method or "").strip().upper() not in {"GET", "POST"} else (status_callback_method or "").strip().upper()
+
+  return payload
+
+
+def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict:
+  lookup = _lookup_twilio_number_by_phone(phone_number, account="default")
+  if not lookup.get("enabled"):
+    return {
+      "ok": False,
+      "input": phone_number,
+      "normalized": _normalize_phone_to_e164(phone_number),
+      "sid": "",
+      "status": lookup.get("status", "Twilio is not configured"),
+    }
+
+  if not lookup.get("found") or not (lookup.get("sid") or "").strip():
+    return {
+      "ok": False,
+      "input": phone_number,
+      "normalized": _normalize_phone_to_e164(phone_number),
+      "sid": "",
+      "status": "Phone number not found in Twilio AMIEWeb account",
+    }
+
+  lookup_sid = _resolve_twilio_lookup_account_sid()
+  if not lookup_sid:
+    return {
+      "ok": False,
+      "input": phone_number,
+      "normalized": _normalize_phone_to_e164(phone_number),
+      "sid": "",
+      "status": "Twilio AMIEWeb account SID could not be resolved",
+    }
+
+  phone_sid = (lookup.get("sid") or "").strip()
+  try:
+    response = requests.post(
+      f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers/{phone_sid}.json",
+      data=payload,
+      auth=(lookup_sid, TWILIO_AUTH_TOKEN),
+      verify=False,
+      timeout=20,
+    )
+    body = response.json() if response.text else {}
+    if response.status_code not in {200, 201}:
+      err_message = str(body.get("message", "")).strip() or f"Twilio update failed HTTP {response.status_code}"
+      return {
+        "ok": False,
+        "input": phone_number,
+        "normalized": _normalize_phone_to_e164(phone_number),
+        "sid": phone_sid,
+        "status": err_message,
+      }
+
+    with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
+      TWILIO_INCOMING_PHONE_NUMBER_CACHE.pop(lookup_sid, None)
+
+    return {
+      "ok": True,
+      "input": phone_number,
+      "normalized": _normalize_phone_to_e164(phone_number),
+      "twilio_number": (body.get("phone_number") or lookup.get("phone_number") or "").strip(),
+      "sid": phone_sid,
+      "sms_url": str(body.get("sms_url", "") or "").strip(),
+      "sms_method": str(body.get("sms_method", "") or "").strip(),
+      "status_callback": str(body.get("status_callback", "") or "").strip(),
+      "status": "Updated",
+    }
+  except Exception as exc:
+    return {
+      "ok": False,
+      "input": phone_number,
+      "normalized": _normalize_phone_to_e164(phone_number),
+      "sid": phone_sid,
+      "status": f"Twilio update error: {exc}",
     }
 
 
@@ -9994,6 +10111,7 @@ def page3_twilio_items(request: Request):
         <div class="portal-nav">
           __SMS_LOOK_MENU__
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
@@ -10030,6 +10148,33 @@ def page3_twilio_items(request: Request):
             </form>
             <p id="twilio-number-lookup-status" style="color:#2c5c8a; min-height:18px;"></p>
             <div id="twilio-number-lookup-results" style="overflow-x:auto;"></div>
+          </div>
+        </section>
+
+        <section class="tool-panel" data-panel="twilio-sms-hosting">
+          <div class="panel">
+            <h3>Twilio SMS Hosting - AMIEWeb</h3>
+            <p>Host SMS for one or more Twilio numbers in AMIEWeb. This updates SMS webhook fields only and does not modify voice webhook settings.</p>
+            <form id="twilio-sms-host-form">
+              <div class="search-filter-row" style="align-items:flex-start;">
+                <textarea name="phone_numbers" rows="5" placeholder="Phone numbers (one or more), separated by commas or new lines&#10;Example: 8585236648" required></textarea>
+              </div>
+              <div class="search-filter-row">
+                <input name="sms_url" placeholder="SMS URL (https://...) *" required>
+                <input name="sms_method" placeholder="SMS Method (POST/GET)" value="POST">
+              </div>
+              <div class="search-filter-row">
+                <input name="sms_fallback_url" placeholder="SMS Fallback URL (optional)">
+                <input name="sms_fallback_method" placeholder="SMS Fallback Method (POST/GET)" value="POST">
+              </div>
+              <div class="search-filter-row">
+                <input name="status_callback_url" placeholder="Status Callback URL (optional)">
+                <input name="status_callback_method" placeholder="Status Callback Method (POST/GET)" value="POST">
+                <button type="submit">Apply SMS Hosting</button>
+              </div>
+            </form>
+            <p id="twilio-sms-host-status" style="color:#2c5c8a; min-height:18px;">Required fields: phone number(s), SMS URL, SMS method.</p>
+            <div id="twilio-sms-host-results" style="overflow-x:auto;"></div>
           </div>
         </section>
 
@@ -10566,6 +10711,70 @@ def page3_twilio_items(request: Request):
               resultsEl.innerHTML = html;
             } catch (err) {
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        })();
+
+        // Twilio SMS Hosting - AMIEWeb (SMS-only webhook updates)
+        (function () {
+          const form = document.getElementById("twilio-sms-host-form");
+          const statusEl = document.getElementById("twilio-sms-host-status");
+          const resultsEl = document.getElementById("twilio-sms-host-results");
+
+          if (!form || !statusEl || !resultsEl) return;
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Applying SMS hosting configuration...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(form);
+              const response = await fetch("/twilio/amieweb/sms-host", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload && payload.error) || "SMS hosting update failed.");
+              }
+
+              const summary = payload.summary || {};
+              statusEl.textContent = `Requested: ${summary.requested || 0} | Updated: ${summary.updated || 0} | Failed: ${summary.failed || 0}`;
+
+              const rows = payload.results || [];
+              if (!rows.length) {
+                resultsEl.innerHTML = "";
+                return;
+              }
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Input</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Normalized</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Phone SID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Result</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Status</th>';
+              html += '</tr></thead><tbody>';
+
+              rows.forEach(function (row, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                const result = row.ok ? "Updated" : "Failed";
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px;">' + (row.input || "") + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.normalized || "") + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.sid || "—") + '</td>';
+                html += '<td style="padding:7px 10px; font-weight:700; color:' + (row.ok ? '#145c2e' : '#a01818') + ';">' + result + '</td>';
+                html += '<td style="padding:7px 10px;">' + (row.status || "") + '</td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+            } catch (err) {
+              statusEl.textContent = "Update failed: " + ((err && err.message) || "Unknown error.");
             }
           });
         })();
@@ -12787,6 +12996,90 @@ def lookup_twilio_by_number_sfdc_route(phone_number: str = Form(...)):
           "ok": False,
           "error": str(exc),
           "result": None,
+      }, status_code=500)
+
+
+@app.post("/twilio/amieweb/sms-host")
+def twilio_amieweb_sms_host_route(
+    phone_numbers: str = Form(""),
+    sms_url: str = Form(""),
+    sms_method: str = Form("POST"),
+    sms_fallback_url: str = Form(""),
+    sms_fallback_method: str = Form("POST"),
+    status_callback_url: str = Form(""),
+    status_callback_method: str = Form("POST"),
+):
+    try:
+      required_fields = [
+        "phone_numbers (one or more, comma/newline separated)",
+        "sms_url (HTTPS endpoint for inbound SMS webhook)",
+        "sms_method (GET or POST)",
+      ]
+
+      numbers = _parse_phone_number_input_list(phone_numbers)
+      clean_sms_url = (sms_url or "").strip()
+      if not numbers:
+        return JSONResponse({
+          "ok": False,
+          "error": "At least one phone number is required.",
+          "required_fields": required_fields,
+          "results": [],
+        }, status_code=400)
+      if not clean_sms_url:
+        return JSONResponse({
+          "ok": False,
+          "error": "sms_url is required.",
+          "required_fields": required_fields,
+          "results": [],
+        }, status_code=400)
+      if not clean_sms_url.lower().startswith("https://"):
+        return JSONResponse({
+          "ok": False,
+          "error": "sms_url must be an HTTPS URL.",
+          "required_fields": required_fields,
+          "results": [],
+        }, status_code=400)
+
+      payload = _build_twilio_sms_only_update_payload(
+        sms_url=clean_sms_url,
+        sms_method=sms_method,
+        sms_fallback_url=sms_fallback_url,
+        sms_fallback_method=sms_fallback_method,
+        status_callback_url=status_callback_url,
+        status_callback_method=status_callback_method,
+      )
+
+      results = []
+      success_count = 0
+      for number in numbers:
+        row = _twilio_update_sms_only_for_number(number, payload)
+        if row.get("ok"):
+          success_count += 1
+        results.append(row)
+
+      return JSONResponse({
+        "ok": True,
+        "required_fields": required_fields,
+        "summary": {
+          "requested": len(numbers),
+          "updated": success_count,
+          "failed": len(numbers) - success_count,
+        },
+        "submitted": {
+          "sms_url": payload.get("SmsUrl", ""),
+          "sms_method": payload.get("SmsMethod", "POST"),
+          "sms_fallback_url": payload.get("SmsFallbackUrl", ""),
+          "sms_fallback_method": payload.get("SmsFallbackMethod", ""),
+          "status_callback_url": payload.get("StatusCallback", ""),
+          "status_callback_method": payload.get("StatusCallbackMethod", ""),
+        },
+        "results": results,
+      })
+    except Exception as exc:
+      return JSONResponse({
+        "ok": False,
+        "error": str(exc),
+        "results": [],
       }, status_code=500)
 
 
