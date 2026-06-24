@@ -1962,6 +1962,7 @@ def _reverse_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str,
     f"https://{cucm_host}:8443/axl/",
     data=soap_xml.encode("utf-8"),
     headers={"Content-Type": "text/xml"},
+    verify=False,
     timeout=60,
   )
   if response.status_code != 200:
@@ -1994,6 +1995,7 @@ def _reverse_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str,
           f"https://{cucm_host}:8443/axl/",
           data=soap_update_line.encode("utf-8"),
           headers={"Content-Type": "text/xml"},
+          verify=False,
           timeout=60,
         )
         if response_line.status_code == 200:
@@ -2074,6 +2076,7 @@ def _update_device_line_e164_mask(session: requests.Session, cucm_host: str, dev
     f"https://{cucm_host}:8443/axl/",
     data=get_phone_xml.encode("utf-8"),
     headers={"Content-Type": "text/xml"},
+    verify=False,
     timeout=60,
   )
   if response_get.status_code != 200:
@@ -2144,6 +2147,7 @@ def _update_device_line_e164_mask(session: requests.Session, cucm_host: str, dev
     f"https://{cucm_host}:8443/axl/",
     data=update_phone_xml.encode("utf-8"),
     headers={"Content-Type": "text/xml"},
+    verify=False,
     timeout=60,
   )
   if response_update.status_code != 200:
@@ -2231,6 +2235,7 @@ def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, t
     f"https://{cucm_host}:8443/axl/",
     data=update_pattern_xml.encode("utf-8"),
     headers={"Content-Type": "text/xml"},
+    verify=False,
     timeout=60,
   )
   if response.status_code != 200:
@@ -2252,6 +2257,7 @@ def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, t
     f"https://{cucm_host}:8443/axl/",
     data=update_line_xml.encode("utf-8"),
     headers={"Content-Type": "text/xml"},
+    verify=False,
     timeout=60,
   )
   if response_line.status_code != 200:
@@ -2371,6 +2377,7 @@ def _list_translation_patterns_by_description(cucm_host: str, cucm_user: str, cu
       f"https://{cucm_host}:8443/axl/",
       data=soap_xml.encode("utf-8"),
       headers={"Content-Type": "text/xml"},
+      verify=False,
       timeout=60,
     )
     if response.status_code != 200:
@@ -2504,6 +2511,7 @@ def _update_twilio_inbound_verification_pattern(
       f"https://{cucm_host}:8443/axl/",
       data=soap_xml.encode("utf-8"),
       headers={"Content-Type": "text/xml"},
+      verify=False,
       timeout=60,
     )
     if response.status_code != 200:
