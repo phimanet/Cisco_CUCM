@@ -12798,70 +12798,77 @@ def lookup_sms_number_look_route(
     first_name: str = Form(""),
     phone_number: str = Form(""),
 ):
-    if _is_lab_runtime_host() is not True:
-      raise RuntimeError("SMS Number Lookup is LAB-only for now.")
+    try:
+      if _is_lab_runtime_host() is not True:
+        raise RuntimeError("SMS Number Lookup is LAB-only for now.")
 
-    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+      cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+      _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
 
-    clean_phone = (phone_number or "").strip()
-    clean_last = (last_name or "").strip()
-    clean_first = (first_name or "").strip()
+      clean_phone = (phone_number or "").strip()
+      clean_last = (last_name or "").strip()
+      clean_first = (first_name or "").strip()
 
-    def _build_platform_row(display_name: str, extension: str, telephone: str) -> dict:
-      twilio_default = _lookup_twilio_number_by_phone(telephone, account="default")
-      twilio_sfdc = _lookup_twilio_number_by_phone(telephone, account="salesforce")
-      aerialink = _lookup_aerialink_account_code_by_phone(telephone)
+      def _build_platform_row(display_name: str, extension: str, telephone: str) -> dict:
+        twilio_default = _lookup_twilio_number_by_phone(telephone, account="default")
+        twilio_sfdc = _lookup_twilio_number_by_phone(telephone, account="salesforce")
+        aerialink = _lookup_aerialink_account_code_by_phone(telephone)
 
-      found_in = []
-      if twilio_default.get("found"):
-        found_in.append("Twilio - AMIEWeb")
-      if twilio_sfdc.get("found"):
-        found_in.append("Twilio - Salesforce")
-      if aerialink.get("provisioned"):
-        found_in.append("Aerialink Classic")
+        found_in = []
+        if twilio_default.get("found"):
+          found_in.append("Twilio - AMIEWeb")
+        if twilio_sfdc.get("found"):
+          found_in.append("Twilio - Salesforce")
+        if aerialink.get("provisioned"):
+          found_in.append("Aerialink Classic")
 
-      sms_number = (
-        (twilio_default.get("phone_number") or "").strip()
-        or (twilio_sfdc.get("phone_number") or "").strip()
-        or (aerialink.get("matched_number") or "").strip()
-        or _normalize_phone_to_e164(telephone)
-        or (telephone or "").strip()
-      )
+        sms_number = (
+          (twilio_default.get("phone_number") or "").strip()
+          or (twilio_sfdc.get("phone_number") or "").strip()
+          or (aerialink.get("matched_number") or "").strip()
+          or _normalize_phone_to_e164(telephone)
+          or (telephone or "").strip()
+        )
 
-      return {
-        "display_name": display_name or "-",
-        "extension": extension or "-",
-        "sms_number": sms_number or "-",
-        "configured_in": ", ".join(found_in) if found_in else "Not Found",
-      }
+        return {
+          "display_name": display_name or "-",
+          "extension": extension or "-",
+          "sms_number": sms_number or "-",
+          "configured_in": ", ".join(found_in) if found_in else "Not Found",
+        }
 
-    results = []
-    mode = ""
+      results = []
+      mode = ""
 
-    if clean_phone:
-      mode = "number"
-      results.append(_build_platform_row(display_name="(Direct Number Lookup)", extension="-", telephone=clean_phone))
-    else:
-      mode = "name"
-      if not clean_last:
-        raise RuntimeError("Last Name is required when phone number is not provided.")
+      if clean_phone:
+        mode = "number"
+        results.append(_build_platform_row(display_name="(Direct Number Lookup)", extension="-", telephone=clean_phone))
+      else:
+        mode = "name"
+        if not clean_last:
+          raise RuntimeError("Last Name is required when phone number is not provided.")
 
-      users = search_persons_by_name(cucm_host, cucm_user, cucm_pass, clean_last, clean_first)
-      for user in users:
-        display_name = (user.get("display_name") or "").strip() or (
-          (user.get("first_name") or "") + " " + (user.get("last_name") or "")
-        ).strip() or (user.get("userid") or "")
-        extension = (user.get("primary_extension") or "").strip()
-        telephone = (user.get("telephone") or "").strip()
-        results.append(_build_platform_row(display_name=display_name, extension=extension, telephone=telephone))
+        users = search_persons_by_name(cucm_host, cucm_user, cucm_pass, clean_last, clean_first)
+        for user in users:
+          if not isinstance(user, dict):
+            continue
+          display_name = (user.get("display_name") or "").strip() or (
+            (user.get("first_name") or "") + " " + (user.get("last_name") or "")
+          ).strip() or (user.get("userid") or "")
+          extension = (user.get("primary_extension") or "").strip()
+          telephone = (user.get("telephone") or "").strip()
+          results.append(_build_platform_row(display_name=display_name, extension=extension, telephone=telephone))
 
-    return JSONResponse({
-      "ok": True,
-      "mode": mode,
-      "count": len(results),
-      "results": results,
-    })
+      return JSONResponse({
+        "ok": True,
+        "mode": mode,
+        "count": len(results),
+        "results": results,
+      })
+    except RuntimeError:
+      raise
+    except Exception as exc:
+      raise RuntimeError(f"SMS Number Lookup failed: {exc}") from exc
 
 
 @app.post("/check/jabber-status")
