@@ -7537,7 +7537,6 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="adddn">Add Directory Numbers (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="exportdn">Export Directory Numbers</button>
             <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
-            <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="translookup">Translation Pattern Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="transtemplate">Translation Pattern Template</button>
             <button type="button" class="portal-nav-btn" data-panel="strikemask-template">Add Translation for Strike Mask Use (CSV Template)</button>
@@ -7552,6 +7551,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3'">📞 Twilio Items (Page 3)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">⚙️ DN Prefix Settings</button>
+            <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
           </div>
         </aside>
 
