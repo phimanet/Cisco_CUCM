@@ -1221,7 +1221,7 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
       "status": "Twilio credentials not configured",
     }
 
-  # Determine which account SID to use
+  # Determine primary account SID/token for this lookup context.
   if account == "salesforce":
     lookup_sid = _resolve_twilio_salesforce_account_sid()
     lookup_token = TWILIO_SALESFORCE_AUTH_TOKEN or TWILIO_AUTH_TOKEN
@@ -1239,51 +1239,14 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
     }
 
   try:
-    cache_key = lookup_sid
-    now = time.time()
-    cached_numbers = []
-    with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
-      cache_entry = TWILIO_INCOMING_PHONE_NUMBER_CACHE.get(cache_key, {})
-      cached_at = float(cache_entry.get("cached_at", 0) or 0)
-      if (not force_refresh) and cached_at and (now - cached_at) < TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS:
-        cached_numbers = list(cache_entry.get("numbers", []) or [])
-
-    if not cached_numbers:
-      cached_numbers = []
-      next_url = f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers.json"
-      next_params = {"PageSize": 100}
-      while next_url:
-        resp = requests.get(
-          next_url,
-          params=next_params,
-          auth=(lookup_sid, lookup_token),
-          verify=False,
-          timeout=20,
-        )
-        if resp.status_code != 200:
-          return {
-            "enabled": True,
-            "found": False,
-            "phone_number": e164,
-            "sid": "",
-            "status": f"Lookup failed HTTP {resp.status_code}",
-          }
-
-        payload = resp.json() if resp.text else {}
-        cached_numbers.extend(payload.get("incoming_phone_numbers", []) or [])
-
-        next_uri = str(payload.get("next_page_uri", "") or "").strip()
-        if next_uri:
-          next_url = f"https://api.twilio.com{next_uri}" if next_uri.startswith("/") else next_uri
-          next_params = None
-        else:
-          next_url = None
-
-      with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
-        TWILIO_INCOMING_PHONE_NUMBER_CACHE[cache_key] = {
-          "cached_at": now,
-          "numbers": cached_numbers,
-        }
+    lookup_accounts: list[tuple[str, str]] = [(lookup_sid, lookup_token)]
+    # Fallback to parent account search in case the number lives there.
+    if (
+      TWILIO_ACCOUNT_SID
+      and TWILIO_AUTH_TOKEN
+      and TWILIO_ACCOUNT_SID != lookup_sid
+    ):
+      lookup_accounts.append((TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN))
 
     phone_number_digits = "".join(ch for ch in e164 if ch.isdigit())
     candidates = {e164, phone_number_digits}
@@ -1291,26 +1254,35 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
       candidates.add(phone_number_digits[1:])
       candidates.add(f"+{phone_number_digits[1:]}")
 
-    for number_item in cached_numbers:
-      if not isinstance(number_item, dict):
+    lookup_failures = []
+    for account_sid, account_token in lookup_accounts:
+      listed = _list_twilio_incoming_phone_numbers(account_sid, account_token, force_refresh=force_refresh)
+      if not listed.get("ok"):
+        lookup_failures.append(str(listed.get("status", "Lookup failed")))
         continue
-      candidate = str(number_item.get("phone_number", "")).strip()
-      candidate_digits = "".join(ch for ch in candidate if ch.isdigit())
-      if candidate in candidates or candidate_digits in candidates:
-        return {
-          "enabled": True,
-          "found": True,
-          "phone_number": candidate or e164,
-          "sid": str(number_item.get("sid", "")).strip(),
-          "status": "Found",
-        }
+
+      for number_item in listed.get("numbers", []) or []:
+        if not isinstance(number_item, dict):
+          continue
+        candidate = str(number_item.get("phone_number", "")).strip()
+        candidate_digits = "".join(ch for ch in candidate if ch.isdigit())
+        if candidate in candidates or candidate_digits in candidates:
+          return {
+            "enabled": True,
+            "found": True,
+            "phone_number": candidate or e164,
+            "sid": str(number_item.get("sid", "")).strip(),
+            "lookup_account_sid": account_sid,
+            "lookup_auth_token": account_token,
+            "status": "Found",
+          }
 
     not_found_payload = {
       "enabled": True,
       "found": False,
       "phone_number": e164,
       "sid": "",
-      "status": "Not Found",
+      "status": "Not Found" if not lookup_failures else f"Not Found ({'; '.join(lookup_failures)})",
     }
 
     if not force_refresh:
@@ -1391,10 +1363,11 @@ def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict
       "input": phone_number,
       "normalized": _normalize_phone_to_e164(phone_number),
       "sid": "",
-      "status": "Phone number not found in Twilio AMIEWeb account",
+      "status": str(lookup.get("status", "Phone number not found in Twilio account")),
     }
 
-  lookup_sid = _resolve_twilio_lookup_account_sid()
+  lookup_sid = str(lookup.get("lookup_account_sid", "") or _resolve_twilio_lookup_account_sid())
+  lookup_token = str(lookup.get("lookup_auth_token", "") or TWILIO_AUTH_TOKEN)
   if not lookup_sid:
     return {
       "ok": False,
@@ -1409,7 +1382,7 @@ def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict
     response = requests.post(
       f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers/{phone_sid}.json",
       data=payload,
-      auth=(lookup_sid, TWILIO_AUTH_TOKEN),
+      auth=(lookup_sid, lookup_token),
       verify=False,
       timeout=20,
     )
