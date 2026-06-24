@@ -118,6 +118,10 @@ TWILIO_AMIEWEB_DEFAULT_SMS_URL = (
   os.getenv("TWILIO_AMIEWEB_DEFAULT_SMS_URL", "https://api.amnhealthcare.io/listener/notification/v1/twilio/listener")
   or "https://api.amnhealthcare.io/listener/notification/v1/twilio/listener"
 ).strip()
+TWILIO_AMIEWEB_MESSAGING_SERVICE_SID = (
+  os.getenv("TWILIO_AMIEWEB_MESSAGING_SERVICE_SID", "MGdd208368e216d6c6cbd79a90ee4320b8")
+  or "MGdd208368e216d6c6cbd79a90ee4320b8"
+).strip()
 AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aerialink.net/v5") or "https://apix5.aerialink.net/v5").strip().rstrip("/")
 AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
 AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
@@ -189,6 +193,31 @@ AUDIT_LOG_PATH = os.path.join(
   os.path.dirname(os.path.abspath(__file__)),
   "logs",
   "audit_trail.csv",
+)
+TWILIO_SMS_HOSTING_AUDIT_LOCK = threading.Lock()
+TWILIO_SMS_HOSTING_AUDIT_FIELDS = [
+  "timestamp",
+  "submitter",
+  "session_friendly_name",
+  "input_number",
+  "normalized_number",
+  "phone_sid",
+  "verification_code",
+  "verification_status",
+  "result_action",
+  "result_status",
+  "loa_mode",
+  "loa_batch_reference",
+  "loa_recipient_name",
+  "loa_recipient_email",
+  "loa_recipient_phone",
+  "messaging_service_sid",
+  "messaging_service_status",
+]
+TWILIO_SMS_HOSTING_AUDIT_PATH = os.path.join(
+  os.path.dirname(os.path.abspath(__file__)),
+  "logs",
+  "twilio_sms_hosting_audit.csv",
 )
 STRIKE_MASK_HISTORY_LOCK = threading.Lock()
 STRIKE_MASK_HISTORY_FIELDS = [
@@ -908,6 +937,40 @@ def _append_audit_event(
       writer.writerow(row)
 
 
+def _ensure_twilio_sms_hosting_audit_log():
+  os.makedirs(os.path.dirname(TWILIO_SMS_HOSTING_AUDIT_PATH), exist_ok=True)
+  if os.path.exists(TWILIO_SMS_HOSTING_AUDIT_PATH):
+    return
+
+  with open(TWILIO_SMS_HOSTING_AUDIT_PATH, "w", newline="", encoding="utf-8") as handle:
+    writer = csv.writer(handle)
+    writer.writerow(TWILIO_SMS_HOSTING_AUDIT_FIELDS)
+
+
+def _append_twilio_sms_hosting_audit_rows(rows: list[dict]):
+  if not rows:
+    return
+
+  with TWILIO_SMS_HOSTING_AUDIT_LOCK:
+    _ensure_twilio_sms_hosting_audit_log()
+    with open(TWILIO_SMS_HOSTING_AUDIT_PATH, "a", newline="", encoding="utf-8") as handle:
+      writer = csv.DictWriter(handle, fieldnames=TWILIO_SMS_HOSTING_AUDIT_FIELDS)
+      for row in rows:
+        writer.writerow({field: row.get(field, "") for field in TWILIO_SMS_HOSTING_AUDIT_FIELDS})
+
+
+def _load_twilio_sms_hosting_audit_rows(limit: int | None = None) -> list[dict]:
+  with TWILIO_SMS_HOSTING_AUDIT_LOCK:
+    _ensure_twilio_sms_hosting_audit_log()
+    with open(TWILIO_SMS_HOSTING_AUDIT_PATH, "r", newline="", encoding="utf-8") as handle:
+      rows = list(csv.DictReader(handle))
+
+  rows = list(reversed(rows))
+  if limit is not None and limit >= 0:
+    rows = rows[:limit]
+  return rows
+
+
 def _append_strike_mask_history_event(
   event: str,
   operation_id: str,
@@ -1466,7 +1529,15 @@ def _extract_twilio_verification_code(body: dict) -> str:
   return ""
 
 
-def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict:
+def _twilio_update_sms_only_for_number(
+  phone_number: str,
+  payload: dict,
+  loa_recipient_name: str = "",
+  loa_recipient_email: str = "",
+  loa_recipient_phone: str = "",
+  loa_mode: str = "single",
+  loa_batch_reference: str = "",
+) -> dict:
   lookup = _lookup_twilio_number_in_subaccount(phone_number, force_refresh=True)
   if not lookup.get("enabled"):
     return {
@@ -1478,7 +1549,16 @@ def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict
     }
 
   if not lookup.get("found") or not (lookup.get("sid") or "").strip():
-    return _twilio_add_sms_hosted_number(phone_number, payload, str(lookup.get("status", "Not Found")))
+    return _twilio_add_sms_hosted_number(
+      phone_number,
+      payload,
+      str(lookup.get("status", "Not Found")),
+      loa_recipient_name=loa_recipient_name,
+      loa_recipient_email=loa_recipient_email,
+      loa_recipient_phone=loa_recipient_phone,
+      loa_mode=loa_mode,
+      loa_batch_reference=loa_batch_reference,
+    )
 
   lookup_sid = str(lookup.get("lookup_account_sid", "") or _resolve_twilio_lookup_account_sid())
   lookup_token = str(lookup.get("lookup_auth_token", "") or _resolve_twilio_lookup_auth_token_for_sid(lookup_sid))
@@ -1526,6 +1606,8 @@ def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict
       "sms_url": str(body.get("sms_url", "") or "").strip(),
       "sms_method": str(body.get("sms_method", "") or "").strip(),
       "status_callback": str(body.get("status_callback", "") or "").strip(),
+      "messaging_service_sid": TWILIO_AMIEWEB_MESSAGING_SERVICE_SID,
+      "messaging_service_status": "Already hosted; no messaging-service attach required",
       "status": "Updated",
     }
   except Exception as exc:
@@ -1539,7 +1621,46 @@ def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict
     }
 
 
-def _twilio_add_sms_hosted_number(phone_number: str, payload: dict, lookup_status: str = "") -> dict:
+def _twilio_attach_phone_to_messaging_service(
+  account_sid: str,
+  account_token: str,
+  phone_sid: str,
+) -> tuple[bool, str]:
+  if not TWILIO_AMIEWEB_MESSAGING_SERVICE_SID:
+    return False, "Messaging Service SID is not configured"
+  if not phone_sid:
+    return False, "Phone SID is required for Messaging Service registration"
+
+  try:
+    response = requests.post(
+      f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messaging/Services/{TWILIO_AMIEWEB_MESSAGING_SERVICE_SID}/PhoneNumbers.json",
+      data={"PhoneNumberSid": phone_sid},
+      auth=(account_sid, account_token),
+      verify=False,
+      timeout=20,
+    )
+    body = response.json() if response.text else {}
+    if response.status_code in {200, 201}:
+      return True, "Registered"
+
+    message = str(body.get("message", "") or "").strip()
+    if "already" in message.lower() and "service" in message.lower():
+      return True, "Already registered"
+    return False, message or f"Messaging Service attach failed HTTP {response.status_code}"
+  except Exception as exc:
+    return False, f"Messaging Service attach error: {exc}"
+
+
+def _twilio_add_sms_hosted_number(
+  phone_number: str,
+  payload: dict,
+  lookup_status: str = "",
+  loa_recipient_name: str = "",
+  loa_recipient_email: str = "",
+  loa_recipient_phone: str = "",
+  loa_mode: str = "single",
+  loa_batch_reference: str = "",
+) -> dict:
   normalized = _normalize_phone_to_e164(phone_number)
   primary_sid = _resolve_twilio_lookup_account_sid()
   primary_token = _resolve_twilio_lookup_auth_token_for_sid(primary_sid)
@@ -1563,49 +1684,59 @@ def _twilio_add_sms_hosted_number(phone_number: str, payload: dict, lookup_statu
       "status": "Twilio subaccount SID is required; parent account is not allowed for hosting",
     }
 
-  candidate_accounts: list[tuple[str, str, str]] = [
-    (primary_sid, primary_token, "AMIEWeb subaccount"),
-  ]
-
-  create_payload = dict(payload)
-  create_payload["PhoneNumber"] = normalized
+  create_payload = {
+    "PhoneNumber": normalized,
+    "SmsCapability": "true",
+  }
+  clean_friendly = str(payload.get("FriendlyName", "") or "").strip()
+  if clean_friendly:
+    create_payload["FriendlyName"] = clean_friendly
+  if loa_recipient_email:
+    create_payload["Email"] = loa_recipient_email
+  if loa_batch_reference:
+    create_payload["UniqueName"] = loa_batch_reference
 
   attempt_errors = []
-  for account_sid, account_token, account_label in candidate_accounts:
-    try:
-      response = requests.post(
-        f"https://api.twilio.com/2010-04-01/Accounts/{account_sid}/IncomingPhoneNumbers.json",
-        data=create_payload,
-        auth=(account_sid, account_token),
-        verify=False,
-        timeout=20,
-      )
-      body = response.json() if response.text else {}
-      if response.status_code in {200, 201}:
-        with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
-          TWILIO_INCOMING_PHONE_NUMBER_CACHE.pop(account_sid, None)
-          TWILIO_INCOMING_PHONE_NUMBER_CACHE.pop(TWILIO_ACCOUNT_SID, None)
-          TWILIO_INCOMING_PHONE_NUMBER_CACHE.pop(TWILIO_SUBACCOUNT_SID, None)
+  try:
+    response = requests.post(
+      "https://preview.twilio.com/HostedNumbers/HostedNumberOrders",
+      data=create_payload,
+      auth=(primary_sid, primary_token),
+      verify=False,
+      timeout=20,
+    )
+    body = response.json() if response.text else {}
+    if response.status_code in {200, 201}:
+      order_sid = str(body.get("sid", "") or body.get("Sid", "") or "").strip()
+      order_status = str(body.get("status", "") or body.get("Status", "") or "Pending").strip()
+      verification_code = _extract_twilio_verification_code(body)
 
-        return {
-          "ok": True,
-          "action": "Added",
-          "input": phone_number,
-          "normalized": normalized,
-          "twilio_number": str(body.get("phone_number", "") or normalized).strip(),
-          "sid": str(body.get("sid", "") or "").strip(),
-          "friendly_name": str(body.get("friendly_name", "") or payload.get("FriendlyName", "")).strip(),
-          "verification_code": _extract_twilio_verification_code(body),
-          "sms_url": str(body.get("sms_url", "") or payload.get("SmsUrl", "")).strip(),
-          "sms_method": str(body.get("sms_method", "") or payload.get("SmsMethod", "")).strip(),
-          "status_callback": str(body.get("status_callback", "") or payload.get("StatusCallback", "")).strip(),
-          "status": f"Added and Hosted via {account_label}",
-        }
+      return {
+        "ok": True,
+        "action": "HostedOrderCreated",
+        "input": phone_number,
+        "normalized": normalized,
+        "twilio_number": normalized,
+        "sid": order_sid,
+        "friendly_name": clean_friendly,
+        "verification_code": verification_code,
+        "sms_url": str(payload.get("SmsUrl", "") or "").strip(),
+        "sms_method": str(payload.get("SmsMethod", "") or "").strip(),
+        "status_callback": str(payload.get("StatusCallback", "") or "").strip(),
+        "loa_recipient_name": loa_recipient_name,
+        "loa_recipient_email": loa_recipient_email,
+        "loa_recipient_phone": loa_recipient_phone,
+        "loa_mode": loa_mode,
+        "loa_batch_reference": loa_batch_reference,
+        "messaging_service_sid": TWILIO_AMIEWEB_MESSAGING_SERVICE_SID,
+        "messaging_service_status": "Pending number completion before registration",
+        "status": f"Hosted order created ({order_status})",
+      }
 
-      err_message = str(body.get("message", "")).strip() or f"Twilio add failed HTTP {response.status_code}"
-      attempt_errors.append(f"{account_label}: {err_message}")
-    except Exception as exc:
-      attempt_errors.append(f"{account_label}: Twilio add error: {exc}")
+    err_message = str(body.get("message", "") or body.get("Message", "")).strip() or f"Hosted order create failed HTTP {response.status_code}"
+    attempt_errors.append(f"AMIEWeb subaccount: {err_message}")
+  except Exception as exc:
+    attempt_errors.append(f"AMIEWeb subaccount: Hosted order create error: {exc}")
 
   prefix = f"{lookup_status}; " if lookup_status else ""
   return {
@@ -10459,6 +10590,13 @@ def page3_twilio_items(request: Request):
                 <input name="loa_recipient_phone" placeholder="LOA Recipient Phone (default from Settings)" value="__DEFAULT_TWILIO_LOA_RECIPIENT_PHONE__">
               </div>
               <div class="search-filter-row">
+                <select name="loa_mode" style="max-width:260px;">
+                  <option value="single" selected>LOA Mode: Single LOA for Batch</option>
+                  <option value="per_number">LOA Mode: Per Number</option>
+                </select>
+                <input name="loa_batch_reference" placeholder="LOA Batch Reference (optional; e.g., DocuSign Envelope ID)">
+              </div>
+              <div class="search-filter-row">
                 <input name="sms_fallback_url" placeholder="SMS Fallback URL (optional)">
                 <input name="sms_fallback_method" placeholder="SMS Fallback Method (POST/GET)" value="POST">
               </div>
@@ -10470,6 +10608,18 @@ def page3_twilio_items(request: Request):
             </form>
             <p id="twilio-sms-host-status" style="color:#2c5c8a; min-height:18px;">Required fields: phone number(s), SMS method. Friendly Name can be custom, or blank for auto YYYYMMDD_X. LOA contact defaults come from Settings.</p>
             <div id="twilio-sms-host-results" style="overflow-x:auto;"></div>
+            <div id="twilio-sms-verify-queue" style="margin-top:14px;"></div>
+            <hr style="margin: 16px 0; border: none; border-top: 1px solid #ddd;">
+            <h4 style="margin:0 0 8px 0; color:#2c5c8a;">Recent Friendly Name Status</h4>
+            <form id="twilio-friendly-status-form">
+              <div class="search-filter-row">
+                <input name="friendly_name" placeholder="Friendly Name (leave blank for recent)">
+                <button type="submit">Refresh Status</button>
+                <a href="/download/twilio-sms-hosting-audit" style="display:inline-block;padding:8px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;">Download SMS Hosting Audit CSV</a>
+              </div>
+            </form>
+            <p id="twilio-friendly-status-status" style="color:#2c5c8a; min-height:18px;">Use this for long-running completion checks (minutes/hours/days).</p>
+            <div id="twilio-friendly-status-results" style="overflow-x:auto;"></div>
           </div>
         </section>
 
@@ -11015,13 +11165,192 @@ def page3_twilio_items(request: Request):
           const form = document.getElementById("twilio-sms-host-form");
           const statusEl = document.getElementById("twilio-sms-host-status");
           const resultsEl = document.getElementById("twilio-sms-host-results");
+          const verifyQueueEl = document.getElementById("twilio-sms-verify-queue");
 
           if (!form || !statusEl || !resultsEl) return;
+
+          function normalizeForTranslationPattern(rawValue) {
+            const digits = String(rawValue || "").replace(/\D/g, "");
+            if (digits.length === 11 && digits.startsWith("1")) {
+              return digits.slice(1);
+            }
+            return digits;
+          }
+
+          async function routeVerificationCall(profileKey, targetPattern) {
+            const formData = new URLSearchParams({
+              cucm_host: "__AUTH_CUCM_HOST__",
+              cucm_user: "__AUTH_USER__",
+              cucm_pass: "",
+              profile_key: profileKey,
+              target_pattern: targetPattern,
+            });
+
+            const response = await fetch("/translation-pattern/twilio-inbound-verification", {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: formData.toString(),
+              credentials: "same-origin",
+            });
+
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || (payload && payload.detail) || "Verification route update failed.");
+            }
+            return payload;
+          }
+
+          async function markVerificationStatus(row, verificationStatus, notes) {
+            try {
+              const body = new URLSearchParams({
+                friendly_name: row.friendly_name || "",
+                normalized_number: row.normalized || "",
+                verification_status: verificationStatus,
+                notes: notes || "",
+              });
+              await fetch("/twilio/amieweb/verification/mark", {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: body.toString(),
+                credentials: "same-origin",
+              });
+            } catch (_err) {
+              // Non-blocking for operator flow.
+            }
+          }
+
+          function renderVerificationQueue(rows, loaModeText, loaRefText) {
+            if (!verifyQueueEl) {
+              return;
+            }
+
+            const queue = (rows || [])
+              .map(function (row) {
+                return {
+                  input: row.input || "",
+                  normalized: row.normalized || "",
+                  friendly_name: row.friendly_name || "",
+                  verification_code: row.verification_code || "",
+                  sid: row.sid || "",
+                  status: row.status || "",
+                  ok: !!row.ok,
+                  routed_profile: "",
+                  verified: false,
+                };
+              })
+              .filter(function (item) {
+                return !!item.verification_code;
+              });
+
+            if (!queue.length) {
+              verifyQueueEl.innerHTML = "";
+              return;
+            }
+
+            let idx = 0;
+
+            const render = function () {
+              const current = queue[idx] || null;
+              if (!current) {
+                verifyQueueEl.innerHTML = '<div style="border:1px solid #c8dbee;border-radius:8px;background:#f8fbff;padding:12px;">All verification-code items are complete.</div>';
+                return;
+              }
+
+              const completed = queue.filter(function (item) { return item.verified; }).length;
+              const total = queue.length;
+              const loaLine = loaModeText
+                ? ('LOA Mode: <strong>' + loaModeText + '</strong>' + (loaRefText ? (' | Reference: <strong>' + loaRefText + '</strong>') : ''))
+                : '';
+
+              verifyQueueEl.innerHTML =
+                '<div style="border:1px solid #c8dbee;border-radius:8px;background:#f8fbff;padding:12px;">'
+                + '<h4 style="margin:0 0 8px 0;color:#12304a;">Twilio Verification Queue (One Number at a Time)</h4>'
+                + '<p style="margin:0 0 8px 0;color:#355978;">Item ' + (idx + 1) + ' of ' + total + ' | Verified: ' + completed + '</p>'
+                + (loaLine ? ('<p style="margin:0 0 8px 0;color:#355978;">' + loaLine + '</p>') : '')
+                + '<p style="margin:0 0 6px 0;"><strong>Number:</strong> ' + (current.normalized || current.input || '') + '</p>'
+                + '<p style="margin:0 0 8px 0;"><strong>Phone SID:</strong> <span style="font-family:Consolas,monospace;">' + (current.sid || '—') + '</span></p>'
+                + '<div style="font-family:Consolas,monospace;font-size:22px;font-weight:700;color:#002f6c;background:#fff;border:1px solid #b7d0e6;border-radius:6px;padding:8px 10px;display:inline-block;">'
+                + (current.verification_code || '—')
+                + '</div>'
+                + '<p style="margin:8px 0 10px 0;color:#355978;">Read this code, trigger the Twilio ownership call, answer on selected Jabber target, then key in this code.</p>'
+                + '<div style="display:flex;flex-wrap:wrap;gap:8px;">'
+                + '<button type="button" id="twilio-queue-route-phimane" style="background:#005eb8;color:#fff;border:none;border-radius:6px;padding:7px 10px;font-weight:700;cursor:pointer;">Route Call to Phimane</button>'
+                + '<button type="button" id="twilio-queue-route-lauraa" style="background:#0f766e;color:#fff;border:none;border-radius:6px;padding:7px 10px;font-weight:700;cursor:pointer;">Route Call to LauraA</button>'
+                + '<button type="button" id="twilio-queue-mark-next" style="background:#237741;color:#fff;border:none;border-radius:6px;padding:7px 10px;font-weight:700;cursor:pointer;">Mark Verified and Next</button>'
+                + '<button type="button" id="twilio-queue-skip-next" style="background:#6b7280;color:#fff;border:none;border-radius:6px;padding:7px 10px;font-weight:700;cursor:pointer;">Skip to Next</button>'
+                + '</div>'
+                + '<p id="twilio-queue-status" style="margin:10px 0 0 0;color:#2c5c8a;min-height:18px;">Current route: '
+                + (current.routed_profile ? current.routed_profile : 'Not set')
+                + '</p>'
+                + '</div>';
+
+              const queueStatusEl = document.getElementById("twilio-queue-status");
+              const targetPattern = normalizeForTranslationPattern(current.normalized || current.input || "");
+
+              const bindRouteButton = function (buttonId, profileKey, label) {
+                const btn = document.getElementById(buttonId);
+                if (!btn) {
+                  return;
+                }
+                btn.addEventListener("click", async function () {
+                  if (!targetPattern) {
+                    queueStatusEl.textContent = "Cannot route: target number is empty.";
+                    return;
+                  }
+                  btn.disabled = true;
+                  queueStatusEl.textContent = "Updating translation pattern route to " + label + "...";
+                  try {
+                    await routeVerificationCall(profileKey, targetPattern);
+                    current.routed_profile = label;
+                    queueStatusEl.textContent = "Route set to " + label + " for " + targetPattern + ".";
+                  } catch (err) {
+                    queueStatusEl.textContent = "Route update failed: " + ((err && err.message) || "Unknown error.");
+                    btn.disabled = false;
+                  }
+                });
+              };
+
+              bindRouteButton("twilio-queue-route-phimane", "phimane", "Phimane");
+              bindRouteButton("twilio-queue-route-lauraa", "lauraa", "LauraA");
+
+              const markBtn = document.getElementById("twilio-queue-mark-next");
+              if (markBtn) {
+                markBtn.addEventListener("click", async function () {
+                  current.verified = true;
+                  await markVerificationStatus(current, "verified", "Marked verified in queue");
+                  if (idx < queue.length - 1) {
+                    idx += 1;
+                    render();
+                  } else {
+                    verifyQueueEl.innerHTML = '<div style="border:1px solid #c8dbee;border-radius:8px;background:#eefbf2;color:#145c2e;padding:12px;font-weight:700;">Verification queue complete. All items marked verified.</div>';
+                  }
+                });
+              }
+
+              const skipBtn = document.getElementById("twilio-queue-skip-next");
+              if (skipBtn) {
+                skipBtn.addEventListener("click", async function () {
+                  await markVerificationStatus(current, "pending", "Skipped in queue");
+                  if (idx < queue.length - 1) {
+                    idx += 1;
+                    render();
+                  } else {
+                    queueStatusEl.textContent = "Already at last queue item.";
+                  }
+                });
+              }
+            };
+
+            render();
+          }
 
           form.addEventListener("submit", async function (event) {
             event.preventDefault();
             statusEl.textContent = "Applying SMS hosting configuration...";
             resultsEl.innerHTML = "";
+            if (verifyQueueEl) {
+              verifyQueueEl.innerHTML = "";
+            }
 
             try {
               const formData = new FormData(form);
@@ -11044,7 +11373,8 @@ def page3_twilio_items(request: Request):
               const loaNote = submitted.loa_recipient_email
                 ? (`LOA contact: ${submitted.loa_recipient_name || ""} <${submitted.loa_recipient_email}>`)
                 : "LOA contact: not set";
-              statusEl.textContent = `Requested: ${summary.requested || 0} | Updated: ${summary.updated || 0} | Failed: ${summary.failed || 0} | ${friendlyNote} | ${loaNote}`;
+              const loaModeNote = submitted.loa_mode === "per_number" ? "LOA mode: Per Number" : "LOA mode: Single Batch";
+              statusEl.textContent = `Requested: ${summary.requested || 0} | Updated: ${summary.updated || 0} | Failed: ${summary.failed || 0} | ${friendlyNote} | ${loaNote} | ${loaModeNote}`;
 
               const rows = payload.results || [];
               if (!rows.length) {
@@ -11079,8 +11409,77 @@ def page3_twilio_items(request: Request):
 
               html += '</tbody></table>';
               resultsEl.innerHTML = html;
+
+              renderVerificationQueue(rows, submitted.loa_mode === "per_number" ? "Per Number" : "Single LOA for Batch", submitted.loa_batch_reference || "");
             } catch (err) {
               statusEl.textContent = "Update failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        })();
+
+        // Recent Friendly Name status lookup for long-running completion tracking.
+        (function () {
+          const form = document.getElementById("twilio-friendly-status-form");
+          const statusEl = document.getElementById("twilio-friendly-status-status");
+          const resultsEl = document.getElementById("twilio-friendly-status-results");
+          if (!form || !statusEl || !resultsEl) return;
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Loading recent friendly-name status...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const fd = new FormData(form);
+              const name = String(fd.get("friendly_name") || "").trim();
+              const query = new URLSearchParams({
+                friendly_name: name,
+                limit: "100",
+              });
+              const response = await fetch("/twilio/amieweb/friendly-name-status?" + query.toString(), {
+                method: "GET",
+                credentials: "same-origin",
+              });
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload && payload.error) || "Status lookup failed.");
+              }
+
+              const rows = payload.rows || [];
+              statusEl.textContent = `Status rows: ${rows.length}`;
+              if (!rows.length) {
+                resultsEl.innerHTML = "";
+                return;
+              }
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left;">Timestamp</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Submitter</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Friendly Name</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Number</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Verification</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Result</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Messaging Service</th>';
+              html += '</tr></thead><tbody>';
+
+              rows.forEach(function (row, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px;">' + (row.timestamp || "") + '</td>';
+                html += '<td style="padding:7px 10px;">' + (row.submitter || "") + '</td>';
+                html += '<td style="padding:7px 10px;">' + (row.session_friendly_name || "") + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.normalized_number || row.input_number || "") + '</td>';
+                html += '<td style="padding:7px 10px;">' + (row.verification_status || "") + '</td>';
+                html += '<td style="padding:7px 10px;">' + (row.result_status || row.result_action || "") + '</td>';
+                html += '<td style="padding:7px 10px;">' + (row.messaging_service_status || "") + '</td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+            } catch (err) {
+              statusEl.textContent = "Status lookup failed: " + ((err && err.message) || "Unknown error.");
             }
           });
         })();
@@ -13334,6 +13733,7 @@ def lookup_twilio_by_number_sfdc_route(phone_number: str = Form(...)):
 
 @app.post("/twilio/amieweb/sms-host")
 def twilio_amieweb_sms_host_route(
+  request: Request,
     phone_numbers: str = Form(""),
     sms_url: str = Form(""),
     sms_method: str = Form("POST"),
@@ -13341,6 +13741,8 @@ def twilio_amieweb_sms_host_route(
     loa_recipient_name: str = Form(""),
     loa_recipient_email: str = Form(""),
     loa_recipient_phone: str = Form(""),
+    loa_mode: str = Form("single"),
+    loa_batch_reference: str = Form(""),
     sms_fallback_url: str = Form(""),
     sms_fallback_method: str = Form("POST"),
     status_callback_url: str = Form(""),
@@ -13356,9 +13758,13 @@ def twilio_amieweb_sms_host_route(
       settings = _load_settings()
       clean_sms_url = (sms_url or "").strip() or TWILIO_AMIEWEB_DEFAULT_SMS_URL
       custom_friendly_name = (friendly_name or "").strip()
+      operator_username = str((_get_auth_session(request) or {}).get("username", "") or "").strip()
       clean_loa_recipient_name = (loa_recipient_name or "").strip() or (settings.get("twilio_loa_recipient_name", "") or "").strip()
       clean_loa_recipient_email = (loa_recipient_email or "").strip() or (settings.get("twilio_loa_recipient_email", "") or "").strip()
       clean_loa_recipient_phone = (loa_recipient_phone or "").strip() or (settings.get("twilio_loa_recipient_phone", "") or "").strip()
+      clean_loa_mode = "per_number" if (loa_mode or "").strip().lower() in {"per_number", "per-number", "pernumber"} else "single"
+      clean_loa_batch_reference = (loa_batch_reference or "").strip()
+      session_friendly_name = custom_friendly_name or f"host-{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
       if not numbers:
         return JSONResponse({
           "ok": False,
@@ -13394,15 +13800,56 @@ def twilio_amieweb_sms_host_route(
       success_count = 0
       for idx, number in enumerate(numbers):
         row_payload = dict(payload)
-        if not custom_friendly_name:
-          row_payload["FriendlyName"] = f"{auto_prefix}_{auto_index + idx}"
+        row_payload["FriendlyName"] = session_friendly_name
 
-        row = _twilio_update_sms_only_for_number(number, row_payload)
+        row = _twilio_update_sms_only_for_number(
+          number,
+          row_payload,
+          loa_recipient_name=clean_loa_recipient_name,
+          loa_recipient_email=clean_loa_recipient_email,
+          loa_recipient_phone=clean_loa_recipient_phone,
+          loa_mode=clean_loa_mode,
+          loa_batch_reference=clean_loa_batch_reference,
+        )
+
+        row_sid = str(row.get("sid", "") or "").strip()
+        if row.get("ok") and row.get("action") == "Updated" and row_sid.startswith("PN"):
+          attach_ok, attach_status = _twilio_attach_phone_to_messaging_service(
+            _resolve_twilio_lookup_account_sid(),
+            _resolve_twilio_lookup_auth_token_for_sid(_resolve_twilio_lookup_account_sid()),
+            row_sid,
+          )
+          row["messaging_service_sid"] = TWILIO_AMIEWEB_MESSAGING_SERVICE_SID
+          row["messaging_service_status"] = attach_status if attach_ok else f"Failed: {attach_status}"
         if not row.get("friendly_name"):
-          row["friendly_name"] = str(row_payload.get("FriendlyName", "") or "").strip()
+          row["friendly_name"] = session_friendly_name
         if row.get("ok"):
           success_count += 1
         results.append(row)
+
+      audit_rows = []
+      now_text = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+      for row in results:
+        audit_rows.append({
+          "timestamp": now_text,
+          "submitter": operator_username,
+          "session_friendly_name": session_friendly_name,
+          "input_number": str(row.get("input", "") or ""),
+          "normalized_number": str(row.get("normalized", "") or ""),
+          "phone_sid": str(row.get("sid", "") or ""),
+          "verification_code": str(row.get("verification_code", "") or ""),
+          "verification_status": "pending" if str(row.get("verification_code", "") or "").strip() else "n/a",
+          "result_action": str(row.get("action", "") or ""),
+          "result_status": str(row.get("status", "") or ""),
+          "loa_mode": clean_loa_mode,
+          "loa_batch_reference": clean_loa_batch_reference,
+          "loa_recipient_name": clean_loa_recipient_name,
+          "loa_recipient_email": clean_loa_recipient_email,
+          "loa_recipient_phone": clean_loa_recipient_phone,
+          "messaging_service_sid": str(row.get("messaging_service_sid", "") or TWILIO_AMIEWEB_MESSAGING_SERVICE_SID),
+          "messaging_service_status": str(row.get("messaging_service_status", "") or ""),
+        })
+      _append_twilio_sms_hosting_audit_rows(audit_rows)
 
       return JSONResponse({
         "ok": True,
@@ -13415,12 +13862,14 @@ def twilio_amieweb_sms_host_route(
         "submitted": {
           "sms_url": payload.get("SmsUrl", ""),
           "sms_method": payload.get("SmsMethod", "POST"),
-          "friendly_name": custom_friendly_name,
-          "friendly_name_mode": "custom" if custom_friendly_name else "auto",
+          "friendly_name": session_friendly_name,
+          "friendly_name_mode": "custom" if custom_friendly_name else "session_auto",
           "friendly_name_auto_seed": f"{auto_prefix}_{auto_index}",
           "loa_recipient_name": clean_loa_recipient_name,
           "loa_recipient_email": clean_loa_recipient_email,
           "loa_recipient_phone": clean_loa_recipient_phone,
+          "loa_mode": clean_loa_mode,
+          "loa_batch_reference": clean_loa_batch_reference,
           "sms_fallback_url": payload.get("SmsFallbackUrl", ""),
           "sms_fallback_method": payload.get("SmsFallbackMethod", ""),
           "status_callback_url": payload.get("StatusCallback", ""),
@@ -13434,6 +13883,82 @@ def twilio_amieweb_sms_host_route(
         "error": str(exc),
         "results": [],
       }, status_code=500)
+
+
+@app.get("/download/twilio-sms-hosting-audit")
+def download_twilio_sms_hosting_audit():
+  with TWILIO_SMS_HOSTING_AUDIT_LOCK:
+    _ensure_twilio_sms_hosting_audit_log()
+    with open(TWILIO_SMS_HOSTING_AUDIT_PATH, "rb") as handle:
+      data = handle.read()
+
+  return Response(
+    data,
+    media_type="text/csv",
+    headers={"Content-Disposition": 'attachment; filename="twilio_sms_hosting_audit.csv"'},
+  )
+
+
+@app.get("/twilio/amieweb/friendly-name-status")
+def twilio_amieweb_friendly_name_status(
+  friendly_name: str = "",
+  limit: int = 50,
+):
+  clean_name = (friendly_name or "").strip()
+  safe_limit = max(1, min(limit, 200))
+  rows = _load_twilio_sms_hosting_audit_rows(limit=500)
+  if clean_name:
+    rows = [row for row in rows if str(row.get("session_friendly_name", "") or "").strip() == clean_name]
+  rows = rows[:safe_limit]
+
+  return JSONResponse({
+    "ok": True,
+    "count": len(rows),
+    "friendly_name": clean_name,
+    "rows": rows,
+  })
+
+
+@app.post("/twilio/amieweb/verification/mark")
+def twilio_amieweb_verification_mark(
+  request: Request,
+  friendly_name: str = Form(""),
+  normalized_number: str = Form(""),
+  verification_status: str = Form("pending"),
+  notes: str = Form(""),
+):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  clean_name = (friendly_name or "").strip()
+  clean_number = (normalized_number or "").strip()
+  clean_status = (verification_status or "pending").strip().lower()
+  clean_notes = (notes or "").strip()
+  if clean_status not in {"pending", "verified", "failed", "skipped"}:
+    clean_status = "pending"
+
+  _append_twilio_sms_hosting_audit_rows([
+    {
+      "timestamp": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+      "submitter": operator,
+      "session_friendly_name": clean_name,
+      "input_number": clean_number,
+      "normalized_number": clean_number,
+      "phone_sid": "",
+      "verification_code": "",
+      "verification_status": clean_status,
+      "result_action": "VerificationUpdate",
+      "result_status": clean_notes,
+      "loa_mode": "",
+      "loa_batch_reference": "",
+      "loa_recipient_name": "",
+      "loa_recipient_email": "",
+      "loa_recipient_phone": "",
+      "messaging_service_sid": TWILIO_AMIEWEB_MESSAGING_SERVICE_SID,
+      "messaging_service_status": "",
+    }
+  ])
+
+  return JSONResponse({"ok": True})
 
 
 @app.post("/lookup/aerialink-by-number")
