@@ -7672,14 +7672,11 @@ def menu_admin_page(request: Request):
 
       <section class="panel tool-panel" data-panel="ldapsync">
         <h3>Trigger CUCM LDAP Sync</h3>
-        <p>Triggers CUCM LDAP sync using the selected CUCM environment. Agreement defaults by host: PROD uses LDAP_AMN, LAB uses LAB_LDAP_AMN.</p>
+        <p>Triggers CUCM LDAP sync for the active environment automatically. PROD uses LDAP_AMN and LAB uses LAB_LDAP_AMN.</p>
         <form action="/admin/ldap-sync" method="post">
           <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
-
-          LDAP Agreement Name (optional override):<br>
-          <input name="agreement_name" placeholder="Leave blank for environment default"><br><br>
 
           <button type="submit">Run CUCM LDAP Sync</button>
         </form>
@@ -12733,15 +12730,12 @@ def admin_ldap_sync_route(
     cucm_host: str = Form(""),
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
-    agreement_name: str = Form(""),
     inline: bool = Query(False),
 ):
   cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
   _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
 
-  agreement = (agreement_name or "").strip()
-  if not agreement:
-    agreement = LAB_LDAP_AGREEMENT if _is_lab_host(cucm_host) else PROD_LDAP_AGREEMENT
+  agreement = LAB_LDAP_AGREEMENT if _is_lab_host(cucm_host) else PROD_LDAP_AGREEMENT
 
   now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
   safe_agreement = re.sub(r"[^A-Za-z0-9_-]+", "_", agreement)
