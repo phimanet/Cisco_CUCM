@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-06-19
+- Date: 2026-06-23
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -88,6 +88,13 @@ Priority keys:
 - Added Administrative Items LAB-only v1.01 scaffold panel: VeraSMART queue CSV template download, queue upload endpoint, and run-status view placeholders.
 - Confirmed rollout posture: LAB web server only for v1.01 testing; no production pull/deploy during this phase.
 - Captured next priority enhancement as Planned: automatic deferred voicemail build at 10:00 AM PST after AD-inactive Unity failure, with operator-success notification email.
+
+### 2026-06-23
+- Completed Unity SSL consistency remediation for remaining flows and promoted fix commit `13b9c84`.
+- Added/validated Page 2 CUCM LDAP sync trigger behavior (auto-select LAB/PROD agreement by host) and moved menu item to bottom.
+- Validated production workflows end-to-end after pull/restart: Separation, Jabber Build, Name Change, and Reset Voicemail PIN (all success).
+- Confirmed Twilio AMIEWeb workflow still passes after promotion.
+- Confirmed LAB and PROD parity: both servers on commit `13b9c84` with `cucm-web.service` active/running.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.
