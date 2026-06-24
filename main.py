@@ -1697,46 +1697,51 @@ def _twilio_add_sms_hosted_number(
     create_payload["UniqueName"] = loa_batch_reference
 
   attempt_errors = []
-  try:
-    response = requests.post(
-      "https://preview.twilio.com/HostedNumbers/HostedNumberOrders",
-      data=create_payload,
-      auth=(primary_sid, primary_token),
-      verify=False,
-      timeout=20,
-    )
-    body = response.json() if response.text else {}
-    if response.status_code in {200, 201}:
-      order_sid = str(body.get("sid", "") or body.get("Sid", "") or "").strip()
-      order_status = str(body.get("status", "") or body.get("Status", "") or "Pending").strip()
-      verification_code = _extract_twilio_verification_code(body)
+  hosted_order_endpoints = [
+    "https://preview.twilio.com/HostedNumbers/HostedNumberOrders.json",
+    "https://preview.twilio.com/HostedNumbers/HostedNumberOrders",
+  ]
+  for endpoint in hosted_order_endpoints:
+    try:
+      response = requests.post(
+        endpoint,
+        data=create_payload,
+        auth=(primary_sid, primary_token),
+        verify=False,
+        timeout=20,
+      )
+      body = response.json() if response.text else {}
+      if response.status_code in {200, 201}:
+        order_sid = str(body.get("sid", "") or body.get("Sid", "") or "").strip()
+        order_status = str(body.get("status", "") or body.get("Status", "") or "Pending").strip()
+        verification_code = _extract_twilio_verification_code(body)
 
-      return {
-        "ok": True,
-        "action": "HostedOrderCreated",
-        "input": phone_number,
-        "normalized": normalized,
-        "twilio_number": normalized,
-        "sid": order_sid,
-        "friendly_name": clean_friendly,
-        "verification_code": verification_code,
-        "sms_url": str(payload.get("SmsUrl", "") or "").strip(),
-        "sms_method": str(payload.get("SmsMethod", "") or "").strip(),
-        "status_callback": str(payload.get("StatusCallback", "") or "").strip(),
-        "loa_recipient_name": loa_recipient_name,
-        "loa_recipient_email": loa_recipient_email,
-        "loa_recipient_phone": loa_recipient_phone,
-        "loa_mode": loa_mode,
-        "loa_batch_reference": loa_batch_reference,
-        "messaging_service_sid": TWILIO_AMIEWEB_MESSAGING_SERVICE_SID,
-        "messaging_service_status": "Pending number completion before registration",
-        "status": f"Hosted order created ({order_status})",
-      }
+        return {
+          "ok": True,
+          "action": "HostedOrderCreated",
+          "input": phone_number,
+          "normalized": normalized,
+          "twilio_number": normalized,
+          "sid": order_sid,
+          "friendly_name": clean_friendly,
+          "verification_code": verification_code,
+          "sms_url": str(payload.get("SmsUrl", "") or "").strip(),
+          "sms_method": str(payload.get("SmsMethod", "") or "").strip(),
+          "status_callback": str(payload.get("StatusCallback", "") or "").strip(),
+          "loa_recipient_name": loa_recipient_name,
+          "loa_recipient_email": loa_recipient_email,
+          "loa_recipient_phone": loa_recipient_phone,
+          "loa_mode": loa_mode,
+          "loa_batch_reference": loa_batch_reference,
+          "messaging_service_sid": TWILIO_AMIEWEB_MESSAGING_SERVICE_SID,
+          "messaging_service_status": "Pending number completion before registration",
+          "status": f"Hosted order created ({order_status})",
+        }
 
-    err_message = str(body.get("message", "") or body.get("Message", "")).strip() or f"Hosted order create failed HTTP {response.status_code}"
-    attempt_errors.append(f"AMIEWeb subaccount: {err_message}")
-  except Exception as exc:
-    attempt_errors.append(f"AMIEWeb subaccount: Hosted order create error: {exc}")
+      err_message = str(body.get("message", "") or body.get("Message", "")).strip() or f"Hosted order create failed HTTP {response.status_code}"
+      attempt_errors.append(f"AMIEWeb subaccount [{endpoint}]: {err_message}")
+    except Exception as exc:
+      attempt_errors.append(f"AMIEWeb subaccount [{endpoint}]: Hosted order create error: {exc}")
 
   prefix = f"{lookup_status}; " if lookup_status else ""
   return {
