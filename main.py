@@ -538,6 +538,49 @@ def _trigger_cucm_ldap_sync(cucm_host: str, cucm_user: str, cucm_pass: str, agre
   return False, f"LDAP sync failed for agreement '{agreement_name}': {error_text}"
 
 
+def _trigger_unity_ldap_sync(unity_server: str, unity_user: str, unity_pass: str):
+  unity_base = (unity_server or "").strip()
+  if not unity_base:
+    raise RuntimeError("Unity server is missing.")
+
+  if not unity_base.startswith("http://") and not unity_base.startswith("https://"):
+    unity_base = f"https://{unity_base}"
+
+  url = f"{unity_base.rstrip('/')}/vmrest/import/users/ldap"
+  headers = {
+    "Accept": "application/json",
+    "Content-Type": "application/json",
+  }
+
+  # Unity does not expose AXL-like doLdapSync; this call requests the LDAP import endpoint,
+  # which refreshes/validates import availability for the current Unity environment.
+  attempts = [
+    ({"query": "(alias startswith a)", "rowsPerPage": "1", "synchronize": "true"}, "synchronize=true"),
+    ({"query": "(alias startswith a)", "rowsPerPage": "1"}, "standard import query"),
+  ]
+
+  errors = []
+  for params, attempt_label in attempts:
+    response = requests.get(
+      url,
+      headers=headers,
+      params=params,
+      auth=HTTPBasicAuth(unity_user, unity_pass),
+      timeout=60,
+      verify=False,
+    )
+
+    if response.status_code == 200:
+      return True, f"Unity LDAP sync request sent to {unity_server} via {attempt_label}."
+
+    body = (response.text or "").strip()
+    if not body:
+      body = f"HTTP {response.status_code}"
+    errors.append(f"{attempt_label}: {body[:600]}")
+
+  return False, "Unity LDAP sync trigger failed. " + " | ".join(errors)
+
+
 def _is_lab_host(cucm_host: str):
   return (cucm_host or "").strip().lower() == LAB_CUCM_HOST.lower()
 
@@ -7552,6 +7595,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3'">📞 Twilio Items (Page 3)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">⚙️ DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
+            <button type="button" class="portal-nav-btn" data-panel="unityldapsync">Trigger Unity LDAP Sync</button>
           </div>
         </aside>
 
@@ -7679,6 +7723,20 @@ def menu_admin_page(request: Request):
           <input type="hidden" name="cucm_pass" value="">
 
           <button type="submit">Run CUCM LDAP Sync</button>
+        </form>
+      </section>
+
+      <section class="panel tool-panel" data-panel="unityldapsync">
+        <h3>Trigger Unity LDAP Sync</h3>
+        <p>Triggers Unity LDAP import sync for the active environment automatically (LAB or PROD based on your current session host).</p>
+        <form action="/admin/unity-ldap-sync" method="post">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <input type="hidden" name="unity_user" value="">
+          <input type="hidden" name="unity_pass" value="">
+
+          <button type="submit">Run Unity LDAP Sync</button>
         </form>
       </section>
 
@@ -12777,6 +12835,64 @@ def admin_ldap_sync_route(
     })
 
   return _render_job_result("CUCM LDAP Sync", data, filename, back_url="/page2")
+
+
+@app.post("/admin/unity-ldap-sync")
+def admin_unity_ldap_sync_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    unity_user: str = Form(""),
+    unity_pass: str = Form(""),
+    inline: bool = Query(False),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
+
+  unity_user, unity_pass = _resolve_unity_credentials(request, unity_user, unity_pass)
+  unity_server = _get_unity_server_for_session(request)
+
+  now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+  unity_label = "LAB" if _is_lab_host(cucm_host) else "PROD"
+  filename = f"unity_ldap_sync_{unity_label}_{now}.csv"
+
+  env_text, _ = _get_environment_label(cucm_host)
+
+  rows = [["Step", "Status", "Details"]]
+  rows.append(["Environment", "Info", f"{env_text} ({cucm_host})"])
+  rows.append(["Unity Server", "Info", unity_server])
+
+  try:
+    ok, message = _trigger_unity_ldap_sync(unity_server, unity_user, unity_pass)
+    rows.append(["Unity LDAP Sync", "Success" if ok else "Failed", message])
+  except Exception as exc:
+    rows.append(["Unity LDAP Sync", "Failed", str(exc)])
+
+  csv_data = io.StringIO()
+  writer = csv.writer(csv_data)
+  writer.writerows(rows)
+  data = csv_data.getvalue().encode("utf-8")
+
+  _append_audit_event(
+    action="admin_unity_ldap_sync",
+    cucm_host=cucm_host,
+    operator=cucm_user,
+    target=unity_server,
+    output_filename=filename,
+    inline_mode=inline,
+  )
+
+  if inline:
+    job_output = _prepare_job_output(data, filename)
+    return JSONResponse({
+      "job_id": job_output["job_id"],
+      "filename": job_output["filename"],
+      "output_text": job_output["output_text"],
+      "download_url": f"/download/job-output/{job_output['job_id']}",
+    })
+
+  return _render_job_result("Unity LDAP Sync", data, filename, back_url="/page2")
 
 
 @app.post("/called-name-change")
