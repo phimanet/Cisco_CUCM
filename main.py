@@ -1787,16 +1787,32 @@ def _twilio_add_sms_hosted_number(
         attempt_errors.append(f"AMIEWeb {auth_label} [{endpoint}]: Hosted order create error: {exc}")
 
   prefix = f"{lookup_status}; " if lookup_status else ""
-  extra_hint = ""
-  if attempt_errors and all("not found" in err.lower() for err in attempt_errors):
-    extra_hint = " | Hosted Numbers API may not be enabled for this subaccount (Developer Preview access required)."
+  errors_joined = " | ".join(attempt_errors)
+  lower_errors = errors_joined.lower()
+  sub_preview_not_found = (
+    "amieweb subaccount [https://preview.twilio.com/hostednumbers/hostednumberorders]" in lower_errors
+    and "requested resource /hostednumbers/hostednumberorders was not found" in lower_errors
+  )
+  parent_auth_failed = (
+    "amieweb parent-account" in lower_errors
+    and ("authenticate" in lower_errors or "`20003`" in lower_errors)
+  )
+
+  concise_status = ""
+  if sub_preview_not_found:
+    concise_status = "Hosted Number create blocked: Twilio Hosted Numbers Developer Preview is not enabled for the AMIEWeb subaccount or account context."
+    if parent_auth_failed:
+      concise_status += " Parent-account fallback auth also failed (20003)."
+    concise_status += " Next: enable Hosted Numbers preview for this account path in Twilio, then retry one number."
+
+  final_status = f"{prefix}{concise_status}" if concise_status else f"{prefix}{errors_joined}"
   return {
     "ok": False,
     "action": "Failed",
     "input": phone_number,
     "normalized": normalized,
     "sid": "",
-    "status": f"{prefix}{' | '.join(attempt_errors)}{extra_hint}",
+    "status": final_status,
   }
 
 
