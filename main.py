@@ -624,6 +624,24 @@ def _is_lab_environment(cucm_host: str = ""):
   return _is_lab_host(cucm_host)
 
 
+def _get_runtime_cucm_host(default_host: str = ""):
+  runtime_is_lab = _is_lab_runtime_host()
+  if runtime_is_lab is True:
+    return LAB_CUCM_HOST
+  if runtime_is_lab is False:
+    return PROD_CUCM_HOST
+  return (default_host or "").strip()
+
+
+def _get_runtime_unity_host(default_host: str = ""):
+  runtime_is_lab = _is_lab_runtime_host()
+  if runtime_is_lab is True:
+    return LAB_UNITY_HOST
+  if runtime_is_lab is False:
+    return PROD_UNITY_HOST
+  return (default_host or "").strip()
+
+
 def _get_unity_server_for_session(request: Request):
   runtime_is_lab = _is_lab_runtime_host()
   if runtime_is_lab is True:
@@ -12832,6 +12850,7 @@ def admin_ldap_sync_route(
   cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
   _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
 
+  cucm_host = _get_runtime_cucm_host(cucm_host)
   agreement = LAB_LDAP_AGREEMENT if _is_lab_environment(cucm_host) else PROD_LDAP_AGREEMENT
 
   now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -12890,7 +12909,8 @@ def admin_unity_ldap_sync_route(
   _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
 
   unity_user, unity_pass = _resolve_unity_credentials(request, unity_user, unity_pass)
-  unity_server = _get_unity_server_for_session(request)
+  cucm_host = _get_runtime_cucm_host(cucm_host)
+  unity_server = _get_runtime_unity_host(_get_unity_server_for_session(request))
 
   now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
   unity_label = "LAB" if (unity_server or "").strip().lower() == LAB_UNITY_HOST.lower() else "PROD"
