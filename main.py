@@ -10349,7 +10349,13 @@ def page3_twilio_items(request: Request):
                 credentials: "same-origin",
                 headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
               });
-              const payload = await response.json();
+              const rawText = await response.text();
+              let payload = {};
+              try {
+                payload = rawText ? JSON.parse(rawText) : {};
+              } catch (_) {
+                payload = { ok: false, detail: `Unexpected response (HTTP ${response.status}).` };
+              }
               if (!response.ok || !payload.ok) {
                 throw new Error((payload.error && payload.error.message) || payload.detail || "Lookup failed.");
               }
@@ -10382,7 +10388,13 @@ def page3_twilio_items(request: Request):
                 credentials: "same-origin",
                 headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
               });
-              const payload = await response.json();
+              const rawText = await response.text();
+              let payload = {};
+              try {
+                payload = rawText ? JSON.parse(rawText) : {};
+              } catch (_) {
+                payload = { ok: false, detail: `Unexpected response (HTTP ${response.status}).` };
+              }
               if (!response.ok || !payload.ok) {
                 throw new Error((payload.error && payload.error.message) || payload.detail || "Lookup failed.");
               }
