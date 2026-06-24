@@ -1703,6 +1703,10 @@ def _twilio_add_sms_hosted_number(
   clean_friendly = str(payload.get("FriendlyName", "") or "").strip()
   if clean_friendly:
     create_payload["FriendlyName"] = clean_friendly
+  status_callback_url = str(payload.get("StatusCallback", "") or "").strip()
+  if status_callback_url:
+    create_payload["StatusCallbackUrl"] = status_callback_url
+    create_payload["StatusCallbackMethod"] = str(payload.get("StatusCallbackMethod", "POST") or "POST").strip().upper()
   if loa_recipient_email:
     create_payload["Email"] = loa_recipient_email
   if loa_batch_reference:
@@ -1710,6 +1714,8 @@ def _twilio_add_sms_hosted_number(
 
   attempt_errors = []
   hosted_order_endpoints = [
+    "https://preview.twilio.com/HostedNumbers/HostedNumberOrders",
+    "https://preview.twilio.com/HostedNumbers/HostedNumberOrders.json",
     f"https://api.twilio.com/2010-04-01/Accounts/{primary_sid}/IncomingPhoneNumbers/HostedNumberOrders.json",
     f"https://api.twilio.com/2010-04-01/Accounts/{primary_sid}/IncomingPhoneNumbers/HostedNumberOrders",
     "https://api.twilio.com/2010-04-01/IncomingPhoneNumbers/HostedNumberOrders.json",
@@ -1758,13 +1764,16 @@ def _twilio_add_sms_hosted_number(
       attempt_errors.append(f"AMIEWeb subaccount [{endpoint}]: Hosted order create error: {exc}")
 
   prefix = f"{lookup_status}; " if lookup_status else ""
+  extra_hint = ""
+  if attempt_errors and all("not found" in err.lower() for err in attempt_errors):
+    extra_hint = " | Hosted Numbers API may not be enabled for this subaccount (Developer Preview access required)."
   return {
     "ok": False,
     "action": "Failed",
     "input": phone_number,
     "normalized": normalized,
     "sid": "",
-    "status": f"{prefix}{' | '.join(attempt_errors)}",
+    "status": f"{prefix}{' | '.join(attempt_errors)}{extra_hint}",
   }
 
 
