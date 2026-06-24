@@ -133,6 +133,12 @@ MOBILE_JABBER_EMAIL_BODY = (
 STRIKE_MASK_PATTERN_PREFIX = (os.getenv("STRIKE_MASK_PATTERN_PREFIX", "945") or "945").strip()
 STRIKE_MASK_ROUTE_PARTITION = "ENT_DEVICE_PT"
 STRIKE_MASK_AVAILABLE_TRANSFORM_MASK = "2481001"
+SMS_NUMBER_LOOKUP_ENABLED = (os.getenv("SMS_NUMBER_LOOKUP_ENABLED", "true") or "true").strip().lower() in {
+  "1",
+  "true",
+  "yes",
+  "on",
+}
 CSF_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 TWILIO_INBOUND_VERIFICATION_PROFILES = {
   "phimane": {
@@ -9429,7 +9435,7 @@ def page3_twilio_items(request: Request):
   credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
   credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
-  sms_look_enabled = _is_lab_runtime_host() is True
+  sms_look_enabled = SMS_NUMBER_LOOKUP_ENABLED
 
   sms_look_menu_html = ""
   sms_look_panel_html = ""
@@ -12821,8 +12827,8 @@ def lookup_sms_number_look_route(
     phone_number: str = Form(""),
 ):
     try:
-      if _is_lab_runtime_host() is not True:
-        raise RuntimeError("SMS Number Lookup is LAB-only for now.")
+      if not SMS_NUMBER_LOOKUP_ENABLED:
+        raise RuntimeError("SMS Number Lookup is currently disabled.")
 
       cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
       _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
