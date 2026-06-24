@@ -1721,47 +1721,70 @@ def _twilio_add_sms_hosted_number(
     "https://api.twilio.com/2010-04-01/IncomingPhoneNumbers/HostedNumberOrders.json",
     "https://api.twilio.com/2010-04-01/IncomingPhoneNumbers/HostedNumberOrders",
   ]
-  for endpoint in hosted_order_endpoints:
-    try:
-      response = requests.post(
-        endpoint,
-        data=create_payload,
-        auth=(primary_sid, primary_token),
-        verify=False,
-        timeout=20,
-      )
-      body = response.json() if response.text else {}
-      if response.status_code in {200, 201}:
-        order_sid = str(body.get("sid", "") or body.get("Sid", "") or "").strip()
-        order_status = str(body.get("status", "") or body.get("Status", "") or "Pending").strip()
-        verification_code = _extract_twilio_verification_code(body)
+  auth_attempts = [(primary_sid, primary_token, "subaccount", False)]
+  if (
+    TWILIO_ACCOUNT_SID
+    and TWILIO_AUTH_TOKEN
+    and TWILIO_ACCOUNT_SID != primary_sid
+  ):
+    auth_attempts.append((TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, "parent-account", True))
 
-        return {
-          "ok": True,
-          "action": "HostedOrderCreated",
-          "input": phone_number,
-          "normalized": normalized,
-          "twilio_number": normalized,
-          "sid": order_sid,
-          "friendly_name": clean_friendly,
-          "verification_code": verification_code,
-          "sms_url": str(payload.get("SmsUrl", "") or "").strip(),
-          "sms_method": str(payload.get("SmsMethod", "") or "").strip(),
-          "status_callback": str(payload.get("StatusCallback", "") or "").strip(),
-          "loa_recipient_name": loa_recipient_name,
-          "loa_recipient_email": loa_recipient_email,
-          "loa_recipient_phone": loa_recipient_phone,
-          "loa_mode": loa_mode,
-          "loa_batch_reference": loa_batch_reference,
-          "messaging_service_sid": TWILIO_AMIEWEB_MESSAGING_SERVICE_SID,
-          "messaging_service_status": "Pending number completion before registration",
-          "status": f"Hosted order created ({order_status})",
-        }
+  for auth_sid, auth_token, auth_label, include_account_sid in auth_attempts:
+    for endpoint in hosted_order_endpoints:
+      try:
+        request_payload = dict(create_payload)
+        if include_account_sid:
+          request_payload["AccountSid"] = primary_sid
 
-      err_message = str(body.get("message", "") or body.get("Message", "")).strip() or f"Hosted order create failed HTTP {response.status_code}"
-      attempt_errors.append(f"AMIEWeb subaccount [{endpoint}]: {err_message}")
-    except Exception as exc:
-      attempt_errors.append(f"AMIEWeb subaccount [{endpoint}]: Hosted order create error: {exc}")
+        response = requests.post(
+          endpoint,
+          data=request_payload,
+          auth=(auth_sid, auth_token),
+          verify=False,
+          timeout=20,
+        )
+
+        body = {}
+        if response.text:
+          try:
+            body = response.json()
+          except Exception:
+            body = {}
+
+        if response.status_code in {200, 201}:
+          order_sid = str(body.get("sid", "") or body.get("Sid", "") or "").strip()
+          order_status = str(body.get("status", "") or body.get("Status", "") or "Pending").strip()
+          verification_code = _extract_twilio_verification_code(body)
+
+          return {
+            "ok": True,
+            "action": "HostedOrderCreated",
+            "input": phone_number,
+            "normalized": normalized,
+            "twilio_number": normalized,
+            "sid": order_sid,
+            "friendly_name": clean_friendly,
+            "verification_code": verification_code,
+            "sms_url": str(payload.get("SmsUrl", "") or "").strip(),
+            "sms_method": str(payload.get("SmsMethod", "") or "").strip(),
+            "status_callback": str(payload.get("StatusCallback", "") or "").strip(),
+            "loa_recipient_name": loa_recipient_name,
+            "loa_recipient_email": loa_recipient_email,
+            "loa_recipient_phone": loa_recipient_phone,
+            "loa_mode": loa_mode,
+            "loa_batch_reference": loa_batch_reference,
+            "messaging_service_sid": TWILIO_AMIEWEB_MESSAGING_SERVICE_SID,
+            "messaging_service_status": "Pending number completion before registration",
+            "status": f"Hosted order created ({order_status})",
+          }
+
+        err_message = str(body.get("message", "") or body.get("Message", "")).strip()
+        if not err_message:
+          raw_message = (response.text or "").strip().replace("\r", " ").replace("\n", " ")
+          err_message = raw_message[:240] if raw_message else f"Hosted order create failed HTTP {response.status_code}"
+        attempt_errors.append(f"AMIEWeb {auth_label} [{endpoint}]: {err_message}")
+      except Exception as exc:
+        attempt_errors.append(f"AMIEWeb {auth_label} [{endpoint}]: Hosted order create error: {exc}")
 
   prefix = f"{lookup_status}; " if lookup_status else ""
   extra_hint = ""
