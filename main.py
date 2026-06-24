@@ -89,6 +89,8 @@ PROD_CUCM_HOST = "lascucmpp01.ahs.int"
 LAB_CUCM_HOST = "lascucmpl01.ahs.int"
 PROD_UNITY_HOST = "SANCUTYP01.ahs.int"
 LAB_UNITY_HOST = "lascutypl01.ahs.int"
+PROD_LDAP_AGREEMENT = "LDAP_AMN"
+LAB_LDAP_AGREEMENT = "LAB_LDAP_AMN"
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp1.ahs.int").strip() or "smtp1.ahs.int"
 SMTP_PORT = int(os.getenv("SMTP_PORT", "25"))
 SMTP_TIMEOUT_SECONDS = int(os.getenv("SMTP_TIMEOUT_SECONDS", "20"))
@@ -503,6 +505,37 @@ def _validate_cucm_login(cucm_host: str, cucm_user: str, cucm_pass: str):
     return True, "Login successful"
 
   return False, f"Login failed (HTTP {response.status_code}). Verify host/username/password."
+
+
+def _trigger_cucm_ldap_sync(cucm_host: str, cucm_user: str, cucm_pass: str, agreement_name: str):
+  soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:doLdapSync>
+      <name>{xml_escape(agreement_name)}</name>
+      <sync>true</sync>
+    </axl:doLdapSync>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  url = f"https://{cucm_host}:8443/axl/"
+  response = requests.post(
+    url,
+    data=soap_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    auth=HTTPBasicAuth(cucm_user, cucm_pass),
+    timeout=60,
+    verify=False,
+  )
+
+  if response.status_code == 200:
+    return True, f"LDAP sync triggered for agreement '{agreement_name}'."
+
+  error_text = _extract_soap_error(response.text or "")
+  if not error_text:
+    error_text = f"HTTP {response.status_code}"
+  return False, f"LDAP sync failed for agreement '{agreement_name}': {error_text}"
 
 
 def _is_lab_host(cucm_host: str):
@@ -7504,6 +7537,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="adddn">Add Directory Numbers (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="exportdn">Export Directory Numbers</button>
             <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
+            <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="translookup">Translation Pattern Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="transtemplate">Translation Pattern Template</button>
             <button type="button" class="portal-nav-btn" data-panel="strikemask-template">Add Translation for Strike Mask Use (CSV Template)</button>
@@ -7633,6 +7667,21 @@ def menu_admin_page(request: Request):
           <input name="lastname" required><br><br>
 
           <button type="submit">Export End Users</button>
+        </form>
+      </section>
+
+      <section class="panel tool-panel" data-panel="ldapsync">
+        <h3>Trigger CUCM LDAP Sync</h3>
+        <p>Triggers CUCM LDAP sync using the selected CUCM environment. Agreement defaults by host: PROD uses LDAP_AMN, LAB uses LAB_LDAP_AMN.</p>
+        <form action="/admin/ldap-sync" method="post">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+
+          LDAP Agreement Name (optional override):<br>
+          <input name="agreement_name" placeholder="Leave blank for environment default"><br><br>
+
+          <button type="submit">Run CUCM LDAP Sync</button>
         </form>
       </section>
 
@@ -12676,6 +12725,64 @@ def update_ad_phone_fields_route(
       })
 
     return _render_job_result("Update Active Directory Telephone and ipPhone field only (Option 11)", data, filename)
+
+
+@app.post("/admin/ldap-sync")
+def admin_ldap_sync_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    agreement_name: str = Form(""),
+    inline: bool = Query(False),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
+
+  agreement = (agreement_name or "").strip()
+  if not agreement:
+    agreement = LAB_LDAP_AGREEMENT if _is_lab_host(cucm_host) else PROD_LDAP_AGREEMENT
+
+  now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+  safe_agreement = re.sub(r"[^A-Za-z0-9_-]+", "_", agreement)
+  filename = f"ldap_sync_{safe_agreement}_{now}.csv"
+
+  env_text, _ = _get_environment_label(cucm_host)
+
+  rows = [["Step", "Status", "Details"]]
+  rows.append(["Environment", "Info", f"{env_text} ({cucm_host})"])
+  rows.append(["LDAP Agreement", "Info", agreement])
+
+  try:
+    ok, message = _trigger_cucm_ldap_sync(cucm_host, cucm_user, cucm_pass, agreement)
+    rows.append(["LDAP Sync", "Success" if ok else "Failed", message])
+  except Exception as exc:
+    rows.append(["LDAP Sync", "Failed", str(exc)])
+
+  csv_data = io.StringIO()
+  writer = csv.writer(csv_data)
+  writer.writerows(rows)
+  data = csv_data.getvalue().encode("utf-8")
+
+  _append_audit_event(
+    action="admin_ldap_sync",
+    cucm_host=cucm_host,
+    operator=cucm_user,
+    target=agreement,
+    output_filename=filename,
+    inline_mode=inline,
+  )
+
+  if inline:
+    job_output = _prepare_job_output(data, filename)
+    return JSONResponse({
+      "job_id": job_output["job_id"],
+      "filename": job_output["filename"],
+      "output_text": job_output["output_text"],
+      "download_url": f"/download/job-output/{job_output['job_id']}",
+    })
+
+  return _render_job_result("CUCM LDAP Sync", data, filename, back_url="/page2")
 
 
 @app.post("/called-name-change")
