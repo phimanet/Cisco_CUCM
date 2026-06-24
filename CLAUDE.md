@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-06-23
+- Date: 2026-06-24
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -95,6 +95,14 @@ Priority keys:
 - Validated production workflows end-to-end after pull/restart: Separation, Jabber Build, Name Change, and Reset Voicemail PIN (all success).
 - Confirmed Twilio AMIEWeb workflow still passes after promotion.
 - Confirmed LAB and PROD parity: both servers on commit `13b9c84` with `cucm-web.service` active/running.
+
+### 2026-06-24
+- Strike Mask troubleshooting resumed for PROD mismatch where available patterns were not being returned in Page 2.
+- Confirmed runtime has no `STRIKE_MASK_*` overrides loaded from `.env` on PROD; app used in-code defaults for Strike Mask matching.
+- Updated Strike Mask availability logic to remove prefix dependency and use global translation pattern search with rule-based filtering.
+- Final rule confirmed: available Strike Mask translation patterns must have description beginning with `Strike Mask -` and Called Party Transform Mask exactly `2481001`.
+- Updated Strike Mask apply/reverse/template paths to consistently use `2481001` for available-state mask handling.
+- Git operation on local Windows workspace hit repeated interactive prompt (`Deletion of directory '.git/objects/*' failed. Should I try again?`), causing commit/push flow interruption during this session.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.
