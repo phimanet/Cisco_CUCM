@@ -1098,7 +1098,7 @@ def _resolve_twilio_salesforce_account_sid() -> str:
   return TWILIO_ACCOUNT_SID
 
 
-def _list_twilio_incoming_phone_numbers(lookup_sid: str, lookup_token: str) -> dict:
+def _list_twilio_incoming_phone_numbers(lookup_sid: str, lookup_token: str, force_refresh: bool = False) -> dict:
   if not lookup_sid or not lookup_token:
     return {"ok": False, "status": "Twilio account not configured", "numbers": []}
 
@@ -1109,7 +1109,7 @@ def _list_twilio_incoming_phone_numbers(lookup_sid: str, lookup_token: str) -> d
     with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
       cache_entry = TWILIO_INCOMING_PHONE_NUMBER_CACHE.get(cache_key, {})
       cached_at = float(cache_entry.get("cached_at", 0) or 0)
-      if cached_at and (now - cached_at) < TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS:
+      if (not force_refresh) and cached_at and (now - cached_at) < TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS:
         cached_numbers = list(cache_entry.get("numbers", []) or [])
 
     if not cached_numbers:
@@ -1169,7 +1169,7 @@ def _get_twilio_next_friendly_name_seed(account: str = "default") -> dict:
     now_dt = datetime.datetime.now()
   date_prefix = now_dt.strftime("%Y%m%d")
 
-  listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token)
+  listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token, force_refresh=True)
   if not listed.get("ok"):
     return {
       "ok": False,
@@ -1195,7 +1195,7 @@ def _get_twilio_next_friendly_name_seed(account: str = "default") -> dict:
   return {"ok": True, "status": "OK", "date_prefix": date_prefix, "next_index": max_index + 1}
 
 
-def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default") -> dict:
+def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", force_refresh: bool = False) -> dict:
   """Lookup Twilio IncomingPhoneNumbers by phone number; returns sid/number if found.
   
   Args:
@@ -1245,7 +1245,7 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default") 
     with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
       cache_entry = TWILIO_INCOMING_PHONE_NUMBER_CACHE.get(cache_key, {})
       cached_at = float(cache_entry.get("cached_at", 0) or 0)
-      if cached_at and (now - cached_at) < TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS:
+      if (not force_refresh) and cached_at and (now - cached_at) < TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS:
         cached_numbers = list(cache_entry.get("numbers", []) or [])
 
     if not cached_numbers:
@@ -1305,13 +1305,18 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default") 
           "status": "Found",
         }
 
-    return {
+    not_found_payload = {
       "enabled": True,
       "found": False,
       "phone_number": e164,
       "sid": "",
       "status": "Not Found",
     }
+
+    if not force_refresh:
+      return _lookup_twilio_number_by_phone(phone_number, account=account, force_refresh=True)
+
+    return not_found_payload
   except Exception as exc:
     return {
       "enabled": True,
@@ -1370,7 +1375,7 @@ def _build_twilio_sms_only_update_payload(
 
 
 def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict:
-  lookup = _lookup_twilio_number_by_phone(phone_number, account="default")
+  lookup = _lookup_twilio_number_by_phone(phone_number, account="default", force_refresh=True)
   if not lookup.get("enabled"):
     return {
       "ok": False,
