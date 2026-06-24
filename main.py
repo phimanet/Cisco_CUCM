@@ -1440,6 +1440,32 @@ def _build_twilio_sms_only_update_payload(
   return payload
 
 
+def _extract_twilio_verification_code(body: dict) -> str:
+  if not isinstance(body, dict):
+    return ""
+
+  # Twilio responses may vary in casing/shape across APIs.
+  direct_keys = [
+    "verification_code",
+    "verificationCode",
+    "VerificationCode",
+    "verificationcode",
+  ]
+  for key in direct_keys:
+    value = str(body.get(key, "") or "").strip()
+    if value:
+      return value
+
+  nested = body.get("verification", {})
+  if isinstance(nested, dict):
+    for key in ("code", "verification_code", "verificationCode"):
+      value = str(nested.get(key, "") or "").strip()
+      if value:
+        return value
+
+  return ""
+
+
 def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict:
   lookup = _lookup_twilio_number_in_subaccount(phone_number, force_refresh=True)
   if not lookup.get("enabled"):
@@ -1496,6 +1522,7 @@ def _twilio_update_sms_only_for_number(phone_number: str, payload: dict) -> dict
       "twilio_number": (body.get("phone_number") or lookup.get("phone_number") or "").strip(),
       "sid": phone_sid,
       "friendly_name": str(body.get("friendly_name", "") or payload.get("FriendlyName", "")).strip(),
+      "verification_code": _extract_twilio_verification_code(body),
       "sms_url": str(body.get("sms_url", "") or "").strip(),
       "sms_method": str(body.get("sms_method", "") or "").strip(),
       "status_callback": str(body.get("status_callback", "") or "").strip(),
@@ -1568,6 +1595,7 @@ def _twilio_add_sms_hosted_number(phone_number: str, payload: dict, lookup_statu
           "twilio_number": str(body.get("phone_number", "") or normalized).strip(),
           "sid": str(body.get("sid", "") or "").strip(),
           "friendly_name": str(body.get("friendly_name", "") or payload.get("FriendlyName", "")).strip(),
+          "verification_code": _extract_twilio_verification_code(body),
           "sms_url": str(body.get("sms_url", "") or payload.get("SmsUrl", "")).strip(),
           "sms_method": str(body.get("sms_method", "") or payload.get("SmsMethod", "")).strip(),
           "status_callback": str(body.get("status_callback", "") or payload.get("StatusCallback", "")).strip(),
@@ -11030,6 +11058,7 @@ def page3_twilio_items(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Normalized</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Phone SID</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Friendly Name</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Verification Code</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Result</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Status</th>';
               html += '</tr></thead><tbody>';
@@ -11042,6 +11071,7 @@ def page3_twilio_items(request: Request):
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.normalized || "") + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.sid || "—") + '</td>';
                 html += '<td style="padding:7px 10px;">' + (row.friendly_name || "—") + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace; font-weight:700; color:#002f6c;">' + (row.verification_code || "—") + '</td>';
                 html += '<td style="padding:7px 10px; font-weight:700; color:' + (row.ok ? '#145c2e' : '#a01818') + ';">' + result + '</td>';
                 html += '<td style="padding:7px 10px;">' + (row.status || "") + '</td>';
                 html += '</tr>';
