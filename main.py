@@ -617,6 +617,13 @@ def _is_lab_runtime_host():
   return None
 
 
+def _is_lab_environment(cucm_host: str = ""):
+  runtime_is_lab = _is_lab_runtime_host()
+  if runtime_is_lab is not None:
+    return runtime_is_lab
+  return _is_lab_host(cucm_host)
+
+
 def _get_unity_server_for_session(request: Request):
   runtime_is_lab = _is_lab_runtime_host()
   if runtime_is_lab is True:
@@ -12825,7 +12832,7 @@ def admin_ldap_sync_route(
   cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
   _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
 
-  agreement = LAB_LDAP_AGREEMENT if _is_lab_host(cucm_host) else PROD_LDAP_AGREEMENT
+  agreement = LAB_LDAP_AGREEMENT if _is_lab_environment(cucm_host) else PROD_LDAP_AGREEMENT
 
   now = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
   safe_agreement = re.sub(r"[^A-Za-z0-9_-]+", "_", agreement)
