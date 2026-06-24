@@ -7669,7 +7669,7 @@ def menu_admin_page(request: Request):
             <strong>Action History</strong>
             <span>Review recent portal actions and download the audit CSV.</span>
           </a>
-          <a class="hero-link-card" href="/page3">
+          <a class="hero-link-card" href="/page3?panel=sms-number-look">
             <strong>📞 Twilio Items</strong>
             <span>Manage Twilio number verification and lookup operations.</span>
           </a>
@@ -7699,7 +7699,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
-            <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3'">📞 Twilio Items (Page 3)</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">📞 Twilio Items (Page 3)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">⚙️ DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unityldapsync">Trigger Unity LDAP Sync</button>
@@ -9433,8 +9433,9 @@ def page3_twilio_items(request: Request):
 
   sms_look_menu_html = ""
   sms_look_panel_html = ""
+  twilio_lookup_btn_active_class = " active" if not sms_look_enabled else ""
   if sms_look_enabled:
-    sms_look_menu_html = '<button type="button" class="portal-nav-btn" data-panel="sms-number-look">SMS Number Lookup</button>'
+    sms_look_menu_html = '<button type="button" class="portal-nav-btn active" data-panel="sms-number-look">SMS Number Lookup</button>'
     sms_look_panel_html = """
       <section class="tool-panel active" data-panel="sms-number-look">
           <div class="panel">
@@ -9986,7 +9987,7 @@ def page3_twilio_items(request: Request):
         <h4>Twilio Menu</h4>
         <div class="portal-nav">
           __SMS_LOOK_MENU__
-          <button type="button" class="portal-nav-btn active" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
+          <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
@@ -10167,19 +10168,40 @@ def page3_twilio_items(request: Request):
         startCredentialTimer();
 
         // Panel navigation
-        document.querySelectorAll(".portal-nav-btn").forEach(btn => {
+        const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
+        const panels = Array.from(document.querySelectorAll(".tool-panel"));
+
+        function showPanel(panelName) {
+          if (!panelName) {
+            return false;
+          }
+          const targetPanel = document.querySelector(`.tool-panel[data-panel="${panelName}"]`);
+          const targetButton = document.querySelector(`.portal-nav-btn[data-panel="${panelName}"]`);
+          if (!targetPanel || !targetButton) {
+            return false;
+          }
+
+          panels.forEach((panel) => panel.classList.remove("active"));
+          navButtons.forEach((button) => button.classList.remove("active"));
+          targetPanel.classList.add("active");
+          targetButton.classList.add("active");
+          return true;
+        }
+
+        navButtons.forEach((btn) => {
           btn.addEventListener("click", function () {
             const panelName = this.getAttribute("data-panel");
-            console.log("Button clicked, panel:", panelName);
-            document.querySelectorAll(".tool-panel").forEach(p => p.classList.remove("active"));
-            document.querySelectorAll(".portal-nav-btn").forEach(b => b.classList.remove("active"));
-            
-            const targetPanel = document.querySelector(`.tool-panel[data-panel="${panelName}"]`);
-            console.log("Target panel found:", !!targetPanel);
-            targetPanel?.classList.add("active");
-            this.classList.add("active");
+            showPanel(panelName);
           });
         });
+
+        const panelFromQuery = new URLSearchParams(window.location.search).get("panel");
+        if (!showPanel(panelFromQuery)) {
+          const firstButton = navButtons.find((btn) => !!btn.getAttribute("data-panel"));
+          if (firstButton) {
+            showPanel(firstButton.getAttribute("data-panel"));
+          }
+        }
 
         // Twilio Inbound Verification Panel Handler
         function initTwilioInboundVerificationPanel(config) {
@@ -10824,7 +10846,7 @@ def page3_twilio_items(request: Request):
     </main>
   </body>
 </html>
-""".replace("__SMS_LOOK_MENU__", sms_look_menu_html).replace("__SMS_LOOK_PANEL__", sms_look_panel_html).replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
+""".replace("__SMS_LOOK_MENU__", sms_look_menu_html).replace("__SMS_LOOK_PANEL__", sms_look_panel_html).replace("__TWILIO_LOOKUP_ACTIVE_CLASS__", twilio_lookup_btn_active_class).replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
 
   return HTMLResponse(
     content=html,
