@@ -111,6 +111,11 @@ Priority keys:
 - Current operator workflow paused at input collection stage: POST confirmed; awaiting final SMS URL and first test number for live run.
 - Operator provided SMS POST endpoint for Twilio hosting: `https://api.amnhealthcare.io/listener/notification/v1/twilio/listener`.
 - Session paused for workstation reboot before collecting first target number and running SMS-hosting test.
+- Twilio Hosted Numbers API path validated against Twilio docs; confirmed service is in Developer Preview and currently blocked in this account context (resource-not-found/auth mix from Twilio endpoints).
+- Added clear product hold-state in UI and backend guard: **Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)** with feature flag `TWILIO_HOSTED_NUMBERS_ACTIVE` defaulting to disabled.
+- Standardized hosted-number failure messaging to concise entitlement/auth guidance instead of verbose endpoint dump.
+- Added Twilio SMS hosting audit retention control with automatic prune to **90 days** (`TWILIO_SMS_HOSTING_AUDIT_RETENTION_DAYS`, default 90) on append/read/download paths.
+- Baseline freeze decision: keep current implementation in LAB/PROD as prepared-but-disabled foundation until Twilio enables preview access.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.
