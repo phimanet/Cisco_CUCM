@@ -128,6 +128,10 @@ TWILIO_HOSTED_NUMBERS_ACTIVE = (os.getenv("TWILIO_HOSTED_NUMBERS_ACTIVE", "false
   "yes",
   "on",
 }
+GENESYS_CLOUD_REGION = (os.getenv("GENESYS_CLOUD_REGION", "usw2") or "usw2").strip().lower()
+GENESYS_CLIENT_ID = (os.getenv("GENESYS_CLIENT_ID", "") or "").strip()
+GENESYS_CLIENT_SECRET = (os.getenv("GENESYS_CLIENT_SECRET", "") or "").strip()
+GENESYS_USERS_PAGE_SIZE = int((os.getenv("GENESYS_USERS_PAGE_SIZE", "100") or "100").strip())
 AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aerialink.net/v5") or "https://apix5.aerialink.net/v5").strip().rstrip("/")
 AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
 AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
@@ -349,6 +353,125 @@ def _get_cached_secret(session: dict, key: str, now_epoch: float | None = None) 
 
 def _has_valid_cached_secret(session: dict, key: str, now_epoch: float | None = None) -> bool:
   return bool(_get_cached_secret(session, key, now_epoch))
+
+
+def _genesys_region_to_urls(region: str) -> tuple[str, str, str]:
+  clean_region = (region or "").strip().lower() or GENESYS_CLOUD_REGION or "usw2"
+  login_base = f"https://login.{clean_region}.pure.cloud"
+  api_base = f"https://api.{clean_region}.pure.cloud"
+  return clean_region, login_base, api_base
+
+
+def _genesys_get_access_token(region: str, client_id: str, client_secret: str) -> dict:
+  clean_client_id = (client_id or "").strip()
+  clean_client_secret = (client_secret or "").strip()
+  if not clean_client_id or not clean_client_secret:
+    return {"ok": False, "error": "Genesys OAuth client ID and secret are required."}
+
+  clean_region, login_base, _ = _genesys_region_to_urls(region)
+  token_url = f"{login_base}/oauth/token"
+
+  try:
+    response = requests.post(
+      token_url,
+      data={"grant_type": "client_credentials"},
+      auth=(clean_client_id, clean_client_secret),
+      timeout=20,
+    )
+    payload = response.json() if response.text else {}
+  except Exception as exc:
+    return {"ok": False, "error": f"Genesys token request failed: {exc}"}
+
+  if response.status_code != 200:
+    message = str(payload.get("error_description", "") or payload.get("error", "")).strip() or f"HTTP {response.status_code}"
+    return {"ok": False, "error": f"Genesys token request failed: {message}"}
+
+  token = str(payload.get("access_token", "") or "").strip()
+  if not token:
+    return {"ok": False, "error": "Genesys token response did not include an access token."}
+
+  return {
+    "ok": True,
+    "region": clean_region,
+    "access_token": token,
+  }
+
+
+def _genesys_search_users_by_name(
+  region: str,
+  access_token: str,
+  last_name: str,
+  first_name: str = "",
+  email_targets: set[str] | None = None,
+) -> dict:
+  clean_last = (last_name or "").strip().lower()
+  clean_first = (first_name or "").strip().lower()
+  clean_email_targets = {
+    (item or "").strip().lower()
+    for item in (email_targets or set())
+    if (item or "").strip()
+  }
+  if not clean_last:
+    return {"ok": False, "error": "Last name is required."}
+
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+  users_url = f"{api_base}/api/v2/users"
+  page_size = max(25, min(GENESYS_USERS_PAGE_SIZE, 200))
+  headers = {"Authorization": f"Bearer {access_token}"}
+
+  rows = []
+  page_number = 1
+  while True:
+    try:
+      response = requests.get(
+        users_url,
+        params={
+          "pageSize": page_size,
+          "pageNumber": page_number,
+        },
+        headers=headers,
+        timeout=25,
+      )
+      payload = response.json() if response.text else {}
+    except Exception as exc:
+      return {"ok": False, "error": f"Genesys user lookup failed: {exc}"}
+
+    if response.status_code != 200:
+      message = str(payload.get("message", "") or payload.get("error", "")).strip() or f"HTTP {response.status_code}"
+      return {"ok": False, "error": f"Genesys user lookup failed: {message}"}
+
+    entities = payload.get("entities", []) or []
+    for user in entities:
+      name = str(user.get("name", "") or "").strip()
+      email = str(user.get("email", "") or "").strip()
+      username = str(user.get("username", "") or "").strip()
+      haystack = " ".join([name.lower(), email.lower(), username.lower()])
+      email_match = bool(email and email.lower() in clean_email_targets)
+      name_match = clean_last in haystack and ((not clean_first) or (clean_first in haystack))
+      if not (email_match or name_match):
+        continue
+
+      rows.append({
+        "id": str(user.get("id", "") or "").strip(),
+        "name": name,
+        "email": email,
+        "username": username,
+        "state": str(user.get("state", "") or "").strip(),
+        "department": str(user.get("department", "") or "").strip(),
+        "title": str(user.get("title", "") or "").strip(),
+      })
+
+    page_count = int(payload.get("pageCount", 0) or 0)
+    if not page_count or page_number >= page_count:
+      break
+    page_number += 1
+
+  rows.sort(key=lambda item: ((item.get("name") or "").lower(), (item.get("email") or "").lower()))
+  return {
+    "ok": True,
+    "region": clean_region,
+    "rows": rows,
+  }
 
 
 def _create_auth_session(cucm_host: str, username: str, cucm_pass: str) -> str:
@@ -715,7 +838,7 @@ def _get_unity_server_for_session(request: Request):
 
 
 def _is_public_path(path: str):
-  return path in {"/", "/login", "/genesys-admin", "/healthz"}
+  return path in {"/", "/login", "/genesys-admin", "/genesys/users/extract", "/healthz"}
 
 
 def _wants_json_response(request: Request) -> bool:
@@ -4006,105 +4129,366 @@ def home(request: Request):
 
 
 @app.get("/genesys-admin", response_class=HTMLResponse)
-def genesys_admin_placeholder():
-  return """
+def genesys_admin_placeholder(request: Request):
+  session = _get_auth_session(request) or {}
+  auth_cucm_host = str(session.get("cucm_host", "") or "").strip()
+  auth_user = str(session.get("username", "") or "").strip()
+  html = """
 <html>
   <head>
-    <title>Genesys Admin - Placeholder</title>
+    <title>Genesys Admin</title>
     <style>
       :root {
         --amn-blue: #005eb8;
         --amn-navy: #002f6c;
-        --amn-sky: #eaf4ff;
-        --amn-ice: #f6fbff;
-        --amn-mist: #dbeaf7;
-        --amn-gold: #c68a12;
         --amn-text: #12304a;
         --amn-text-soft: #4e6a84;
         --amn-border: #c8dbee;
-        --amn-panel-border: rgba(0, 47, 108, 0.12);
-        --amn-shadow: 0 18px 40px rgba(0, 47, 108, 0.12);
+        --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
       }
 
       body {
         font-family: "Segoe UI", Tahoma, Arial, sans-serif;
         margin: 0;
-        background:
-          radial-gradient(circle at top left, rgba(0, 94, 184, 0.18), transparent 26%),
-          radial-gradient(circle at top right, rgba(198, 138, 18, 0.16), transparent 22%),
-          linear-gradient(180deg, #f4f9fe 0%, #e8f1f9 42%, #edf5fc 100%);
+        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
         color: var(--amn-text);
       }
 
       .topbar {
         display: flex;
         align-items: center;
+        justify-content: space-between;
         gap: 12px;
-        padding: 14px 24px;
-        background: linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
+        padding: 10px 16px;
+        background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94));
+        color: #fff;
+        box-shadow: 0 12px 28px rgba(0, 47, 108, 0.22);
+      }
+
+      .topbar-brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .topbar-btn {
+        display: inline-block;
+        padding: 7px 12px;
+        border-radius: 10px;
+        font-size: 12px;
+        font-weight: 700;
+        text-decoration: none;
+        border: 1px solid rgba(255, 255, 255, 0.65);
         color: #fff;
       }
 
-      .brand-fallback {
-        font-weight: 700;
-        letter-spacing: 0.2px;
+      .content {
+        max-width: 1400px;
+        margin: 8px auto 14px auto;
+        padding: 0 12px 12px 12px;
       }
 
-      .content {
-        max-width: 900px;
-        margin: 48px auto;
-        padding: 0 16px;
+      .page-hero {
+        padding: 12px 14px;
+        margin-bottom: 10px;
+        border-radius: 12px;
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95));
+        border: 1px solid rgba(0, 47, 108, 0.1);
+        box-shadow: var(--amn-shadow);
+      }
+
+      .page-title {
+        margin: 0;
+        color: var(--amn-navy);
+        font-size: 22px;
+      }
+
+      .page-subtitle {
+        margin: 6px 0 0 0;
+        color: var(--amn-text-soft);
+        font-size: 13px;
+      }
+
+      .portal-shell {
+        display: grid;
+        grid-template-columns: 244px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        margin-top: 8px;
+      }
+
+      .portal-sidebar {
+        position: sticky;
+        top: 54px;
+        background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        padding: 8px;
+        box-shadow: 0 18px 36px rgba(0, 47, 108, 0.18);
+      }
+
+      .portal-sidebar h4 {
+        margin: 4px 6px 8px 6px;
+        color: #fff;
+        font-size: 13px;
+      }
+
+      .portal-nav-btn {
+        width: 100%;
+        text-align: left;
+        background: linear-gradient(90deg, #ffffff, #ecf6ff);
+        color: var(--amn-navy);
+        border: 1px solid rgba(255, 255, 255, 0.92);
+        border-radius: 8px;
+        padding: 7px 8px;
+        font-size: 12px;
+        line-height: 1.25;
+        font-weight: 700;
       }
 
       .panel {
         background: #fff;
         border: 1px solid var(--amn-border);
         border-radius: 12px;
-        padding: 22px;
-        box-shadow: 0 8px 20px rgba(0, 47, 108, 0.08);
+        padding: 14px;
+        box-shadow: var(--amn-shadow);
       }
 
-      .badge {
-        display: inline-block;
+      .search-filter-row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        margin-bottom: 8px;
+      }
+
+      input,
+      select,
+      button {
+        border-radius: 10px;
+        border: 1px solid var(--amn-border);
+      }
+
+      input,
+      select {
+        min-height: 34px;
+        padding: 6px 8px;
+      }
+
+      button {
+        background: linear-gradient(180deg, #0c77d8, #005eb8);
+        color: #fff;
+        border: none;
         padding: 8px 12px;
-        border-radius: 8px;
-        background: #ffe6cc;
-        border: 1px solid #f7b267;
-        color: #5c2700;
         font-weight: 700;
+        cursor: pointer;
       }
 
-      a {
-        color: var(--amn-blue);
-        font-weight: 700;
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+
+      th,
+      td {
+        padding: 7px 10px;
+        border-bottom: 1px solid #c8dbee;
+        text-align: left;
+      }
+
+      thead tr {
+        background: #005eb8;
+        color: #fff;
       }
     </style>
   </head>
   <body>
     <header class="topbar">
-      <span class="brand-fallback">AMN Healthcare</span>
-      <strong>Voice Operations Portal</strong>
+      <div class="topbar-brand">
+        <strong>Voice Operations Portal</strong>
+      </div>
+      <div>
+        <a class="topbar-btn" href="/">Back to Login</a>
+      </div>
     </header>
 
     <main class="content">
-      <section class="panel">
-        <h1>Genesys Admin</h1>
-        <p class="badge">Placeholder Page</p>
-        <p>
-          This page is reserved for the future Genesys Admin workflow.
-          Development and deployments for Genesys Admin are intended to be handled independently from Cisco Admin.
-        </p>
-        <ul>
-          <li>LAB first, then Production rollout.</li>
-          <li>Separate code path and change process from Cisco Admin.</li>
-          <li>Use the same Ubuntu server with independent service restart ownership.</li>
-        </ul>
-        <p><a href="/">Back to Cisco Landing Page</a></p>
+      <section class="page-hero">
+        <h2 class="page-title">Genesys Admin</h2>
+        <p class="page-subtitle">Starter workflow: extract Genesys Cloud users by last name and optional first name.</p>
       </section>
+
+      <div class="portal-shell">
+        <aside class="portal-sidebar">
+          <h4>Genesys Menu</h4>
+          <button type="button" class="portal-nav-btn">Extract User by Name</button>
+        </aside>
+
+        <section class="portal-main">
+          <div class="panel">
+            <h3 style="margin-top:0;">Extract User by Name</h3>
+            <p style="margin-top:0; color:#4e6a84;">Region defaults to US West (`usw2`). Enter OAuth client ID/secret, last name, and optional first name. If Genesys lookup requires email alignment, CUCM name lookup is used to collect email targets from the existing workflow context.</p>
+
+            <form id="genesys-user-search-form">
+              <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+              <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+              <input type="hidden" name="cucm_pass" value="">
+              <div class="search-filter-row">
+                <input name="region" placeholder="Genesys Region" value="__GENESYS_REGION__" style="width:120px;">
+                <input name="client_id" placeholder="OAuth Client ID" value="__GENESYS_CLIENT_ID__" style="width:320px;" required>
+                <input type="password" name="client_secret" placeholder="OAuth Client Secret" style="width:320px;" required>
+              </div>
+              <div class="search-filter-row">
+                <input name="last_name" placeholder="Last Name *" style="width:220px;" required>
+                <input name="first_name" placeholder="First Name (optional)" style="width:220px;">
+                <button type="submit">Extract User Data</button>
+              </div>
+            </form>
+
+            <p id="genesys-user-search-status" style="color:#2c5c8a; min-height:18px;">Ready.</p>
+            <div id="genesys-user-search-results" style="overflow-x:auto;"></div>
+          </div>
+        </section>
+      </div>
     </main>
+
+    <script>
+      (function () {
+        const form = document.getElementById("genesys-user-search-form");
+        const statusEl = document.getElementById("genesys-user-search-status");
+        const resultsEl = document.getElementById("genesys-user-search-results");
+        if (!form || !statusEl || !resultsEl) return;
+
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          statusEl.textContent = "Running Genesys lookup...";
+          resultsEl.innerHTML = "";
+
+          try {
+            const formData = new FormData(form);
+            const response = await fetch("/genesys/users/extract", {
+              method: "POST",
+              body: formData,
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Genesys lookup failed.");
+            }
+
+            const rows = payload.rows || [];
+            const emailTargetCount = Number(payload.cucm_email_targets || 0);
+            statusEl.textContent = "Region: " + (payload.region || "") + " | CUCM Emails: " + emailTargetCount + " | Matches: " + rows.length;
+
+            if (!rows.length) {
+              resultsEl.innerHTML = "<p style='color:#4e6a84;'>No matching users found.</p>";
+              return;
+            }
+
+            let html = "<table><thead><tr>";
+            html += "<th>Name</th><th>Email</th><th>Username</th><th>State</th><th>Department</th><th>Title</th><th>User ID</th>";
+            html += "</tr></thead><tbody>";
+            rows.forEach(function (row, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              html += "<tr style='background:" + bg + ";'>";
+              html += "<td>" + (row.name || "") + "</td>";
+              html += "<td>" + (row.email || "") + "</td>";
+              html += "<td>" + (row.username || "") + "</td>";
+              html += "<td>" + (row.state || "") + "</td>";
+              html += "<td>" + (row.department || "") + "</td>";
+              html += "<td>" + (row.title || "") + "</td>";
+              html += "<td style='font-family:Consolas,monospace;'>" + (row.id || "") + "</td>";
+              html += "</tr>";
+            });
+            html += "</tbody></table>";
+            resultsEl.innerHTML = html;
+          } catch (err) {
+            statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+          }
+        });
+      })();
+    </script>
   </body>
 </html>
 """
+  html = html.replace("__GENESYS_REGION__", escape(GENESYS_CLOUD_REGION or "usw2"))
+  html = html.replace("__GENESYS_CLIENT_ID__", escape(GENESYS_CLIENT_ID or ""))
+  html = html.replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host))
+  html = html.replace("__AUTH_USER__", escape(auth_user))
+  return HTMLResponse(html)
+
+
+@app.post("/genesys/users/extract")
+def genesys_extract_users_route(
+  request: Request,
+  region: str = Form("usw2"),
+  client_id: str = Form(""),
+  client_secret: str = Form(""),
+  last_name: str = Form(""),
+  first_name: str = Form(""),
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  session = _get_auth_session(request) or {}
+  clean_region = (region or "").strip().lower() or "usw2"
+  clean_client_id = (client_id or "").strip() or GENESYS_CLIENT_ID
+  clean_client_secret = (client_secret or "").strip() or GENESYS_CLIENT_SECRET
+  clean_last = (last_name or "").strip()
+  clean_first = (first_name or "").strip()
+  clean_cucm_host = (cucm_host or "").strip() or str(session.get("cucm_host", "") or "").strip()
+  clean_cucm_user = (cucm_user or "").strip() or str(session.get("username", "") or "").strip()
+  clean_cucm_pass = (cucm_pass or "").strip() or _get_cached_secret(session, "cucm_pass")
+
+  if not clean_last:
+    return JSONResponse({"ok": False, "error": "Last name is required.", "rows": []}, status_code=400)
+
+  token_result = _genesys_get_access_token(clean_region, clean_client_id, clean_client_secret)
+  if not token_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": token_result.get("error", "Genesys token request failed."),
+      "rows": [],
+    }, status_code=400)
+
+  cucm_email_targets = set()
+  if clean_cucm_host and clean_cucm_user and clean_cucm_pass:
+    try:
+      cucm_people = search_persons_by_name(
+        clean_cucm_host,
+        clean_cucm_user,
+        clean_cucm_pass,
+        clean_last,
+        clean_first,
+      )
+      for person in cucm_people or []:
+        email_value = str(person.get("email", "") or "").strip().lower()
+        if email_value:
+          cucm_email_targets.add(email_value)
+    except Exception:
+      # Non-blocking: Genesys direct lookup still runs.
+      pass
+
+  search_result = _genesys_search_users_by_name(
+    token_result.get("region", clean_region),
+    token_result.get("access_token", ""),
+    clean_last,
+    clean_first,
+    cucm_email_targets,
+  )
+  if not search_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": search_result.get("error", "Genesys user lookup failed."),
+      "rows": [],
+    }, status_code=400)
+
+  return JSONResponse({
+    "ok": True,
+    "region": search_result.get("region", clean_region),
+    "rows": search_result.get("rows", []),
+    "cucm_email_targets": len(cucm_email_targets),
+  })
 
 
 @app.post("/login")
