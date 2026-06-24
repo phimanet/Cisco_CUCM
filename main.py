@@ -1277,12 +1277,15 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
     account: Which account to query - "default" (AMIEWeb) or "salesforce" (Enterprise Org Prod)
   """
   e164 = _normalize_phone_to_e164(phone_number)
+  configured_account_name = TWILIO_SALESFORCE_SUBACCOUNT_NAME if account == "salesforce" else TWILIO_SUBACCOUNT_NAME
   if not e164:
     return {
       "enabled": bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN),
       "found": False,
       "phone_number": "",
       "sid": "",
+      "lookup_account_name": configured_account_name,
+      "lookup_account_sid": "",
       "status": "No telephone",
     }
 
@@ -1292,6 +1295,8 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
       "found": False,
       "phone_number": e164,
       "sid": "",
+      "lookup_account_name": configured_account_name,
+      "lookup_account_sid": "",
       "status": "Twilio credentials not configured",
     }
 
@@ -1309,18 +1314,20 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
       "found": False,
       "phone_number": e164,
       "sid": "",
+      "lookup_account_name": configured_account_name,
+      "lookup_account_sid": "",
       "status": "Twilio account not configured",
     }
 
   try:
-    lookup_accounts: list[tuple[str, str]] = [(lookup_sid, lookup_token)]
+    lookup_accounts: list[tuple[str, str, str]] = [(lookup_sid, lookup_token, configured_account_name or "Configured subaccount")]
     # Fallback to parent account search in case the number lives there.
     if (
       TWILIO_ACCOUNT_SID
       and TWILIO_AUTH_TOKEN
       and TWILIO_ACCOUNT_SID != lookup_sid
     ):
-      lookup_accounts.append((TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN))
+      lookup_accounts.append((TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, "Parent account"))
 
     phone_number_digits = "".join(ch for ch in e164 if ch.isdigit())
     candidates = {e164, phone_number_digits}
@@ -1329,7 +1336,7 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
       candidates.add(f"+{phone_number_digits[1:]}")
 
     lookup_failures = []
-    for account_sid, account_token in lookup_accounts:
+    for account_sid, account_token, account_name in lookup_accounts:
       listed = _list_twilio_incoming_phone_numbers(account_sid, account_token, force_refresh=force_refresh)
       if not listed.get("ok"):
         lookup_failures.append(str(listed.get("status", "Lookup failed")))
@@ -1346,6 +1353,7 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
             "found": True,
             "phone_number": candidate or e164,
             "sid": str(number_item.get("sid", "")).strip(),
+            "lookup_account_name": account_name,
             "lookup_account_sid": account_sid,
             "lookup_auth_token": account_token,
             "status": "Found",
@@ -1356,6 +1364,8 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
       "found": False,
       "phone_number": e164,
       "sid": "",
+      "lookup_account_name": configured_account_name,
+      "lookup_account_sid": lookup_sid,
       "status": "Not Found" if not lookup_failures else f"Not Found ({'; '.join(lookup_failures)})",
     }
 
@@ -1369,6 +1379,8 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
       "found": False,
       "phone_number": e164,
       "sid": "",
+      "lookup_account_name": configured_account_name,
+      "lookup_account_sid": lookup_sid,
       "status": f"Lookup error: {exc}",
     }
 
@@ -11073,6 +11085,7 @@ def page3_twilio_items(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Number</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Phone SID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Lookup Account</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Twilio Status</th>';
               html += '</tr></thead><tbody>';
 
@@ -11084,6 +11097,7 @@ def page3_twilio_items(request: Request):
                 const twilio = r.twilio_lookup || {};
                 const twilioNumber = twilio.phone_number || "—";
                 const twilioSid = twilio.sid || "—";
+                const twilioAccount = twilio.lookup_account_name || "—";
                 const twilioStatus = twilio.status || "—";
 
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
@@ -11092,6 +11106,7 @@ def page3_twilio_items(request: Request):
                 html += '<td style="padding:7px 10px;">' + telephone + '</td>';
                 html += '<td style="padding:7px 10px;">' + twilioNumber + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + twilioSid + '</td>';
+                html += '<td style="padding:7px 10px;">' + twilioAccount + '</td>';
                 html += '<td style="padding:7px 10px;">' + twilioStatus + '</td>';
                 html += '</tr>';
               });
@@ -11145,6 +11160,8 @@ def page3_twilio_items(request: Request):
                 { label: "Found", value: result.found ? "Yes" : "No" },
                 { label: "Twilio Number", value: result.phone_number || "—" },
                 { label: "Phone SID", value: result.sid || "—" },
+                { label: "Lookup Account Name", value: result.lookup_account_name || "—" },
+                { label: "Lookup Account SID", value: result.lookup_account_sid || "—" },
                 { label: "Status", value: result.status || "—" },
               ];
 
@@ -11379,7 +11396,8 @@ def page3_twilio_items(request: Request):
                 ? (`LOA contact: ${submitted.loa_recipient_name || ""} <${submitted.loa_recipient_email}>`)
                 : "LOA contact: not set";
               const loaModeNote = submitted.loa_mode === "per_number" ? "LOA mode: Per Number" : "LOA mode: Single Batch";
-              statusEl.textContent = `Requested: ${summary.requested || 0} | Updated: ${summary.updated || 0} | Failed: ${summary.failed || 0} | ${friendlyNote} | ${loaNote} | ${loaModeNote}`;
+              const subaccountNote = `Subaccount: ${(submitted.subaccount_name || "")}${submitted.subaccount_sid ? ` (${submitted.subaccount_sid})` : ""}`;
+              statusEl.textContent = `Requested: ${summary.requested || 0} | Updated: ${summary.updated || 0} | Failed: ${summary.failed || 0} | ${friendlyNote} | ${subaccountNote} | ${loaNote} | ${loaModeNote}`;
 
               const rows = payload.results || [];
               if (!rows.length) {
@@ -13770,6 +13788,8 @@ def twilio_amieweb_sms_host_route(
       clean_loa_mode = "per_number" if (loa_mode or "").strip().lower() in {"per_number", "per-number", "pernumber"} else "single"
       clean_loa_batch_reference = (loa_batch_reference or "").strip()
       session_friendly_name = custom_friendly_name or f"host-{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
+      subaccount_sid = _resolve_twilio_lookup_account_sid()
+      subaccount_name = TWILIO_SUBACCOUNT_NAME or "AMIEWeb subaccount"
       if not numbers:
         return JSONResponse({
           "ok": False,
@@ -13870,6 +13890,8 @@ def twilio_amieweb_sms_host_route(
           "friendly_name": session_friendly_name,
           "friendly_name_mode": "custom" if custom_friendly_name else "session_auto",
           "friendly_name_auto_seed": f"{auto_prefix}_{auto_index}",
+          "subaccount_name": subaccount_name,
+          "subaccount_sid": subaccount_sid,
           "loa_recipient_name": clean_loa_recipient_name,
           "loa_recipient_email": clean_loa_recipient_email,
           "loa_recipient_phone": clean_loa_recipient_phone,
