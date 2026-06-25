@@ -133,6 +133,8 @@ GENESYS_CLIENT_ID = (os.getenv("GENESYS_CLIENT_ID", "") or "").strip()
 GENESYS_CLIENT_SECRET = (os.getenv("GENESYS_CLIENT_SECRET", "") or "").strip()
 GENESYS_USERS_PAGE_SIZE = int((os.getenv("GENESYS_USERS_PAGE_SIZE", "100") or "100").strip())
 GENESYS_PHONE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_PHONE_LOOKUP_MAX_PAGES", "50") or "50").strip())
+GENESYS_QUEUE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_LOOKUP_MAX_PAGES", "30") or "30").strip())
+GENESYS_QUEUE_MEMBER_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_MEMBER_MAX_PAGES", "20") or "20").strip())
 AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aerialink.net/v5") or "https://apix5.aerialink.net/v5").strip().rstrip("/")
 AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
 AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
@@ -727,6 +729,94 @@ def _genesys_lookup_phone_management_name(api_base: str, access_token: str, user
   return phone_name, matched_phone, payload, ""
 
 
+def _genesys_queue_member_matches_user(member: dict, user_id: str, user_email: str, user_name: str) -> bool:
+  if not isinstance(member, dict):
+    return False
+
+  clean_user_id = str(user_id or "").strip().lower()
+  clean_user_email = str(user_email or "").strip().lower()
+  clean_user_name = str(user_name or "").strip().lower()
+
+  candidates = []
+  for key in ["id", "userId", "memberId", "email", "username", "name"]:
+    value = str(member.get(key, "") or "").strip().lower()
+    if value:
+      candidates.append(value)
+
+  user_obj = member.get("user") if isinstance(member.get("user"), dict) else {}
+  for key in ["id", "email", "username", "name"]:
+    value = str(user_obj.get(key, "") or "").strip().lower()
+    if value:
+      candidates.append(value)
+
+  if clean_user_id and clean_user_id in candidates:
+    return True
+  if clean_user_email and clean_user_email in candidates:
+    return True
+  if clean_user_name and any(clean_user_name == item for item in candidates):
+    return True
+  return False
+
+
+def _genesys_lookup_user_queues_via_membership(api_base: str, access_token: str, user_id: str, user_email: str, user_name: str) -> tuple[list[str], str]:
+  queue_entities = []
+  max_queue_pages = max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 200))
+
+  for page_number in range(1, max_queue_pages + 1):
+    ok_queues, queues_payload, err_queues = _genesys_get_json(
+      api_base,
+      access_token,
+      "/api/v2/routing/queues",
+      params={"pageSize": 100, "pageNumber": page_number},
+    )
+    if not ok_queues:
+      return [], err_queues
+
+    entities = queues_payload.get("entities", []) if isinstance(queues_payload, dict) else []
+    if isinstance(entities, list):
+      queue_entities.extend(entities)
+
+    page_count = int(queues_payload.get("pageCount", 0) or 0) if isinstance(queues_payload, dict) else 0
+    if not page_count or page_number >= page_count:
+      break
+
+  matched_queue_names = []
+  max_member_pages = max(1, min(GENESYS_QUEUE_MEMBER_MAX_PAGES, 200))
+  for queue_item in queue_entities:
+    if not isinstance(queue_item, dict):
+      continue
+
+    queue_id = str(queue_item.get("id", "") or "").strip()
+    queue_name = str(queue_item.get("name", "") or "").strip()
+    if not queue_id:
+      continue
+
+    found_in_queue = False
+    for member_page in range(1, max_member_pages + 1):
+      ok_members, members_payload, err_members = _genesys_get_json(
+        api_base,
+        access_token,
+        f"/api/v2/routing/queues/{queue_id}/members",
+        params={"pageSize": 100, "pageNumber": member_page},
+      )
+      if not ok_members:
+        # Continue with other queues; this endpoint can be permission-scoped.
+        break
+
+      members = members_payload.get("entities", []) if isinstance(members_payload, dict) else []
+      if any(_genesys_queue_member_matches_user(member, user_id, user_email, user_name) for member in members if isinstance(member, dict)):
+        found_in_queue = True
+
+      member_page_count = int(members_payload.get("pageCount", 0) or 0) if isinstance(members_payload, dict) else 0
+      if found_in_queue or (not member_page_count) or member_page >= member_page_count:
+        break
+
+    if found_in_queue and queue_name:
+      matched_queue_names.append(queue_name)
+
+  return sorted(set(matched_queue_names), key=str.lower), ""
+
+
 def _load_genesys_webrtc_template() -> dict:
   try:
     with open(GENESYS_WEBRTC_TEMPLATE_PATH, "r", encoding="utf-8") as handle:
@@ -870,7 +960,22 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
           q_name = str(item.get("name", "") or "").strip() if isinstance(item, dict) else ""
           if q_name:
             queue_names.append(q_name)
-        queues_text = ", ".join(sorted(set(queue_names), key=str.lower)) if queue_names else "(none)"
+        if queue_names:
+          queues_text = ", ".join(sorted(set(queue_names), key=str.lower))
+        else:
+          fallback_queue_names, fallback_queue_err = _genesys_lookup_user_queues_via_membership(
+            api_base,
+            access_token,
+            user_id,
+            str(row.get("email", "") or ""),
+            str(row.get("name", "") or ""),
+          )
+          if fallback_queue_names:
+            queues_text = ", ".join(fallback_queue_names)
+          else:
+            queues_text = "(none)"
+            if fallback_queue_err:
+              warnings.append(f"{row.get('name', user_id)} queue membership fallback: {fallback_queue_err}")
       elif err_queues:
         warnings.append(f"{row.get('name', user_id)} queues: {err_queues}")
 
