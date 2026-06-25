@@ -524,6 +524,9 @@ def _genesys_extract_phone_management_name(phone_payload: dict, user_id: str, us
   clean_user_name = str(user_name or "").strip().lower()
   clean_user_email = str(user_email or "").strip().lower()
 
+  def _normalized(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
   for item in entities or []:
     if not isinstance(item, dict):
       continue
@@ -540,12 +543,21 @@ def _genesys_extract_phone_management_name(phone_payload: dict, user_id: str, us
     for key in ["userId", "ownerUserId", "ownerId", "associatedUserId", "username", "email"]:
       owner_tokens.append(str(item.get(key, "") or "").strip().lower())
 
+    owner_tokens = [token for token in owner_tokens if token]
+
+    phone_name = str(item.get("name", "") or "").strip()
+    normalized_phone_name = _normalized(phone_name)
+    normalized_user_name = _normalized(clean_user_name)
+
     is_match = False
     if clean_user_id and clean_user_id in owner_tokens:
       is_match = True
     elif clean_user_email and clean_user_email in owner_tokens:
       is_match = True
     elif clean_user_name and any(clean_user_name in token for token in owner_tokens if token):
+      is_match = True
+    elif (not owner_tokens) and normalized_phone_name and normalized_user_name and normalized_phone_name == normalized_user_name:
+      # Some orgs return phones without owner linkage; use exact-name fallback.
       is_match = True
 
     if not is_match:
