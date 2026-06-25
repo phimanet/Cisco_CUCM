@@ -1762,40 +1762,102 @@ def _parse_platform_expiration_date(value: str):
   return None
 
 
-def _parse_cisco_certificate_table(html_text: str) -> list:
-  source = html_text or ""
-  if not source:
-    return []
+def _extract_balanced_segment(source: str, start_index: int, opener: str, closer: str) -> str:
+  text = source or ""
+  if start_index < 0 or start_index >= len(text) or text[start_index] != opener:
+    return ""
 
-  rows = []
-  tr_matches = re.findall(r"<tr[^>]*>(.*?)</tr>", source, flags=re.IGNORECASE | re.DOTALL)
-  for tr_html in tr_matches:
-    td_cells = re.findall(r"<td[^>]*>(.*?)</td>", tr_html, flags=re.IGNORECASE | re.DOTALL)
-    if len(td_cells) < 8:
+  depth = 0
+  in_string = False
+  escape_next = False
+  string_quote = ""
+  for idx in range(start_index, len(text)):
+    ch = text[idx]
+    if in_string:
+      if escape_next:
+        escape_next = False
+      elif ch == "\\":
+        escape_next = True
+      elif ch == string_quote:
+        in_string = False
       continue
 
-    cleaned = [_html_to_text(cell) for cell in td_cells]
-
-    expiration_idx = -1
-    for idx, value in enumerate(cleaned):
-      if re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}$", value):
-        expiration_idx = idx
-        break
-    if expiration_idx < 0:
+    if ch == '"' or ch == "'":
+      in_string = True
+      string_quote = ch
       continue
 
-    # Expected Cisco platform order (with minor tolerance):
-    # 0 Certificate, 1 Common Name/Common Name_SerialNumber, 2 Usage, 3 Type, ... Expiration at idx>=7
-    certificate = cleaned[0] if len(cleaned) > 0 else ""
-    common_name = cleaned[1] if len(cleaned) > 1 else ""
-    usage = cleaned[2] if len(cleaned) > 2 else ""
-    cert_type = cleaned[3] if len(cleaned) > 3 else ""
-    expiration_date = cleaned[expiration_idx]
+    if ch == opener:
+      depth += 1
+    elif ch == closer:
+      depth -= 1
+      if depth == 0:
+        return text[start_index : idx + 1]
 
+  return ""
+
+
+def _parse_cisco_certificate_rows_from_sequence(rows) -> list:
+  parsed_rows = []
+  for row in rows or []:
+    certificate = ""
+    common_name = ""
+    usage = ""
+    cert_type = ""
+    expiration_date = ""
+
+    if isinstance(row, dict):
+      certificate = _html_to_text(str(row.get("certificate") or row.get("certificateName") or row.get("certName") or ""))
+      common_name = _html_to_text(str(row.get("commonName") or row.get("common_name") or row.get("cn") or ""))
+      usage = _html_to_text(str(row.get("usage") or row.get("certificateUsage") or ""))
+      cert_type = _html_to_text(str(row.get("type") or row.get("certificateType") or row.get("certType") or ""))
+      expiration_date = _html_to_text(
+        str(
+          row.get("expirationDate")
+          or row.get("expiration")
+          or row.get("expires")
+          or row.get("validTo")
+          or ""
+        )
+      )
+
+      if not expiration_date:
+        dict_values = [_html_to_text(str(v)) for v in row.values()]
+        for value in dict_values:
+          if re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}$", value):
+            expiration_date = value
+            break
+      if not certificate and not common_name:
+        dict_values = [_html_to_text(str(v)) for v in row.values()]
+        if len(dict_values) >= 4:
+          certificate = dict_values[0]
+          common_name = dict_values[1]
+          usage = dict_values[2]
+          cert_type = dict_values[3]
+
+    elif isinstance(row, (list, tuple)):
+      cleaned = [_html_to_text(str(cell)) for cell in row]
+      expiration_idx = -1
+      for idx, value in enumerate(cleaned):
+        if re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}$", value):
+          expiration_idx = idx
+          break
+      if expiration_idx < 0:
+        continue
+      certificate = cleaned[0] if len(cleaned) > 0 else ""
+      common_name = cleaned[1] if len(cleaned) > 1 else ""
+      usage = cleaned[2] if len(cleaned) > 2 else ""
+      cert_type = cleaned[3] if len(cleaned) > 3 else ""
+      expiration_date = cleaned[expiration_idx]
+    else:
+      continue
+
+    if not expiration_date or not re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}$", expiration_date):
+      continue
     if not certificate and not common_name:
       continue
 
-    rows.append(
+    parsed_rows.append(
       {
         "certificate": certificate,
         "common_name": common_name,
@@ -1804,6 +1866,103 @@ def _parse_cisco_certificate_table(html_text: str) -> list:
         "expiration_date": expiration_date,
       }
     )
+
+  return parsed_rows
+
+
+def _parse_cisco_certificate_json_payload(source_text: str) -> list:
+  text = (source_text or "").strip()
+  if not text:
+    return []
+
+  def _rows_from_obj(obj) -> list:
+    if isinstance(obj, list):
+      return _parse_cisco_certificate_rows_from_sequence(obj)
+    if isinstance(obj, dict):
+      for key in ("aaData", "data", "rows", "result", "results"):
+        value = obj.get(key)
+        if isinstance(value, list):
+          parsed = _parse_cisco_certificate_rows_from_sequence(value)
+          if parsed:
+            return parsed
+    return []
+
+  for candidate in [text, unescape(text)]:
+    try:
+      obj = json.loads(candidate)
+      parsed = _rows_from_obj(obj)
+      if parsed:
+        return parsed
+    except Exception:
+      pass
+
+  for pattern in [r"(?:aaData|data|rows)\s*[:=]\s*\[", r"(?:aaData|data|rows)\s*[:=]\s*\{"]:
+    for match in re.finditer(pattern, text, flags=re.IGNORECASE):
+      payload_start = match.end() - 1
+      opener = text[payload_start]
+      closer = "]" if opener == "[" else "}"
+      snippet = _extract_balanced_segment(text, payload_start, opener, closer)
+      if not snippet:
+        continue
+      try:
+        obj = json.loads(snippet)
+      except Exception:
+        continue
+      parsed = _rows_from_obj(obj)
+      if parsed:
+        return parsed
+
+  return []
+
+
+def _parse_cisco_certificate_table(html_text: str) -> list:
+  source = html_text or ""
+  if not source:
+    return []
+
+  json_rows = _parse_cisco_certificate_json_payload(source)
+  if json_rows:
+    return json_rows
+
+  rows = []
+  for candidate_source in [source, unescape(source)]:
+    tr_matches = re.findall(r"<tr[^>]*>(.*?)</tr>", candidate_source, flags=re.IGNORECASE | re.DOTALL)
+    for tr_html in tr_matches:
+      td_cells = re.findall(r"<td[^>]*>(.*?)</td>", tr_html, flags=re.IGNORECASE | re.DOTALL)
+      if len(td_cells) < 5:
+        continue
+
+      cleaned = [_html_to_text(cell) for cell in td_cells]
+
+      expiration_idx = -1
+      for idx, value in enumerate(cleaned):
+        if re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}$", value):
+          expiration_idx = idx
+          break
+      if expiration_idx < 0:
+        continue
+
+      certificate = cleaned[0] if len(cleaned) > 0 else ""
+      common_name = cleaned[1] if len(cleaned) > 1 else ""
+      usage = cleaned[2] if len(cleaned) > 2 else ""
+      cert_type = cleaned[3] if len(cleaned) > 3 else ""
+      expiration_date = cleaned[expiration_idx]
+
+      if not certificate and not common_name:
+        continue
+
+      rows.append(
+        {
+          "certificate": certificate,
+          "common_name": common_name,
+          "usage": usage,
+          "type": cert_type,
+          "expiration_date": expiration_date,
+        }
+      )
+
+    if rows:
+      return rows
 
   if rows:
     return rows
