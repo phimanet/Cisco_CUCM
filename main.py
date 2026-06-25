@@ -32,6 +32,7 @@ from fastapi import FastAPI, Form, UploadFile, File, Query, Request
 from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse
 from html import escape, unescape
 from requests.auth import HTTPBasicAuth
+from urllib.parse import urljoin
 from uuid import uuid4
 
 from toolkit.enduser import export_endusers_all_fields
@@ -1822,6 +1823,8 @@ def _fetch_platform_certificate_rows(hostname: str, username: str, password: str
   base_url = f"https://{host}"
   paths = [
     "/cmplatform/certificateFindList.do?sortColumn=expiration&sortAscend=true",
+    "/cmplatform/certificateFindList.do",
+    "/cmplatform/certificateList.do",
     "/cuplatform/certificateFindList.do?sortColumn=expiration&sortAscend=true",
   ]
 
@@ -1829,6 +1832,32 @@ def _fetch_platform_certificate_rows(hostname: str, username: str, password: str
   session_obj.verify = False
   session_obj.trust_env = False
   session_obj.headers.update({"User-Agent": "Mozilla/5.0"})
+
+  def _parse_from_html_or_frames(html_text: str, preferred_auth: tuple | None = None):
+    parsed = _parse_cisco_certificate_table(html_text or "")
+    if parsed:
+      return parsed
+
+    frame_sources = re.findall(r"<(?:frame|iframe)[^>]+src=[\"']([^\"']+)[\"']", html_text or "", flags=re.IGNORECASE)
+    for src in frame_sources:
+      src_text = (src or "").strip()
+      if not src_text or src_text.lower().startswith("javascript:"):
+        continue
+      frame_url = urljoin(f"{base_url}/", src_text)
+      try:
+        frame_resp = session_obj.get(
+          frame_url,
+          auth=preferred_auth,
+          timeout=timeout_seconds,
+          allow_redirects=True,
+        )
+        parsed_frame = _parse_cisco_certificate_table(frame_resp.text or "")
+        if parsed_frame:
+          return parsed_frame
+      except Exception:
+        continue
+
+    return []
 
   errors = []
   for path in paths:
@@ -1840,25 +1869,52 @@ def _fetch_platform_certificate_rows(hostname: str, username: str, password: str
         timeout=timeout_seconds,
         allow_redirects=True,
       )
-      parsed = _parse_cisco_certificate_table(resp.text or "")
+      parsed = _parse_from_html_or_frames(resp.text or "", preferred_auth=HTTPBasicAuth(user, pwd))
       if parsed:
         return parsed, "OK"
 
       html_text = (resp.text or "")
-      if "j_security_check" in html_text or "j_username" in html_text:
-        login_url = f"{base_url}/j_security_check"
-        session_obj.post(
-          login_url,
-          data={"j_username": user, "j_password": pwd},
-          timeout=timeout_seconds,
-          allow_redirects=True,
-        )
-        resp2 = session_obj.get(target_url, timeout=timeout_seconds, allow_redirects=True)
-        parsed2 = _parse_cisco_certificate_table(resp2.text or "")
-        if parsed2:
-          return parsed2, "OK"
+      login_endpoints = [
+        "/j_security_check",
+        "/platform/j_security_check",
+        "/cmplatform/j_security_check",
+        "/cuadmin/j_security_check",
+      ]
+      login_payloads = [
+        {"j_username": user, "j_password": pwd},
+        {"username": user, "password": pwd},
+      ]
 
-      errors.append(f"{path}: HTTP {resp.status_code}")
+      should_attempt_login = (
+        "j_security_check" in html_text
+        or "j_username" in html_text
+        or "login" in (resp.url or "").lower()
+        or "certificate list" not in (html_text or "").lower()
+      )
+
+      if should_attempt_login:
+        for login_path in login_endpoints:
+          login_url = f"{base_url}{login_path}"
+          for payload in login_payloads:
+            try:
+              session_obj.post(
+                login_url,
+                data=payload,
+                timeout=timeout_seconds,
+                allow_redirects=True,
+              )
+            except Exception:
+              continue
+
+            try:
+              resp2 = session_obj.get(target_url, timeout=timeout_seconds, allow_redirects=True)
+              parsed2 = _parse_from_html_or_frames(resp2.text or "")
+              if parsed2:
+                return parsed2, "OK"
+            except Exception:
+              continue
+
+      errors.append(f"{path}: HTTP {resp.status_code}, final_url={resp.url}")
     except Exception as exc:
       errors.append(f"{path}: {type(exc).__name__}: {exc}")
 
