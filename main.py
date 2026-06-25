@@ -1865,6 +1865,9 @@ def _collect_lab_certificate_inventory() -> list:
     certificate_name = str(probe.get("common_name", "") or "").strip()
     if not certificate_name:
       certificate_name = str(probe.get("subject", "") or "").strip()
+    serial_number = str(probe.get("serial_number", "") or "").strip()
+    if certificate_name and serial_number:
+      certificate_name = f"{certificate_name}_{serial_number.lower()}"
 
     rows.append(
       {
@@ -1873,7 +1876,7 @@ def _collect_lab_certificate_inventory() -> list:
         "hostname": host,
         "ip": str(target.get("ip", "") or "").strip(),
         "certificate": certificate_name,
-        "certificate_serial": str(probe.get("serial_number", "") or "").strip(),
+        "certificate_serial": serial_number,
         "certificate_fingerprint": str(probe.get("sha256_fingerprint", "") or "").strip(),
         "type": "Server TLS",
         "expiration_date": expiration_date,
