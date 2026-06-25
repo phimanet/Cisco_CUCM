@@ -117,6 +117,7 @@ def _axl_post(session, cucm_host, soap_xml):
         data=soap_xml.encode("utf-8"),
         headers={"Content-Type": "text/xml"},
         timeout=120,
+        verify=False,
     )
     return response
 
@@ -426,6 +427,7 @@ def create_teams_telephony_user(
 
     session = requests.Session()
     session.verify = False
+    session.trust_env = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
     try:

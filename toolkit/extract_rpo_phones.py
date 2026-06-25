@@ -15,7 +15,13 @@ TARGET_DEVICE_PREFIX = "CSF"
 def _axl_post(session, cucm_host, soap_xml):
     url = f"https://{cucm_host}:8443/axl/"
     headers = {"Content-Type": "text/xml"}
-    return session.post(url, data=soap_xml.encode("utf-8"), headers=headers, timeout=120)
+    return session.post(
+        url,
+        data=soap_xml.encode("utf-8"),
+        headers=headers,
+        timeout=120,
+        verify=False,
+    )
 
 
 def _strip_ns(tag):
@@ -167,6 +173,7 @@ def extract_rpo_phones(cucm_host, cucm_user, cucm_pass, userids_text):
 
     session = requests.Session()
     session.verify = False
+    session.trust_env = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
     records = []

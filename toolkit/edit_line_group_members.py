@@ -13,7 +13,13 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 def _axl_post(session, cucm_host, soap_xml):
     url = f"https://{cucm_host}:8443/axl/"
     headers = {"Content-Type": "text/xml"}
-    return session.post(url, data=soap_xml.encode("utf-8"), headers=headers, timeout=120)
+    return session.post(
+        url,
+        data=soap_xml.encode("utf-8"),
+        headers=headers,
+        timeout=120,
+        verify=False,
+    )
 
 
 def _strip_ns(tag):
@@ -131,6 +137,7 @@ def _extract_line_group_members(root):
 def search_line_groups(cucm_host, cucm_user, cucm_pass, search_text):
     session = requests.Session()
     session.verify = False
+    session.trust_env = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
     response = _axl_post(session, cucm_host, _soap_list_line_groups((search_text or "").strip()))
@@ -177,6 +184,7 @@ def edit_line_group_members(cucm_host, cucm_user, cucm_pass, line_group_name, ac
 
     session = requests.Session()
     session.verify = False
+    session.trust_env = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
     try:

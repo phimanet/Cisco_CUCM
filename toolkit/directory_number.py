@@ -37,7 +37,13 @@ def _strip_ns(tag: str) -> str:
 def _axl_post(session: requests.Session, cucm_host: str, soap_xml: str) -> str:
     url = f"https://{cucm_host}:8443/axl/"
     headers = {"Content-Type": "text/xml"}
-    resp = session.post(url, data=soap_xml.encode("utf-8"), headers=headers, timeout=90)
+    resp = session.post(
+        url,
+        data=soap_xml.encode("utf-8"),
+        headers=headers,
+        timeout=90,
+        verify=False,
+    )
     resp.raise_for_status()
     return resp.text
 
@@ -181,6 +187,7 @@ def export_directory_numbers(
     try:
         session = requests.Session()
         session.verify = False
+        session.trust_env = False
         session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
         dn_contains = (dn_contains or "").strip()

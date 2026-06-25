@@ -61,6 +61,7 @@ def _axl_post(session, cucm_host, soap_xml):
         data=soap_xml.encode("utf-8"),
         headers={"Content-Type": "text/xml"},
         timeout=120,
+        verify=False,
     )
     return response
 
@@ -203,6 +204,7 @@ def _find_strict_teams_pattern_match(session, cucm_host, extension_or_telephone,
 def lookup_teams_telephony_removal_candidate(cucm_host, cucm_user, cucm_pass, target_user):
     session = requests.Session()
     session.verify = False
+    session.trust_env = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
     clean_target = (target_user or "").strip()
@@ -317,6 +319,7 @@ def remove_teams_telephony_user(
 
     session = requests.Session()
     session.verify = False
+    session.trust_env = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
     try:
