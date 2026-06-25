@@ -121,6 +121,7 @@ Priority keys:
 - Genesys WebRTC Phone mapping now adds explicit `/api/v2/users/{id}/stationassociations` fallback so assigned stations are captured even when routing status/profile payloads omit station fields.
 - Added secondary Genesys fallback to query Phone Management inventory (`/api/v2/telephony/providers/edges/phones`) and map phone name to the user when station-association API is unavailable (observed 404 in current org).
 - Refined Phone Management matching logic to support org payloads where phone entities omit explicit owner fields; extractor now uses exact normalized phone-name == user-name fallback (e.g., "Michael Beecher").
+- Updated Phone Management fallback matching to treat display-name fields (`displayName`, `stationName`, `phoneName`) as equivalent match candidates to `name`, aligned to WebRTC build naming convention.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.

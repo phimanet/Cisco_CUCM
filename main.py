@@ -545,8 +545,13 @@ def _genesys_extract_phone_management_name(phone_payload: dict, user_id: str, us
 
     owner_tokens = [token for token in owner_tokens if token]
 
-    phone_name = str(item.get("name", "") or "").strip()
-    normalized_phone_name = _normalized(phone_name)
+    phone_name_candidates = []
+    for key in ["name", "displayName", "stationName", "phoneName"]:
+      candidate = str(item.get(key, "") or "").strip()
+      if candidate:
+        phone_name_candidates.append(candidate)
+
+    normalized_phone_names = [_normalized(value) for value in phone_name_candidates if value]
     normalized_user_name = _normalized(clean_user_name)
 
     is_match = False
@@ -556,7 +561,7 @@ def _genesys_extract_phone_management_name(phone_payload: dict, user_id: str, us
       is_match = True
     elif clean_user_name and any(clean_user_name in token for token in owner_tokens if token):
       is_match = True
-    elif (not owner_tokens) and normalized_phone_name and normalized_user_name and normalized_phone_name == normalized_user_name:
+    elif (not owner_tokens) and normalized_user_name and any(pn == normalized_user_name for pn in normalized_phone_names if pn):
       # Some orgs return phones without owner linkage; use exact-name fallback.
       is_match = True
 
