@@ -30,7 +30,7 @@ except Exception:
   _FERNET_AVAILABLE = False
 from fastapi import FastAPI, Form, UploadFile, File, Query, Request
 from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse
-from html import escape
+from html import escape, unescape
 from requests.auth import HTTPBasicAuth
 from uuid import uuid4
 
@@ -1740,6 +1740,116 @@ def _extract_cert_name(parts) -> str:
   return ", ".join(tokens)
 
 
+def _html_to_text(value: str) -> str:
+  text = value or ""
+  text = re.sub(r"<br\s*/?>", " ", text, flags=re.IGNORECASE)
+  text = re.sub(r"<[^>]+>", " ", text)
+  text = unescape(text)
+  return re.sub(r"\s+", " ", text).strip()
+
+
+def _parse_platform_expiration_date(value: str):
+  raw = (value or "").strip()
+  if not raw:
+    return None
+
+  for fmt in ["%m/%d/%Y", "%m/%d/%y", "%Y-%m-%d"]:
+    try:
+      return datetime.datetime.strptime(raw, fmt).date()
+    except Exception:
+      continue
+  return None
+
+
+def _parse_cisco_certificate_table(html_text: str) -> list:
+  source = html_text or ""
+  if not source:
+    return []
+
+  tables = re.findall(r"<table[^>]*>.*?</table>", source, flags=re.IGNORECASE | re.DOTALL)
+  for table in tables:
+    table_lc = table.lower()
+    if "certificate" not in table_lc or "expiration" not in table_lc:
+      continue
+
+    rows = []
+    tr_matches = re.findall(r"<tr[^>]*>(.*?)</tr>", table, flags=re.IGNORECASE | re.DOTALL)
+    for tr_html in tr_matches:
+      td_cells = re.findall(r"<td[^>]*>(.*?)</td>", tr_html, flags=re.IGNORECASE | re.DOTALL)
+      if len(td_cells) < 8:
+        continue
+
+      cleaned = [_html_to_text(cell) for cell in td_cells]
+      row = {
+        "certificate": cleaned[0],
+        "common_name": cleaned[1],
+        "usage": cleaned[2],
+        "type": cleaned[3],
+        "expiration_date": cleaned[7],
+      }
+      rows.append(row)
+
+    if rows:
+      return rows
+
+  return []
+
+
+def _fetch_platform_certificate_rows(hostname: str, username: str, password: str, timeout_seconds: int = 20) -> tuple[list, str]:
+  host = (hostname or "").strip()
+  user = (username or "").strip()
+  pwd = (password or "").strip()
+  if not host:
+    return [], "Missing hostname"
+  if not user or not pwd:
+    return [], "Missing platform credentials"
+
+  base_url = f"https://{host}"
+  paths = [
+    "/cmplatform/certificateFindList.do?sortColumn=expiration&sortAscend=true",
+    "/cuplatform/certificateFindList.do?sortColumn=expiration&sortAscend=true",
+  ]
+
+  session_obj = requests.Session()
+  session_obj.verify = False
+  session_obj.trust_env = False
+  session_obj.headers.update({"User-Agent": "Mozilla/5.0"})
+
+  errors = []
+  for path in paths:
+    target_url = f"{base_url}{path}"
+    try:
+      resp = session_obj.get(
+        target_url,
+        auth=HTTPBasicAuth(user, pwd),
+        timeout=timeout_seconds,
+        allow_redirects=True,
+      )
+      parsed = _parse_cisco_certificate_table(resp.text or "")
+      if parsed:
+        return parsed, "OK"
+
+      html_text = (resp.text or "")
+      if "j_security_check" in html_text or "j_username" in html_text:
+        login_url = f"{base_url}/j_security_check"
+        session_obj.post(
+          login_url,
+          data={"j_username": user, "j_password": pwd},
+          timeout=timeout_seconds,
+          allow_redirects=True,
+        )
+        resp2 = session_obj.get(target_url, timeout=timeout_seconds, allow_redirects=True)
+        parsed2 = _parse_cisco_certificate_table(resp2.text or "")
+        if parsed2:
+          return parsed2, "OK"
+
+      errors.append(f"{path}: HTTP {resp.status_code}")
+    except Exception as exc:
+      errors.append(f"{path}: {type(exc).__name__}: {exc}")
+
+  return [], " ; ".join(errors) if errors else "Certificate table not found"
+
+
 def _probe_tls_certificate(hostname: str, ip_address: str, port: int, timeout_seconds: int = 6) -> dict:
   host = (hostname or "").strip()
   ip = (ip_address or "").strip()
@@ -1851,59 +1961,56 @@ def _probe_tls_certificate(hostname: str, ip_address: str, port: int, timeout_se
     return result
 
 
-def _collect_lab_certificate_inventory() -> list:
+def _collect_lab_certificate_inventory(cucm_user: str, cucm_pass: str) -> list:
   rows = []
   for target in LAB_CERT_MANAGER_TARGETS:
     host = str(target.get("hostname", "") or "").strip().lower()
     if host not in LAB_CERT_MANAGER_ALLOWED_HOSTS:
       continue
 
-    best_probe = None
-    for port in CERT_MANAGER_PROBE_PORTS:
-      probe = _probe_tls_certificate(
-        hostname=host,
-        ip_address=str(target.get("ip", "") or "").strip(),
-        port=int(port),
+    parsed_rows, fetch_status = _fetch_platform_certificate_rows(host, cucm_user, cucm_pass)
+    if not parsed_rows:
+      rows.append(
+        {
+          "system": str(target.get("system", "") or "").strip(),
+          "role": str(target.get("role", "") or "").strip(),
+          "hostname": host,
+          "ip": str(target.get("ip", "") or "").strip(),
+          "certificate": "",
+          "usage": "",
+          "type": "",
+          "expiration_date": "",
+          "days_remaining": None,
+          "common_name": "",
+          "issuer": "",
+          "status": f"Fetch failed: {fetch_status}",
+        }
       )
-      best_probe = probe
-      if probe.get("reachable"):
-        break
+      continue
 
-    probe = best_probe or {}
-    valid_until_text = str(probe.get("valid_until", "") or "").strip()
-    expiration_date = ""
-    if valid_until_text:
-      if "T" in valid_until_text:
-        expiration_date = valid_until_text.split("T", 1)[0]
-      else:
-        expiration_date = valid_until_text
+    for cert_row in parsed_rows:
+      expiration_date = str(cert_row.get("expiration_date", "") or "").strip()
+      expiration_obj = _parse_platform_expiration_date(expiration_date)
+      days_remaining = None
+      if expiration_obj:
+        days_remaining = (expiration_obj - datetime.datetime.now(datetime.timezone.utc).date()).days
 
-    certificate_name = str(probe.get("common_name", "") or "").strip()
-    if not certificate_name:
-      certificate_name = str(probe.get("subject", "") or "").strip()
-    serial_number = str(probe.get("serial_number", "") or "").strip()
-    if certificate_name and serial_number:
-      certificate_name = f"{certificate_name}_{serial_number.lower()}"
-
-    rows.append(
-      {
-        "system": str(target.get("system", "") or "").strip(),
-        "role": str(target.get("role", "") or "").strip(),
-        "hostname": host,
-        "ip": str(target.get("ip", "") or "").strip(),
-        "certificate": certificate_name,
-        "usage": str(probe.get("usage", "Identity") or "Identity").strip(),
-        "type": str(probe.get("certificate_type", "Unknown") or "Unknown").strip(),
-        "expiration_date": expiration_date,
-        "probe_port": probe.get("probe_port"),
-        "reachable": bool(probe.get("reachable")),
-        "valid_until": str(probe.get("valid_until", "") or "").strip(),
-        "days_remaining": probe.get("days_remaining"),
-        "common_name": str(probe.get("common_name", "") or "").strip(),
-        "issuer": str(probe.get("issuer", "") or "").strip(),
-        "status": str(probe.get("status", "") or "").strip(),
-      }
-    )
+      rows.append(
+        {
+          "system": str(target.get("system", "") or "").strip(),
+          "role": str(target.get("role", "") or "").strip(),
+          "hostname": host,
+          "ip": str(target.get("ip", "") or "").strip(),
+          "certificate": str(cert_row.get("certificate", "") or "").strip(),
+          "usage": str(cert_row.get("usage", "") or "").strip(),
+          "type": str(cert_row.get("type", "") or "").strip(),
+          "expiration_date": expiration_date,
+          "days_remaining": days_remaining,
+          "common_name": str(cert_row.get("common_name", "") or "").strip(),
+          "issuer": "",
+          "status": "Expired" if (days_remaining is not None and days_remaining < 0) else "OK",
+        }
+      )
   return rows
 
 
@@ -9711,9 +9818,9 @@ def page4_certificate_manager(request: Request):
         }
 
         function statusClass(row) {
-          const ok = !!row.reachable;
           const days = Number(row.days_remaining);
-          if (!ok) return "status-bad";
+          const statusText = String(row.status || "").toLowerCase();
+          if (statusText.includes("fetch failed") || statusText.includes("error")) return "status-bad";
           if (!Number.isNaN(days) && days >= 0 && days <= 30) return "status-warn";
           if (!Number.isNaN(days) && days < 0) return "status-bad";
           return "status-ok";
@@ -9826,7 +9933,8 @@ def cert_manager_lab_inventory(request: Request):
       status_code=403,
     )
 
-  rows = _collect_lab_certificate_inventory()
+  _, resolved_cucm_user, resolved_cucm_pass = _resolve_cucm_credentials(request, cucm_host, "", "")
+  rows = _collect_lab_certificate_inventory(resolved_cucm_user, resolved_cucm_pass)
   return JSONResponse(
     {
       "ok": True,
