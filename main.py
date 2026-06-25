@@ -1,5 +1,6 @@
 import csv
 import datetime
+import hashlib
 import io
 import json
 import logging
@@ -1753,6 +1754,8 @@ def _probe_tls_certificate(hostname: str, ip_address: str, port: int, timeout_se
     "subject": "",
     "common_name": "",
     "subject_alt_names": [],
+    "serial_number": "",
+    "sha256_fingerprint": "",
     "status": "Probe failed",
   }
 
@@ -1787,6 +1790,10 @@ def _probe_tls_certificate(hostname: str, ip_address: str, port: int, timeout_se
       result["status"] = "No certificate returned"
       return result
 
+    fingerprint = ""
+    if der_cert:
+      fingerprint = hashlib.sha256(der_cert).hexdigest().upper()
+
     not_after_raw = (cert.get("notAfter", "") or "").strip()
     not_after = _parse_certificate_not_after(not_after_raw)
     days_remaining = None
@@ -1817,6 +1824,8 @@ def _probe_tls_certificate(hostname: str, ip_address: str, port: int, timeout_se
         "subject": _extract_cert_name(cert.get("subject", [])),
         "common_name": common_name,
         "subject_alt_names": sans,
+        "serial_number": str(cert.get("serialNumber", "") or "").strip(),
+        "sha256_fingerprint": fingerprint,
         "status": "OK" if days_remaining is None or days_remaining >= 0 else "Expired",
       }
     )
@@ -1864,6 +1873,8 @@ def _collect_lab_certificate_inventory() -> list:
         "hostname": host,
         "ip": str(target.get("ip", "") or "").strip(),
         "certificate": certificate_name,
+        "certificate_serial": str(probe.get("serial_number", "") or "").strip(),
+        "certificate_fingerprint": str(probe.get("sha256_fingerprint", "") or "").strip(),
         "type": "Server TLS",
         "expiration_date": expiration_date,
         "probe_port": probe.get("probe_port"),
@@ -9715,7 +9726,7 @@ def page4_certificate_manager(request: Request):
           }
 
           let html = "<table><thead><tr>";
-          html += "<th>System</th><th>Server</th><th>Certificate</th><th>Expiration Date</th><th>Days Left</th><th>Status</th>";
+          html += "<th>System</th><th>Server</th><th>Certificate</th><th>Serial</th><th>SHA256 Fingerprint</th><th>Expiration Date</th><th>Days Left</th><th>Status</th>";
           html += "</tr></thead><tbody>";
 
           expiringRows.forEach(function (row) {
@@ -9724,6 +9735,8 @@ def page4_certificate_manager(request: Request):
             html += "<td>" + toCell(row.system) + "</td>";
             html += "<td class='mono'>" + toCell(row.hostname) + "</td>";
             html += "<td class='mono'>" + toCell(row.certificate) + "</td>";
+            html += "<td class='mono'>" + toCell(row.certificate_serial) + "</td>";
+            html += "<td class='mono'>" + toCell(row.certificate_fingerprint) + "</td>";
             html += "<td class='mono'>" + toCell(row.expiration_date) + "</td>";
             html += "<td>" + toCell(row.days_remaining) + "</td>";
             html += "<td class='" + cls + "'>" + toCell(row.status) + "</td>";
