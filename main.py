@@ -74,6 +74,9 @@ VERASMART_QUEUE_MAX_RUNS = 50
 STRIKE_MASK_OPERATIONS = {}
 STRIKE_MASK_LOCK = threading.Lock()
 STRIKE_MASK_MAX_OPERATIONS = 200
+CERT_RENEWAL_RUNS = {}
+CERT_RENEWAL_RUNS_LOCK = threading.Lock()
+CERT_RENEWAL_MAX_RUNS = 200
 AUTH_SESSIONS = {}
 AUTH_SESSION_SECRETS = {}
 TWILIO_INCOMING_PHONE_NUMBER_CACHE = {}
@@ -2314,6 +2317,285 @@ def _collect_lab_certificate_inventory(cucm_user: str, cucm_pass: str, target_ho
         }
       )
   return rows
+
+
+def _prune_cert_renewal_runs_locked(max_runs: int = CERT_RENEWAL_MAX_RUNS):
+  if len(CERT_RENEWAL_RUNS) <= max_runs:
+    return
+  sorted_runs = sorted(
+    CERT_RENEWAL_RUNS.items(),
+    key=lambda kv: float(kv[1].get("created_epoch", 0) or 0),
+  )
+  for run_id, _ in sorted_runs[:-max_runs]:
+    CERT_RENEWAL_RUNS.pop(run_id, None)
+
+
+def _build_renewal_step_template() -> dict:
+  return {
+    "precheck": {"status": "pending", "detail": "Not started", "updated_at": ""},
+    "generate_csr": {"status": "pending", "detail": "Not started", "updated_at": ""},
+    "upload_signed_cert": {"status": "pending", "detail": "Not started", "updated_at": ""},
+    "restart_services": {"status": "pending", "detail": "Not started", "updated_at": ""},
+    "final_validate": {"status": "pending", "detail": "Not started", "updated_at": ""},
+  }
+
+
+def _create_cert_renewal_run(operator: str, target_hosts: list[str]) -> dict:
+  now_utc = datetime.datetime.now(datetime.timezone.utc)
+  run_id = str(uuid4())
+  host_states = {}
+  for host in target_hosts:
+    host_states[host] = {
+      "hostname": host,
+      "steps": _build_renewal_step_template(),
+    }
+
+  run = {
+    "run_id": run_id,
+    "operator": operator,
+    "target_hosts": list(target_hosts),
+    "created_at": now_utc.isoformat(),
+    "created_epoch": time.time(),
+    "updated_at": now_utc.isoformat(),
+    "status": "active",
+    "hosts": host_states,
+    "history": [
+      {
+        "at": now_utc.isoformat(),
+        "event": "run_created",
+        "detail": f"Renewal run created for {', '.join(target_hosts)}",
+      }
+    ],
+  }
+  return run
+
+
+def _snapshot_cert_renewal_run(run: dict) -> dict:
+  return json.loads(json.dumps(run))
+
+
+def _set_cert_run_step_status(run: dict, host: str, step: str, status: str, detail: str):
+  now_text = datetime.datetime.now(datetime.timezone.utc).isoformat()
+  host_state = ((run or {}).get("hosts", {}) or {}).get(host, {})
+  steps = host_state.get("steps", {}) if isinstance(host_state, dict) else {}
+  step_state = steps.get(step, {}) if isinstance(steps, dict) else {}
+  if not isinstance(step_state, dict):
+    step_state = {}
+    steps[step] = step_state
+
+  step_state["status"] = status
+  step_state["detail"] = detail
+  step_state["updated_at"] = now_text
+  run["updated_at"] = now_text
+  run.setdefault("history", []).append(
+    {
+      "at": now_text,
+      "event": f"{step}:{status}",
+      "detail": f"{host}: {detail}",
+    }
+  )
+
+
+def _split_pem_certificates(chain_text: str) -> list[str]:
+  source = chain_text or ""
+  matches = re.findall(
+    r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----",
+    source,
+    flags=re.DOTALL,
+  )
+  normalized = []
+  for cert in matches:
+    clean = (cert or "").strip()
+    if not clean:
+      continue
+    if not clean.endswith("\n"):
+      clean += "\n"
+    normalized.append(clean)
+  return normalized
+
+
+def _vos_api_request(host: str, user: str, pwd: str, method: str, path: str, payload: dict | None = None, timeout_seconds: int = 30):
+  url = f"https://{host}{path}"
+  headers = {"Accept": "application/json"}
+  if payload is not None:
+    headers["Content-Type"] = "application/json"
+
+  response = requests.request(
+    method=method.upper(),
+    url=url,
+    auth=HTTPBasicAuth(user, pwd),
+    json=payload,
+    headers=headers,
+    verify=False,
+    timeout=timeout_seconds,
+    allow_redirects=True,
+  )
+  parsed = None
+  try:
+    parsed = response.json()
+  except Exception:
+    parsed = None
+
+  return response.status_code, parsed, (response.text or ""), (response.url or url)
+
+
+def _extract_csr_from_payload(data, fallback_text: str = "") -> str:
+  def _walk(node):
+    if isinstance(node, dict):
+      for key in ["csr", "csrPem", "pkcs10", "certificateSigningRequest", "request"]:
+        value = node.get(key)
+        if isinstance(value, str) and "BEGIN CERTIFICATE REQUEST" in value:
+          return value
+      for value in node.values():
+        found = _walk(value)
+        if found:
+          return found
+    elif isinstance(node, list):
+      for item in node:
+        found = _walk(item)
+        if found:
+          return found
+    return ""
+
+  found = _walk(data)
+  if found:
+    return found.strip()
+
+  match = re.search(
+    r"-----BEGIN CERTIFICATE REQUEST-----.*?-----END CERTIFICATE REQUEST-----",
+    fallback_text or "",
+    flags=re.DOTALL,
+  )
+  if match:
+    return match.group(0).strip()
+  return ""
+
+
+def _renewal_precheck_host(host: str, user: str, pwd: str) -> tuple[bool, str]:
+  checks = [
+    "/platformcom/api/v1/certmgr/config/trust/certificate?service=tomcat",
+    "/platformcom/api/v1/certmgr/config/identity/certificates?service=tomcat",
+    "/platformcom/api/v1/certmgr/config/identity/certificate?service=tomcat",
+  ]
+  errors = []
+  for path in checks:
+    try:
+      status_code, _, _, final_url = _vos_api_request(host, user, pwd, "GET", path, payload=None)
+      if 200 <= int(status_code) < 300:
+        return True, f"Precheck OK via {path}"
+      errors.append(f"{path}: HTTP {status_code}, final_url={final_url}")
+    except Exception as exc:
+      errors.append(f"{path}: {type(exc).__name__}: {exc}")
+  return False, " ; ".join(errors)
+
+
+def _renewal_generate_csr_host(host: str, user: str, pwd: str, cert_alias: str) -> tuple[bool, str, str]:
+  alias = (cert_alias or "tomcat").strip() or "tomcat"
+  endpoint = "/platformcom/api/v1/certmgr/config/csr"
+  payloads = [
+    {"service": "tomcat", "certificate": alias},
+    {"service": "tomcat", "certName": alias},
+    {"service": "tomcat", "name": alias},
+  ]
+
+  attempts = []
+  for payload in payloads:
+    try:
+      status_code, parsed, body_text, final_url = _vos_api_request(host, user, pwd, "POST", endpoint, payload=payload)
+      csr_text = _extract_csr_from_payload(parsed, body_text)
+      if 200 <= int(status_code) < 300 and csr_text:
+        return True, f"CSR generated via payload keys {', '.join(payload.keys())}", csr_text
+      attempts.append(f"HTTP {status_code} final_url={final_url} payload={payload}")
+    except Exception as exc:
+      attempts.append(f"{payload}: {type(exc).__name__}: {exc}")
+
+  return False, "CSR generation failed: " + " ; ".join(attempts), ""
+
+
+def _renewal_upload_signed_chain_host(host: str, user: str, pwd: str, signed_chain_pem: str) -> tuple[bool, str]:
+  certificates = _split_pem_certificates(signed_chain_pem)
+  if not certificates:
+    return False, "No PEM certificates found in signed chain input"
+
+  trust_endpoint = "/platformcom/api/v1/certmgr/config/trust/certificates"
+  identity_endpoint = "/platformcom/api/v1/certmgr/config/identity/certificates"
+
+  trust_certs = certificates[1:] if len(certificates) > 1 else []
+  if trust_certs:
+    trust_payloads = [
+      {"service": ["tomcat"], "certificates": trust_certs, "description": "Trust Certificate"},
+      {"service": "tomcat", "certificates": trust_certs, "description": "Trust Certificate"},
+    ]
+    trust_ok = False
+    trust_errors = []
+    for payload in trust_payloads:
+      try:
+        status_code, _, _, final_url = _vos_api_request(host, user, pwd, "POST", trust_endpoint, payload=payload)
+        if 200 <= int(status_code) < 300:
+          trust_ok = True
+          break
+        trust_errors.append(f"HTTP {status_code}, final_url={final_url}")
+      except Exception as exc:
+        trust_errors.append(f"{type(exc).__name__}: {exc}")
+    if not trust_ok and trust_errors:
+      return False, "Trust certificate upload failed: " + " ; ".join(trust_errors)
+
+  identity_payloads = [
+    {"service": "tomcat", "certificates": certificates},
+    {"service": ["tomcat"], "certificates": certificates},
+  ]
+  identity_errors = []
+  for payload in identity_payloads:
+    try:
+      status_code, _, _, final_url = _vos_api_request(host, user, pwd, "POST", identity_endpoint, payload=payload)
+      if 200 <= int(status_code) < 300:
+        return True, "Identity certificate chain uploaded"
+      identity_errors.append(f"HTTP {status_code}, final_url={final_url}")
+    except Exception as exc:
+      identity_errors.append(f"{type(exc).__name__}: {exc}")
+
+  return False, "Identity upload failed: " + " ; ".join(identity_errors)
+
+
+def _renewal_restart_services_host(host: str, user: str, pwd: str) -> tuple[bool, str]:
+  attempts = [
+    ("/platformcom/api/v1/service/restart", {"services": ["Cisco Tomcat"]}),
+    ("/platformcom/api/v1/services/restart", {"service": "Cisco Tomcat"}),
+    ("/platformcom/api/v1/utils/service/restart", {"service": "Cisco Tomcat"}),
+  ]
+  errors = []
+  for path, payload in attempts:
+    try:
+      status_code, _, _, final_url = _vos_api_request(host, user, pwd, "POST", path, payload=payload)
+      if 200 <= int(status_code) < 300:
+        return True, f"Tomcat restart initiated via {path}"
+      errors.append(f"{path}: HTTP {status_code}, final_url={final_url}")
+    except Exception as exc:
+      errors.append(f"{path}: {type(exc).__name__}: {exc}")
+
+  manual = f"API restart not confirmed. Run manually on {host}: utils service restart Cisco Tomcat"
+  return False, manual + (" ; attempts: " + " ; ".join(errors) if errors else "")
+
+
+def _renewal_final_validate_host(host: str, user: str, pwd: str, cert_alias: str) -> tuple[bool, str]:
+  alias = (cert_alias or "tomcat").strip().lower()
+  rows, status = _fetch_platform_certificate_rows(host, user, pwd)
+  if rows:
+    matching = [
+      row for row in rows
+      if alias in str(row.get("certificate", "") or "").strip().lower()
+    ]
+    candidate_rows = matching if matching else rows
+    candidate_rows.sort(key=lambda row: str(row.get("expiration_date", "") or ""))
+    best = candidate_rows[0] if candidate_rows else {}
+    exp = str(best.get("expiration_date", "") or "").strip()
+    cert_name = str(best.get("certificate", "") or "").strip()
+    return True, f"Inventory validate OK: {cert_name or '(unknown cert)'} expires {exp or '(unknown)'}"
+
+  tls = _probe_tls_certificate(host, "", 8443)
+  if tls.get("reachable"):
+    return True, f"TLS probe reachable; cert validation fallback used ({tls.get('status', 'OK')})"
+  return False, f"Final validation failed: {status}"
 
 
 def _check_aerialink_feasibility(force_refresh: bool = False) -> dict:
@@ -10085,6 +10367,32 @@ def page4_certificate_manager(request: Request):
         color: #b91c1c;
         font-weight: 700;
       }
+      .run-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 10px;
+        margin-top: 10px;
+      }
+      .run-grid textarea {
+        width: 100%;
+        min-height: 120px;
+        border: 1px solid #b7d0eb;
+        border-radius: 8px;
+        padding: 8px;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+        box-sizing: border-box;
+      }
+      .run-pill {
+        display: inline-block;
+        padding: 5px 8px;
+        border-radius: 999px;
+        border: 1px solid #93c5fd;
+        background: #eff6ff;
+        color: #1d4ed8;
+        font-size: 12px;
+        font-weight: 700;
+      }
     </style>
   </head>
   <body>
@@ -10134,6 +10442,33 @@ def page4_certificate_manager(request: Request):
         <h4 style="margin:12px 0 6px 0;">Certificates Expiring in 45 Days or Less</h4>
         <div id="cert-inventory-results" style="overflow-x:auto;"></div>
       </section>
+
+      <section class="panel">
+        <h3 style="margin-top:0;">Renewal Run (2-Server Workflow)</h3>
+        <p style="margin:0 0 8px 0; color:#2c5c8a;">Create one run for your two target servers, then execute steps in order.</p>
+        <p><span class="run-pill" id="renewal-run-id">Run: not started</span></p>
+        <div class="toolbar">
+          <button id="renewal-create-run-btn" type="button">Create Renewal Run</button>
+          <button id="renewal-precheck-btn" type="button">1) Run Precheck</button>
+          <button id="renewal-generate-csr-btn" type="button">2) Generate CSR</button>
+          <button id="renewal-download-csr-btn" type="button">Download CSR Bundle</button>
+          <button id="renewal-upload-btn" type="button">3) Upload Signed Certificate</button>
+          <button id="renewal-restart-btn" type="button">4) Restart Services</button>
+          <button id="renewal-validate-btn" type="button">5) Final Validate</button>
+        </div>
+        <div class="run-grid">
+          <div>
+            <label for="renewal-cert-alias" style="display:block;font-weight:700;margin-bottom:4px;">Certificate Alias</label>
+            <input id="renewal-cert-alias" type="text" value="tomcat" style="width:100%;border:1px solid #b7d0eb;border-radius:8px;padding:8px 10px;box-sizing:border-box;" />
+          </div>
+          <div style="grid-column: 1 / -1;">
+            <label for="renewal-signed-chain" style="display:block;font-weight:700;margin-bottom:4px;">Signed Certificate Chain (PEM)</label>
+            <textarea id="renewal-signed-chain" placeholder="Paste CA-signed leaf + intermediates + root PEM bundle here"></textarea>
+          </div>
+        </div>
+        <h4 style="margin:12px 0 6px 0;">Run Status</h4>
+        <div id="renewal-run-results" style="overflow-x:auto;"></div>
+      </section>
     </main>
 
     <script>
@@ -10148,6 +10483,19 @@ def page4_certificate_manager(request: Request):
         const targetHostEl = document.getElementById("target-host");
         const platformUserEl = document.getElementById("platform-user");
         const platformPassEl = document.getElementById("platform-pass");
+        const renewalRunIdEl = document.getElementById("renewal-run-id");
+        const renewalResultsEl = document.getElementById("renewal-run-results");
+        const renewalAliasEl = document.getElementById("renewal-cert-alias");
+        const renewalSignedChainEl = document.getElementById("renewal-signed-chain");
+        const renewalCreateRunBtn = document.getElementById("renewal-create-run-btn");
+        const renewalPrecheckBtn = document.getElementById("renewal-precheck-btn");
+        const renewalGenerateCsrBtn = document.getElementById("renewal-generate-csr-btn");
+        const renewalDownloadCsrBtn = document.getElementById("renewal-download-csr-btn");
+        const renewalUploadBtn = document.getElementById("renewal-upload-btn");
+        const renewalRestartBtn = document.getElementById("renewal-restart-btn");
+        const renewalValidateBtn = document.getElementById("renewal-validate-btn");
+        let currentRenewalRunId = "";
+        let currentRenewalRun = null;
 
         function toCell(value) {
           if (value === null || value === undefined || value === "") return "-";
@@ -10241,6 +10589,131 @@ def page4_certificate_manager(request: Request):
           quickResultsEl.innerHTML = html;
         }
 
+        function selectedHosts() {
+          return targetHostEl
+            ? Array.from(targetHostEl.selectedOptions || []).map(function (opt) {
+                return (opt && opt.value ? opt.value : "").trim();
+              }).filter(Boolean)
+            : [];
+        }
+
+        function credentialsPayload() {
+          return {
+            platform_user: (platformUserEl && platformUserEl.value ? platformUserEl.value : "").trim(),
+            platform_pass: (platformPassEl && platformPassEl.value ? platformPassEl.value : "").trim(),
+          };
+        }
+
+        function renderRenewalRun(run) {
+          if (!run || !run.hosts) {
+            renewalResultsEl.innerHTML = "<p>No renewal run yet.</p>";
+            return;
+          }
+          currentRenewalRun = run;
+          currentRenewalRunId = run.run_id || "";
+          renewalRunIdEl.textContent = currentRenewalRunId ? ("Run: " + currentRenewalRunId) : "Run: not started";
+
+          let html = "<table><thead><tr><th>Host</th><th>Precheck</th><th>Generate CSR</th><th>Upload Cert</th><th>Restart</th><th>Final Validate</th></tr></thead><tbody>";
+          Object.keys(run.hosts || {}).forEach(function (host) {
+            const hostObj = run.hosts[host] || {};
+            const steps = hostObj.steps || {};
+            function stepCell(stepKey) {
+              const step = steps[stepKey] || {};
+              const st = String(step.status || "pending");
+              const detail = String(step.detail || "");
+              const cls = st === "ok" ? "status-ok" : (st === "failed" ? "status-bad" : (st === "warning" ? "status-warn" : ""));
+              return "<td class='" + cls + "'>" + toCell(st + (detail ? (": " + detail) : "")) + "</td>";
+            }
+            html += "<tr>";
+            html += "<td class='mono'>" + toCell(host) + "</td>";
+            html += stepCell("precheck");
+            html += stepCell("generate_csr");
+            html += stepCell("upload_signed_cert");
+            html += stepCell("restart_services");
+            html += stepCell("final_validate");
+            html += "</tr>";
+          });
+          html += "</tbody></table>";
+          renewalResultsEl.innerHTML = html;
+        }
+
+        async function createRenewalRun() {
+          const hosts = selectedHosts();
+          if (hosts.length !== 2) {
+            alert("Select exactly 2 target hosts to create a renewal run.");
+            return;
+          }
+          const response = await fetch("/cert-manager/lab/renewal/run/create", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ target_hosts: hosts }),
+          });
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) {
+            throw new Error((payload && payload.detail) || "Failed to create renewal run.");
+          }
+          renderRenewalRun(payload.run || null);
+        }
+
+        async function runRenewalAction(actionName) {
+          if (!currentRenewalRunId) {
+            alert("Create a renewal run first.");
+            return;
+          }
+          const creds = credentialsPayload();
+          if ((!hasCachedCucmPass || !credentialExpiresAtMs) && (!creds.platform_user || !creds.platform_pass)) {
+            alert("Provide Platform Username and Platform Password.");
+            return;
+          }
+          const response = await fetch("/cert-manager/lab/renewal/run/" + encodeURIComponent(currentRenewalRunId) + "/action", {
+            method: "POST",
+            credentials: "same-origin",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: actionName,
+              cert_alias: (renewalAliasEl && renewalAliasEl.value ? renewalAliasEl.value : "tomcat").trim() || "tomcat",
+              signed_chain_pem: (renewalSignedChainEl && renewalSignedChainEl.value ? renewalSignedChainEl.value : "").trim(),
+              platform_user: creds.platform_user,
+              platform_pass: creds.platform_pass,
+            }),
+          });
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) {
+            throw new Error((payload && payload.detail) || "Renewal action failed.");
+          }
+          renderRenewalRun(payload.run || null);
+        }
+
+        function downloadCsrBundle() {
+          if (!currentRenewalRun || !currentRenewalRun.hosts) {
+            alert("No CSR data available yet.");
+            return;
+          }
+          const lines = [];
+          Object.keys(currentRenewalRun.hosts).forEach(function (host) {
+            const hostState = currentRenewalRun.hosts[host] || {};
+            const csr = String(hostState.csr_pem || "").trim();
+            if (!csr) return;
+            lines.push("### " + host);
+            lines.push(csr);
+            lines.push("");
+          });
+          if (!lines.length) {
+            alert("No CSR generated yet. Run 'Generate CSR' first.");
+            return;
+          }
+          const blob = new Blob([lines.join("\n")], { type: "text/plain;charset=utf-8" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = "renewal-csr-bundle.txt";
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        }
+
         async function loadInventory() {
           statusEl.textContent = "Loading certificate inventory...";
           const payloadBody = {
@@ -10285,6 +10758,45 @@ def page4_certificate_manager(request: Request):
         if (refreshBtn) {
           refreshBtn.addEventListener("click", function () {
             loadInventory();
+          });
+        }
+
+        if (renewalCreateRunBtn) {
+          renewalCreateRunBtn.addEventListener("click", async function () {
+            try {
+              await createRenewalRun();
+            } catch (err) {
+              alert((err && err.message) || "Failed to create renewal run.");
+            }
+          });
+        }
+
+        if (renewalPrecheckBtn) {
+          renewalPrecheckBtn.addEventListener("click", async function () {
+            try { await runRenewalAction("precheck"); } catch (err) { alert((err && err.message) || "Precheck failed."); }
+          });
+        }
+        if (renewalGenerateCsrBtn) {
+          renewalGenerateCsrBtn.addEventListener("click", async function () {
+            try { await runRenewalAction("generate_csr"); } catch (err) { alert((err && err.message) || "CSR generation failed."); }
+          });
+        }
+        if (renewalDownloadCsrBtn) {
+          renewalDownloadCsrBtn.addEventListener("click", function () { downloadCsrBundle(); });
+        }
+        if (renewalUploadBtn) {
+          renewalUploadBtn.addEventListener("click", async function () {
+            try { await runRenewalAction("upload_signed_cert"); } catch (err) { alert((err && err.message) || "Upload failed."); }
+          });
+        }
+        if (renewalRestartBtn) {
+          renewalRestartBtn.addEventListener("click", async function () {
+            try { await runRenewalAction("restart_services"); } catch (err) { alert((err && err.message) || "Restart failed."); }
+          });
+        }
+        if (renewalValidateBtn) {
+          renewalValidateBtn.addEventListener("click", async function () {
+            try { await runRenewalAction("final_validate"); } catch (err) { alert((err && err.message) || "Validation failed."); }
           });
         }
 
@@ -10398,6 +10910,118 @@ async def cert_manager_lab_inventory(request: Request):
       },
     }
   )
+
+
+@app.post("/cert-manager/lab/renewal/run/create")
+async def cert_manager_lab_renewal_create_run(request: Request):
+  session, username = _require_admin_session(request)
+  cucm_host = str(session.get("cucm_host", "") or "")
+  cert_manager_enabled = _feature_enabled(
+    CERT_MANAGER_PAGE_ENABLED,
+    lab_only=(CERT_MANAGER_PAGE_LAB_ONLY and PREVIEW_FEATURES_LAB_ONLY_DEFAULT),
+    cucm_host=cucm_host,
+  )
+  if not cert_manager_enabled or not _is_lab_environment(cucm_host):
+    return JSONResponse({"ok": False, "detail": "Server Certificate Manager is LAB-only and disabled in this environment."}, status_code=403)
+
+  payload = await request.json()
+  target_hosts = []
+  if isinstance(payload, dict):
+    raw = payload.get("target_hosts", [])
+    if isinstance(raw, list):
+      target_hosts = [str(item or "").strip().lower() for item in raw if str(item or "").strip()]
+
+  if len(target_hosts) != 2:
+    return JSONResponse({"ok": False, "detail": "Select exactly 2 target hosts to create a renewal run."}, status_code=400)
+
+  for host in target_hosts:
+    if host not in LAB_CERT_MANAGER_ALLOWED_HOSTS:
+      return JSONResponse({"ok": False, "detail": f"Invalid target host: {host}"}, status_code=400)
+
+  with CERT_RENEWAL_RUNS_LOCK:
+    run = _create_cert_renewal_run(username, target_hosts)
+    CERT_RENEWAL_RUNS[run["run_id"]] = run
+    _prune_cert_renewal_runs_locked()
+    snapshot = _snapshot_cert_renewal_run(run)
+
+  return JSONResponse({"ok": True, "run": snapshot})
+
+
+@app.get("/cert-manager/lab/renewal/run/{run_id}")
+def cert_manager_lab_renewal_get_run(request: Request, run_id: str):
+  _session, _username = _require_admin_session(request)
+  with CERT_RENEWAL_RUNS_LOCK:
+    run = CERT_RENEWAL_RUNS.get(run_id)
+    if not run:
+      return JSONResponse({"ok": False, "detail": "Renewal run not found."}, status_code=404)
+    snapshot = _snapshot_cert_renewal_run(run)
+  return JSONResponse({"ok": True, "run": snapshot})
+
+
+@app.post("/cert-manager/lab/renewal/run/{run_id}/action")
+async def cert_manager_lab_renewal_run_action(request: Request, run_id: str):
+  session, _username = _require_admin_session(request)
+  cucm_host = str(session.get("cucm_host", "") or "")
+  cert_manager_enabled = _feature_enabled(
+    CERT_MANAGER_PAGE_ENABLED,
+    lab_only=(CERT_MANAGER_PAGE_LAB_ONLY and PREVIEW_FEATURES_LAB_ONLY_DEFAULT),
+    cucm_host=cucm_host,
+  )
+  if not cert_manager_enabled or not _is_lab_environment(cucm_host):
+    return JSONResponse({"ok": False, "detail": "Server Certificate Manager is LAB-only and disabled in this environment."}, status_code=403)
+
+  payload = await request.json()
+  if not isinstance(payload, dict):
+    payload = {}
+
+  action = str(payload.get("action", "") or "").strip().lower()
+  cert_alias = str(payload.get("cert_alias", "tomcat") or "tomcat").strip() or "tomcat"
+  signed_chain_pem = str(payload.get("signed_chain_pem", "") or "")
+  platform_user = str(payload.get("platform_user", "") or "").strip()
+  platform_pass = str(payload.get("platform_pass", "") or "").strip()
+
+  if platform_user and platform_pass:
+    resolved_user = platform_user
+    resolved_pass = platform_pass
+  else:
+    _, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, "", "")
+
+  if not str(resolved_user or "").strip() or not str(resolved_pass or "").strip():
+    return JSONResponse({"ok": False, "detail": "Missing platform credentials. Use cached login or provide Platform Username/Password."}, status_code=400)
+
+  with CERT_RENEWAL_RUNS_LOCK:
+    run = CERT_RENEWAL_RUNS.get(run_id)
+    if not run:
+      return JSONResponse({"ok": False, "detail": "Renewal run not found."}, status_code=404)
+
+    hosts = list(run.get("target_hosts", []) or [])
+    for host in hosts:
+      if action == "precheck":
+        ok, detail = _renewal_precheck_host(host, resolved_user, resolved_pass)
+        _set_cert_run_step_status(run, host, "precheck", "ok" if ok else "failed", detail)
+      elif action == "generate_csr":
+        ok, detail, csr_text = _renewal_generate_csr_host(host, resolved_user, resolved_pass, cert_alias)
+        if ok and csr_text:
+          run.setdefault("hosts", {}).setdefault(host, {})["csr_pem"] = csr_text
+        _set_cert_run_step_status(run, host, "generate_csr", "ok" if ok else "failed", detail)
+      elif action == "upload_signed_cert":
+        if not signed_chain_pem.strip():
+          _set_cert_run_step_status(run, host, "upload_signed_cert", "failed", "Signed chain PEM is required for upload.")
+          continue
+        ok, detail = _renewal_upload_signed_chain_host(host, resolved_user, resolved_pass, signed_chain_pem)
+        _set_cert_run_step_status(run, host, "upload_signed_cert", "ok" if ok else "failed", detail)
+      elif action == "restart_services":
+        ok, detail = _renewal_restart_services_host(host, resolved_user, resolved_pass)
+        _set_cert_run_step_status(run, host, "restart_services", "ok" if ok else "warning", detail)
+      elif action == "final_validate":
+        ok, detail = _renewal_final_validate_host(host, resolved_user, resolved_pass, cert_alias)
+        _set_cert_run_step_status(run, host, "final_validate", "ok" if ok else "failed", detail)
+      else:
+        return JSONResponse({"ok": False, "detail": f"Unsupported action: {action}"}, status_code=400)
+
+    snapshot = _snapshot_cert_renewal_run(run)
+
+  return JSONResponse({"ok": True, "run": snapshot})
 
 
 @app.get("/menu-admin", response_class=HTMLResponse)
