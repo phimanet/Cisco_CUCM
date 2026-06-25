@@ -1845,12 +1845,27 @@ def _collect_lab_certificate_inventory() -> list:
         break
 
     probe = best_probe or {}
+    valid_until_text = str(probe.get("valid_until", "") or "").strip()
+    expiration_date = ""
+    if valid_until_text:
+      if "T" in valid_until_text:
+        expiration_date = valid_until_text.split("T", 1)[0]
+      else:
+        expiration_date = valid_until_text
+
+    certificate_name = str(probe.get("common_name", "") or "").strip()
+    if not certificate_name:
+      certificate_name = str(probe.get("subject", "") or "").strip()
+
     rows.append(
       {
         "system": str(target.get("system", "") or "").strip(),
         "role": str(target.get("role", "") or "").strip(),
         "hostname": host,
         "ip": str(target.get("ip", "") or "").strip(),
+        "certificate": certificate_name,
+        "type": "Server TLS",
+        "expiration_date": expiration_date,
         "probe_port": probe.get("probe_port"),
         "reachable": bool(probe.get("reachable")),
         "valid_until": str(probe.get("valid_until", "") or "").strip(),
@@ -9681,7 +9696,7 @@ def page4_certificate_manager(request: Request):
           }
 
           let html = "<table><thead><tr>";
-          html += "<th>System</th><th>Role</th><th>Host</th><th>IP</th><th>Port</th><th>Reachable</th><th>Days Left</th><th>Valid Until (UTC)</th><th>Common Name</th><th>Issuer</th><th>Status</th>";
+          html += "<th>System</th><th>Role</th><th>Host</th><th>IP</th><th>Certificate</th><th>Type</th><th>Expiration Date</th><th>Port</th><th>Reachable</th><th>Days Left</th><th>Valid Until (UTC)</th><th>Common Name</th><th>Issuer</th><th>Status</th>";
           html += "</tr></thead><tbody>";
 
           rows.forEach(function (row) {
@@ -9691,6 +9706,9 @@ def page4_certificate_manager(request: Request):
             html += "<td>" + toCell(row.role) + "</td>";
             html += "<td class='mono'>" + toCell(row.hostname) + "</td>";
             html += "<td class='mono'>" + toCell(row.ip) + "</td>";
+            html += "<td class='mono'>" + toCell(row.certificate) + "</td>";
+            html += "<td>" + toCell(row.type) + "</td>";
+            html += "<td class='mono'>" + toCell(row.expiration_date) + "</td>";
             html += "<td class='mono'>" + toCell(row.probe_port) + "</td>";
             html += "<td>" + (row.reachable ? "Yes" : "No") + "</td>";
             html += "<td>" + toCell(row.days_remaining) + "</td>";
