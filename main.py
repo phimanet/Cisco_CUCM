@@ -1753,6 +1753,8 @@ def _probe_tls_certificate(hostname: str, ip_address: str, port: int, timeout_se
     "issuer": "",
     "subject": "",
     "common_name": "",
+    "usage": "Identity",
+    "certificate_type": "Unknown",
     "subject_alt_names": [],
     "serial_number": "",
     "sha256_fingerprint": "",
@@ -1815,6 +1817,18 @@ def _probe_tls_certificate(hostname: str, ip_address: str, port: int, timeout_se
       if san_type and san_value:
         sans.append(f"{san_type}:{san_value}")
 
+    usage = "Identity"
+    ext_usage_values = [str(x or "").strip() for x in (cert.get("extendedKeyUsage", []) or []) if str(x or "").strip()]
+    if ext_usage_values and all("TLS Web Server Authentication" not in item for item in ext_usage_values):
+      usage = "Trust"
+
+    signature_alg = str(cert.get("signatureAlgorithm", "") or "").upper()
+    certificate_type = "Unknown"
+    if "RSA" in signature_alg:
+      certificate_type = "RSA"
+    elif "EC" in signature_alg or "ECDSA" in signature_alg:
+      certificate_type = "EC"
+
     result.update(
       {
         "reachable": True,
@@ -1823,6 +1837,8 @@ def _probe_tls_certificate(hostname: str, ip_address: str, port: int, timeout_se
         "issuer": _extract_cert_name(cert.get("issuer", [])),
         "subject": _extract_cert_name(cert.get("subject", [])),
         "common_name": common_name,
+        "usage": usage,
+        "certificate_type": certificate_type,
         "subject_alt_names": sans,
         "serial_number": str(cert.get("serialNumber", "") or "").strip(),
         "sha256_fingerprint": fingerprint,
@@ -1876,9 +1892,8 @@ def _collect_lab_certificate_inventory() -> list:
         "hostname": host,
         "ip": str(target.get("ip", "") or "").strip(),
         "certificate": certificate_name,
-        "certificate_serial": serial_number,
-        "certificate_fingerprint": str(probe.get("sha256_fingerprint", "") or "").strip(),
-        "type": "Server TLS",
+        "usage": str(probe.get("usage", "Identity") or "Identity").strip(),
+        "type": str(probe.get("certificate_type", "Unknown") or "Unknown").strip(),
         "expiration_date": expiration_date,
         "probe_port": probe.get("probe_port"),
         "reachable": bool(probe.get("reachable")),
@@ -9729,17 +9744,17 @@ def page4_certificate_manager(request: Request):
           }
 
           let html = "<table><thead><tr>";
-          html += "<th>System</th><th>Server</th><th>Certificate</th><th>Serial</th><th>SHA256 Fingerprint</th><th>Expiration Date</th><th>Days Left</th><th>Status</th>";
+          html += "<th>System</th><th>Certificate</th><th>Common Name</th><th>Usage</th><th>Type</th><th>Expiration Date</th><th>Days Left</th><th>Status</th>";
           html += "</tr></thead><tbody>";
 
           expiringRows.forEach(function (row) {
             const cls = statusClass(row);
             html += "<tr>";
             html += "<td>" + toCell(row.system) + "</td>";
-            html += "<td class='mono'>" + toCell(row.hostname) + "</td>";
             html += "<td class='mono'>" + toCell(row.certificate) + "</td>";
-            html += "<td class='mono'>" + toCell(row.certificate_serial) + "</td>";
-            html += "<td class='mono'>" + toCell(row.certificate_fingerprint) + "</td>";
+            html += "<td class='mono'>" + toCell(row.common_name) + "</td>";
+            html += "<td>" + toCell(row.usage) + "</td>";
+            html += "<td>" + toCell(row.type) + "</td>";
             html += "<td class='mono'>" + toCell(row.expiration_date) + "</td>";
             html += "<td>" + toCell(row.days_remaining) + "</td>";
             html += "<td class='" + cls + "'>" + toCell(row.status) + "</td>";
