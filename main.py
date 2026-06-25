@@ -132,6 +132,7 @@ GENESYS_CLOUD_REGION = (os.getenv("GENESYS_CLOUD_REGION", "usw2") or "usw2").str
 GENESYS_CLIENT_ID = (os.getenv("GENESYS_CLIENT_ID", "") or "").strip()
 GENESYS_CLIENT_SECRET = (os.getenv("GENESYS_CLIENT_SECRET", "") or "").strip()
 GENESYS_USERS_PAGE_SIZE = int((os.getenv("GENESYS_USERS_PAGE_SIZE", "100") or "100").strip())
+GENESYS_PHONE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_PHONE_LOOKUP_MAX_PAGES", "50") or "50").strip())
 AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aerialink.net/v5") or "https://apix5.aerialink.net/v5").strip().rstrip("/")
 AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
 AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
@@ -700,9 +701,10 @@ def _genesys_extract_phone_management_name(phone_payload: dict, user_id: str, us
 
 
 def _genesys_lookup_phone_management_name(api_base: str, access_token: str, user_id: str, user_name: str, user_email: str) -> tuple[str, dict, dict, str]:
-  # Phone inventory can be large; cap paging for responsiveness.
+  # Phone inventory can be large; allow a configurable cap to avoid missing users.
   merged_entities = []
-  for page_number in range(1, 6):
+  max_pages = max(1, min(GENESYS_PHONE_LOOKUP_MAX_PAGES, 200))
+  for page_number in range(1, max_pages + 1):
     ok_phones, phones_payload, err_phones = _genesys_get_json(
       api_base,
       access_token,

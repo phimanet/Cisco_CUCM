@@ -127,6 +127,7 @@ Priority keys:
 - Added inline Genesys action flow: when lookup shows no WebRTC phone, UI now offers **Build + Associate** button per user.
 - Added backend route `/genesys/users/build-webrtc` using template baseline + Genesys Phone Management creation path; attempts user association during create and falls back to station association call when needed.
 - Fixed Genesys extractor parsing for ACD skills where payload returns `entities[].name` directly (not only `entities[].skill.name`), and changed ACD Skills/Queues display to explicit `(none)` when empty to avoid blank-column confusion.
+- Refined Genesys Phone Management lookup paging depth with configurable cap (`GENESYS_PHONE_LOOKUP_MAX_PAGES`, default 50) so existing users like Shane Carr are not missed when inventory spans many pages.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.
