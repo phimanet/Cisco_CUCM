@@ -10768,7 +10768,13 @@ def page4_certificate_manager(request: Request):
         }
 
         async function loadInventory() {
-          statusEl.textContent = "Loading certificate inventory...";
+          const opStarted = Date.now();
+          let progressTimer = null;
+          if (refreshBtn) {
+            refreshBtn.disabled = true;
+            refreshBtn.textContent = "Refreshing...";
+          }
+          statusEl.textContent = "Starting refresh request...";
           const payloadBody = {
             target_hosts: (targetHostEl ? Array.from(targetHostEl.selectedOptions || []).map(function (opt) { return (opt && opt.value ? opt.value : "").trim(); }).filter(Boolean) : []),
             platform_user: (platformUserEl && platformUserEl.value ? platformUserEl.value : "").trim(),
@@ -10776,15 +10782,26 @@ def page4_certificate_manager(request: Request):
           };
           appendDebug("loadInventory start: targets=" + payloadBody.target_hosts.join(",") + " user_override=" + (payloadBody.platform_user ? "yes" : "no"));
 
+          progressTimer = setInterval(function () {
+            const sec = Math.max(0, Math.floor((Date.now() - opStarted) / 1000));
+            statusEl.textContent = "Refreshing inventory... " + sec + "s elapsed";
+          }, 1000);
+
           if ((!hasCachedCucmPass || !credentialExpiresAtMs) && (!payloadBody.platform_user || !payloadBody.platform_pass)) {
             statusEl.textContent = "Inventory requires credentials: enter Platform Username and Platform Password.";
             resultsEl.innerHTML = "";
             appendDebug("loadInventory blocked: missing credentials");
+            if (progressTimer) clearInterval(progressTimer);
+            if (refreshBtn) {
+              refreshBtn.disabled = false;
+              refreshBtn.textContent = "Refresh Inventory";
+            }
             return;
           }
 
           try {
             const started = Date.now();
+            statusEl.textContent = "Submitting request to /cert-manager/lab/inventory ...";
             const response = await fetch("/cert-manager/lab/inventory", {
               method: "POST",
               credentials: "same-origin",
@@ -10815,6 +10832,12 @@ def page4_certificate_manager(request: Request):
             quickResultsEl.innerHTML = "";
             resultsEl.innerHTML = "";
             appendDebug("loadInventory exception: " + ((err && err.message) || String(err)));
+          } finally {
+            if (progressTimer) clearInterval(progressTimer);
+            if (refreshBtn) {
+              refreshBtn.disabled = false;
+              refreshBtn.textContent = "Refresh Inventory";
+            }
           }
         }
 
