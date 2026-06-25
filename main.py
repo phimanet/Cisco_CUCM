@@ -9711,7 +9711,7 @@ def menu_admin_page(request: Request):
             <span>Review recent portal actions and download the audit CSV.</span>
           </a>
           <a class="hero-link-card" href="/page3?panel=sms-number-look">
-            <strong>📞 Twilio Items</strong>
+            <strong>📞 SMS Items - Twilio/Aerialinkn</strong>
             <span>Manage Twilio number verification and lookup operations.</span>
           </a>
         </div>
@@ -9740,7 +9740,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
-            <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">📞 Twilio Items (Page 3)</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">📞 SMS Items - Twilio/Aerialinkn (Page 3)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">⚙️ DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unityldapsync">Trigger Unity LDAP Sync</button>
@@ -11456,7 +11456,7 @@ def page3_twilio_items(request: Request):
   session_username = str(session.get("username", ""))
   if not _is_admin_user(session_username):
     return HTMLResponse(
-      content="<h3>403 Forbidden</h3><p>You are not authorized to access Twilio Items.</p>",
+      content="<h3>403 Forbidden</h3><p>You are not authorized to access SMS Items - Twilio/Aerialinkn.</p>",
       status_code=403,
     )
 
@@ -11520,7 +11520,7 @@ def page3_twilio_items(request: Request):
   html = """
 <html>
   <head>
-    <title>Twilio Items - Voice Operations Portal</title>
+    <title>SMS Items - Twilio/Aerialinkn - Voice Operations Portal</title>
     <style>
       :root {
         --amn-blue: #005eb8;
@@ -12016,7 +12016,7 @@ def page3_twilio_items(request: Request):
     <section class="page-hero">
       <div class="page-title-row">
         <div class="page-title-block">
-          <h2 class="page-title">Twilio Items</h2>
+          <h2 class="page-title">SMS Items - Twilio/Aerialinkn</h2>
           <p class="page-subtitle">Manage Twilio numbers and inbound verification patterns for the organization.</p>
         </div>
       </div>
