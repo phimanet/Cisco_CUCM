@@ -4429,7 +4429,6 @@ def genesys_admin_placeholder(request: Request):
         <section class="portal-main">
           <div class="panel">
             <h3 style="margin-top:0;">Extract User by Name</h3>
-            <p style="margin-top:0; color:#4e6a84;">Region is fixed to US West (`usw2`). OAuth credentials are loaded from server environment variables. If Genesys lookup requires email alignment, CUCM name lookup is used to collect email targets from the existing workflow context.</p>
 
             <form id="genesys-user-search-form">
               <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
