@@ -36,12 +36,25 @@ fi
 
 echo
 echo "--- Health ---"
-if curl -fsS "http://127.0.0.1:8000/healthz" >/dev/null 2>&1; then
-  curl -fsS "http://127.0.0.1:8000/healthz"
-elif curl -ksS "https://127.0.0.1/healthz" >/dev/null 2>&1; then
-  curl -ksS "https://127.0.0.1/healthz"
-else
-  echo "Could not reach /healthz via localhost:8000 or local nginx https endpoint"
+HEALTH_OK=0
+for i in {1..20}; do
+  if curl -fsS "http://127.0.0.1:8000/healthz" >/dev/null 2>&1; then
+    curl -fsS "http://127.0.0.1:8000/healthz"
+    HEALTH_OK=1
+    break
+  fi
+
+  if curl -ksS "https://127.0.0.1/healthz" >/dev/null 2>&1; then
+    curl -ksS "https://127.0.0.1/healthz"
+    HEALTH_OK=1
+    break
+  fi
+
+  sleep 1
+done
+
+if [[ "$HEALTH_OK" -ne 1 ]]; then
+  echo "Could not reach /healthz via localhost:8000 or local nginx https endpoint after retry window"
 fi
 
 echo
