@@ -135,6 +135,7 @@ GENESYS_USERS_PAGE_SIZE = int((os.getenv("GENESYS_USERS_PAGE_SIZE", "100") or "1
 GENESYS_PHONE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_PHONE_LOOKUP_MAX_PAGES", "50") or "50").strip())
 GENESYS_QUEUE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_LOOKUP_MAX_PAGES", "30") or "30").strip())
 GENESYS_QUEUE_MEMBER_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_MEMBER_MAX_PAGES", "20") or "20").strip())
+GENESYS_QUEUE_ID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 GENESYS_PRIORITY_QUEUE_IDS = [
   (item or "").strip()
   for item in (os.getenv("GENESYS_PRIORITY_QUEUE_IDS", "df95c0ce-1ca4-4ab1-8ce3-f474642edf4d") or "df95c0ce-1ca4-4ab1-8ce3-f474642edf4d").split(",")
@@ -778,31 +779,18 @@ def _genesys_get_queue_name(api_base: str, access_token: str, queue_id: str) -> 
 
 def _genesys_lookup_user_queues_by_ids(api_base: str, access_token: str, user_id: str, user_email: str, user_name: str, queue_ids: list[str]) -> list[str]:
   matched_queue_names = []
-  max_member_pages = max(1, min(GENESYS_QUEUE_MEMBER_MAX_PAGES, 200))
 
   for queue_id in queue_ids:
     clean_queue_id = str(queue_id or "").strip()
     if not clean_queue_id:
       continue
 
-    found_in_queue = False
-    for member_page in range(1, max_member_pages + 1):
-      ok_members, members_payload, _ = _genesys_get_json(
-        api_base,
-        access_token,
-        f"/api/v2/routing/queues/{clean_queue_id}/members",
-        params={"pageSize": 100, "pageNumber": member_page},
-      )
-      if not ok_members:
-        break
-
-      members = members_payload.get("entities", []) if isinstance(members_payload, dict) else []
-      if any(_genesys_queue_member_matches_user(member, user_id, user_email, user_name) for member in members if isinstance(member, dict)):
-        found_in_queue = True
-
-      member_page_count = int(members_payload.get("pageCount", 0) or 0) if isinstance(members_payload, dict) else 0
-      if found_in_queue or (not member_page_count) or member_page >= member_page_count:
-        break
+    members, _ = _genesys_get_queue_members(api_base, access_token, clean_queue_id)
+    found_in_queue = any(
+      _genesys_queue_member_matches_user(member, user_id, user_email, user_name)
+      for member in members
+      if isinstance(member, dict)
+    )
 
     if found_in_queue:
       matched_queue_names.append(_genesys_get_queue_name(api_base, access_token, clean_queue_id))
@@ -846,7 +834,6 @@ def _genesys_lookup_user_queues_via_membership(api_base: str, access_token: str,
       break
 
   matched_queue_names = []
-  max_member_pages = max(1, min(GENESYS_QUEUE_MEMBER_MAX_PAGES, 200))
   for queue_item in queue_entities:
     if not isinstance(queue_item, dict):
       continue
@@ -856,25 +843,12 @@ def _genesys_lookup_user_queues_via_membership(api_base: str, access_token: str,
     if not queue_id:
       continue
 
-    found_in_queue = False
-    for member_page in range(1, max_member_pages + 1):
-      ok_members, members_payload, err_members = _genesys_get_json(
-        api_base,
-        access_token,
-        f"/api/v2/routing/queues/{queue_id}/members",
-        params={"pageSize": 100, "pageNumber": member_page},
-      )
-      if not ok_members:
-        # Continue with other queues; this endpoint can be permission-scoped.
-        break
-
-      members = members_payload.get("entities", []) if isinstance(members_payload, dict) else []
-      if any(_genesys_queue_member_matches_user(member, user_id, user_email, user_name) for member in members if isinstance(member, dict)):
-        found_in_queue = True
-
-      member_page_count = int(members_payload.get("pageCount", 0) or 0) if isinstance(members_payload, dict) else 0
-      if found_in_queue or (not member_page_count) or member_page >= member_page_count:
-        break
+    members, _ = _genesys_get_queue_members(api_base, access_token, queue_id)
+    found_in_queue = any(
+      _genesys_queue_member_matches_user(member, user_id, user_email, user_name)
+      for member in members
+      if isinstance(member, dict)
+    )
 
     if found_in_queue and queue_name:
       matched_queue_names.append(queue_name)
@@ -929,32 +903,105 @@ def _genesys_search_queues_by_name(api_base: str, access_token: str, queue_name:
 
 
 def _genesys_get_queue_members(api_base: str, access_token: str, queue_id: str) -> tuple[list[dict], str]:
+  members, _, err = _genesys_get_queue_members_with_diagnostics(api_base, access_token, queue_id)
+  return members, err
+
+
+def _genesys_extract_queue_id_hint(queue_query: str) -> str:
+  clean_query = str(queue_query or "").strip()
+  if not clean_query:
+    return ""
+
+  match = GENESYS_QUEUE_ID_PATTERN.search(clean_query)
+  return match.group(0).lower() if match else ""
+
+
+def _genesys_get_queue_members_with_diagnostics(api_base: str, access_token: str, queue_id: str) -> tuple[list[dict], list[str], str]:
   clean_queue_id = str(queue_id or "").strip()
   if not clean_queue_id:
-    return [], "Queue id is required."
+    return [], [], "Queue id is required."
 
-  members = []
+  diagnostics = []
+  errors = []
+  fallback_variants = [
+    {
+      "label": "members",
+      "path": f"/api/v2/routing/queues/{clean_queue_id}/members",
+      "params": {"pageSize": 100},
+      "wrap_user": False,
+    },
+    {
+      "label": "members-expand-user",
+      "path": f"/api/v2/routing/queues/{clean_queue_id}/members",
+      "params": {"pageSize": 100, "expand": "user"},
+      "wrap_user": False,
+    },
+    {
+      "label": "users",
+      "path": f"/api/v2/routing/queues/{clean_queue_id}/users",
+      "params": {"pageSize": 100},
+      "wrap_user": True,
+    },
+  ]
+
   max_member_pages = max(1, min(GENESYS_QUEUE_MEMBER_MAX_PAGES, 200))
-  for member_page in range(1, max_member_pages + 1):
-    ok_members, members_payload, err_members = _genesys_get_json(
-      api_base,
-      access_token,
-      f"/api/v2/routing/queues/{clean_queue_id}/members",
-      params={"pageSize": 100, "pageNumber": member_page},
-    )
-    if not ok_members:
-      return [], err_members
+  for variant in fallback_variants:
+    collected = []
+    strategy = str(variant.get("label", "")).strip() or "members"
+    path = str(variant.get("path", "")).strip()
+    base_params = dict(variant.get("params", {}) or {})
+    wrap_user = bool(variant.get("wrap_user", False))
 
-    entities = members_payload.get("entities", []) if isinstance(members_payload, dict) else []
-    for item in entities:
-      if isinstance(item, dict):
-        members.append(item)
+    for member_page in range(1, max_member_pages + 1):
+      request_params = dict(base_params)
+      request_params["pageNumber"] = member_page
+      ok_members, members_payload, err_members = _genesys_get_json(
+        api_base,
+        access_token,
+        path,
+        params=request_params,
+      )
+      if not ok_members:
+        errors.append(f"{strategy}: {err_members}")
+        diagnostics.append(f"{strategy} page {member_page}: failed ({err_members})")
+        break
 
-    page_count = int(members_payload.get("pageCount", 0) or 0) if isinstance(members_payload, dict) else 0
-    if not page_count or member_page >= page_count:
-      break
+      entities = members_payload.get("entities", []) if isinstance(members_payload, dict) else []
+      page_items = 0
+      for item in entities:
+        if not isinstance(item, dict):
+          continue
+        page_items += 1
+        if wrap_user:
+          collected.append({"user": item, "id": item.get("id", "")})
+        else:
+          collected.append(item)
 
-  return members, ""
+      page_count = int(members_payload.get("pageCount", 0) or 0) if isinstance(members_payload, dict) else 0
+      diagnostics.append(f"{strategy} page {member_page}: {page_items} item(s)")
+      if not page_count or member_page >= page_count:
+        break
+
+    if collected:
+      unique = []
+      seen = set()
+      for member in collected:
+        user_obj = member.get("user") if isinstance(member.get("user"), dict) else {}
+        member_key = "|".join([
+          str(user_obj.get("id", "") or member.get("id", "") or "").strip().lower(),
+          str(user_obj.get("email", "") or member.get("email", "") or "").strip().lower(),
+          str(user_obj.get("name", "") or member.get("name", "") or "").strip().lower(),
+        ])
+        if member_key in seen:
+          continue
+        seen.add(member_key)
+        unique.append(member)
+      diagnostics.append(f"selected strategy: {strategy} ({len(unique)} unique member(s))")
+      return unique, diagnostics, ""
+
+  if errors:
+    return [], diagnostics, errors[0]
+  return [], diagnostics, ""
 
 
 def _load_genesys_webrtc_template() -> dict:
@@ -5181,10 +5228,16 @@ def genesys_admin_placeholder(request: Request):
 
             const rows = payload.rows || [];
             const warnings = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
-            queueStatusEl.textContent = "Queue Query: " + (payload.query || "") + " | Matched Queues: " + ((payload.queues || []).length || 0) + " | Member Rows: " + rows.length + " | Warnings: " + warnings;
+            const diagnostics = Array.isArray(payload.diagnostics) ? payload.diagnostics : [];
+            const directQueueId = String(payload.direct_queue_id || "");
+            queueStatusEl.textContent = "Queue Query: " + (payload.query || "") + " | Direct Queue ID: " + (directQueueId || "(none)") + " | Matched Queues: " + ((payload.queues || []).length || 0) + " | Member Rows: " + rows.length + " | Warnings: " + warnings + " | Diagnostics: " + diagnostics.length;
 
             if (!rows.length) {
-              queueResultsEl.innerHTML = "<p style='color:#4e6a84;'>No queue members found for this query.</p>";
+              let noRowsHtml = "<p style='color:#4e6a84;'>No queue members found for this query.</p>";
+              if (diagnostics.length) {
+                noRowsHtml += "<div style='margin-top:8px;padding:8px;border:1px solid #d7e3ee;border-radius:6px;background:#f9fcff;'><strong>Diagnostics</strong><pre style='white-space:pre-wrap;margin:6px 0 0 0;font-size:12px;line-height:1.35;'>" + diagnostics.join("\n") + "</pre></div>";
+              }
+              queueResultsEl.innerHTML = noRowsHtml;
               return;
             }
 
@@ -5203,6 +5256,9 @@ def genesys_admin_placeholder(request: Request):
               html += "</tr>";
             });
             html += "</tbody></table>";
+            if (diagnostics.length) {
+              html += "<div style='margin-top:8px;padding:8px;border:1px solid #d7e3ee;border-radius:6px;background:#f9fcff;'><strong>Diagnostics</strong><pre style='white-space:pre-wrap;margin:6px 0 0 0;font-size:12px;line-height:1.35;'>" + diagnostics.join("\n") + "</pre></div>";
+            }
             queueResultsEl.innerHTML = html;
           } catch (err) {
             queueStatusEl.textContent = "Queue lookup failed: " + ((err && err.message) || "Unknown error.");
@@ -5332,17 +5388,31 @@ def genesys_queue_lookup_route(queue_name: str = Form("")):
 
   region = token_result.get("region", clean_region)
   _, _, api_base = _genesys_region_to_urls(region)
-  queue_items, queue_err = _genesys_search_queues_by_name(api_base, token_result.get("access_token", ""), clean_queue_name)
-  if queue_err:
-    return JSONResponse({"ok": False, "error": queue_err}, status_code=400)
+  access_token = token_result.get("access_token", "")
+
+  queue_items = []
+  direct_queue_id = _genesys_extract_queue_id_hint(clean_queue_name)
+  if direct_queue_id:
+    queue_items = [{
+      "id": direct_queue_id,
+      "name": _genesys_get_queue_name(api_base, access_token, direct_queue_id),
+    }]
+  else:
+    search_items, queue_err = _genesys_search_queues_by_name(api_base, access_token, clean_queue_name)
+    if queue_err:
+      return JSONResponse({"ok": False, "error": queue_err}, status_code=400)
+    queue_items = search_items
 
   warnings = []
+  diagnostics = []
   rows = []
   queue_summaries = []
   for queue_item in queue_items[:15]:
     queue_id = str(queue_item.get("id", "") or "").strip()
     queue_label = str(queue_item.get("name", "") or "").strip() or queue_id
-    members, member_err = _genesys_get_queue_members(api_base, token_result.get("access_token", ""), queue_id)
+    members, member_diag, member_err = _genesys_get_queue_members_with_diagnostics(api_base, access_token, queue_id)
+    for diag in member_diag:
+      diagnostics.append(f"{queue_label} [{queue_id}] {diag}")
     if member_err:
       warnings.append(f"{queue_label}: {member_err}")
       continue
@@ -5383,9 +5453,11 @@ def genesys_queue_lookup_route(queue_name: str = Form("")):
     "ok": True,
     "region": region,
     "query": clean_queue_name,
+    "direct_queue_id": direct_queue_id,
     "queues": queue_summaries,
     "rows": rows,
     "warnings": warnings,
+    "diagnostics": diagnostics,
   })
 
 
