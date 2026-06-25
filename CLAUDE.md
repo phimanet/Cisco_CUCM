@@ -129,6 +129,7 @@ Priority keys:
 - Fixed Genesys extractor parsing for ACD skills where payload returns `entities[].name` directly (not only `entities[].skill.name`), and changed ACD Skills/Queues display to explicit `(none)` when empty to avoid blank-column confusion.
 - Refined Genesys Phone Management lookup paging depth with configurable cap (`GENESYS_PHONE_LOOKUP_MAX_PAGES`, default 50) so existing users like Shane Carr are not missed when inventory spans many pages.
 - Added queue fallback extraction path: when `/api/v2/users/{id}/queues` returns empty, extractor now checks queue membership via `/api/v2/routing/queues` + `/api/v2/routing/queues/{queueId}/members` to capture real queue assignments (supports multi-queue users).
+- Added priority queue membership probe support (`GENESYS_PRIORITY_QUEUE_IDS`, seeded with `df95c0ce-1ca4-4ab1-8ce3-f474642edf4d`) so known queues are checked first for user membership when direct queue listing is empty.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.

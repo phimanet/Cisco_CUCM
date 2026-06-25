@@ -135,6 +135,11 @@ GENESYS_USERS_PAGE_SIZE = int((os.getenv("GENESYS_USERS_PAGE_SIZE", "100") or "1
 GENESYS_PHONE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_PHONE_LOOKUP_MAX_PAGES", "50") or "50").strip())
 GENESYS_QUEUE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_LOOKUP_MAX_PAGES", "30") or "30").strip())
 GENESYS_QUEUE_MEMBER_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_MEMBER_MAX_PAGES", "20") or "20").strip())
+GENESYS_PRIORITY_QUEUE_IDS = [
+  (item or "").strip()
+  for item in (os.getenv("GENESYS_PRIORITY_QUEUE_IDS", "df95c0ce-1ca4-4ab1-8ce3-f474642edf4d") or "df95c0ce-1ca4-4ab1-8ce3-f474642edf4d").split(",")
+  if (item or "").strip()
+]
 AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aerialink.net/v5") or "https://apix5.aerialink.net/v5").strip().rstrip("/")
 AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
 AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
@@ -758,7 +763,67 @@ def _genesys_queue_member_matches_user(member: dict, user_id: str, user_email: s
   return False
 
 
+def _genesys_get_queue_name(api_base: str, access_token: str, queue_id: str) -> str:
+  clean_queue_id = str(queue_id or "").strip()
+  if not clean_queue_id:
+    return ""
+
+  ok_queue, queue_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/routing/queues/{clean_queue_id}")
+  if ok_queue and isinstance(queue_payload, dict):
+    queue_name = str(queue_payload.get("name", "") or "").strip()
+    if queue_name:
+      return queue_name
+  return clean_queue_id
+
+
+def _genesys_lookup_user_queues_by_ids(api_base: str, access_token: str, user_id: str, user_email: str, user_name: str, queue_ids: list[str]) -> list[str]:
+  matched_queue_names = []
+  max_member_pages = max(1, min(GENESYS_QUEUE_MEMBER_MAX_PAGES, 200))
+
+  for queue_id in queue_ids:
+    clean_queue_id = str(queue_id or "").strip()
+    if not clean_queue_id:
+      continue
+
+    found_in_queue = False
+    for member_page in range(1, max_member_pages + 1):
+      ok_members, members_payload, _ = _genesys_get_json(
+        api_base,
+        access_token,
+        f"/api/v2/routing/queues/{clean_queue_id}/members",
+        params={"pageSize": 100, "pageNumber": member_page},
+      )
+      if not ok_members:
+        break
+
+      members = members_payload.get("entities", []) if isinstance(members_payload, dict) else []
+      if any(_genesys_queue_member_matches_user(member, user_id, user_email, user_name) for member in members if isinstance(member, dict)):
+        found_in_queue = True
+
+      member_page_count = int(members_payload.get("pageCount", 0) or 0) if isinstance(members_payload, dict) else 0
+      if found_in_queue or (not member_page_count) or member_page >= member_page_count:
+        break
+
+    if found_in_queue:
+      matched_queue_names.append(_genesys_get_queue_name(api_base, access_token, clean_queue_id))
+
+  return sorted(set(matched_queue_names), key=str.lower)
+
+
 def _genesys_lookup_user_queues_via_membership(api_base: str, access_token: str, user_id: str, user_email: str, user_name: str) -> tuple[list[str], str]:
+  # First, check known priority queue IDs when provided.
+  if GENESYS_PRIORITY_QUEUE_IDS:
+    priority_matches = _genesys_lookup_user_queues_by_ids(
+      api_base,
+      access_token,
+      user_id,
+      user_email,
+      user_name,
+      GENESYS_PRIORITY_QUEUE_IDS,
+    )
+    if priority_matches:
+      return priority_matches, ""
+
   queue_entities = []
   max_queue_pages = max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 200))
 
