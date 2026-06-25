@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import socket
+import subprocess
 from collections import Counter
 import smtplib
 import ssl
@@ -75,6 +76,9 @@ AUTH_SESSION_SECRETS = {}
 TWILIO_INCOMING_PHONE_NUMBER_CACHE = {}
 TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK = threading.Lock()
 TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS = 5 * 60
+INTEGRATION_FEASIBILITY_CACHE = {}
+INTEGRATION_FEASIBILITY_LOCK = threading.Lock()
+INTEGRATION_FEASIBILITY_TTL_SECONDS = 5 * 60
 SESSION_COOKIE_NAME = "cucm_web_session"
 SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
 CREDENTIAL_CACHE_TTL_SECONDS = 60 * 60
@@ -162,6 +166,30 @@ STRIKE_MASK_PATTERN_PREFIX = (os.getenv("STRIKE_MASK_PATTERN_PREFIX", "945") or 
 STRIKE_MASK_ROUTE_PARTITION = "ENT_DEVICE_PT"
 STRIKE_MASK_AVAILABLE_TRANSFORM_MASK = "2481001"
 SMS_NUMBER_LOOKUP_ENABLED = (os.getenv("SMS_NUMBER_LOOKUP_ENABLED", "true") or "true").strip().lower() in {
+  "1",
+  "true",
+  "yes",
+  "on",
+}
+PREVIEW_FEATURES_LAB_ONLY_DEFAULT = (os.getenv("PREVIEW_FEATURES_LAB_ONLY_DEFAULT", "true") or "true").strip().lower() in {
+  "1",
+  "true",
+  "yes",
+  "on",
+}
+SMS_EXPERIMENTAL_MENU_ENABLED = (os.getenv("SMS_EXPERIMENTAL_MENU_ENABLED", "false") or "false").strip().lower() in {
+  "1",
+  "true",
+  "yes",
+  "on",
+}
+SMS_EXPERIMENTAL_MENU_LAB_ONLY = (os.getenv("SMS_EXPERIMENTAL_MENU_LAB_ONLY", "true") or "true").strip().lower() in {
+  "1",
+  "true",
+  "yes",
+  "on",
+}
+INTEGRATION_PREFLIGHT_REQUIRED = (os.getenv("INTEGRATION_PREFLIGHT_REQUIRED", "true") or "true").strip().lower() in {
   "1",
   "true",
   "yes",
@@ -1572,6 +1600,89 @@ def _get_unity_server_for_session(request: Request):
   return PROD_UNITY_HOST
 
 
+def _feature_enabled(flag_enabled: bool, lab_only: bool = False, cucm_host: str = "") -> bool:
+  if not flag_enabled:
+    return False
+  if not lab_only:
+    return True
+  return _is_lab_environment(cucm_host)
+
+
+def _build_lookup_error(service_name: str, reason: str, hint: str = "") -> str:
+  safe_service = (service_name or "Lookup service").strip()
+  safe_reason = (reason or "Lookup failed").strip()
+  safe_hint = (hint or "").strip()
+  if safe_hint:
+    return f"{safe_service} unavailable: {safe_reason}. Next: {safe_hint}"
+  return f"{safe_service} unavailable: {safe_reason}"
+
+
+def _git_commit_short() -> str:
+  try:
+    return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=os.path.dirname(__file__), text=True).strip()
+  except Exception:
+    return "unknown"
+
+
+def _check_aerialink_feasibility(force_refresh: bool = False) -> dict:
+  now_epoch = time.time()
+  cache_key = "aerialink"
+
+  with INTEGRATION_FEASIBILITY_LOCK:
+    cached = INTEGRATION_FEASIBILITY_CACHE.get(cache_key)
+    if cached and not force_refresh and (now_epoch - float(cached.get("checked_at", 0) or 0)) < INTEGRATION_FEASIBILITY_TTL_SECONDS:
+      return dict(cached)
+
+  result = {
+    "integration": "aerialink",
+    "ok": False,
+    "status": "Unknown",
+    "hint": "",
+    "checked_at": now_epoch,
+  }
+
+  if not AERIALINK_V5_BASE_URL:
+    result["status"] = "Aerialink base URL not configured"
+    result["hint"] = "Set AERIALINK_V5_BASE_URL in environment settings."
+  elif not AERIALINK_USERNAME or not AERIALINK_PASSWORD:
+    result["status"] = "Aerialink credentials not configured"
+    result["hint"] = "Set AERIALINK_USERNAME and AERIALINK_PASSWORD in environment settings."
+  else:
+    try:
+      endpoint_path = AERIALINK_ACCOUNT_CODE_LOOKUP_PATH or "/codes"
+      endpoint_path = endpoint_path if endpoint_path.startswith("/") else f"/{endpoint_path}"
+      probe_url = f"{AERIALINK_V5_BASE_URL}{endpoint_path}"
+      resp = requests.get(
+        probe_url,
+        params={"codes": "10000000000"},
+        headers={"Accept": "application/json"},
+        auth=HTTPBasicAuth(AERIALINK_USERNAME, AERIALINK_PASSWORD),
+        verify=False,
+        timeout=20,
+      )
+
+      if resp.status_code == 200:
+        result["ok"] = True
+        result["status"] = "Aerialink API reachable"
+      elif resp.status_code in {401, 403}:
+        result["status"] = f"Aerialink authentication failed (HTTP {resp.status_code})"
+        result["hint"] = "Verify AERIALINK_USERNAME/AERIALINK_PASSWORD and account permissions."
+      elif resp.status_code == 404:
+        result["status"] = "Aerialink lookup endpoint not found (HTTP 404)"
+        result["hint"] = "Verify AERIALINK_ACCOUNT_CODE_LOOKUP_PATH against your account API documentation."
+      else:
+        result["status"] = f"Aerialink API probe failed (HTTP {resp.status_code})"
+        result["hint"] = "Confirm endpoint path, credentials, and network egress from this host."
+    except Exception as exc:
+      result["status"] = f"Aerialink API probe error: {exc}"
+      result["hint"] = "Confirm DNS/network reachability and TLS policy from this host."
+
+  with INTEGRATION_FEASIBILITY_LOCK:
+    INTEGRATION_FEASIBILITY_CACHE[cache_key] = dict(result)
+
+  return result
+
+
 def _is_public_path(path: str):
   return path in {"/", "/login", "/genesys-admin", "/genesys/users/extract", "/healthz"}
 
@@ -1606,6 +1717,8 @@ def _wants_json_response(request: Request) -> bool:
     "/strike-mask/in-use",
     "/lookup/sms-number-look",
     "/twilio/amieweb/sms-host",
+    "/ops/integrations/feasibility",
+    "/ops/parity-report",
   }:
     return True
   return False
@@ -2751,6 +2864,18 @@ def _lookup_aerialink_account_code_by_phone(phone_number: str) -> dict:
       "status": "No telephone",
     }
 
+  if INTEGRATION_PREFLIGHT_REQUIRED:
+    preflight = _check_aerialink_feasibility()
+    if not preflight.get("ok"):
+      return {
+        "enabled": True,
+        "found": False,
+        "provisioned": False,
+        "requested_number": e164,
+        "matched_number": "",
+        "status": _build_lookup_error("Aerialink lookup", str(preflight.get("status", "Preflight failed")), str(preflight.get("hint", ""))),
+      }
+
   if not AERIALINK_V5_BASE_URL:
     return {
       "enabled": False,
@@ -2758,7 +2883,7 @@ def _lookup_aerialink_account_code_by_phone(phone_number: str) -> dict:
       "provisioned": False,
       "requested_number": e164,
       "matched_number": "",
-      "status": "Aerialink base URL not configured",
+      "status": _build_lookup_error("Aerialink lookup", "Aerialink base URL not configured", "Set AERIALINK_V5_BASE_URL in environment settings."),
     }
 
   if not AERIALINK_USERNAME or not AERIALINK_PASSWORD:
@@ -2768,7 +2893,7 @@ def _lookup_aerialink_account_code_by_phone(phone_number: str) -> dict:
       "provisioned": False,
       "requested_number": e164,
       "matched_number": "",
-      "status": "Aerialink credentials not configured",
+      "status": _build_lookup_error("Aerialink lookup", "Aerialink credentials not configured", "Set AERIALINK_USERNAME and AERIALINK_PASSWORD in environment settings."),
     }
 
   endpoint_path = AERIALINK_ACCOUNT_CODE_LOOKUP_PATH or "/codes"
@@ -2797,7 +2922,7 @@ def _lookup_aerialink_account_code_by_phone(phone_number: str) -> dict:
         "provisioned": False,
         "requested_number": e164,
         "matched_number": "",
-        "status": f"Aerialink lookup failed HTTP {response.status_code}",
+        "status": _build_lookup_error("Aerialink lookup", f"HTTP {response.status_code}", "Verify endpoint path, credentials, and network egress from this host."),
       }
 
     payload = response.json() if response.text else {}
@@ -2851,7 +2976,7 @@ def _lookup_aerialink_account_code_by_phone(phone_number: str) -> dict:
       "provisioned": False,
       "requested_number": e164,
       "matched_number": "",
-      "status": f"Aerialink lookup error: {exc}",
+      "status": _build_lookup_error("Aerialink lookup", str(exc), "Confirm DNS/network reachability and TLS policy from this host."),
     }
 
 
@@ -11475,9 +11600,16 @@ def page3_twilio_items(request: Request):
   default_twilio_loa_recipient_email = (settings.get("twilio_loa_recipient_email", "") or "").strip()
   default_twilio_loa_recipient_phone = (settings.get("twilio_loa_recipient_phone", "") or "").strip()
   sms_look_enabled = SMS_NUMBER_LOOKUP_ENABLED
+  sms_experimental_enabled = _feature_enabled(
+    SMS_EXPERIMENTAL_MENU_ENABLED,
+    lab_only=(SMS_EXPERIMENTAL_MENU_LAB_ONLY and PREVIEW_FEATURES_LAB_ONLY_DEFAULT),
+    cucm_host=auth_cucm_host,
+  )
 
   sms_look_menu_html = ""
   sms_look_panel_html = ""
+  sms_experimental_menu_html = ""
+  sms_experimental_panel_html = ""
   twilio_lookup_btn_active_class = " active" if not sms_look_enabled else ""
   if sms_look_enabled:
     sms_look_menu_html = '<button type="button" class="portal-nav-btn active" data-panel="sms-number-look">SMS Number Lookup</button>'
@@ -11515,6 +11647,18 @@ def page3_twilio_items(request: Request):
             <div id="sms-look-results" style="overflow-x:auto;"></div>
           </div>
         </section>
+"""
+
+  if sms_experimental_enabled:
+    sms_experimental_menu_html = '<button type="button" class="portal-nav-btn" data-panel="sms-experimental-lab">SMS Experimental (LAB)</button>'
+    sms_experimental_panel_html = """
+      <section class="tool-panel" data-panel="sms-experimental-lab">
+        <div class="panel">
+          <h3>SMS Experimental (LAB)</h3>
+          <p class="preview-banner">Preview only. LAB-only feature flag is enabled. Keep disabled in PROD until validation is complete.</p>
+          <p>This panel is intentionally feature-flagged and LAB-only. Use it for future integrations after API feasibility is validated.</p>
+        </div>
+      </section>
 """
 
   html = """
@@ -11954,6 +12098,16 @@ def page3_twilio_items(request: Request):
         background: #ffffff;
       }
 
+      .preview-banner {
+        margin: 8px 0 10px 0;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid #f0b44a;
+        background: #fff4df;
+        color: #6a3c00;
+        font-weight: 700;
+      }
+
       .env-action-pill {
         display: inline-block;
         margin: 4px 0 0 0;
@@ -12032,6 +12186,7 @@ def page3_twilio_items(request: Request):
         <h4>Twilio Menu</h4>
         <div class="portal-nav">
           __SMS_LOOK_MENU__
+          __SMS_EXPERIMENTAL_MENU__
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
@@ -12043,6 +12198,7 @@ def page3_twilio_items(request: Request):
 
       <section class="portal-main">
         __SMS_LOOK_PANEL__
+        __SMS_EXPERIMENTAL_PANEL__
         <section class="tool-panel" data-panel="twilio-lookup">
           <div class="panel">
             <h3>Twilio Number Lookup - AMIEWeb</h3>
@@ -13279,7 +13435,7 @@ def page3_twilio_items(request: Request):
     </main>
   </body>
 </html>
-""".replace("__SMS_LOOK_MENU__", sms_look_menu_html).replace("__SMS_LOOK_PANEL__", sms_look_panel_html).replace("__TWILIO_LOOKUP_ACTIVE_CLASS__", twilio_lookup_btn_active_class).replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DEFAULT_TWILIO_SMS_URL__", escape(TWILIO_AMIEWEB_DEFAULT_SMS_URL)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_NAME__", escape(default_twilio_loa_recipient_name)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_EMAIL__", escape(default_twilio_loa_recipient_email)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_PHONE__", escape(default_twilio_loa_recipient_phone))
+""".replace("__SMS_LOOK_MENU__", sms_look_menu_html).replace("__SMS_LOOK_PANEL__", sms_look_panel_html).replace("__SMS_EXPERIMENTAL_MENU__", sms_experimental_menu_html).replace("__SMS_EXPERIMENTAL_PANEL__", sms_experimental_panel_html).replace("__TWILIO_LOOKUP_ACTIVE_CLASS__", twilio_lookup_btn_active_class).replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DEFAULT_TWILIO_SMS_URL__", escape(TWILIO_AMIEWEB_DEFAULT_SMS_URL)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_NAME__", escape(default_twilio_loa_recipient_name)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_EMAIL__", escape(default_twilio_loa_recipient_email)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_PHONE__", escape(default_twilio_loa_recipient_phone))
 
   return HTMLResponse(
     content=html,
@@ -13802,6 +13958,57 @@ def healthz():
       "job_output_cache_entries": len(JOB_OUTPUTS),
       "audit_log_exists": os.path.exists(AUDIT_LOG_PATH),
       "audit_retention_days": AUDIT_RETENTION_DAYS,
+      "git_commit": _git_commit_short(),
+      "feature_flags": {
+        "preview_lab_only_default": PREVIEW_FEATURES_LAB_ONLY_DEFAULT,
+        "sms_experimental_menu_enabled": SMS_EXPERIMENTAL_MENU_ENABLED,
+        "sms_experimental_menu_lab_only": SMS_EXPERIMENTAL_MENU_LAB_ONLY,
+        "integration_preflight_required": INTEGRATION_PREFLIGHT_REQUIRED,
+      },
+    }
+  )
+
+
+@app.get("/ops/integrations/feasibility")
+def integrations_feasibility(request: Request, force_refresh: bool = False):
+  session, username = _require_admin_session(request)
+  cucm_host = str(session.get("cucm_host", "") or "")
+  result = {
+    "ok": True,
+    "operator": username,
+    "environment": "LAB" if _is_lab_environment(cucm_host) else "PROD",
+    "checked_at": datetime.datetime.now().strftime(AUDIT_TIMESTAMP_FORMAT),
+    "integrations": {
+      "aerialink": _check_aerialink_feasibility(force_refresh=force_refresh),
+    },
+  }
+  return JSONResponse(result)
+
+
+@app.get("/ops/parity-report")
+def ops_parity_report(request: Request):
+  session, username = _require_admin_session(request)
+  cucm_host = str(session.get("cucm_host", "") or "")
+  env_label = "LAB" if _is_lab_environment(cucm_host) else "PROD"
+  return JSONResponse(
+    {
+      "ok": True,
+      "operator": username,
+      "timestamp": datetime.datetime.now().strftime(AUDIT_TIMESTAMP_FORMAT),
+      "git_commit": _git_commit_short(),
+      "runtime_environment": env_label,
+      "resolved_cucm_host": cucm_host,
+      "flags": {
+        "sms_number_lookup_enabled": SMS_NUMBER_LOOKUP_ENABLED,
+        "twilio_hosted_numbers_active": TWILIO_HOSTED_NUMBERS_ACTIVE,
+        "preview_lab_only_default": PREVIEW_FEATURES_LAB_ONLY_DEFAULT,
+        "sms_experimental_menu_enabled": SMS_EXPERIMENTAL_MENU_ENABLED,
+        "sms_experimental_menu_lab_only": SMS_EXPERIMENTAL_MENU_LAB_ONLY,
+        "integration_preflight_required": INTEGRATION_PREFLIGHT_REQUIRED,
+      },
+      "integration_preflight": {
+        "aerialink": _check_aerialink_feasibility(force_refresh=False),
+      },
     }
   )
 
@@ -15205,6 +15412,12 @@ def lookup_twilio_by_number_route(phone_number: str = Form(...)):
         }, status_code=400)
       
       result = _lookup_twilio_number_by_phone(clean_number, account="default")
+      if not result.get("enabled"):
+        return JSONResponse({
+          "ok": False,
+          "error": _build_lookup_error("Twilio AMIEWeb lookup", str(result.get("status", "Not configured")), "Set Twilio account SID/token environment variables and restart the service."),
+          "result": result,
+        }, status_code=503)
       return JSONResponse({
           "ok": True,
           "phone_number": clean_number,
@@ -15231,6 +15444,12 @@ def lookup_twilio_by_number_sfdc_route(phone_number: str = Form(...)):
         }, status_code=400)
       
       result = _lookup_twilio_number_by_phone(clean_number, account="salesforce")
+      if not result.get("enabled"):
+        return JSONResponse({
+          "ok": False,
+          "error": _build_lookup_error("Twilio Salesforce lookup", str(result.get("status", "Not configured")), "Set Twilio Salesforce subaccount SID/token environment variables and restart the service."),
+          "result": result,
+        }, status_code=503)
       return JSONResponse({
           "ok": True,
           "phone_number": clean_number,
@@ -15499,6 +15718,12 @@ def lookup_aerialink_by_number_route(phone_number: str = Form(...)):
         }, status_code=400)
       
       result = _lookup_aerialink_account_code_by_phone(clean_number)
+      if not result.get("enabled"):
+        return JSONResponse({
+            "ok": False,
+            "error": str(result.get("status") or _build_lookup_error("Aerialink lookup", "Not configured")),
+            "result": result,
+        }, status_code=503)
       return JSONResponse({
           "ok": True,
           "phone_number": clean_number,
