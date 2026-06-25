@@ -1,0 +1,9 @@
+{
+  "template_name": "Michael Beecher",
+  "source_phone_name": "Michael Beecher",
+  "site_id": "51f227fc-30f4-43c4-9917-75638ea22ee8",
+  "phone_base_settings_id": "da927187-f705-445b-a925-448448b67352",
+  "standalone": false,
+  "line_count": 1,
+  "notes": "Baseline WebRTC phone template. For new users, keep this template and change display name only."
+}

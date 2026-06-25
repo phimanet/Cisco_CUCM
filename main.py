@@ -232,6 +232,11 @@ TWILIO_SMS_HOSTING_AUDIT_PATH = os.path.join(
 TWILIO_SMS_HOSTING_AUDIT_RETENTION_DAYS = int(
   (os.getenv("TWILIO_SMS_HOSTING_AUDIT_RETENTION_DAYS", "90") or "90").strip()
 )
+GENESYS_WEBRTC_TEMPLATE_PATH = os.path.join(
+  os.path.dirname(os.path.abspath(__file__)),
+  "toolkit",
+  "genesys_webrtc_phone_template.json",
+)
 STRIKE_MASK_HISTORY_LOCK = threading.Lock()
 STRIKE_MASK_HISTORY_FIELDS = [
   "timestamp",
@@ -518,7 +523,7 @@ def _genesys_extract_webrtc_phone(user_payload: dict, routing_payload: dict, sta
   return ""
 
 
-def _genesys_extract_phone_management_name(phone_payload: dict, user_id: str, user_name: str, user_email: str) -> str:
+def _genesys_extract_phone_management_name(phone_payload: dict, user_id: str, user_name: str, user_email: str) -> tuple[str, dict]:
   entities = phone_payload.get("entities", []) if isinstance(phone_payload, dict) else []
   clean_user_id = str(user_id or "").strip().lower()
   clean_user_name = str(user_name or "").strip().lower()
@@ -571,16 +576,16 @@ def _genesys_extract_phone_management_name(phone_payload: dict, user_id: str, us
     for key in ["name", "phoneName", "stationName", "displayName"]:
       value = str(item.get(key, "") or "").strip()
       if value:
-        return value
+        return value, item
 
     item_id = str(item.get("id", "") or "").strip()
     if item_id:
-      return item_id
+      return item_id, item
 
-  return ""
+  return "", {}
 
 
-def _genesys_lookup_phone_management_name(api_base: str, access_token: str, user_id: str, user_name: str, user_email: str) -> tuple[str, dict, str]:
+def _genesys_lookup_phone_management_name(api_base: str, access_token: str, user_id: str, user_name: str, user_email: str) -> tuple[str, dict, dict, str]:
   # Phone inventory can be large; cap paging for responsiveness.
   merged_entities = []
   for page_number in range(1, 6):
@@ -591,7 +596,7 @@ def _genesys_lookup_phone_management_name(api_base: str, access_token: str, user
       params={"pageSize": 100, "pageNumber": page_number},
     )
     if not ok_phones:
-      return "", {}, err_phones
+      return "", {}, {}, err_phones
 
     entities = phones_payload.get("entities", []) if isinstance(phones_payload, dict) else []
     if isinstance(entities, list):
@@ -602,12 +607,64 @@ def _genesys_lookup_phone_management_name(api_base: str, access_token: str, user
       break
 
   payload = {"entities": merged_entities}
-  phone_name = _genesys_extract_phone_management_name(payload, user_id, user_name, user_email)
-  return phone_name, payload, ""
+  phone_name, matched_phone = _genesys_extract_phone_management_name(payload, user_id, user_name, user_email)
+  return phone_name, matched_phone, payload, ""
+
+
+def _load_genesys_webrtc_template() -> dict:
+  try:
+    with open(GENESYS_WEBRTC_TEMPLATE_PATH, "r", encoding="utf-8") as handle:
+      payload = json.load(handle)
+      if isinstance(payload, dict):
+        return payload
+  except Exception:
+    pass
+
+  return {
+    "template_name": "Default WebRTC Template",
+    "source_phone_name": "Michael Beecher",
+    "site_id": "",
+    "phone_base_settings_id": "",
+    "standalone": False,
+    "line_count": 0,
+  }
+
+
+def _build_phone_template_summary(phone_entity: dict, fallback_template: dict) -> dict:
+  template_name = str(fallback_template.get("template_name", "") or "").strip()
+  source_phone_name = str(fallback_template.get("source_phone_name", "") or "").strip()
+  site_id = str(fallback_template.get("site_id", "") or "").strip()
+  phone_base_settings_id = str(fallback_template.get("phone_base_settings_id", "") or "").strip()
+  standalone = bool(fallback_template.get("standalone", False))
+  line_count = int(fallback_template.get("line_count", 0) or 0)
+  source = "template-file"
+
+  if isinstance(phone_entity, dict) and phone_entity:
+    source = "matched-phone"
+    template_name = str(phone_entity.get("name", "") or template_name).strip()
+    source_phone_name = str(phone_entity.get("name", "") or source_phone_name).strip()
+    site_obj = phone_entity.get("site") if isinstance(phone_entity.get("site"), dict) else {}
+    pbs_obj = phone_entity.get("phoneBaseSettings") if isinstance(phone_entity.get("phoneBaseSettings"), dict) else {}
+    lines_obj = phone_entity.get("lines") if isinstance(phone_entity.get("lines"), list) else []
+    site_id = str(site_obj.get("id", "") or site_id).strip()
+    phone_base_settings_id = str(pbs_obj.get("id", "") or phone_base_settings_id).strip()
+    standalone = bool(phone_entity.get("standAlone", standalone))
+    line_count = len(lines_obj) if lines_obj else line_count
+
+  return {
+    "source": source,
+    "template_name": template_name,
+    "source_phone_name": source_phone_name,
+    "site_id": site_id,
+    "phone_base_settings_id": phone_base_settings_id,
+    "standalone": standalone,
+    "line_count": line_count,
+  }
 
 
 def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) -> dict:
   clean_region, _, api_base = _genesys_region_to_urls(region)
+  fallback_template = _load_genesys_webrtc_template()
   enriched = []
   warnings = []
   raw_items = []
@@ -616,6 +673,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
     user_id = str(row.get("id", "") or "").strip()
     division_name = ""
     webrtc_phone = ""
+    phone_template = _build_phone_template_summary({}, fallback_template)
     acd_skills_text = ""
     queues_text = ""
 
@@ -626,6 +684,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
       queues_payload = {}
       station_associations_payload = {}
       phone_management_payload = {}
+      phone_management_match = {}
 
       ok_user, user_payload, err_user = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}")
       if ok_user:
@@ -653,18 +712,19 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         station_associations_payload if ok_station_assoc else {},
       )
 
-      if not webrtc_phone:
-        phone_management_name, phone_management_payload, err_phone_mgmt = _genesys_lookup_phone_management_name(
-          api_base,
-          access_token,
-          user_id,
-          str(row.get("name", "") or ""),
-          str(row.get("email", "") or ""),
-        )
-        if phone_management_name:
-          webrtc_phone = phone_management_name
-        elif err_phone_mgmt:
-          warnings.append(f"{row.get('name', user_id)} phone management lookup: {err_phone_mgmt}")
+      phone_management_name, phone_management_match, phone_management_payload, err_phone_mgmt = _genesys_lookup_phone_management_name(
+        api_base,
+        access_token,
+        user_id,
+        str(row.get("name", "") or ""),
+        str(row.get("email", "") or ""),
+      )
+      if phone_management_name and not webrtc_phone:
+        webrtc_phone = phone_management_name
+      if err_phone_mgmt:
+        warnings.append(f"{row.get('name', user_id)} phone management lookup: {err_phone_mgmt}")
+
+      phone_template = _build_phone_template_summary(phone_management_match, fallback_template)
 
       ok_skills, skills_payload, err_skills = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}/routingskills")
       if ok_skills:
@@ -699,6 +759,8 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         "user": user_payload if ok_user else {},
         "routing_status": routing_payload if ok_routing else {},
         "station_associations": station_associations_payload if ok_station_assoc else {},
+        "phone_management_match": phone_management_match,
+        "phone_template": phone_template,
         "phone_management": phone_management_payload,
         "routing_skills": skills_payload if ok_skills else {},
         "queues": queues_payload if ok_queues else {},
@@ -707,6 +769,11 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
     merged = dict(row)
     merged["division"] = division_name
     merged["webrtc_phone"] = webrtc_phone
+    merged["phone_template_source"] = str(phone_template.get("source", "") or "")
+    merged["phone_template_name"] = str(phone_template.get("template_name", "") or "")
+    merged["phone_template_site_id"] = str(phone_template.get("site_id", "") or "")
+    merged["phone_template_base_settings_id"] = str(phone_template.get("phone_base_settings_id", "") or "")
+    merged["phone_template_line_count"] = int(phone_template.get("line_count", 0) or 0)
     merged["acd_skills"] = acd_skills_text
     merged["queues"] = queues_text
     enriched.append(merged)
@@ -4634,7 +4701,7 @@ def genesys_admin_placeholder(request: Request):
             }
 
             let html = "<table><thead><tr>";
-            html += "<th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>ACD Skills</th><th>Queues</th><th>State</th><th>User ID</th>";
+            html += "<th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>Template Source</th><th>Template Phone</th><th>Template Site ID</th><th>Template Base Settings</th><th>Template Lines</th><th>ACD Skills</th><th>Queues</th><th>State</th><th>User ID</th>";
             html += "</tr></thead><tbody>";
             rows.forEach(function (row, i) {
               const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
@@ -4644,6 +4711,11 @@ def genesys_admin_placeholder(request: Request):
               html += "<td>" + (row.username || "") + "</td>";
               html += "<td>" + (row.division || "") + "</td>";
               html += "<td>" + (row.webrtc_phone || "") + "</td>";
+              html += "<td>" + (row.phone_template_source || "") + "</td>";
+              html += "<td>" + (row.phone_template_name || "") + "</td>";
+              html += "<td style='font-family:Consolas,monospace;'>" + (row.phone_template_site_id || "") + "</td>";
+              html += "<td style='font-family:Consolas,monospace;'>" + (row.phone_template_base_settings_id || "") + "</td>";
+              html += "<td>" + (row.phone_template_line_count || 0) + "</td>";
               html += "<td>" + (row.acd_skills || "") + "</td>";
               html += "<td>" + (row.queues || "") + "</td>";
               html += "<td>" + (row.state || "") + "</td>";
