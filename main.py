@@ -2117,13 +2117,19 @@ def _collect_lab_tls_quick_expiry(target_hostnames: list[str] | None = None) -> 
     days_remaining = probe_result.get("days_remaining")
     status_text = str(probe_result.get("status", "") or "").strip() or "Unknown"
     expiration_text = str(probe_result.get("valid_until", "") or "").strip()
+    expiration_short = ""
+    if expiration_text:
+      expiration_short = expiration_text[:10]
+    common_name = str(probe_result.get("common_name", "") or "").strip()
 
     rows.append(
       {
         "system": str(target.get("system", "") or "").strip(),
         "role": str(target.get("role", "") or "").strip(),
         "hostname": host,
-        "certificate": str(probe_result.get("common_name", "") or "").strip(),
+        "certificate": common_name,
+        "common_name": common_name,
+        "expiration_date_short": expiration_short,
         "expiration_date": expiration_text,
         "days_remaining": days_remaining,
         "status": status_text,
@@ -10095,6 +10101,13 @@ def page4_certificate_manager(request: Request):
 
     <main class="content">
       <section class="panel">
+        <h3 style="margin-top:0;">Quick Overview</h3>
+        <p id="cert-inventory-status" style="margin-top:4px; color:#2c5c8a;">Loading inventory...</p>
+        <div id="cert-quick-results" style="overflow-x:auto; margin-bottom:10px;"></div>
+      </section>
+
+      <section class="panel">
+        <h3 style="margin-top:0;">Deep Dive Inventory Lookup</h3>
         <p class="preview-banner">LAB-only preview: read-only certificate inventory for CUCM, IM and Presence, and Unity Voicemail.</p>
         <p class="danger-banner">Full server restart is not part of this tool and is intentionally blocked by design.</p>
         <p>Authenticated Operator: <strong>__AUTH_USER__</strong></p>
@@ -10118,13 +10131,6 @@ def page4_certificate_manager(request: Request):
           <button id="refresh-inventory-btn" type="button">Refresh Inventory</button>
           <a href="/ops/parity-report" target="_blank" rel="noopener">Open Parity Report JSON</a>
         </div>
-      </section>
-
-      <section class="panel">
-        <h3 style="margin-top:0;">LAB Certificate Inventory</h3>
-        <p id="cert-inventory-status" style="margin-top:4px; color:#2c5c8a;">Loading inventory...</p>
-        <h4 style="margin:12px 0 6px 0;">Quick Expiry Overview (Presented TLS Certificate)</h4>
-        <div id="cert-quick-results" style="overflow-x:auto; margin-bottom:10px;"></div>
         <h4 style="margin:12px 0 6px 0;">Certificates Expiring in 45 Days or Less</h4>
         <div id="cert-inventory-results" style="overflow-x:auto;"></div>
       </section>
@@ -10214,31 +10220,19 @@ def page4_certificate_manager(request: Request):
             return;
           }
 
-          const expiringOrErrorRows = rows.filter(function (row) {
-            const days = Number(row.days_remaining);
-            const statusText = String(row.status || "").toLowerCase();
-            if (statusText.includes("error") || statusText.includes("fail") || statusText.includes("timed out")) return true;
-            return !Number.isNaN(days) && days <= 45;
-          });
-
-          if (!expiringOrErrorRows.length) {
-            quickResultsEl.innerHTML = "<p style='margin:0; color:#047857; font-weight:700;'>No quick-signal expirations within 45 days.</p>";
-            return;
-          }
-
           let html = "<table><thead><tr>";
-          html += "<th>System</th><th>Role</th><th>Host</th><th>Presented Certificate (CN)</th><th>Expiration</th><th>Days Left</th><th>Status</th>";
+          html += "<th>System</th><th>Certificate</th><th>Expiration Date</th><th>Days Left</th><th>Valid Until (UTC)</th><th>Common Name</th><th>Status</th>";
           html += "</tr></thead><tbody>";
 
-          expiringOrErrorRows.forEach(function (row) {
+          rows.forEach(function (row) {
             const cls = statusClass(row);
             html += "<tr>";
             html += "<td>" + toCell(row.system) + "</td>";
-            html += "<td>" + toCell(row.role) + "</td>";
-            html += "<td class='mono'>" + toCell(row.hostname) + "</td>";
             html += "<td class='mono'>" + toCell(row.certificate) + "</td>";
-            html += "<td class='mono'>" + toCell(row.expiration_date) + "</td>";
+            html += "<td class='mono'>" + toCell(row.expiration_date_short || row.expiration_date) + "</td>";
             html += "<td>" + toCell(row.days_remaining) + "</td>";
+            html += "<td class='mono'>" + toCell(row.expiration_date) + "</td>";
+            html += "<td class='mono'>" + toCell(row.common_name) + "</td>";
             html += "<td class='" + cls + "'>" + toCell(row.status) + "</td>";
             html += "</tr>";
           });
