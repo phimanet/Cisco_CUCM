@@ -10434,26 +10434,28 @@ def page4_certificate_manager(request: Request):
           <button type="submit" style="background:#0b6bcb;color:#fff;border:1px solid #0b6bcb;border-radius:8px;padding:7px 10px;font-weight:700;cursor:pointer;">Run Inventory (No-JS Fallback)</button>
           <span style="margin-left:8px;color:#4e6a84;font-size:12px;">Use this if page buttons appear stuck.</span>
         </form>
+        <form id="deep-inventory-form" method="post" action="/cert-manager/lab/inventory-sync">
         <div class="inventory-controls">
           <div>
             <label for="target-host">Target System(s)</label>
-              <select id="target-host" multiple size="7">
+              <select id="target-host" name="target_hosts" multiple size="7">
               __TARGET_OPTIONS__
             </select>
           </div>
           <div>
             <label for="platform-user">Platform Username (optional override)</label>
-            <input id="platform-user" type="text" placeholder="Use cached login if left blank" autocomplete="username" />
+            <input id="platform-user" name="platform_user" type="text" placeholder="Use cached login if left blank" autocomplete="username" />
           </div>
           <div>
             <label for="platform-pass">Platform Password (optional override)</label>
-            <input id="platform-pass" type="password" placeholder="Use cached login if left blank" autocomplete="current-password" />
+            <input id="platform-pass" name="platform_pass" type="password" placeholder="Use cached login if left blank" autocomplete="current-password" />
           </div>
         </div>
         <div class="toolbar">
-          <button id="refresh-inventory-btn" type="button">Refresh Inventory</button>
+          <button id="refresh-inventory-btn" type="submit">Refresh Inventory</button>
           <a href="/ops/parity-report" target="_blank" rel="noopener">Open Parity Report JSON</a>
         </div>
+        </form>
         <h4 style="margin:12px 0 6px 0;">Certificates Expiring in 45 Days or Less</h4>
         <div id="cert-inventory-results" style="overflow-x:auto;"></div>
       </section>
@@ -10505,6 +10507,7 @@ def page4_certificate_manager(request: Request):
         const statusEl = document.getElementById("cert-inventory-status");
         const quickResultsEl = document.getElementById("cert-quick-results");
         const resultsEl = document.getElementById("cert-inventory-results");
+        const deepInventoryFormEl = document.getElementById("deep-inventory-form");
         const refreshBtn = document.getElementById("refresh-inventory-btn");
         const targetHostEl = document.getElementById("target-host");
         const platformUserEl = document.getElementById("platform-user");
@@ -10841,7 +10844,12 @@ def page4_certificate_manager(request: Request):
           }
         }
 
-        if (refreshBtn) {
+        if (deepInventoryFormEl) {
+          deepInventoryFormEl.addEventListener("submit", function (evt) {
+            evt.preventDefault();
+            loadInventory();
+          });
+        } else if (refreshBtn) {
           refreshBtn.addEventListener("click", function () {
             loadInventory();
           });
