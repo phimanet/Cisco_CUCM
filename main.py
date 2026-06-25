@@ -491,18 +491,15 @@ def _genesys_extract_webrtc_phone(user_payload: dict, routing_payload: dict) -> 
   station = routing_payload.get("station") if isinstance(routing_payload, dict) else {}
   if isinstance(station, dict):
     station_name = str(station.get("name", "") or "").strip()
-    station_id = str(station.get("id", "") or "").strip()
-    station_name_lower = station_name.lower()
-    if station_name and ("webrtc" in station_name_lower or "web rtc" in station_name_lower):
+    if station_name:
       return station_name
 
-    # Fall back to user profile station field if it explicitly indicates WebRTC.
-    if station_id:
-      user_station = user_payload.get("station") or {}
-      if isinstance(user_station, dict):
-        user_station_name = str(user_station.get("name", "") or "").strip()
-        if user_station_name and ("webrtc" in user_station_name.lower() or "web rtc" in user_station_name.lower()):
-          return user_station_name
+  # Fall back to user profile station field.
+  user_station = user_payload.get("station") if isinstance(user_payload, dict) else {}
+  if isinstance(user_station, dict):
+    user_station_name = str(user_station.get("name", "") or "").strip()
+    if user_station_name:
+      return user_station_name
 
   return ""
 
@@ -511,6 +508,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
   clean_region, _, api_base = _genesys_region_to_urls(region)
   enriched = []
   warnings = []
+  raw_items = []
 
   for row in rows:
     user_id = str(row.get("id", "") or "").strip()
@@ -560,6 +558,16 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
       elif err_queues:
         warnings.append(f"{row.get('name', user_id)} queues: {err_queues}")
 
+      raw_items.append({
+        "user_id": user_id,
+        "name": str(row.get("name", "") or "").strip(),
+        "email": str(row.get("email", "") or "").strip(),
+        "user": user_payload if ok_user else {},
+        "routing_status": routing_payload if ok_routing else {},
+        "routing_skills": skills_payload if ok_skills else {},
+        "queues": queues_payload if ok_queues else {},
+      })
+
     merged = dict(row)
     merged["division"] = division_name
     merged["webrtc_phone"] = webrtc_phone
@@ -572,6 +580,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
     "region": clean_region,
     "rows": enriched,
     "warnings": warnings,
+    "raw_items": raw_items,
   }
 
 
@@ -2082,9 +2091,9 @@ def _twilio_add_sms_hosted_number(
   }
 
 
-def _store_job_output(csv_data: bytes, filename: str) -> str:
+def _store_job_output(data_bytes: bytes, filename: str, media_type: str = "text/csv") -> str:
     job_id = str(uuid4())
-    JOB_OUTPUTS[job_id] = {"data": csv_data, "filename": filename}
+    JOB_OUTPUTS[job_id] = {"data": data_bytes, "filename": filename, "media_type": media_type}
 
     # Keep an in-memory cap so older outputs naturally roll off.
     if len(JOB_OUTPUTS) > 100:
@@ -2096,7 +2105,7 @@ def _store_job_output(csv_data: bytes, filename: str) -> str:
 
 def _prepare_job_output(csv_data, filename: str) -> dict:
     csv_bytes = _to_bytes(csv_data)
-    job_id = _store_job_output(csv_bytes, filename)
+    job_id = _store_job_output(csv_bytes, filename, "text/csv")
     return {
         "job_id": job_id,
         "filename": filename,
@@ -4442,6 +4451,7 @@ def genesys_admin_placeholder(request: Request):
             </form>
 
             <p id="genesys-user-search-status" style="color:#2c5c8a; min-height:18px;">Ready.</p>
+            <div id="genesys-user-raw-download" style="margin:6px 0 10px 0;"></div>
             <div id="genesys-user-search-results" style="overflow-x:auto;"></div>
           </div>
         </section>
@@ -4452,12 +4462,14 @@ def genesys_admin_placeholder(request: Request):
       (function () {
         const form = document.getElementById("genesys-user-search-form");
         const statusEl = document.getElementById("genesys-user-search-status");
+        const rawDownloadEl = document.getElementById("genesys-user-raw-download");
         const resultsEl = document.getElementById("genesys-user-search-results");
-        if (!form || !statusEl || !resultsEl) return;
+        if (!form || !statusEl || !resultsEl || !rawDownloadEl) return;
 
         form.addEventListener("submit", async function (event) {
           event.preventDefault();
           statusEl.textContent = "Running Genesys lookup...";
+          rawDownloadEl.innerHTML = "";
           resultsEl.innerHTML = "";
 
           try {
@@ -4475,6 +4487,10 @@ def genesys_admin_placeholder(request: Request):
             const emailTargetCount = Number(payload.cucm_email_targets || 0);
             const warningCount = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
             statusEl.textContent = "Region: " + (payload.region || "") + " | CUCM Emails: " + emailTargetCount + " | Matches: " + rows.length + " | Warnings: " + warningCount;
+            if (payload.raw_download_url) {
+              const rawName = payload.raw_filename || "genesys_user_extract.json";
+              rawDownloadEl.innerHTML = "<a href='" + payload.raw_download_url + "' style='display:inline-block;padding:7px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Raw Genesys JSON (" + rawName + ")</a>";
+            }
 
             if (!rows.length) {
               resultsEl.innerHTML = "<p style='color:#4e6a84;'>No matching users found.</p>";
@@ -4583,12 +4599,32 @@ def genesys_extract_users_route(
     search_result.get("rows", []),
   )
 
+  raw_payload = {
+    "generated_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+    "region": enrich_result.get("region", search_result.get("region", clean_region)),
+    "lookup": {
+      "last_name": clean_last,
+      "first_name": clean_first,
+      "cucm_email_targets": sorted(cucm_email_targets),
+    },
+    "warnings": enrich_result.get("warnings", []),
+    "items": enrich_result.get("raw_items", []),
+  }
+  raw_filename = f"genesys_user_extract_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+  raw_job_id = _store_job_output(
+    json.dumps(raw_payload, indent=2).encode("utf-8"),
+    raw_filename,
+    "application/json",
+  )
+
   return JSONResponse({
     "ok": True,
     "region": enrich_result.get("region", search_result.get("region", clean_region)),
     "rows": enrich_result.get("rows", search_result.get("rows", [])),
     "cucm_email_targets": len(cucm_email_targets),
     "warnings": enrich_result.get("warnings", []),
+    "raw_download_url": f"/download/job-output/{raw_job_id}",
+    "raw_filename": raw_filename,
   })
 
 
@@ -12902,7 +12938,7 @@ def download_job_output(job_id: str):
 
   return Response(
     job_output["data"],
-    media_type="text/csv",
+    media_type=str(job_output.get("media_type", "text/csv") or "text/csv"),
     headers={"Content-Disposition": f'attachment; filename="{job_output["filename"]}"'}
   )
 

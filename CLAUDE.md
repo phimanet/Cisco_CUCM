@@ -116,6 +116,8 @@ Priority keys:
 - Standardized hosted-number failure messaging to concise entitlement/auth guidance instead of verbose endpoint dump.
 - Added Twilio SMS hosting audit retention control with automatic prune to **90 days** (`TWILIO_SMS_HOSTING_AUDIT_RETENTION_DAYS`, default 90) on append/read/download paths.
 - Baseline freeze decision: keep current implementation in LAB/PROD as prepared-but-disabled foundation until Twilio enables preview access.
+- Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
+- Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.
