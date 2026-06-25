@@ -9696,21 +9696,15 @@ def page4_certificate_manager(request: Request):
           }
 
           let html = "<table><thead><tr>";
-          html += "<th>System</th><th>Role</th><th>Host</th><th>IP</th><th>Certificate</th><th>Type</th><th>Expiration Date</th><th>Port</th><th>Reachable</th><th>Days Left</th><th>Valid Until (UTC)</th><th>Common Name</th><th>Issuer</th><th>Status</th>";
+          html += "<th>System</th><th>Certificate</th><th>Expiration Date</th><th>Days Left</th><th>Valid Until (UTC)</th><th>Common Name</th><th>Issuer</th><th>Status</th>";
           html += "</tr></thead><tbody>";
 
           rows.forEach(function (row) {
             const cls = statusClass(row);
             html += "<tr>";
             html += "<td>" + toCell(row.system) + "</td>";
-            html += "<td>" + toCell(row.role) + "</td>";
-            html += "<td class='mono'>" + toCell(row.hostname) + "</td>";
-            html += "<td class='mono'>" + toCell(row.ip) + "</td>";
             html += "<td class='mono'>" + toCell(row.certificate) + "</td>";
-            html += "<td>" + toCell(row.type) + "</td>";
             html += "<td class='mono'>" + toCell(row.expiration_date) + "</td>";
-            html += "<td class='mono'>" + toCell(row.probe_port) + "</td>";
-            html += "<td>" + (row.reachable ? "Yes" : "No") + "</td>";
             html += "<td>" + toCell(row.days_remaining) + "</td>";
             html += "<td class='mono'>" + toCell(row.valid_until) + "</td>";
             html += "<td class='mono'>" + toCell(row.common_name) + "</td>";
