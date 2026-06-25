@@ -10393,6 +10393,17 @@ def page4_certificate_manager(request: Request):
         font-size: 12px;
         font-weight: 700;
       }
+      .debug-window {
+        width: 100%;
+        min-height: 180px;
+        border: 1px solid #b7d0eb;
+        border-radius: 8px;
+        padding: 8px;
+        box-sizing: border-box;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+        background: #f8fbff;
+      }
     </style>
   </head>
   <body>
@@ -10473,6 +10484,17 @@ def page4_certificate_manager(request: Request):
         <h4 style="margin:12px 0 6px 0;">Run Status</h4>
         <div id="renewal-run-results" style="overflow-x:auto;"></div>
       </section>
+
+      <section class="panel">
+        <h3 style="margin-top:0;">Debug Window</h3>
+        <p style="margin:0 0 8px 0; color:#2c5c8a;">Use this for quick copy/paste when reporting issues.</p>
+        <div class="toolbar" style="margin-top:0;">
+          <button id="debug-copy-btn" type="button">Copy Debug Log</button>
+          <button id="debug-clear-btn" type="button">Clear Debug Log</button>
+        </div>
+        <textarea id="debug-log" class="debug-window" readonly>Debug window initialized. If this never updates after load, page JavaScript failed before startup.</textarea>
+        <noscript><p style="color:#b91c1c;font-weight:700;">JavaScript is disabled; Page4 interactive actions will not run.</p></noscript>
+      </section>
     </main>
 
     <script>
@@ -10498,8 +10520,22 @@ def page4_certificate_manager(request: Request):
         const renewalUploadBtn = document.getElementById("renewal-upload-btn");
         const renewalRestartBtn = document.getElementById("renewal-restart-btn");
         const renewalValidateBtn = document.getElementById("renewal-validate-btn");
+        const debugLogEl = document.getElementById("debug-log");
+        const debugCopyBtn = document.getElementById("debug-copy-btn");
+        const debugClearBtn = document.getElementById("debug-clear-btn");
         let currentRenewalRunId = "";
         let currentRenewalRun = null;
+
+        function debugNow() {
+          try { return new Date().toISOString(); } catch (_e) { return ""; }
+        }
+
+        function appendDebug(message) {
+          if (!debugLogEl) return;
+          const line = "[" + debugNow() + "] " + String(message || "");
+          debugLogEl.value = (debugLogEl.value ? (debugLogEl.value + "\n") : "") + line;
+          debugLogEl.scrollTop = debugLogEl.scrollHeight;
+        }
 
         function toCell(value) {
           if (value === null || value === undefined || value === "") return "-";
@@ -10643,10 +10679,13 @@ def page4_certificate_manager(request: Request):
 
         async function createRenewalRun() {
           const hosts = selectedHosts();
+          appendDebug("createRenewalRun: selected_hosts=" + hosts.join(","));
           if (hosts.length !== 2) {
             alert("Select exactly 2 target hosts to create a renewal run.");
+            appendDebug("createRenewalRun blocked: expected 2 hosts, got " + hosts.length);
             return;
           }
+          const started = Date.now();
           const response = await fetch("/cert-manager/lab/renewal/run/create", {
             method: "POST",
             credentials: "same-origin",
@@ -10654,22 +10693,29 @@ def page4_certificate_manager(request: Request):
             body: JSON.stringify({ target_hosts: hosts }),
           });
           const payload = await response.json();
+          appendDebug("createRenewalRun response: status=" + response.status + " elapsed_ms=" + (Date.now() - started));
           if (!response.ok || !payload.ok) {
+            appendDebug("createRenewalRun error: " + ((payload && payload.detail) || "unknown"));
             throw new Error((payload && payload.detail) || "Failed to create renewal run.");
           }
+          appendDebug("createRenewalRun success: run_id=" + String((payload.run || {}).run_id || ""));
           renderRenewalRun(payload.run || null);
         }
 
         async function runRenewalAction(actionName) {
+          appendDebug("runRenewalAction: action=" + actionName + " run_id=" + currentRenewalRunId);
           if (!currentRenewalRunId) {
             alert("Create a renewal run first.");
+            appendDebug("runRenewalAction blocked: no run_id");
             return;
           }
           const creds = credentialsPayload();
           if ((!hasCachedCucmPass || !credentialExpiresAtMs) && (!creds.platform_user || !creds.platform_pass)) {
             alert("Provide Platform Username and Platform Password.");
+            appendDebug("runRenewalAction blocked: missing credentials");
             return;
           }
+          const started = Date.now();
           const response = await fetch("/cert-manager/lab/renewal/run/" + encodeURIComponent(currentRenewalRunId) + "/action", {
             method: "POST",
             credentials: "same-origin",
@@ -10683,9 +10729,12 @@ def page4_certificate_manager(request: Request):
             }),
           });
           const payload = await response.json();
+          appendDebug("runRenewalAction response: action=" + actionName + " status=" + response.status + " elapsed_ms=" + (Date.now() - started));
           if (!response.ok || !payload.ok) {
+            appendDebug("runRenewalAction error: " + ((payload && payload.detail) || "unknown"));
             throw new Error((payload && payload.detail) || "Renewal action failed.");
           }
+          appendDebug("runRenewalAction success: action=" + actionName);
           renderRenewalRun(payload.run || null);
         }
 
@@ -10725,14 +10774,17 @@ def page4_certificate_manager(request: Request):
             platform_user: (platformUserEl && platformUserEl.value ? platformUserEl.value : "").trim(),
             platform_pass: (platformPassEl && platformPassEl.value ? platformPassEl.value : "").trim(),
           };
+          appendDebug("loadInventory start: targets=" + payloadBody.target_hosts.join(",") + " user_override=" + (payloadBody.platform_user ? "yes" : "no"));
 
           if ((!hasCachedCucmPass || !credentialExpiresAtMs) && (!payloadBody.platform_user || !payloadBody.platform_pass)) {
             statusEl.textContent = "Inventory requires credentials: enter Platform Username and Platform Password.";
             resultsEl.innerHTML = "";
+            appendDebug("loadInventory blocked: missing credentials");
             return;
           }
 
           try {
+            const started = Date.now();
             const response = await fetch("/cert-manager/lab/inventory", {
               method: "POST",
               credentials: "same-origin",
@@ -10742,7 +10794,9 @@ def page4_certificate_manager(request: Request):
               body: JSON.stringify(payloadBody),
             });
             const payload = await response.json();
+            appendDebug("loadInventory response: status=" + response.status + " elapsed_ms=" + (Date.now() - started));
             if (!response.ok || !payload.ok) {
+              appendDebug("loadInventory error payload: " + ((payload && payload.detail) || "unknown"));
               throw new Error((payload && payload.detail) || "Failed to load certificate inventory.");
             }
             renderQuick(payload.quick_rows || []);
@@ -10755,10 +10809,12 @@ def page4_certificate_manager(request: Request):
               ? " Mode: quick-only"
               : " Mode: deep lookup";
             statusEl.textContent = "Inventory refreshed. Checked at: " + checkedAt + "." + targetText + "." + modeText;
+            appendDebug("loadInventory success: mode=" + String(payload.inventory_mode || "") + " quick_rows=" + String((payload.quick_rows || []).length) + " deep_rows=" + String((payload.rows || []).length));
           } catch (err) {
             statusEl.textContent = "Inventory failed: " + ((err && err.message) || "Unknown error.");
             quickResultsEl.innerHTML = "";
             resultsEl.innerHTML = "";
+            appendDebug("loadInventory exception: " + ((err && err.message) || String(err)));
           }
         }
 
@@ -10767,6 +10823,45 @@ def page4_certificate_manager(request: Request):
             loadInventory();
           });
         }
+
+        if (debugClearBtn) {
+          debugClearBtn.addEventListener("click", function () {
+            if (debugLogEl) {
+              debugLogEl.value = "";
+              appendDebug("debug log cleared");
+            }
+          });
+        }
+
+        if (debugCopyBtn) {
+          debugCopyBtn.addEventListener("click", async function () {
+            try {
+              const text = debugLogEl ? debugLogEl.value : "";
+              if (!text) return;
+              if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+                await navigator.clipboard.writeText(text);
+                appendDebug("debug copied to clipboard");
+                return;
+              }
+              if (debugLogEl) {
+                debugLogEl.select();
+                document.execCommand("copy");
+                appendDebug("debug copied to clipboard (execCommand)");
+              }
+            } catch (err) {
+              appendDebug("debug copy failed: " + ((err && err.message) || String(err)));
+            }
+          });
+        }
+
+        window.addEventListener("error", function (evt) {
+          appendDebug("window.error: " + (evt && evt.message ? evt.message : "unknown"));
+        });
+
+        window.addEventListener("unhandledrejection", function (evt) {
+          const reason = evt && evt.reason ? (evt.reason.message || String(evt.reason)) : "unknown";
+          appendDebug("unhandledrejection: " + reason);
+        });
 
         if (renewalCreateRunBtn) {
           renewalCreateRunBtn.addEventListener("click", async function () {
@@ -10807,6 +10902,7 @@ def page4_certificate_manager(request: Request):
           });
         }
 
+        appendDebug("page4 script initialized");
         loadInventory();
       })();
     </script>
