@@ -1618,8 +1618,41 @@ def _build_lookup_error(service_name: str, reason: str, hint: str = "") -> str:
 
 
 def _git_commit_short() -> str:
+  repo_dir = os.path.dirname(os.path.abspath(__file__))
+
+  for git_cmd in ["git", "/usr/bin/git"]:
+    try:
+      commit = subprocess.check_output(
+        [git_cmd, "-C", repo_dir, "rev-parse", "--short", "HEAD"],
+        text=True,
+        stderr=subprocess.DEVNULL,
+      ).strip()
+      if commit:
+        return commit
+    except Exception:
+      continue
+
+  # Fallback when git is unavailable in PATH for service context.
   try:
-    return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=os.path.dirname(__file__), text=True).strip()
+    head_path = os.path.join(repo_dir, ".git", "HEAD")
+    with open(head_path, "r", encoding="utf-8") as handle:
+      head_value = (handle.read() or "").strip()
+
+    if head_value.startswith("ref:"):
+      ref_rel = head_value.split(" ", 1)[-1].strip()
+      ref_path = os.path.join(repo_dir, ".git", ref_rel.replace("/", os.sep))
+      with open(ref_path, "r", encoding="utf-8") as ref_handle:
+        full_hash = (ref_handle.read() or "").strip()
+      if full_hash:
+        return full_hash[:7]
+
+    if head_value:
+      return head_value[:7]
+  except Exception:
+    pass
+
+  try:
+    return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=repo_dir, text=True).strip()
   except Exception:
     return "unknown"
 
