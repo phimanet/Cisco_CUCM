@@ -10419,6 +10419,10 @@ def page4_certificate_manager(request: Request):
         <p class="preview-banner">LAB-only preview: read-only certificate inventory for CUCM, IM and Presence, and Unity Voicemail.</p>
         <p class="danger-banner">Full server restart is not part of this tool and is intentionally blocked by design.</p>
         <p>Authenticated Operator: <strong>__AUTH_USER__</strong></p>
+        <form method="post" action="/cert-manager/lab/inventory-sync" style="margin:8px 0 10px 0;">
+          <button type="submit" style="background:#0b6bcb;color:#fff;border:1px solid #0b6bcb;border-radius:8px;padding:7px 10px;font-weight:700;cursor:pointer;">Run Inventory (No-JS Fallback)</button>
+          <span style="margin-left:8px;color:#4e6a84;font-size:12px;">Use this if page buttons appear stuck.</span>
+        </form>
         <div class="inventory-controls">
           <div>
             <label for="target-host">Target System(s)</label>
@@ -10910,6 +10914,106 @@ async def cert_manager_lab_inventory(request: Request):
       },
     }
   )
+
+
+@app.post("/cert-manager/lab/inventory-sync", response_class=HTMLResponse)
+async def cert_manager_lab_inventory_sync(request: Request):
+  session, username = _require_admin_session(request)
+  cucm_host = str(session.get("cucm_host", "") or "")
+  cert_manager_enabled = _feature_enabled(
+    CERT_MANAGER_PAGE_ENABLED,
+    lab_only=(CERT_MANAGER_PAGE_LAB_ONLY and PREVIEW_FEATURES_LAB_ONLY_DEFAULT),
+    cucm_host=cucm_host,
+  )
+  if not cert_manager_enabled or not _is_lab_environment(cucm_host):
+    return HTMLResponse("<h3>403 Forbidden</h3><p>Server Certificate Manager is LAB-only and disabled in this environment.</p>", status_code=403)
+
+  form = await request.form()
+  target_hosts = []
+  for val in form.getlist("target_hosts"):
+    text = str(val or "").strip().lower()
+    if text:
+      target_hosts.append(text)
+
+  _, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, "", "")
+  if not str(resolved_user or "").strip() or not str(resolved_pass or "").strip():
+    return HTMLResponse(
+      "<h3>Missing Credentials</h3><p>Cached platform credentials were not found. Re-login and retry Page 4.</p>",
+      status_code=400,
+    )
+
+  quick_rows = _collect_lab_tls_quick_expiry(target_hosts)
+  rows = _collect_lab_certificate_inventory(resolved_user, resolved_pass, target_hosts)
+
+  def _cell(v):
+    return escape(str(v if v is not None else "-"))
+
+  quick_html_rows = "".join(
+    [
+      "<tr>"
+      f"<td>{_cell(r.get('system', ''))}</td>"
+      f"<td>{_cell(r.get('certificate', ''))}</td>"
+      f"<td>{_cell(r.get('expiration_date_short', r.get('expiration_date', '')))}</td>"
+      f"<td>{_cell(r.get('days_remaining', '-'))}</td>"
+      f"<td>{_cell(r.get('status', ''))}</td>"
+      "</tr>"
+      for r in quick_rows
+    ]
+  )
+
+  deep_rows = []
+  for r in rows:
+    days = r.get("days_remaining")
+    if isinstance(days, int) and days <= 45:
+      deep_rows.append(r)
+    elif isinstance(days, float) and days <= 45:
+      deep_rows.append(r)
+    elif "fetch failed" in str(r.get("status", "")).lower():
+      deep_rows.append(r)
+
+  deep_html_rows = "".join(
+    [
+      "<tr>"
+      f"<td>{_cell(r.get('system', ''))}</td>"
+      f"<td>{_cell(r.get('certificate', ''))}</td>"
+      f"<td>{_cell(r.get('common_name', ''))}</td>"
+      f"<td>{_cell(r.get('usage', ''))}</td>"
+      f"<td>{_cell(r.get('type', ''))}</td>"
+      f"<td>{_cell(r.get('expiration_date', ''))}</td>"
+      f"<td>{_cell(r.get('days_remaining', '-'))}</td>"
+      f"<td>{_cell(r.get('status', ''))}</td>"
+      "</tr>"
+      for r in deep_rows
+    ]
+  )
+
+  checked_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
+  html = f"""
+<html>
+  <head>
+    <title>LAB Inventory (Fallback)</title>
+    <style>
+      body {{ font-family: Segoe UI, Arial, sans-serif; margin: 14px; background:#f7fbff; color:#12304a; }}
+      .card {{ background:#fff; border:1px solid #cfe1f3; border-radius:10px; padding:12px; margin-bottom:10px; }}
+      table {{ width:100%; border-collapse:collapse; font-size:13px; }}
+      th {{ background:#005eb8; color:#fff; text-align:left; padding:7px; }}
+      td {{ border-bottom:1px solid #d5e4f5; padding:7px; vertical-align:top; }}
+      .actions a {{ color:#005eb8; font-weight:700; text-decoration:none; }}
+    </style>
+  </head>
+  <body>
+    <div class='actions'><a href='/page4'>Back to Page 4</a></div>
+    <div class='card'><h3 style='margin:0 0 6px 0;'>LAB Quick Overview</h3><p style='margin:0 0 8px 0;'>Checked at: {escape(checked_at)}</p>
+      <table><thead><tr><th>System</th><th>Certificate</th><th>Expiration</th><th>Days Left</th><th>Status</th></tr></thead><tbody>{quick_html_rows or '<tr><td colspan="5">No rows</td></tr>'}</tbody></table>
+    </div>
+    <div class='card'><h3 style='margin:0 0 6px 0;'>Deep Dive (45 days + failures)</h3>
+      <table><thead><tr><th>System</th><th>Certificate</th><th>Common Name</th><th>Usage</th><th>Type</th><th>Expiration Date</th><th>Days Left</th><th>Status</th></tr></thead><tbody>{deep_html_rows or '<tr><td colspan="8">No rows</td></tr>'}</tbody></table>
+    </div>
+    <div class='card'><p style='margin:0;'>Operator: {escape(str(username or ''))}</p></div>
+  </body>
+</html>
+"""
+  return HTMLResponse(content=html)
 
 
 @app.post("/cert-manager/lab/renewal/run/create")
