@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-06-24
+- Date: 2026-06-25
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -135,6 +135,15 @@ Priority keys:
 - Queue lookup now treats queue ID from real-world input (including full Genesys URL strings) as primary key; route extracts UUID and queries members directly before any name search.
 - Queue membership retrieval now uses multi-endpoint fallback (`/members`, `/members?expand=user`, `/users`) with per-strategy page diagnostics surfaced in the UI and response payload.
 - Queue-based user extraction fallback now reuses the same queue-members helper so membership checks benefit from identical endpoint fallback behavior.
+
+### 2026-06-25
+- Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
+- Verified LAB parity after pull/restart: `/healthz` now returns `git_commit":"0c59386"` and service is healthy.
+- Confirmed prior 502 seen in parity output was startup timing noise (Nginx upstream connect refused during immediate post-restart probe), not runtime app failure.
+- Hardened `scripts/check_env_parity.sh` health section with retry window (up to 20 seconds) before declaring health probe failure; commit `34f8757`.
+- Promoted parity retry fix to LAB and PROD; both environments aligned on latest `main`.
+- Added operator instruction convention: every operational step now starts by explicitly stating environment (LAB/PROD/BOTH).
+- Created new local rollback checkpoint tag on both servers: `websave-2026-06-25`.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.
