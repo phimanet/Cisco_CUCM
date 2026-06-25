@@ -2191,11 +2191,18 @@ def _probe_tls_certificate(hostname: str, ip_address: str, port: int, timeout_se
     return result
 
 
-def _collect_lab_certificate_inventory(cucm_user: str, cucm_pass: str) -> list:
+def _collect_lab_certificate_inventory(cucm_user: str, cucm_pass: str, target_hostnames: list[str] | None = None) -> list:
   rows = []
+  target_hosts = {
+    str(item or "").strip().lower()
+    for item in (target_hostnames or [])
+    if str(item or "").strip()
+  }
   for target in LAB_CERT_MANAGER_TARGETS:
     host = str(target.get("hostname", "") or "").strip().lower()
     if host not in LAB_CERT_MANAGER_ALLOWED_HOSTS:
+      continue
+    if target_hosts and host not in target_hosts:
       continue
 
     parsed_rows, fetch_status = _fetch_platform_certificate_rows(host, cucm_user, cucm_pass)
@@ -9942,6 +9949,28 @@ def page4_certificate_manager(request: Request):
         gap: 10px;
         margin-top: 12px;
       }
+      .inventory-controls {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+        gap: 10px;
+        margin-top: 12px;
+      }
+      .inventory-controls label {
+        display: block;
+        font-size: 12px;
+        font-weight: 700;
+        color: #2c5c8a;
+        margin-bottom: 4px;
+      }
+      .inventory-controls input,
+      .inventory-controls select {
+        width: 100%;
+        border: 1px solid #b7d0eb;
+        border-radius: 8px;
+        padding: 8px 10px;
+        font-size: 13px;
+        box-sizing: border-box;
+      }
       .toolbar button,
       .toolbar a {
         display: inline-block;
@@ -10010,6 +10039,22 @@ def page4_certificate_manager(request: Request):
         <p class="preview-banner">LAB-only preview: read-only certificate inventory for CUCM, IM and Presence, and Unity Voicemail.</p>
         <p class="danger-banner">Full server restart is not part of this tool and is intentionally blocked by design.</p>
         <p>Authenticated Operator: <strong>__AUTH_USER__</strong></p>
+        <div class="inventory-controls">
+          <div>
+            <label for="target-host">Target System(s)</label>
+              <select id="target-host" multiple size="7">
+              __TARGET_OPTIONS__
+            </select>
+          </div>
+          <div>
+            <label for="platform-user">Platform Username (optional override)</label>
+            <input id="platform-user" type="text" placeholder="Use cached login if left blank" autocomplete="username" />
+          </div>
+          <div>
+            <label for="platform-pass">Platform Password (optional override)</label>
+            <input id="platform-pass" type="password" placeholder="Use cached login if left blank" autocomplete="current-password" />
+          </div>
+        </div>
         <div class="toolbar">
           <button id="refresh-inventory-btn" type="button">Refresh Inventory</button>
           <a href="/ops/parity-report" target="_blank" rel="noopener">Open Parity Report JSON</a>
@@ -10028,14 +10073,13 @@ def page4_certificate_manager(request: Request):
       (function () {
         const hasCachedCucmPass = "__HAS_CACHED_CUCM_PASS__" === "true";
         const credentialExpiresAtMs = Number("__CREDENTIAL_EXPIRES_AT_MS__") || 0;
-        if (!hasCachedCucmPass || !credentialExpiresAtMs) {
-          window.location.href = "/";
-          return;
-        }
 
         const statusEl = document.getElementById("cert-inventory-status");
         const resultsEl = document.getElementById("cert-inventory-results");
         const refreshBtn = document.getElementById("refresh-inventory-btn");
+        const targetHostEl = document.getElementById("target-host");
+        const platformUserEl = document.getElementById("platform-user");
+        const platformPassEl = document.getElementById("platform-pass");
 
         function toCell(value) {
           if (value === null || value === undefined || value === "") return "-";
@@ -10104,10 +10148,26 @@ def page4_certificate_manager(request: Request):
 
         async function loadInventory() {
           statusEl.textContent = "Loading certificate inventory...";
+          const payloadBody = {
+            target_hosts: (targetHostEl ? Array.from(targetHostEl.selectedOptions || []).map(function (opt) { return (opt && opt.value ? opt.value : "").trim(); }).filter(Boolean) : []),
+            platform_user: (platformUserEl && platformUserEl.value ? platformUserEl.value : "").trim(),
+            platform_pass: (platformPassEl && platformPassEl.value ? platformPassEl.value : "").trim(),
+          };
+
+          if ((!hasCachedCucmPass || !credentialExpiresAtMs) && (!payloadBody.platform_user || !payloadBody.platform_pass)) {
+            statusEl.textContent = "Inventory requires credentials: enter Platform Username and Platform Password.";
+            resultsEl.innerHTML = "";
+            return;
+          }
+
           try {
             const response = await fetch("/cert-manager/lab/inventory", {
-              method: "GET",
+              method: "POST",
               credentials: "same-origin",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify(payloadBody),
             });
             const payload = await response.json();
             if (!response.ok || !payload.ok) {
@@ -10115,7 +10175,10 @@ def page4_certificate_manager(request: Request):
             }
             render(payload.rows || []);
             const checkedAt = payload.checked_at || "";
-            statusEl.textContent = "Inventory refreshed. Checked at: " + checkedAt;
+            const targetText = (Array.isArray(payload.target_hosts) && payload.target_hosts.length)
+              ? (" Target: " + payload.target_hosts.join(", "))
+              : " Target: all";
+            statusEl.textContent = "Inventory refreshed. Checked at: " + checkedAt + "." + targetText;
           } catch (err) {
             statusEl.textContent = "Inventory failed: " + ((err && err.message) || "Unknown error.");
             resultsEl.innerHTML = "";
@@ -10133,7 +10196,15 @@ def page4_certificate_manager(request: Request):
     </script>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
+""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace(
+  "__TARGET_OPTIONS__",
+  "".join(
+    [
+      f"<option value=\"{escape(str(item.get('hostname', '') or '').strip().lower())}\">{escape(str(item.get('system', '') or '').strip())} - {escape(str(item.get('role', '') or '').strip())} ({escape(str(item.get('hostname', '') or '').strip().lower())})</option>"
+      for item in LAB_CERT_MANAGER_TARGETS
+    ]
+  ),
+)
 
   return HTMLResponse(
     content=html,
@@ -10146,7 +10217,8 @@ def page4_certificate_manager(request: Request):
 
 
 @app.get("/cert-manager/lab/inventory")
-def cert_manager_lab_inventory(request: Request):
+@app.post("/cert-manager/lab/inventory")
+async def cert_manager_lab_inventory(request: Request):
   session, username = _require_admin_session(request)
   cucm_host = str(session.get("cucm_host", "") or "")
   cert_manager_enabled = _feature_enabled(
@@ -10163,13 +10235,62 @@ def cert_manager_lab_inventory(request: Request):
       status_code=403,
     )
 
-  _, resolved_cucm_user, resolved_cucm_pass = _resolve_cucm_credentials(request, cucm_host, "", "")
-  rows = _collect_lab_certificate_inventory(resolved_cucm_user, resolved_cucm_pass)
+  target_hosts = []
+  platform_user = ""
+  platform_pass = ""
+
+  if request.method.upper() == "POST":
+    try:
+      payload = await request.json()
+      if isinstance(payload, dict):
+        raw_target_hosts = payload.get("target_hosts", [])
+        if isinstance(raw_target_hosts, list):
+          target_hosts = [
+            str(item or "").strip().lower()
+            for item in raw_target_hosts
+            if str(item or "").strip()
+          ]
+        else:
+          single_target = str(payload.get("target_host", "") or "").strip().lower()
+          if single_target:
+            target_hosts = [single_target]
+        platform_user = str(payload.get("platform_user", "") or "").strip()
+        platform_pass = str(payload.get("platform_pass", "") or "").strip()
+    except Exception:
+      payload = {}
+
+  for target_host in target_hosts:
+    if target_host not in LAB_CERT_MANAGER_ALLOWED_HOSTS:
+      return JSONResponse(
+        {
+          "ok": False,
+          "detail": f"Invalid target host: {target_host}",
+        },
+        status_code=400,
+      )
+
+  if platform_user and platform_pass:
+    resolved_cucm_user = platform_user
+    resolved_cucm_pass = platform_pass
+  else:
+    _, resolved_cucm_user, resolved_cucm_pass = _resolve_cucm_credentials(request, cucm_host, "", "")
+
+  if not str(resolved_cucm_user or "").strip() or not str(resolved_cucm_pass or "").strip():
+    return JSONResponse(
+      {
+        "ok": False,
+        "detail": "Missing platform credentials. Use cached login or provide Platform Username/Password.",
+      },
+      status_code=400,
+    )
+
+  rows = _collect_lab_certificate_inventory(resolved_cucm_user, resolved_cucm_pass, target_hosts)
   return JSONResponse(
     {
       "ok": True,
       "operator": username,
       "environment": "LAB",
+      "target_hosts": target_hosts,
       "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
       "rows": rows,
       "restart_policy": {
