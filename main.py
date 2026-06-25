@@ -5105,165 +5105,167 @@ def genesys_admin_placeholder(request: Request):
         const queueForm = document.getElementById("genesys-queue-search-form");
         const queueStatusEl = document.getElementById("genesys-queue-search-status");
         const queueResultsEl = document.getElementById("genesys-queue-search-results");
-        if (!form || !statusEl || !resultsEl || !rawDownloadEl || !queueForm || !queueStatusEl || !queueResultsEl) return;
+        if (form && statusEl && resultsEl && rawDownloadEl) {
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Running Genesys lookup...";
+            rawDownloadEl.innerHTML = "";
+            resultsEl.innerHTML = "";
 
-        form.addEventListener("submit", async function (event) {
-          event.preventDefault();
-          statusEl.textContent = "Running Genesys lookup...";
-          rawDownloadEl.innerHTML = "";
-          resultsEl.innerHTML = "";
-
-          try {
-            const formData = new FormData(form);
-            const response = await fetch("/genesys/users/extract", {
-              method: "POST",
-              body: formData,
-            });
-            const payload = await response.json();
-            if (!response.ok || !payload.ok) {
-              throw new Error((payload && payload.error) || "Genesys lookup failed.");
-            }
-
-            const rows = payload.rows || [];
-            const emailTargetCount = Number(payload.cucm_email_targets || 0);
-            const warningCount = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
-            statusEl.textContent = "Region: " + (payload.region || "") + " | CUCM Emails: " + emailTargetCount + " | Matches: " + rows.length + " | Warnings: " + warningCount;
-            if (payload.raw_download_url) {
-              const rawName = payload.raw_filename || "genesys_user_extract.json";
-              rawDownloadEl.innerHTML = "<a href='" + payload.raw_download_url + "' style='display:inline-block;padding:7px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Raw Genesys JSON (" + rawName + ")</a>";
-            }
-
-            if (!rows.length) {
-              resultsEl.innerHTML = "<p style='color:#4e6a84;'>No matching users found.</p>";
-              return;
-            }
-
-            let html = "<table><thead><tr>";
-            html += "<th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>Action</th><th>Template Source</th><th>Template Phone</th><th>Template Site ID</th><th>Template Base Settings</th><th>Template Lines</th><th>ACD Skills</th><th>Queues</th><th>State</th><th>User ID</th>";
-            html += "</tr></thead><tbody>";
-            rows.forEach(function (row, i) {
-              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
-              html += "<tr style='background:" + bg + ";'>";
-              html += "<td>" + (row.name || "") + "</td>";
-              html += "<td>" + (row.email || "") + "</td>";
-              html += "<td>" + (row.username || "") + "</td>";
-              html += "<td>" + (row.division || "") + "</td>";
-              html += "<td>" + (row.webrtc_phone || "") + "</td>";
-              if (row.can_build_webrtc) {
-                html += "<td><button type='button' class='genesys-build-btn' data-user-id='" + (row.id || "") + "' data-user-name='" + (row.name || "") + "'>Build + Associate</button></td>";
-              } else {
-                html += "<td><span style='color:#2d7a43;font-weight:700;'>Already Present</span></td>";
-              }
-              html += "<td>" + (row.phone_template_source || "") + "</td>";
-              html += "<td>" + (row.phone_template_name || "") + "</td>";
-              html += "<td style='font-family:Consolas,monospace;'>" + (row.phone_template_site_id || "") + "</td>";
-              html += "<td style='font-family:Consolas,monospace;'>" + (row.phone_template_base_settings_id || "") + "</td>";
-              html += "<td>" + (row.phone_template_line_count || 0) + "</td>";
-              html += "<td>" + (row.acd_skills || "") + "</td>";
-              html += "<td>" + (row.queues || "") + "</td>";
-              html += "<td>" + (row.state || "") + "</td>";
-              html += "<td style='font-family:Consolas,monospace;'>" + (row.id || "") + "</td>";
-              html += "</tr>";
-            });
-            html += "</tbody></table>";
-            resultsEl.innerHTML = html;
-
-            const buildButtons = resultsEl.querySelectorAll(".genesys-build-btn");
-            buildButtons.forEach(function (btn) {
-              btn.addEventListener("click", async function () {
-                const userId = String(btn.getAttribute("data-user-id") || "").trim();
-                const userName = String(btn.getAttribute("data-user-name") || "").trim();
-                if (!userId) return;
-
-                btn.disabled = true;
-                const originalText = btn.textContent;
-                btn.textContent = "Building...";
-                statusEl.textContent = "Building WebRTC phone for " + userName + "...";
-
-                try {
-                  const buildForm = new FormData();
-                  buildForm.append("user_id", userId);
-                  buildForm.append("user_name", userName);
-
-                  const buildResponse = await fetch("/genesys/users/build-webrtc", {
-                    method: "POST",
-                    body: buildForm,
-                  });
-                  const buildPayload = await buildResponse.json();
-                  if (!buildResponse.ok || !buildPayload.ok) {
-                    throw new Error((buildPayload && buildPayload.error) || "Build failed.");
-                  }
-
-                  btn.textContent = "Built";
-                  btn.style.background = "#2d7a43";
-                  btn.style.color = "#fff";
-                  statusEl.textContent = "Build success for " + userName + ": " + (buildPayload.phone_name || "") + " (" + (buildPayload.association_result || "") + ")";
-                } catch (buildErr) {
-                  btn.disabled = false;
-                  btn.textContent = originalText;
-                  statusEl.textContent = "Build failed for " + userName + ": " + ((buildErr && buildErr.message) || "Unknown error.");
-                }
+            try {
+              const formData = new FormData(form);
+              const response = await fetch("/genesys/users/extract", {
+                method: "POST",
+                body: formData,
               });
-            });
-          } catch (err) {
-            statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
-          }
-        });
-
-        queueForm.addEventListener("submit", async function (event) {
-          event.preventDefault();
-          queueStatusEl.textContent = "Running queue lookup...";
-          queueResultsEl.innerHTML = "";
-
-          try {
-            const formData = new FormData(queueForm);
-            const response = await fetch("/genesys/queues/lookup", {
-              method: "POST",
-              body: formData,
-            });
-            const payload = await response.json();
-            if (!response.ok || !payload.ok) {
-              throw new Error((payload && payload.error) || "Queue lookup failed.");
-            }
-
-            const rows = payload.rows || [];
-            const warnings = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
-            const diagnostics = Array.isArray(payload.diagnostics) ? payload.diagnostics : [];
-            const directQueueId = String(payload.direct_queue_id || "");
-            queueStatusEl.textContent = "Queue Query: " + (payload.query || "") + " | Direct Queue ID: " + (directQueueId || "(none)") + " | Matched Queues: " + ((payload.queues || []).length || 0) + " | Member Rows: " + rows.length + " | Warnings: " + warnings + " | Diagnostics: " + diagnostics.length;
-
-            if (!rows.length) {
-              let noRowsHtml = "<p style='color:#4e6a84;'>No queue members found for this query.</p>";
-              if (diagnostics.length) {
-                noRowsHtml += "<div style='margin-top:8px;padding:8px;border:1px solid #d7e3ee;border-radius:6px;background:#f9fcff;'><strong>Diagnostics</strong><pre style='white-space:pre-wrap;margin:6px 0 0 0;font-size:12px;line-height:1.35;'>" + diagnostics.join("\n") + "</pre></div>";
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload && payload.error) || "Genesys lookup failed.");
               }
-              queueResultsEl.innerHTML = noRowsHtml;
-              return;
-            }
 
-            let html = "<table><thead><tr>";
-            html += "<th>Queue Name</th><th>Queue ID</th><th>Member Name</th><th>Member Email</th><th>Member Username</th><th>Member ID</th>";
-            html += "</tr></thead><tbody>";
-            rows.forEach(function (row, i) {
-              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
-              html += "<tr style='background:" + bg + ";'>";
-              html += "<td>" + (row.queue_name || "") + "</td>";
-              html += "<td style='font-family:Consolas,monospace;'>" + (row.queue_id || "") + "</td>";
-              html += "<td>" + (row.member_name || "") + "</td>";
-              html += "<td>" + (row.member_email || "") + "</td>";
-              html += "<td>" + (row.member_username || "") + "</td>";
-              html += "<td style='font-family:Consolas,monospace;'>" + (row.member_id || "") + "</td>";
-              html += "</tr>";
-            });
-            html += "</tbody></table>";
-            if (diagnostics.length) {
-              html += "<div style='margin-top:8px;padding:8px;border:1px solid #d7e3ee;border-radius:6px;background:#f9fcff;'><strong>Diagnostics</strong><pre style='white-space:pre-wrap;margin:6px 0 0 0;font-size:12px;line-height:1.35;'>" + diagnostics.join("\n") + "</pre></div>";
+              const rows = payload.rows || [];
+              const emailTargetCount = Number(payload.cucm_email_targets || 0);
+              const warningCount = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
+              statusEl.textContent = "Region: " + (payload.region || "") + " | CUCM Emails: " + emailTargetCount + " | Matches: " + rows.length + " | Warnings: " + warningCount;
+              if (payload.raw_download_url) {
+                const rawName = payload.raw_filename || "genesys_user_extract.json";
+                rawDownloadEl.innerHTML = "<a href='" + payload.raw_download_url + "' style='display:inline-block;padding:7px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Raw Genesys JSON (" + rawName + ")</a>";
+              }
+
+              if (!rows.length) {
+                resultsEl.innerHTML = "<p style='color:#4e6a84;'>No matching users found.</p>";
+                return;
+              }
+
+              let html = "<table><thead><tr>";
+              html += "<th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>Action</th><th>Template Source</th><th>Template Phone</th><th>Template Site ID</th><th>Template Base Settings</th><th>Template Lines</th><th>ACD Skills</th><th>Queues</th><th>State</th><th>User ID</th>";
+              html += "</tr></thead><tbody>";
+              rows.forEach(function (row, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                html += "<tr style='background:" + bg + ";'>";
+                html += "<td>" + (row.name || "") + "</td>";
+                html += "<td>" + (row.email || "") + "</td>";
+                html += "<td>" + (row.username || "") + "</td>";
+                html += "<td>" + (row.division || "") + "</td>";
+                html += "<td>" + (row.webrtc_phone || "") + "</td>";
+                if (row.can_build_webrtc) {
+                  html += "<td><button type='button' class='genesys-build-btn' data-user-id='" + (row.id || "") + "' data-user-name='" + (row.name || "") + "'>Build + Associate</button></td>";
+                } else {
+                  html += "<td><span style='color:#2d7a43;font-weight:700;'>Already Present</span></td>";
+                }
+                html += "<td>" + (row.phone_template_source || "") + "</td>";
+                html += "<td>" + (row.phone_template_name || "") + "</td>";
+                html += "<td style='font-family:Consolas,monospace;'>" + (row.phone_template_site_id || "") + "</td>";
+                html += "<td style='font-family:Consolas,monospace;'>" + (row.phone_template_base_settings_id || "") + "</td>";
+                html += "<td>" + (row.phone_template_line_count || 0) + "</td>";
+                html += "<td>" + (row.acd_skills || "") + "</td>";
+                html += "<td>" + (row.queues || "") + "</td>";
+                html += "<td>" + (row.state || "") + "</td>";
+                html += "<td style='font-family:Consolas,monospace;'>" + (row.id || "") + "</td>";
+                html += "</tr>";
+              });
+              html += "</tbody></table>";
+              resultsEl.innerHTML = html;
+
+              const buildButtons = resultsEl.querySelectorAll(".genesys-build-btn");
+              buildButtons.forEach(function (btn) {
+                btn.addEventListener("click", async function () {
+                  const userId = String(btn.getAttribute("data-user-id") || "").trim();
+                  const userName = String(btn.getAttribute("data-user-name") || "").trim();
+                  if (!userId) return;
+
+                  btn.disabled = true;
+                  const originalText = btn.textContent;
+                  btn.textContent = "Building...";
+                  statusEl.textContent = "Building WebRTC phone for " + userName + "...";
+
+                  try {
+                    const buildForm = new FormData();
+                    buildForm.append("user_id", userId);
+                    buildForm.append("user_name", userName);
+
+                    const buildResponse = await fetch("/genesys/users/build-webrtc", {
+                      method: "POST",
+                      body: buildForm,
+                    });
+                    const buildPayload = await buildResponse.json();
+                    if (!buildResponse.ok || !buildPayload.ok) {
+                      throw new Error((buildPayload && buildPayload.error) || "Build failed.");
+                    }
+
+                    btn.textContent = "Built";
+                    btn.style.background = "#2d7a43";
+                    btn.style.color = "#fff";
+                    statusEl.textContent = "Build success for " + userName + ": " + (buildPayload.phone_name || "") + " (" + (buildPayload.association_result || "") + ")";
+                  } catch (buildErr) {
+                    btn.disabled = false;
+                    btn.textContent = originalText;
+                    statusEl.textContent = "Build failed for " + userName + ": " + ((buildErr && buildErr.message) || "Unknown error.");
+                  }
+                });
+              });
+            } catch (err) {
+              statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
             }
-            queueResultsEl.innerHTML = html;
-          } catch (err) {
-            queueStatusEl.textContent = "Queue lookup failed: " + ((err && err.message) || "Unknown error.");
-          }
-        });
+          });
+        }
+
+        if (queueForm && queueStatusEl && queueResultsEl) {
+          queueForm.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            queueStatusEl.textContent = "Running queue lookup...";
+            queueResultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(queueForm);
+              const response = await fetch("/genesys/queues/lookup", {
+                method: "POST",
+                body: formData,
+              });
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload && payload.error) || "Queue lookup failed.");
+              }
+
+              const rows = payload.rows || [];
+              const warnings = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
+              const diagnostics = Array.isArray(payload.diagnostics) ? payload.diagnostics : [];
+              const directQueueId = String(payload.direct_queue_id || "");
+              queueStatusEl.textContent = "Queue Query: " + (payload.query || "") + " | Direct Queue ID: " + (directQueueId || "(none)") + " | Matched Queues: " + ((payload.queues || []).length || 0) + " | Member Rows: " + rows.length + " | Warnings: " + warnings + " | Diagnostics: " + diagnostics.length;
+
+              if (!rows.length) {
+                let noRowsHtml = "<p style='color:#4e6a84;'>No queue members found for this query.</p>";
+                if (diagnostics.length) {
+                  noRowsHtml += "<div style='margin-top:8px;padding:8px;border:1px solid #d7e3ee;border-radius:6px;background:#f9fcff;'><strong>Diagnostics</strong><pre style='white-space:pre-wrap;margin:6px 0 0 0;font-size:12px;line-height:1.35;'>" + diagnostics.join("\n") + "</pre></div>";
+                }
+                queueResultsEl.innerHTML = noRowsHtml;
+                return;
+              }
+
+              let html = "<table><thead><tr>";
+              html += "<th>Queue Name</th><th>Queue ID</th><th>Member Name</th><th>Member Email</th><th>Member Username</th><th>Member ID</th>";
+              html += "</tr></thead><tbody>";
+              rows.forEach(function (row, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                html += "<tr style='background:" + bg + ";'>";
+                html += "<td>" + (row.queue_name || "") + "</td>";
+                html += "<td style='font-family:Consolas,monospace;'>" + (row.queue_id || "") + "</td>";
+                html += "<td>" + (row.member_name || "") + "</td>";
+                html += "<td>" + (row.member_email || "") + "</td>";
+                html += "<td>" + (row.member_username || "") + "</td>";
+                html += "<td style='font-family:Consolas,monospace;'>" + (row.member_id || "") + "</td>";
+                html += "</tr>";
+              });
+              html += "</tbody></table>";
+              if (diagnostics.length) {
+                html += "<div style='margin-top:8px;padding:8px;border:1px solid #d7e3ee;border-radius:6px;background:#f9fcff;'><strong>Diagnostics</strong><pre style='white-space:pre-wrap;margin:6px 0 0 0;font-size:12px;line-height:1.35;'>" + diagnostics.join("\n") + "</pre></div>";
+              }
+              queueResultsEl.innerHTML = html;
+            } catch (err) {
+              queueStatusEl.textContent = "Queue lookup failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        }
       })();
     </script>
   </body>
