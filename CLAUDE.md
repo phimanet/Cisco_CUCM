@@ -126,6 +126,7 @@ Priority keys:
 - Genesys extraction table now surfaces template-ready fields per user: template source, template phone name, site ID, base settings ID, and line count.
 - Added inline Genesys action flow: when lookup shows no WebRTC phone, UI now offers **Build + Associate** button per user.
 - Added backend route `/genesys/users/build-webrtc` using template baseline + Genesys Phone Management creation path; attempts user association during create and falls back to station association call when needed.
+- Fixed Genesys extractor parsing for ACD skills where payload returns `entities[].name` directly (not only `entities[].skill.name`), and changed ACD Skills/Queues display to explicit `(none)` when empty to avoid blank-column confusion.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.

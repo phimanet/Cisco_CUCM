@@ -845,12 +845,18 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         entities = skills_payload.get("entities", []) or []
         names = []
         for item in entities:
-          skill = item.get("skill") if isinstance(item, dict) else {}
-          if isinstance(skill, dict):
+          if not isinstance(item, dict):
+            continue
+
+          # Genesys payloads can provide the skill name either directly on the entity
+          # or nested under `skill.name` depending on endpoint/version.
+          skill_name = str(item.get("name", "") or "").strip()
+          if not skill_name:
+            skill = item.get("skill") if isinstance(item.get("skill"), dict) else {}
             skill_name = str(skill.get("name", "") or "").strip()
-            if skill_name:
-              names.append(skill_name)
-        acd_skills_text = ", ".join(sorted(set(names), key=str.lower))
+          if skill_name:
+            names.append(skill_name)
+        acd_skills_text = ", ".join(sorted(set(names), key=str.lower)) if names else "(none)"
       elif err_skills:
         warnings.append(f"{row.get('name', user_id)} skills: {err_skills}")
 
@@ -862,7 +868,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
           q_name = str(item.get("name", "") or "").strip() if isinstance(item, dict) else ""
           if q_name:
             queue_names.append(q_name)
-        queues_text = ", ".join(sorted(set(queue_names), key=str.lower))
+        queues_text = ", ".join(sorted(set(queue_names), key=str.lower)) if queue_names else "(none)"
       elif err_queues:
         warnings.append(f"{row.get('name', user_id)} queues: {err_queues}")
 
