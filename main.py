@@ -7,6 +7,7 @@ import os
 import re
 import socket
 import subprocess
+import tempfile
 from collections import Counter
 import smtplib
 import ssl
@@ -1762,7 +1763,25 @@ def _probe_tls_certificate(hostname: str, ip_address: str, port: int, timeout_se
 
     with socket.create_connection((host, int(port)), timeout=float(timeout_seconds)) as sock:
       with context.wrap_socket(sock, server_hostname=host) as tls_sock:
-        cert = tls_sock.getpeercert()
+        der_cert = tls_sock.getpeercert(binary_form=True)
+        cert = tls_sock.getpeercert() or {}
+
+    if (not cert) and der_cert:
+      tmp_path = ""
+      try:
+        pem_cert = ssl.DER_cert_to_PEM_cert(der_cert)
+        with tempfile.NamedTemporaryFile("w", suffix=".pem", delete=False, encoding="utf-8") as tmp:
+          tmp.write(pem_cert)
+          tmp_path = tmp.name
+        cert = ssl._ssl._test_decode_cert(tmp_path) or {}
+      except Exception:
+        cert = cert or {}
+      finally:
+        if tmp_path:
+          try:
+            os.unlink(tmp_path)
+          except Exception:
+            pass
 
     if not cert:
       result["status"] = "No certificate returned"
@@ -1821,10 +1840,8 @@ def _collect_lab_certificate_inventory() -> list:
         ip_address=str(target.get("ip", "") or "").strip(),
         port=int(port),
       )
-      if best_probe is None:
-        best_probe = probe
+      best_probe = probe
       if probe.get("reachable"):
-        best_probe = probe
         break
 
     probe = best_probe or {}
