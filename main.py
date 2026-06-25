@@ -947,6 +947,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
     phone_template = _build_phone_template_summary({}, fallback_template)
     acd_skills_text = ""
     queues_text = ""
+    queue_resolution_source = "none"
 
     if user_id:
       user_payload = {}
@@ -1027,6 +1028,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
             queue_names.append(q_name)
         if queue_names:
           queues_text = ", ".join(sorted(set(queue_names), key=str.lower))
+          queue_resolution_source = "direct-user-queues"
         else:
           fallback_queue_names, fallback_queue_err = _genesys_lookup_user_queues_via_membership(
             api_base,
@@ -1037,8 +1039,10 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
           )
           if fallback_queue_names:
             queues_text = ", ".join(fallback_queue_names)
+            queue_resolution_source = "membership-fallback"
           else:
             queues_text = "(none)"
+            queue_resolution_source = "none"
             if fallback_queue_err:
               warnings.append(f"{row.get('name', user_id)} queue membership fallback: {fallback_queue_err}")
       elif err_queues:
@@ -1056,6 +1060,8 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         "phone_management": phone_management_payload,
         "routing_skills": skills_payload if ok_skills else {},
         "queues": queues_payload if ok_queues else {},
+        "resolved_queues": queues_text,
+        "queue_resolution_source": queue_resolution_source,
       })
 
     merged = dict(row)
