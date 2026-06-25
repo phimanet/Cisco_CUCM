@@ -1984,6 +1984,12 @@ def _fetch_platform_certificate_rows(hostname: str, username: str, password: str
     "/cmplatform/certificateFindList.do?sortColumn=expiration&sortAscend=true",
     "/cmplatform/certificateFindList.do",
     "/cmplatform/certificateList.do",
+    "/platform/certificateFindList.do?sortColumn=expiration&sortAscend=true",
+    "/platform/certificateFindList.do",
+    "/platform/certificateList.do",
+    "/cupplatform/certificateFindList.do?sortColumn=expiration&sortAscend=true",
+    "/cupplatform/certificateFindList.do",
+    "/cupplatform/certificateList.do",
     "/cuplatform/certificateFindList.do?sortColumn=expiration&sortAscend=true",
   ]
 
@@ -2037,7 +2043,9 @@ def _fetch_platform_certificate_rows(hostname: str, username: str, password: str
         "/j_security_check",
         "/platform/j_security_check",
         "/cmplatform/j_security_check",
+        "/cupplatform/j_security_check",
         "/cuadmin/j_security_check",
+        "/cupadmin/j_security_check",
       ]
       login_payloads = [
         {"j_username": user, "j_password": pwd},
@@ -2078,6 +2086,57 @@ def _fetch_platform_certificate_rows(hostname: str, username: str, password: str
       errors.append(f"{path}: {type(exc).__name__}: {exc}")
 
   return [], " ; ".join(errors) if errors else "Certificate table not found"
+
+
+def _collect_lab_tls_quick_expiry(target_hostnames: list[str] | None = None) -> list:
+  rows = []
+  target_hosts = {
+    str(item or "").strip().lower()
+    for item in (target_hostnames or [])
+    if str(item or "").strip()
+  }
+
+  for target in LAB_CERT_MANAGER_TARGETS:
+    host = str(target.get("hostname", "") or "").strip().lower()
+    if host not in LAB_CERT_MANAGER_ALLOWED_HOSTS:
+      continue
+    if target_hosts and host not in target_hosts:
+      continue
+
+    ip = str(target.get("ip", "") or "").strip()
+    probe_result = None
+    for port in CERT_MANAGER_PROBE_PORTS:
+      candidate = _probe_tls_certificate(host, ip, int(port), timeout_seconds=6)
+      if candidate.get("reachable"):
+        probe_result = candidate
+        break
+      if probe_result is None:
+        probe_result = candidate
+
+    probe_result = probe_result or {}
+    days_remaining = probe_result.get("days_remaining")
+    status_text = str(probe_result.get("status", "") or "").strip() or "Unknown"
+    expiration_text = str(probe_result.get("valid_until", "") or "").strip()
+
+    rows.append(
+      {
+        "system": str(target.get("system", "") or "").strip(),
+        "role": str(target.get("role", "") or "").strip(),
+        "hostname": host,
+        "certificate": str(probe_result.get("common_name", "") or "").strip(),
+        "expiration_date": expiration_text,
+        "days_remaining": days_remaining,
+        "status": status_text,
+      }
+    )
+
+  rows.sort(
+    key=lambda row: (
+      float("inf") if row.get("days_remaining") is None else int(row.get("days_remaining")),
+      str(row.get("hostname", "")),
+    )
+  )
+  return rows
 
 
 def _probe_tls_certificate(hostname: str, ip_address: str, port: int, timeout_seconds: int = 6) -> dict:
@@ -10064,6 +10123,8 @@ def page4_certificate_manager(request: Request):
       <section class="panel">
         <h3 style="margin-top:0;">LAB Certificate Inventory</h3>
         <p id="cert-inventory-status" style="margin-top:4px; color:#2c5c8a;">Loading inventory...</p>
+        <h4 style="margin:12px 0 6px 0;">Quick Expiry Overview (Presented TLS Certificate)</h4>
+        <div id="cert-quick-results" style="overflow-x:auto; margin-bottom:10px;"></div>
         <h4 style="margin:12px 0 6px 0;">Certificates Expiring in 45 Days or Less</h4>
         <div id="cert-inventory-results" style="overflow-x:auto;"></div>
       </section>
@@ -10075,6 +10136,7 @@ def page4_certificate_manager(request: Request):
         const credentialExpiresAtMs = Number("__CREDENTIAL_EXPIRES_AT_MS__") || 0;
 
         const statusEl = document.getElementById("cert-inventory-status");
+        const quickResultsEl = document.getElementById("cert-quick-results");
         const resultsEl = document.getElementById("cert-inventory-results");
         const refreshBtn = document.getElementById("refresh-inventory-btn");
         const targetHostEl = document.getElementById("target-host");
@@ -10146,6 +10208,45 @@ def page4_certificate_manager(request: Request):
           resultsEl.innerHTML = html;
         }
 
+        function renderQuick(rows) {
+          if (!Array.isArray(rows) || !rows.length) {
+            quickResultsEl.innerHTML = "<p>No quick overview rows returned.</p>";
+            return;
+          }
+
+          const expiringOrErrorRows = rows.filter(function (row) {
+            const days = Number(row.days_remaining);
+            const statusText = String(row.status || "").toLowerCase();
+            if (statusText.includes("error") || statusText.includes("fail") || statusText.includes("timed out")) return true;
+            return !Number.isNaN(days) && days <= 45;
+          });
+
+          if (!expiringOrErrorRows.length) {
+            quickResultsEl.innerHTML = "<p style='margin:0; color:#047857; font-weight:700;'>No quick-signal expirations within 45 days.</p>";
+            return;
+          }
+
+          let html = "<table><thead><tr>";
+          html += "<th>System</th><th>Role</th><th>Host</th><th>Presented Certificate (CN)</th><th>Expiration</th><th>Days Left</th><th>Status</th>";
+          html += "</tr></thead><tbody>";
+
+          expiringOrErrorRows.forEach(function (row) {
+            const cls = statusClass(row);
+            html += "<tr>";
+            html += "<td>" + toCell(row.system) + "</td>";
+            html += "<td>" + toCell(row.role) + "</td>";
+            html += "<td class='mono'>" + toCell(row.hostname) + "</td>";
+            html += "<td class='mono'>" + toCell(row.certificate) + "</td>";
+            html += "<td class='mono'>" + toCell(row.expiration_date) + "</td>";
+            html += "<td>" + toCell(row.days_remaining) + "</td>";
+            html += "<td class='" + cls + "'>" + toCell(row.status) + "</td>";
+            html += "</tr>";
+          });
+
+          html += "</tbody></table>";
+          quickResultsEl.innerHTML = html;
+        }
+
         async function loadInventory() {
           statusEl.textContent = "Loading certificate inventory...";
           const payloadBody = {
@@ -10173,6 +10274,7 @@ def page4_certificate_manager(request: Request):
             if (!response.ok || !payload.ok) {
               throw new Error((payload && payload.detail) || "Failed to load certificate inventory.");
             }
+            renderQuick(payload.quick_rows || []);
             render(payload.rows || []);
             const checkedAt = payload.checked_at || "";
             const targetText = (Array.isArray(payload.target_hosts) && payload.target_hosts.length)
@@ -10181,6 +10283,7 @@ def page4_certificate_manager(request: Request):
             statusEl.textContent = "Inventory refreshed. Checked at: " + checkedAt + "." + targetText;
           } catch (err) {
             statusEl.textContent = "Inventory failed: " + ((err && err.message) || "Unknown error.");
+            quickResultsEl.innerHTML = "";
             resultsEl.innerHTML = "";
           }
         }
@@ -10284,6 +10387,7 @@ async def cert_manager_lab_inventory(request: Request):
       status_code=400,
     )
 
+  quick_rows = _collect_lab_tls_quick_expiry(target_hosts)
   rows = _collect_lab_certificate_inventory(resolved_cucm_user, resolved_cucm_pass, target_hosts)
   return JSONResponse(
     {
@@ -10292,6 +10396,7 @@ async def cert_manager_lab_inventory(request: Request):
       "environment": "LAB",
       "target_hosts": target_hosts,
       "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+      "quick_rows": quick_rows,
       "rows": rows,
       "restart_policy": {
         "full_server_restart_allowed": False,
