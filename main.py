@@ -518,6 +518,77 @@ def _genesys_extract_webrtc_phone(user_payload: dict, routing_payload: dict, sta
   return ""
 
 
+def _genesys_extract_phone_management_name(phone_payload: dict, user_id: str, user_name: str, user_email: str) -> str:
+  entities = phone_payload.get("entities", []) if isinstance(phone_payload, dict) else []
+  clean_user_id = str(user_id or "").strip().lower()
+  clean_user_name = str(user_name or "").strip().lower()
+  clean_user_email = str(user_email or "").strip().lower()
+
+  for item in entities or []:
+    if not isinstance(item, dict):
+      continue
+
+    # Collect candidate fields that might reference the owning user.
+    owner_tokens = []
+    for key in ["user", "owner", "webRtcUser", "associatedUser", "primaryUser", "effectiveOwner"]:
+      obj = item.get(key)
+      if isinstance(obj, dict):
+        owner_tokens.append(str(obj.get("id", "") or "").strip().lower())
+        owner_tokens.append(str(obj.get("name", "") or "").strip().lower())
+        owner_tokens.append(str(obj.get("email", "") or "").strip().lower())
+
+    for key in ["userId", "ownerUserId", "ownerId", "associatedUserId", "username", "email"]:
+      owner_tokens.append(str(item.get(key, "") or "").strip().lower())
+
+    is_match = False
+    if clean_user_id and clean_user_id in owner_tokens:
+      is_match = True
+    elif clean_user_email and clean_user_email in owner_tokens:
+      is_match = True
+    elif clean_user_name and any(clean_user_name in token for token in owner_tokens if token):
+      is_match = True
+
+    if not is_match:
+      continue
+
+    for key in ["name", "phoneName", "stationName", "displayName"]:
+      value = str(item.get(key, "") or "").strip()
+      if value:
+        return value
+
+    item_id = str(item.get("id", "") or "").strip()
+    if item_id:
+      return item_id
+
+  return ""
+
+
+def _genesys_lookup_phone_management_name(api_base: str, access_token: str, user_id: str, user_name: str, user_email: str) -> tuple[str, dict, str]:
+  # Phone inventory can be large; cap paging for responsiveness.
+  merged_entities = []
+  for page_number in range(1, 6):
+    ok_phones, phones_payload, err_phones = _genesys_get_json(
+      api_base,
+      access_token,
+      "/api/v2/telephony/providers/edges/phones",
+      params={"pageSize": 100, "pageNumber": page_number},
+    )
+    if not ok_phones:
+      return "", {}, err_phones
+
+    entities = phones_payload.get("entities", []) if isinstance(phones_payload, dict) else []
+    if isinstance(entities, list):
+      merged_entities.extend(entities)
+
+    page_count = int(phones_payload.get("pageCount", 0) or 0) if isinstance(phones_payload, dict) else 0
+    if not page_count or page_number >= page_count:
+      break
+
+  payload = {"entities": merged_entities}
+  phone_name = _genesys_extract_phone_management_name(payload, user_id, user_name, user_email)
+  return phone_name, payload, ""
+
+
 def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) -> dict:
   clean_region, _, api_base = _genesys_region_to_urls(region)
   enriched = []
@@ -537,6 +608,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
       skills_payload = {}
       queues_payload = {}
       station_associations_payload = {}
+      phone_management_payload = {}
 
       ok_user, user_payload, err_user = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}")
       if ok_user:
@@ -563,6 +635,19 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         routing_payload if ok_routing else {},
         station_associations_payload if ok_station_assoc else {},
       )
+
+      if not webrtc_phone:
+        phone_management_name, phone_management_payload, err_phone_mgmt = _genesys_lookup_phone_management_name(
+          api_base,
+          access_token,
+          user_id,
+          str(row.get("name", "") or ""),
+          str(row.get("email", "") or ""),
+        )
+        if phone_management_name:
+          webrtc_phone = phone_management_name
+        elif err_phone_mgmt:
+          warnings.append(f"{row.get('name', user_id)} phone management lookup: {err_phone_mgmt}")
 
       ok_skills, skills_payload, err_skills = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}/routingskills")
       if ok_skills:
@@ -597,6 +682,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         "user": user_payload if ok_user else {},
         "routing_status": routing_payload if ok_routing else {},
         "station_associations": station_associations_payload if ok_station_assoc else {},
+        "phone_management": phone_management_payload,
         "routing_skills": skills_payload if ok_skills else {},
         "queues": queues_payload if ok_queues else {},
       })
