@@ -118,6 +118,7 @@ Priority keys:
 - Baseline freeze decision: keep current implementation in LAB/PROD as prepared-but-disabled foundation until Twilio enables preview access.
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.
+- Genesys WebRTC Phone mapping now adds explicit `/api/v2/users/{id}/stationassociations` fallback so assigned stations are captured even when routing status/profile payloads omit station fields.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.

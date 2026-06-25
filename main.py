@@ -487,7 +487,7 @@ def _genesys_get_json(api_base: str, access_token: str, path: str, params: dict 
   return True, payload if isinstance(payload, dict) else {}, ""
 
 
-def _genesys_extract_webrtc_phone(user_payload: dict, routing_payload: dict) -> str:
+def _genesys_extract_webrtc_phone(user_payload: dict, routing_payload: dict, station_associations_payload: dict | None = None) -> str:
   station = routing_payload.get("station") if isinstance(routing_payload, dict) else {}
   if isinstance(station, dict):
     station_name = str(station.get("name", "") or "").strip()
@@ -500,6 +500,20 @@ def _genesys_extract_webrtc_phone(user_payload: dict, routing_payload: dict) -> 
     user_station_name = str(user_station.get("name", "") or "").strip()
     if user_station_name:
       return user_station_name
+
+  # Final fallback: use the station association list for the user.
+  payload = station_associations_payload if isinstance(station_associations_payload, dict) else {}
+  entities = payload.get("entities", []) or []
+  for item in entities:
+    if not isinstance(item, dict):
+      continue
+    station_obj = item.get("station") if isinstance(item.get("station"), dict) else item
+    station_name = str(station_obj.get("name", "") or "").strip()
+    if station_name:
+      return station_name
+    station_id = str(station_obj.get("id", "") or "").strip()
+    if station_id:
+      return station_id
 
   return ""
 
@@ -518,6 +532,12 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
     queues_text = ""
 
     if user_id:
+      user_payload = {}
+      routing_payload = {}
+      skills_payload = {}
+      queues_payload = {}
+      station_associations_payload = {}
+
       ok_user, user_payload, err_user = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}")
       if ok_user:
         division = user_payload.get("division") or {}
@@ -527,10 +547,22 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         warnings.append(f"{row.get('name', user_id)} user profile: {err_user}")
 
       ok_routing, routing_payload, err_routing = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}/routingstatus")
-      if ok_routing:
-        webrtc_phone = _genesys_extract_webrtc_phone(user_payload if ok_user else {}, routing_payload)
-      elif err_routing:
+      if not ok_routing and err_routing:
         warnings.append(f"{row.get('name', user_id)} routing status: {err_routing}")
+
+      ok_station_assoc, station_associations_payload, err_station_assoc = _genesys_get_json(
+        api_base,
+        access_token,
+        f"/api/v2/users/{user_id}/stationassociations",
+      )
+      if not ok_station_assoc and err_station_assoc:
+        warnings.append(f"{row.get('name', user_id)} station associations: {err_station_assoc}")
+
+      webrtc_phone = _genesys_extract_webrtc_phone(
+        user_payload if ok_user else {},
+        routing_payload if ok_routing else {},
+        station_associations_payload if ok_station_assoc else {},
+      )
 
       ok_skills, skills_payload, err_skills = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}/routingskills")
       if ok_skills:
@@ -564,6 +596,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         "email": str(row.get("email", "") or "").strip(),
         "user": user_payload if ok_user else {},
         "routing_status": routing_payload if ok_routing else {},
+        "station_associations": station_associations_payload if ok_station_assoc else {},
         "routing_skills": skills_payload if ok_skills else {},
         "queues": queues_payload if ok_queues else {},
       })
