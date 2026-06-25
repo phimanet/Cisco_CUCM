@@ -9695,11 +9695,19 @@ def page4_certificate_manager(request: Request):
             return;
           }
 
+          const sortedRows = rows.slice().sort(function (a, b) {
+            const aDays = Number(a.days_remaining);
+            const bDays = Number(b.days_remaining);
+            const aVal = Number.isNaN(aDays) ? Number.POSITIVE_INFINITY : aDays;
+            const bVal = Number.isNaN(bDays) ? Number.POSITIVE_INFINITY : bDays;
+            return aVal - bVal;
+          });
+
           let html = "<table><thead><tr>";
-          html += "<th>System</th><th>Certificate</th><th>Expiration Date</th><th>Days Left</th><th>Valid Until (UTC)</th><th>Common Name</th><th>Issuer</th><th>Status</th>";
+          html += "<th>System</th><th>Certificate</th><th>Expiration Date</th><th>Days Left</th><th>Valid Until (UTC)</th><th>Common Name</th><th>Status</th>";
           html += "</tr></thead><tbody>";
 
-          rows.forEach(function (row) {
+          sortedRows.forEach(function (row) {
             const cls = statusClass(row);
             html += "<tr>";
             html += "<td>" + toCell(row.system) + "</td>";
@@ -9708,7 +9716,6 @@ def page4_certificate_manager(request: Request):
             html += "<td>" + toCell(row.days_remaining) + "</td>";
             html += "<td class='mono'>" + toCell(row.valid_until) + "</td>";
             html += "<td class='mono'>" + toCell(row.common_name) + "</td>";
-            html += "<td>" + toCell(row.issuer) + "</td>";
             html += "<td class='" + cls + "'>" + toCell(row.status) + "</td>";
             html += "</tr>";
           });
