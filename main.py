@@ -9654,8 +9654,6 @@ def page4_certificate_manager(request: Request):
         <h3 style="margin-top:0;">LAB Certificate Inventory</h3>
         <p id="cert-inventory-status" style="margin-top:4px; color:#2c5c8a;">Loading inventory...</p>
         <h4 style="margin:12px 0 6px 0;">Certificates Expiring in 45 Days or Less</h4>
-        <div id="cert-expiring-results" style="overflow-x:auto; margin-bottom:12px;"></div>
-        <h4 style="margin:10px 0 6px 0;">All Certificates</h4>
         <div id="cert-inventory-results" style="overflow-x:auto;"></div>
       </section>
     </main>
@@ -9671,7 +9669,6 @@ def page4_certificate_manager(request: Request):
 
         const statusEl = document.getElementById("cert-inventory-status");
         const resultsEl = document.getElementById("cert-inventory-results");
-        const expiringEl = document.getElementById("cert-expiring-results");
         const refreshBtn = document.getElementById("refresh-inventory-btn");
 
         function toCell(value) {
@@ -9696,9 +9693,6 @@ def page4_certificate_manager(request: Request):
         function render(rows) {
           if (!Array.isArray(rows) || !rows.length) {
             resultsEl.innerHTML = "<p>No rows returned.</p>";
-            if (expiringEl) {
-              expiringEl.innerHTML = "";
-            }
             return;
           }
 
@@ -9715,44 +9709,23 @@ def page4_certificate_manager(request: Request):
             return !Number.isNaN(days) && days <= 45;
           });
 
-          if (expiringEl) {
-            if (!expiringRows.length) {
-              expiringEl.innerHTML = "<p style='margin:0; color:#047857; font-weight:700;'>No certificates expiring within 45 days.</p>";
-            } else {
-              let expHtml = "<table><thead><tr>";
-              expHtml += "<th>System</th><th>Server</th><th>Certificate</th><th>Expiration Date</th><th>Days Left</th><th>Status</th>";
-              expHtml += "</tr></thead><tbody>";
-
-              expiringRows.forEach(function (row) {
-                const cls = statusClass(row);
-                expHtml += "<tr>";
-                expHtml += "<td>" + toCell(row.system) + "</td>";
-                expHtml += "<td class='mono'>" + toCell(row.hostname) + "</td>";
-                expHtml += "<td class='mono'>" + toCell(row.certificate) + "</td>";
-                expHtml += "<td class='mono'>" + toCell(row.expiration_date) + "</td>";
-                expHtml += "<td>" + toCell(row.days_remaining) + "</td>";
-                expHtml += "<td class='" + cls + "'>" + toCell(row.status) + "</td>";
-                expHtml += "</tr>";
-              });
-
-              expHtml += "</tbody></table>";
-              expiringEl.innerHTML = expHtml;
-            }
+          if (!expiringRows.length) {
+            resultsEl.innerHTML = "<p style='margin:0; color:#047857; font-weight:700;'>No certificates expiring within 45 days.</p>";
+            return;
           }
 
           let html = "<table><thead><tr>";
-          html += "<th>System</th><th>Certificate</th><th>Expiration Date</th><th>Days Left</th><th>Valid Until (UTC)</th><th>Common Name</th><th>Status</th>";
+          html += "<th>System</th><th>Server</th><th>Certificate</th><th>Expiration Date</th><th>Days Left</th><th>Status</th>";
           html += "</tr></thead><tbody>";
 
-          sortedRows.forEach(function (row) {
+          expiringRows.forEach(function (row) {
             const cls = statusClass(row);
             html += "<tr>";
             html += "<td>" + toCell(row.system) + "</td>";
+            html += "<td class='mono'>" + toCell(row.hostname) + "</td>";
             html += "<td class='mono'>" + toCell(row.certificate) + "</td>";
             html += "<td class='mono'>" + toCell(row.expiration_date) + "</td>";
             html += "<td>" + toCell(row.days_remaining) + "</td>";
-            html += "<td class='mono'>" + toCell(row.valid_until) + "</td>";
-            html += "<td class='mono'>" + toCell(row.common_name) + "</td>";
             html += "<td class='" + cls + "'>" + toCell(row.status) + "</td>";
             html += "</tr>";
           });
