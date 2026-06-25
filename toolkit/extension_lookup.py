@@ -40,7 +40,13 @@ def _find_first_text(elem, path_tags):
 def _axl_post(session, cucm_host, soap_xml):
     url = f"https://{cucm_host}:8443/axl/"
     headers = {"Content-Type": "text/xml"}
-    resp = session.post(url, data=soap_xml.encode("utf-8"), headers=headers, timeout=60)
+    resp = session.post(
+        url,
+        data=soap_xml.encode("utf-8"),
+        headers=headers,
+        timeout=60,
+        verify=False,
+    )
     resp.raise_for_status()
     return resp.text
 
@@ -207,6 +213,7 @@ def lookup_extension_owner(cucm_host, cucm_user, cucm_pass, pattern):
 
     session = requests.Session()
     session.verify = False
+    session.trust_env = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
     # 1. List matching lines (supports partial/wildcard input)
@@ -278,6 +285,7 @@ def check_user_devices(cucm_host, cucm_user, cucm_pass, target_user):
 
     session = requests.Session()
     session.verify = False
+    session.trust_env = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
     xml_text = _axl_post(session, cucm_host, _soap_get_user(target_user))
