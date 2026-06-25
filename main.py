@@ -457,8 +457,6 @@ def _genesys_search_users_by_name(
         "email": email,
         "username": username,
         "state": str(user.get("state", "") or "").strip(),
-        "department": str(user.get("department", "") or "").strip(),
-        "title": str(user.get("title", "") or "").strip(),
       })
 
     page_count = int(payload.get("pageCount", 0) or 0)
@@ -489,21 +487,23 @@ def _genesys_get_json(api_base: str, access_token: str, path: str, params: dict 
   return True, payload if isinstance(payload, dict) else {}, ""
 
 
-def _genesys_extract_default_phone(user_payload: dict) -> str:
-  primary_contact = user_payload.get("primaryContactInfo", []) or []
-  for item in primary_contact:
-    if str(item.get("mediaType", "") or "").strip().lower() == "phone":
-      address = str(item.get("address", "") or "").strip()
-      if address:
-        return address
+def _genesys_extract_webrtc_phone(user_payload: dict, routing_payload: dict) -> str:
+  station = routing_payload.get("station") if isinstance(routing_payload, dict) else {}
+  if isinstance(station, dict):
+    station_name = str(station.get("name", "") or "").strip()
+    station_id = str(station.get("id", "") or "").strip()
+    station_name_lower = station_name.lower()
+    if station_name and ("webrtc" in station_name_lower or "web rtc" in station_name_lower):
+      return station_name
 
-  addresses = user_payload.get("addresses", []) or []
-  for item in addresses:
-    media_type = str(item.get("mediaType", "") or "").strip().lower()
-    if media_type in {"phone", "work", "mobile"}:
-      address = str(item.get("address", "") or "").strip()
-      if address:
-        return address
+    # Fall back to user profile station field if it explicitly indicates WebRTC.
+    if station_id:
+      user_station = user_payload.get("station") or {}
+      if isinstance(user_station, dict):
+        user_station_name = str(user_station.get("name", "") or "").strip()
+        if user_station_name and ("webrtc" in user_station_name.lower() or "web rtc" in user_station_name.lower()):
+          return user_station_name
+
   return ""
 
 
@@ -515,7 +515,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
   for row in rows:
     user_id = str(row.get("id", "") or "").strip()
     division_name = ""
-    default_phone = ""
+    webrtc_phone = ""
     acd_skills_text = ""
     queues_text = ""
 
@@ -525,9 +525,14 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         division = user_payload.get("division") or {}
         if isinstance(division, dict):
           division_name = str(division.get("name", "") or "").strip()
-        default_phone = _genesys_extract_default_phone(user_payload)
       elif err_user:
         warnings.append(f"{row.get('name', user_id)} user profile: {err_user}")
+
+      ok_routing, routing_payload, err_routing = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}/routingstatus")
+      if ok_routing:
+        webrtc_phone = _genesys_extract_webrtc_phone(user_payload if ok_user else {}, routing_payload)
+      elif err_routing:
+        warnings.append(f"{row.get('name', user_id)} routing status: {err_routing}")
 
       ok_skills, skills_payload, err_skills = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}/routingskills")
       if ok_skills:
@@ -557,7 +562,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
 
     merged = dict(row)
     merged["division"] = division_name
-    merged["default_phone"] = default_phone
+    merged["webrtc_phone"] = webrtc_phone
     merged["acd_skills"] = acd_skills_text
     merged["queues"] = queues_text
     enriched.append(merged)
@@ -4478,7 +4483,7 @@ def genesys_admin_placeholder(request: Request):
             }
 
             let html = "<table><thead><tr>";
-            html += "<th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>Default Phone</th><th>ACD Skills</th><th>Queues</th><th>State</th><th>Department</th><th>Title</th><th>User ID</th>";
+            html += "<th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>ACD Skills</th><th>Queues</th><th>State</th><th>User ID</th>";
             html += "</tr></thead><tbody>";
             rows.forEach(function (row, i) {
               const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
@@ -4487,12 +4492,10 @@ def genesys_admin_placeholder(request: Request):
               html += "<td>" + (row.email || "") + "</td>";
               html += "<td>" + (row.username || "") + "</td>";
               html += "<td>" + (row.division || "") + "</td>";
-              html += "<td>" + (row.default_phone || "") + "</td>";
+              html += "<td>" + (row.webrtc_phone || "") + "</td>";
               html += "<td>" + (row.acd_skills || "") + "</td>";
               html += "<td>" + (row.queues || "") + "</td>";
               html += "<td>" + (row.state || "") + "</td>";
-              html += "<td>" + (row.department || "") + "</td>";
-              html += "<td>" + (row.title || "") + "</td>";
               html += "<td style='font-family:Consolas,monospace;'>" + (row.id || "") + "</td>";
               html += "</tr>";
             });
