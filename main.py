@@ -1973,7 +1973,7 @@ def _parse_cisco_certificate_table(html_text: str) -> list:
   return []
 
 
-def _fetch_platform_certificate_rows(hostname: str, username: str, password: str, timeout_seconds: int = 20) -> tuple[list, str]:
+def _fetch_platform_certificate_rows(hostname: str, username: str, password: str, timeout_seconds: int = 6) -> tuple[list, str]:
   host = (hostname or "").strip()
   user = (username or "").strip()
   pwd = (password or "").strip()
@@ -10522,7 +10522,7 @@ def page4_certificate_manager(request: Request):
 
         function render(rows) {
           if (!Array.isArray(rows) || !rows.length) {
-            resultsEl.innerHTML = "<p>No rows returned.</p>";
+            resultsEl.innerHTML = "<p>Select one or more target hosts, then click Refresh Inventory for deep lookup results.</p>";
             return;
           }
 
@@ -10750,8 +10750,11 @@ def page4_certificate_manager(request: Request):
             const checkedAt = payload.checked_at || "";
             const targetText = (Array.isArray(payload.target_hosts) && payload.target_hosts.length)
               ? (" Target: " + payload.target_hosts.join(", "))
-              : " Target: all";
-            statusEl.textContent = "Inventory refreshed. Checked at: " + checkedAt + "." + targetText;
+              : " Target: none (quick overview only)";
+            const modeText = payload.inventory_mode === "quick-only"
+              ? " Mode: quick-only"
+              : " Mode: deep lookup";
+            statusEl.textContent = "Inventory refreshed. Checked at: " + checkedAt + "." + targetText + "." + modeText;
           } catch (err) {
             statusEl.textContent = "Inventory failed: " + ((err && err.message) || "Unknown error.");
             quickResultsEl.innerHTML = "";
@@ -10898,13 +10901,16 @@ async def cert_manager_lab_inventory(request: Request):
     )
 
   quick_rows = _collect_lab_tls_quick_expiry(target_hosts)
-  rows = _collect_lab_certificate_inventory(resolved_cucm_user, resolved_cucm_pass, target_hosts)
+  rows = []
+  if target_hosts:
+    rows = _collect_lab_certificate_inventory(resolved_cucm_user, resolved_cucm_pass, target_hosts)
   return JSONResponse(
     {
       "ok": True,
       "operator": username,
       "environment": "LAB",
       "target_hosts": target_hosts,
+      "inventory_mode": "deep" if target_hosts else "quick-only",
       "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
       "quick_rows": quick_rows,
       "rows": rows,
@@ -10943,7 +10949,7 @@ async def cert_manager_lab_inventory_sync(request: Request):
     )
 
   quick_rows = _collect_lab_tls_quick_expiry(target_hosts)
-  rows = _collect_lab_certificate_inventory(resolved_user, resolved_pass, target_hosts)
+  rows = _collect_lab_certificate_inventory(resolved_user, resolved_pass, target_hosts) if target_hosts else []
 
   def _cell(v):
     return escape(str(v if v is not None else "-"))
@@ -11007,6 +11013,7 @@ async def cert_manager_lab_inventory_sync(request: Request):
       <table><thead><tr><th>System</th><th>Certificate</th><th>Expiration</th><th>Days Left</th><th>Status</th></tr></thead><tbody>{quick_html_rows or '<tr><td colspan="5">No rows</td></tr>'}</tbody></table>
     </div>
     <div class='card'><h3 style='margin:0 0 6px 0;'>Deep Dive (45 days + failures)</h3>
+      <p style='margin:0 0 8px 0;color:#4e6a84;'>Deep lookup runs only when target hosts are selected on Page 4.</p>
       <table><thead><tr><th>System</th><th>Certificate</th><th>Common Name</th><th>Usage</th><th>Type</th><th>Expiration Date</th><th>Days Left</th><th>Status</th></tr></thead><tbody>{deep_html_rows or '<tr><td colspan="8">No rows</td></tr>'}</tbody></table>
     </div>
     <div class='card'><p style='margin:0;'>Operator: {escape(str(username or ''))}</p></div>
