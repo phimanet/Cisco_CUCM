@@ -474,6 +474,102 @@ def _genesys_search_users_by_name(
   }
 
 
+def _genesys_get_json(api_base: str, access_token: str, path: str, params: dict | None = None) -> tuple[bool, dict, str]:
+  headers = {"Authorization": f"Bearer {access_token}"}
+  url = f"{api_base}{path}"
+  try:
+    response = requests.get(url, headers=headers, params=params, timeout=25)
+    payload = response.json() if response.text else {}
+  except Exception as exc:
+    return False, {}, f"Genesys API request failed for {path}: {exc}"
+
+  if response.status_code != 200:
+    message = str(payload.get("message", "") or payload.get("error", "")).strip() or f"HTTP {response.status_code}"
+    return False, payload if isinstance(payload, dict) else {}, message
+  return True, payload if isinstance(payload, dict) else {}, ""
+
+
+def _genesys_extract_default_phone(user_payload: dict) -> str:
+  primary_contact = user_payload.get("primaryContactInfo", []) or []
+  for item in primary_contact:
+    if str(item.get("mediaType", "") or "").strip().lower() == "phone":
+      address = str(item.get("address", "") or "").strip()
+      if address:
+        return address
+
+  addresses = user_payload.get("addresses", []) or []
+  for item in addresses:
+    media_type = str(item.get("mediaType", "") or "").strip().lower()
+    if media_type in {"phone", "work", "mobile"}:
+      address = str(item.get("address", "") or "").strip()
+      if address:
+        return address
+  return ""
+
+
+def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) -> dict:
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+  enriched = []
+  warnings = []
+
+  for row in rows:
+    user_id = str(row.get("id", "") or "").strip()
+    division_name = ""
+    default_phone = ""
+    acd_skills_text = ""
+    queues_text = ""
+
+    if user_id:
+      ok_user, user_payload, err_user = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}")
+      if ok_user:
+        division = user_payload.get("division") or {}
+        if isinstance(division, dict):
+          division_name = str(division.get("name", "") or "").strip()
+        default_phone = _genesys_extract_default_phone(user_payload)
+      elif err_user:
+        warnings.append(f"{row.get('name', user_id)} user profile: {err_user}")
+
+      ok_skills, skills_payload, err_skills = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}/routingskills")
+      if ok_skills:
+        entities = skills_payload.get("entities", []) or []
+        names = []
+        for item in entities:
+          skill = item.get("skill") if isinstance(item, dict) else {}
+          if isinstance(skill, dict):
+            skill_name = str(skill.get("name", "") or "").strip()
+            if skill_name:
+              names.append(skill_name)
+        acd_skills_text = ", ".join(sorted(set(names), key=str.lower))
+      elif err_skills:
+        warnings.append(f"{row.get('name', user_id)} skills: {err_skills}")
+
+      ok_queues, queues_payload, err_queues = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}/queues")
+      if ok_queues:
+        entities = queues_payload.get("entities", []) or []
+        queue_names = []
+        for item in entities:
+          q_name = str(item.get("name", "") or "").strip() if isinstance(item, dict) else ""
+          if q_name:
+            queue_names.append(q_name)
+        queues_text = ", ".join(sorted(set(queue_names), key=str.lower))
+      elif err_queues:
+        warnings.append(f"{row.get('name', user_id)} queues: {err_queues}")
+
+    merged = dict(row)
+    merged["division"] = division_name
+    merged["default_phone"] = default_phone
+    merged["acd_skills"] = acd_skills_text
+    merged["queues"] = queues_text
+    enriched.append(merged)
+
+  return {
+    "ok": True,
+    "region": clean_region,
+    "rows": enriched,
+    "warnings": warnings,
+  }
+
+
 def _create_auth_session(cucm_host: str, username: str, cucm_pass: str) -> str:
   session_id = str(uuid4())
   now_epoch = time.time()
@@ -4373,7 +4469,8 @@ def genesys_admin_placeholder(request: Request):
 
             const rows = payload.rows || [];
             const emailTargetCount = Number(payload.cucm_email_targets || 0);
-            statusEl.textContent = "Region: " + (payload.region || "") + " | CUCM Emails: " + emailTargetCount + " | Matches: " + rows.length;
+            const warningCount = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
+            statusEl.textContent = "Region: " + (payload.region || "") + " | CUCM Emails: " + emailTargetCount + " | Matches: " + rows.length + " | Warnings: " + warningCount;
 
             if (!rows.length) {
               resultsEl.innerHTML = "<p style='color:#4e6a84;'>No matching users found.</p>";
@@ -4381,7 +4478,7 @@ def genesys_admin_placeholder(request: Request):
             }
 
             let html = "<table><thead><tr>";
-            html += "<th>Name</th><th>Email</th><th>Username</th><th>State</th><th>Department</th><th>Title</th><th>User ID</th>";
+            html += "<th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>Default Phone</th><th>ACD Skills</th><th>Queues</th><th>State</th><th>Department</th><th>Title</th><th>User ID</th>";
             html += "</tr></thead><tbody>";
             rows.forEach(function (row, i) {
               const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
@@ -4389,6 +4486,10 @@ def genesys_admin_placeholder(request: Request):
               html += "<td>" + (row.name || "") + "</td>";
               html += "<td>" + (row.email || "") + "</td>";
               html += "<td>" + (row.username || "") + "</td>";
+              html += "<td>" + (row.division || "") + "</td>";
+              html += "<td>" + (row.default_phone || "") + "</td>";
+              html += "<td>" + (row.acd_skills || "") + "</td>";
+              html += "<td>" + (row.queues || "") + "</td>";
               html += "<td>" + (row.state || "") + "</td>";
               html += "<td>" + (row.department || "") + "</td>";
               html += "<td>" + (row.title || "") + "</td>";
@@ -4474,11 +4575,18 @@ def genesys_extract_users_route(
       "rows": [],
     }, status_code=400)
 
+  enrich_result = _genesys_enrich_user_rows(
+    token_result.get("region", clean_region),
+    token_result.get("access_token", ""),
+    search_result.get("rows", []),
+  )
+
   return JSONResponse({
     "ok": True,
-    "region": search_result.get("region", clean_region),
-    "rows": search_result.get("rows", []),
+    "region": enrich_result.get("region", search_result.get("region", clean_region)),
+    "rows": enrich_result.get("rows", search_result.get("rows", [])),
     "cucm_email_targets": len(cucm_email_targets),
+    "warnings": enrich_result.get("warnings", []),
   })
 
 
