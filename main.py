@@ -1766,31 +1766,46 @@ def _parse_cisco_certificate_table(html_text: str) -> list:
   if not source:
     return []
 
-  tables = re.findall(r"<table[^>]*>.*?</table>", source, flags=re.IGNORECASE | re.DOTALL)
-  for table in tables:
-    table_lc = table.lower()
-    if "certificate" not in table_lc or "expiration" not in table_lc:
+  rows = []
+  tr_matches = re.findall(r"<tr[^>]*>(.*?)</tr>", source, flags=re.IGNORECASE | re.DOTALL)
+  for tr_html in tr_matches:
+    td_cells = re.findall(r"<td[^>]*>(.*?)</td>", tr_html, flags=re.IGNORECASE | re.DOTALL)
+    if len(td_cells) < 8:
       continue
 
-    rows = []
-    tr_matches = re.findall(r"<tr[^>]*>(.*?)</tr>", table, flags=re.IGNORECASE | re.DOTALL)
-    for tr_html in tr_matches:
-      td_cells = re.findall(r"<td[^>]*>(.*?)</td>", tr_html, flags=re.IGNORECASE | re.DOTALL)
-      if len(td_cells) < 8:
-        continue
+    cleaned = [_html_to_text(cell) for cell in td_cells]
 
-      cleaned = [_html_to_text(cell) for cell in td_cells]
-      row = {
-        "certificate": cleaned[0],
-        "common_name": cleaned[1],
-        "usage": cleaned[2],
-        "type": cleaned[3],
-        "expiration_date": cleaned[7],
+    expiration_idx = -1
+    for idx, value in enumerate(cleaned):
+      if re.match(r"^\d{1,2}/\d{1,2}/\d{2,4}$", value):
+        expiration_idx = idx
+        break
+    if expiration_idx < 0:
+      continue
+
+    # Expected Cisco platform order (with minor tolerance):
+    # 0 Certificate, 1 Common Name/Common Name_SerialNumber, 2 Usage, 3 Type, ... Expiration at idx>=7
+    certificate = cleaned[0] if len(cleaned) > 0 else ""
+    common_name = cleaned[1] if len(cleaned) > 1 else ""
+    usage = cleaned[2] if len(cleaned) > 2 else ""
+    cert_type = cleaned[3] if len(cleaned) > 3 else ""
+    expiration_date = cleaned[expiration_idx]
+
+    if not certificate and not common_name:
+      continue
+
+    rows.append(
+      {
+        "certificate": certificate,
+        "common_name": common_name,
+        "usage": usage,
+        "type": cert_type,
+        "expiration_date": expiration_date,
       }
-      rows.append(row)
+    )
 
-    if rows:
-      return rows
+  if rows:
+    return rows
 
   return []
 
