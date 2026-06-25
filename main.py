@@ -189,12 +189,68 @@ SMS_EXPERIMENTAL_MENU_LAB_ONLY = (os.getenv("SMS_EXPERIMENTAL_MENU_LAB_ONLY", "t
   "yes",
   "on",
 }
+CERT_MANAGER_PAGE_ENABLED = (os.getenv("CERT_MANAGER_PAGE_ENABLED", "true") or "true").strip().lower() in {
+  "1",
+  "true",
+  "yes",
+  "on",
+}
+CERT_MANAGER_PAGE_LAB_ONLY = (os.getenv("CERT_MANAGER_PAGE_LAB_ONLY", "true") or "true").strip().lower() in {
+  "1",
+  "true",
+  "yes",
+  "on",
+}
 INTEGRATION_PREFLIGHT_REQUIRED = (os.getenv("INTEGRATION_PREFLIGHT_REQUIRED", "true") or "true").strip().lower() in {
   "1",
   "true",
   "yes",
   "on",
 }
+LAB_CERT_MANAGER_TARGETS = [
+  {
+    "system": "CUCM",
+    "role": "Publisher",
+    "hostname": "lascucmpl01.ahs.int",
+    "ip": "10.241.18.200",
+  },
+  {
+    "system": "CUCM",
+    "role": "Subscriber",
+    "hostname": "lascucmsl01.ahs.int",
+    "ip": "10.241.18.201",
+  },
+  {
+    "system": "IM and Presence",
+    "role": "Publisher",
+    "hostname": "lascucimppl01.ahs.int",
+    "ip": "10.241.18.204",
+  },
+  {
+    "system": "IM and Presence",
+    "role": "Subscriber",
+    "hostname": "lascucimpsl01.ahs.int",
+    "ip": "10.241.18.205",
+  },
+  {
+    "system": "Unity Voicemail",
+    "role": "Publisher",
+    "hostname": "lascutypl01.ahs.int",
+    "ip": "10.241.18.202",
+  },
+  {
+    "system": "Unity Voicemail",
+    "role": "Subscriber",
+    "hostname": "lascutysl01.ahs.int",
+    "ip": "10.241.18.203",
+  },
+]
+LAB_CERT_MANAGER_ALLOWED_HOSTS = {
+  str(item.get("hostname", "") or "").strip().lower()
+  for item in LAB_CERT_MANAGER_TARGETS
+  if str(item.get("hostname", "") or "").strip()
+}
+CERT_MANAGER_PROBE_PORTS = [8443, 443]
 CSF_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 TWILIO_INBOUND_VERIFICATION_PROFILES = {
   "phimane": {
@@ -1657,6 +1713,139 @@ def _git_commit_short() -> str:
     return "unknown"
 
 
+def _parse_certificate_not_after(value: str):
+  text = (value or "").strip()
+  if not text:
+    return None
+
+  for fmt in ["%b %d %H:%M:%S %Y %Z", "%b %d %H:%M:%S %Y GMT"]:
+    try:
+      dt = datetime.datetime.strptime(text, fmt)
+      if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=datetime.timezone.utc)
+      return dt.astimezone(datetime.timezone.utc)
+    except Exception:
+      continue
+  return None
+
+
+def _extract_cert_name(parts) -> str:
+  tokens = []
+  for part in parts or []:
+    for key, value in part:
+      if value:
+        tokens.append(f"{key}={value}")
+  return ", ".join(tokens)
+
+
+def _probe_tls_certificate(hostname: str, ip_address: str, port: int, timeout_seconds: int = 6) -> dict:
+  host = (hostname or "").strip()
+  ip = (ip_address or "").strip()
+  result = {
+    "probe_host": host,
+    "probe_ip": ip,
+    "probe_port": int(port),
+    "reachable": False,
+    "valid_until": "",
+    "days_remaining": None,
+    "issuer": "",
+    "subject": "",
+    "common_name": "",
+    "subject_alt_names": [],
+    "status": "Probe failed",
+  }
+
+  try:
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+
+    with socket.create_connection((host, int(port)), timeout=float(timeout_seconds)) as sock:
+      with context.wrap_socket(sock, server_hostname=host) as tls_sock:
+        cert = tls_sock.getpeercert()
+
+    if not cert:
+      result["status"] = "No certificate returned"
+      return result
+
+    not_after_raw = (cert.get("notAfter", "") or "").strip()
+    not_after = _parse_certificate_not_after(not_after_raw)
+    days_remaining = None
+    if not_after:
+      delta = not_after - datetime.datetime.now(datetime.timezone.utc)
+      days_remaining = int(delta.total_seconds() // 86400)
+
+    common_name = ""
+    for part in cert.get("subject", []) or []:
+      for key, value in part:
+        if key == "commonName":
+          common_name = value
+          break
+      if common_name:
+        break
+
+    sans = []
+    for san_type, san_value in cert.get("subjectAltName", []) or []:
+      if san_type and san_value:
+        sans.append(f"{san_type}:{san_value}")
+
+    result.update(
+      {
+        "reachable": True,
+        "valid_until": not_after.isoformat() if not_after else not_after_raw,
+        "days_remaining": days_remaining,
+        "issuer": _extract_cert_name(cert.get("issuer", [])),
+        "subject": _extract_cert_name(cert.get("subject", [])),
+        "common_name": common_name,
+        "subject_alt_names": sans,
+        "status": "OK" if days_remaining is None or days_remaining >= 0 else "Expired",
+      }
+    )
+    return result
+  except Exception as exc:
+    result["status"] = f"{type(exc).__name__}: {exc}"
+    return result
+
+
+def _collect_lab_certificate_inventory() -> list:
+  rows = []
+  for target in LAB_CERT_MANAGER_TARGETS:
+    host = str(target.get("hostname", "") or "").strip().lower()
+    if host not in LAB_CERT_MANAGER_ALLOWED_HOSTS:
+      continue
+
+    best_probe = None
+    for port in CERT_MANAGER_PROBE_PORTS:
+      probe = _probe_tls_certificate(
+        hostname=host,
+        ip_address=str(target.get("ip", "") or "").strip(),
+        port=int(port),
+      )
+      if best_probe is None:
+        best_probe = probe
+      if probe.get("reachable"):
+        best_probe = probe
+        break
+
+    probe = best_probe or {}
+    rows.append(
+      {
+        "system": str(target.get("system", "") or "").strip(),
+        "role": str(target.get("role", "") or "").strip(),
+        "hostname": host,
+        "ip": str(target.get("ip", "") or "").strip(),
+        "probe_port": probe.get("probe_port"),
+        "reachable": bool(probe.get("reachable")),
+        "valid_until": str(probe.get("valid_until", "") or "").strip(),
+        "days_remaining": probe.get("days_remaining"),
+        "common_name": str(probe.get("common_name", "") or "").strip(),
+        "issuer": str(probe.get("issuer", "") or "").strip(),
+        "status": str(probe.get("status", "") or "").strip(),
+      }
+    )
+  return rows
+
+
 def _check_aerialink_feasibility(force_refresh: bool = False) -> dict:
   now_epoch = time.time()
   cache_key = "aerialink"
@@ -1750,6 +1939,7 @@ def _wants_json_response(request: Request) -> bool:
     "/strike-mask/in-use",
     "/lookup/sms-number-look",
     "/twilio/amieweb/sms-host",
+    "/cert-manager/lab/inventory",
     "/ops/integrations/feasibility",
     "/ops/parity-report",
   }:
@@ -9250,6 +9440,331 @@ __ADMIN_CARD__
   )
 
 
+@app.get("/page4", response_class=HTMLResponse)
+def page4_certificate_manager(request: Request):
+  session = _get_auth_session(request) or {}
+  now_epoch = time.time()
+  session_username = str(session.get("username", ""))
+  if not _is_admin_user(session_username):
+    return HTMLResponse(
+      content="<h3>403 Forbidden</h3><p>You are not authorized to access Server Certificate Manager.</p>",
+      status_code=403,
+    )
+
+  auth_user = escape(session_username)
+  auth_cucm_host = str(session.get("cucm_host", "") or "")
+  cert_manager_enabled = _feature_enabled(
+    CERT_MANAGER_PAGE_ENABLED,
+    lab_only=(CERT_MANAGER_PAGE_LAB_ONLY and PREVIEW_FEATURES_LAB_ONLY_DEFAULT),
+    cucm_host=auth_cucm_host,
+  )
+  if not cert_manager_enabled or not _is_lab_environment(auth_cucm_host):
+    return HTMLResponse(
+      content="<h3>403 Forbidden</h3><p>Server Certificate Manager is LAB-only and disabled in this environment.</p>",
+      status_code=403,
+    )
+
+  has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
+  if not has_cached_cucm_pass:
+    page4_sid = request.cookies.get(SESSION_COOKIE_NAME, "")
+    if page4_sid:
+      has_cached_cucm_pass = bool((AUTH_SESSION_SECRETS.get(page4_sid, {}).get("cucm_pass", "") or "").strip())
+  credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
+  credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
+  env_text, env_css_class = _get_environment_label(auth_cucm_host)
+
+  html = """
+<html>
+  <head>
+    <title>Server Certificate Manager - Voice Operations Portal</title>
+    <style>
+      body {
+        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        margin: 0;
+        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+        color: #12304a;
+      }
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 16px;
+        background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94));
+        color: #fff;
+      }
+      .topbar-actions a {
+        color: #fff;
+        text-decoration: none;
+        margin-left: 10px;
+        font-weight: 700;
+      }
+      .env-banner {
+        display: inline-block;
+        padding: 6px 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .content {
+        max-width: 1300px;
+        margin: 10px auto;
+        padding: 0 14px 16px 14px;
+      }
+      .panel {
+        background: #fff;
+        border-radius: 12px;
+        border: 1px solid rgba(0, 47, 108, 0.12);
+        box-shadow: 0 10px 24px rgba(0, 47, 108, 0.11);
+        padding: 14px;
+        margin-bottom: 12px;
+      }
+      .preview-banner {
+        margin: 0 0 10px 0;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid #d97706;
+        background: #fff4e5;
+        color: #8a4b00;
+        font-weight: 700;
+      }
+      .danger-banner {
+        margin: 0;
+        padding: 10px 12px;
+        border-radius: 10px;
+        border: 1px solid #dc2626;
+        background: #fef2f2;
+        color: #991b1b;
+        font-weight: 700;
+      }
+      .toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        margin-top: 12px;
+      }
+      .toolbar button,
+      .toolbar a {
+        display: inline-block;
+        background: #005eb8;
+        color: #fff;
+        border: 1px solid #005eb8;
+        border-radius: 8px;
+        padding: 8px 12px;
+        font-size: 13px;
+        font-weight: 700;
+        text-decoration: none;
+        cursor: pointer;
+      }
+      .toolbar a {
+        background: #fff;
+        color: #005eb8;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th {
+        background: #005eb8;
+        color: #fff;
+        text-align: left;
+        padding: 8px;
+        white-space: nowrap;
+      }
+      td {
+        border-bottom: 1px solid #d5e4f5;
+        padding: 8px;
+        vertical-align: top;
+      }
+      .mono {
+        font-family: Consolas, "Courier New", monospace;
+      }
+      .status-ok {
+        color: #047857;
+        font-weight: 700;
+      }
+      .status-warn {
+        color: #b45309;
+        font-weight: 700;
+      }
+      .status-bad {
+        color: #b91c1c;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div><strong>Voice Operations Portal</strong> - Server Certificate Manager</div>
+      <div>
+        <span class="env-banner __ENV_CLASS__">__ENV_TEXT__</span>
+      </div>
+      <div class="topbar-actions">
+        <a href="/menu-admin">Administrative Items</a>
+        <a href="/logout">Log Out</a>
+      </div>
+    </header>
+
+    <main class="content">
+      <section class="panel">
+        <p class="preview-banner">LAB-only preview: read-only certificate inventory for CUCM, IM and Presence, and Unity Voicemail.</p>
+        <p class="danger-banner">Full server restart is not part of this tool and is intentionally blocked by design.</p>
+        <p>Authenticated Operator: <strong>__AUTH_USER__</strong></p>
+        <div class="toolbar">
+          <button id="refresh-inventory-btn" type="button">Refresh Inventory</button>
+          <a href="/ops/parity-report" target="_blank" rel="noopener">Open Parity Report JSON</a>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h3 style="margin-top:0;">LAB Certificate Inventory</h3>
+        <p id="cert-inventory-status" style="margin-top:4px; color:#2c5c8a;">Loading inventory...</p>
+        <div id="cert-inventory-results" style="overflow-x:auto;"></div>
+      </section>
+    </main>
+
+    <script>
+      (function () {
+        const hasCachedCucmPass = "__HAS_CACHED_CUCM_PASS__" === "true";
+        const credentialExpiresAtMs = Number("__CREDENTIAL_EXPIRES_AT_MS__") || 0;
+        if (!hasCachedCucmPass || !credentialExpiresAtMs) {
+          window.location.href = "/";
+          return;
+        }
+
+        const statusEl = document.getElementById("cert-inventory-status");
+        const resultsEl = document.getElementById("cert-inventory-results");
+        const refreshBtn = document.getElementById("refresh-inventory-btn");
+
+        function toCell(value) {
+          if (value === null || value === undefined || value === "") return "-";
+          return String(value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        function statusClass(row) {
+          const ok = !!row.reachable;
+          const days = Number(row.days_remaining);
+          if (!ok) return "status-bad";
+          if (!Number.isNaN(days) && days >= 0 && days <= 30) return "status-warn";
+          if (!Number.isNaN(days) && days < 0) return "status-bad";
+          return "status-ok";
+        }
+
+        function render(rows) {
+          if (!Array.isArray(rows) || !rows.length) {
+            resultsEl.innerHTML = "<p>No rows returned.</p>";
+            return;
+          }
+
+          let html = "<table><thead><tr>";
+          html += "<th>System</th><th>Role</th><th>Host</th><th>IP</th><th>Port</th><th>Reachable</th><th>Days Left</th><th>Valid Until (UTC)</th><th>Common Name</th><th>Issuer</th><th>Status</th>";
+          html += "</tr></thead><tbody>";
+
+          rows.forEach(function (row) {
+            const cls = statusClass(row);
+            html += "<tr>";
+            html += "<td>" + toCell(row.system) + "</td>";
+            html += "<td>" + toCell(row.role) + "</td>";
+            html += "<td class='mono'>" + toCell(row.hostname) + "</td>";
+            html += "<td class='mono'>" + toCell(row.ip) + "</td>";
+            html += "<td class='mono'>" + toCell(row.probe_port) + "</td>";
+            html += "<td>" + (row.reachable ? "Yes" : "No") + "</td>";
+            html += "<td>" + toCell(row.days_remaining) + "</td>";
+            html += "<td class='mono'>" + toCell(row.valid_until) + "</td>";
+            html += "<td class='mono'>" + toCell(row.common_name) + "</td>";
+            html += "<td>" + toCell(row.issuer) + "</td>";
+            html += "<td class='" + cls + "'>" + toCell(row.status) + "</td>";
+            html += "</tr>";
+          });
+
+          html += "</tbody></table>";
+          resultsEl.innerHTML = html;
+        }
+
+        async function loadInventory() {
+          statusEl.textContent = "Loading certificate inventory...";
+          try {
+            const response = await fetch("/cert-manager/lab/inventory", {
+              method: "GET",
+              credentials: "same-origin",
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.detail) || "Failed to load certificate inventory.");
+            }
+            render(payload.rows || []);
+            const checkedAt = payload.checked_at || "";
+            statusEl.textContent = "Inventory refreshed. Checked at: " + checkedAt;
+          } catch (err) {
+            statusEl.textContent = "Inventory failed: " + ((err && err.message) || "Unknown error.");
+            resultsEl.innerHTML = "";
+          }
+        }
+
+        if (refreshBtn) {
+          refreshBtn.addEventListener("click", function () {
+            loadInventory();
+          });
+        }
+
+        loadInventory();
+      })();
+    </script>
+  </body>
+</html>
+""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
+
+  return HTMLResponse(
+    content=html,
+    headers={
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    },
+  )
+
+
+@app.get("/cert-manager/lab/inventory")
+def cert_manager_lab_inventory(request: Request):
+  session, username = _require_admin_session(request)
+  cucm_host = str(session.get("cucm_host", "") or "")
+  cert_manager_enabled = _feature_enabled(
+    CERT_MANAGER_PAGE_ENABLED,
+    lab_only=(CERT_MANAGER_PAGE_LAB_ONLY and PREVIEW_FEATURES_LAB_ONLY_DEFAULT),
+    cucm_host=cucm_host,
+  )
+  if not cert_manager_enabled or not _is_lab_environment(cucm_host):
+    return JSONResponse(
+      {
+        "ok": False,
+        "detail": "Server Certificate Manager is LAB-only and disabled in this environment.",
+      },
+      status_code=403,
+    )
+
+  rows = _collect_lab_certificate_inventory()
+  return JSONResponse(
+    {
+      "ok": True,
+      "operator": username,
+      "environment": "LAB",
+      "checked_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+      "rows": rows,
+      "restart_policy": {
+        "full_server_restart_allowed": False,
+        "service_restart_mode": "separate",
+      },
+    }
+  )
+
+
 @app.get("/menu-admin", response_class=HTMLResponse)
 @app.get("/menu2", response_class=HTMLResponse)
 @app.get("/page2", response_class=HTMLResponse)
@@ -9872,6 +10387,10 @@ def menu_admin_page(request: Request):
             <strong>📞 SMS Item Menu</strong>
             <span>Manage Twilio number verification and lookup operations.</span>
           </a>
+          <a class="hero-link-card" href="/page4">
+            <strong>🔐 Server Certificate Manager</strong>
+            <span>LAB-only read-only certificate inventory for CUCM, IM and Presence, and Unity.</span>
+          </a>
         </div>
       </section>
 
@@ -9902,6 +10421,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">⚙️ DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unityldapsync">Trigger Unity LDAP Sync</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/page4'">🔐 Server Certificate Manager (Page 4)</button>
           </div>
         </aside>
 
