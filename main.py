@@ -882,6 +882,81 @@ def _genesys_lookup_user_queues_via_membership(api_base: str, access_token: str,
   return sorted(set(matched_queue_names), key=str.lower), ""
 
 
+def _genesys_search_queues_by_name(api_base: str, access_token: str, queue_name: str) -> tuple[list[dict], str]:
+  clean_queue_name = str(queue_name or "").strip().lower()
+  if not clean_queue_name:
+    return [], "Queue name is required."
+
+  matched = []
+  max_queue_pages = max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 200))
+  for page_number in range(1, max_queue_pages + 1):
+    ok_queues, queues_payload, err_queues = _genesys_get_json(
+      api_base,
+      access_token,
+      "/api/v2/routing/queues",
+      params={"pageSize": 100, "pageNumber": page_number},
+    )
+    if not ok_queues:
+      return [], err_queues
+
+    entities = queues_payload.get("entities", []) if isinstance(queues_payload, dict) else []
+    for item in entities:
+      if not isinstance(item, dict):
+        continue
+      q_name = str(item.get("name", "") or "").strip()
+      q_id = str(item.get("id", "") or "").strip()
+      if not q_name and not q_id:
+        continue
+
+      q_name_l = q_name.lower()
+      q_id_l = q_id.lower()
+      if clean_queue_name == q_name_l or clean_queue_name == q_id_l or clean_queue_name in q_name_l:
+        matched.append(item)
+
+    page_count = int(queues_payload.get("pageCount", 0) or 0) if isinstance(queues_payload, dict) else 0
+    if not page_count or page_number >= page_count:
+      break
+
+  # Prefer exact name/id matches first.
+  def _rank(item: dict) -> tuple[int, str]:
+    q_name = str(item.get("name", "") or "").strip().lower()
+    q_id = str(item.get("id", "") or "").strip().lower()
+    if clean_queue_name == q_name or clean_queue_name == q_id:
+      return (0, q_name)
+    return (1, q_name)
+
+  return sorted(matched, key=_rank), ""
+
+
+def _genesys_get_queue_members(api_base: str, access_token: str, queue_id: str) -> tuple[list[dict], str]:
+  clean_queue_id = str(queue_id or "").strip()
+  if not clean_queue_id:
+    return [], "Queue id is required."
+
+  members = []
+  max_member_pages = max(1, min(GENESYS_QUEUE_MEMBER_MAX_PAGES, 200))
+  for member_page in range(1, max_member_pages + 1):
+    ok_members, members_payload, err_members = _genesys_get_json(
+      api_base,
+      access_token,
+      f"/api/v2/routing/queues/{clean_queue_id}/members",
+      params={"pageSize": 100, "pageNumber": member_page},
+    )
+    if not ok_members:
+      return [], err_members
+
+    entities = members_payload.get("entities", []) if isinstance(members_payload, dict) else []
+    for item in entities:
+      if isinstance(item, dict):
+        members.append(item)
+
+    page_count = int(members_payload.get("pageCount", 0) or 0) if isinstance(members_payload, dict) else 0
+    if not page_count or member_page >= page_count:
+      break
+
+  return members, ""
+
+
 def _load_genesys_webrtc_template() -> dict:
   try:
     with open(GENESYS_WEBRTC_TEMPLATE_PATH, "r", encoding="utf-8") as handle:
@@ -4936,6 +5011,7 @@ def genesys_admin_placeholder(request: Request):
         <aside class="portal-sidebar">
           <h4>Genesys Menu</h4>
           <button type="button" class="portal-nav-btn">Extract User by Name</button>
+          <button type="button" class="portal-nav-btn">Queue Lookup</button>
         </aside>
 
         <section class="portal-main">
@@ -4957,6 +5033,18 @@ def genesys_admin_placeholder(request: Request):
             <div id="genesys-user-raw-download" style="margin:6px 0 10px 0;"></div>
             <div id="genesys-user-search-results" style="overflow-x:auto;"></div>
           </div>
+
+          <div class="panel" style="margin-top:12px;">
+            <h3 style="margin-top:0;">Queue Lookup</h3>
+            <form id="genesys-queue-search-form">
+              <div class="search-filter-row">
+                <input name="queue_name" placeholder="Queue Name or Queue ID *" style="width:340px;" required>
+                <button type="submit">Lookup Queue Members</button>
+              </div>
+            </form>
+            <p id="genesys-queue-search-status" style="color:#2c5c8a; min-height:18px;">Ready.</p>
+            <div id="genesys-queue-search-results" style="overflow-x:auto;"></div>
+          </div>
         </section>
       </div>
     </main>
@@ -4967,7 +5055,10 @@ def genesys_admin_placeholder(request: Request):
         const statusEl = document.getElementById("genesys-user-search-status");
         const rawDownloadEl = document.getElementById("genesys-user-raw-download");
         const resultsEl = document.getElementById("genesys-user-search-results");
-        if (!form || !statusEl || !resultsEl || !rawDownloadEl) return;
+        const queueForm = document.getElementById("genesys-queue-search-form");
+        const queueStatusEl = document.getElementById("genesys-queue-search-status");
+        const queueResultsEl = document.getElementById("genesys-queue-search-results");
+        if (!form || !statusEl || !resultsEl || !rawDownloadEl || !queueForm || !queueStatusEl || !queueResultsEl) return;
 
         form.addEventListener("submit", async function (event) {
           event.preventDefault();
@@ -5069,6 +5160,52 @@ def genesys_admin_placeholder(request: Request):
             });
           } catch (err) {
             statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+          }
+        });
+
+        queueForm.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          queueStatusEl.textContent = "Running queue lookup...";
+          queueResultsEl.innerHTML = "";
+
+          try {
+            const formData = new FormData(queueForm);
+            const response = await fetch("/genesys/queues/lookup", {
+              method: "POST",
+              body: formData,
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Queue lookup failed.");
+            }
+
+            const rows = payload.rows || [];
+            const warnings = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
+            queueStatusEl.textContent = "Queue Query: " + (payload.query || "") + " | Matched Queues: " + ((payload.queues || []).length || 0) + " | Member Rows: " + rows.length + " | Warnings: " + warnings;
+
+            if (!rows.length) {
+              queueResultsEl.innerHTML = "<p style='color:#4e6a84;'>No queue members found for this query.</p>";
+              return;
+            }
+
+            let html = "<table><thead><tr>";
+            html += "<th>Queue Name</th><th>Queue ID</th><th>Member Name</th><th>Member Email</th><th>Member Username</th><th>Member ID</th>";
+            html += "</tr></thead><tbody>";
+            rows.forEach(function (row, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              html += "<tr style='background:" + bg + ";'>";
+              html += "<td>" + (row.queue_name || "") + "</td>";
+              html += "<td style='font-family:Consolas,monospace;'>" + (row.queue_id || "") + "</td>";
+              html += "<td>" + (row.member_name || "") + "</td>";
+              html += "<td>" + (row.member_email || "") + "</td>";
+              html += "<td>" + (row.member_username || "") + "</td>";
+              html += "<td style='font-family:Consolas,monospace;'>" + (row.member_id || "") + "</td>";
+              html += "</tr>";
+            });
+            html += "</tbody></table>";
+            queueResultsEl.innerHTML = html;
+          } catch (err) {
+            queueStatusEl.textContent = "Queue lookup failed: " + ((err && err.message) || "Unknown error.");
           }
         });
       })();
@@ -5176,6 +5313,79 @@ def genesys_extract_users_route(
     "warnings": enrich_result.get("warnings", []),
     "raw_download_url": f"/download/job-output/{raw_job_id}",
     "raw_filename": raw_filename,
+  })
+
+
+@app.post("/genesys/queues/lookup")
+def genesys_queue_lookup_route(queue_name: str = Form("")):
+  clean_queue_name = (queue_name or "").strip()
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  if not clean_queue_name:
+    return JSONResponse({"ok": False, "error": "Queue name is required."}, status_code=400)
+
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": token_result.get("error", "Genesys token request failed."),
+    }, status_code=400)
+
+  region = token_result.get("region", clean_region)
+  _, _, api_base = _genesys_region_to_urls(region)
+  queue_items, queue_err = _genesys_search_queues_by_name(api_base, token_result.get("access_token", ""), clean_queue_name)
+  if queue_err:
+    return JSONResponse({"ok": False, "error": queue_err}, status_code=400)
+
+  warnings = []
+  rows = []
+  queue_summaries = []
+  for queue_item in queue_items[:15]:
+    queue_id = str(queue_item.get("id", "") or "").strip()
+    queue_label = str(queue_item.get("name", "") or "").strip() or queue_id
+    members, member_err = _genesys_get_queue_members(api_base, token_result.get("access_token", ""), queue_id)
+    if member_err:
+      warnings.append(f"{queue_label}: {member_err}")
+      continue
+
+    queue_summaries.append({
+      "queue_id": queue_id,
+      "queue_name": queue_label,
+      "member_count": len(members),
+    })
+
+    if not members:
+      rows.append({
+        "queue_name": queue_label,
+        "queue_id": queue_id,
+        "member_name": "(none)",
+        "member_email": "",
+        "member_username": "",
+        "member_id": "",
+      })
+      continue
+
+    for member in members:
+      user_obj = member.get("user") if isinstance(member.get("user"), dict) else {}
+      member_name = str(user_obj.get("name", "") or member.get("name", "") or "").strip()
+      member_email = str(user_obj.get("email", "") or member.get("email", "") or "").strip()
+      member_username = str(user_obj.get("username", "") or member.get("username", "") or "").strip()
+      member_id = str(user_obj.get("id", "") or member.get("id", "") or member.get("memberId", "") or "").strip()
+      rows.append({
+        "queue_name": queue_label,
+        "queue_id": queue_id,
+        "member_name": member_name,
+        "member_email": member_email,
+        "member_username": member_username,
+        "member_id": member_id,
+      })
+
+  return JSONResponse({
+    "ok": True,
+    "region": region,
+    "query": clean_queue_name,
+    "queues": queue_summaries,
+    "rows": rows,
+    "warnings": warnings,
   })
 
 
