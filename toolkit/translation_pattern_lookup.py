@@ -88,7 +88,13 @@ def _flatten_element(elem, prefix="", out=None):
 def _axl_post(session, cucm_host, soap_xml):
     url = f"https://{cucm_host}:8443/axl/"
     headers = {"Content-Type": "text/xml"}
-    resp = session.post(url, data=soap_xml.encode("utf-8"), headers=headers, timeout=60)
+    resp = session.post(
+        url,
+        data=soap_xml.encode("utf-8"),
+        headers=headers,
+        timeout=60,
+        verify=False,
+    )
     resp.raise_for_status()
     return resp.text
 
@@ -148,6 +154,7 @@ def lookup_translation_patterns(cucm_host, cucm_user, cucm_pass, pattern_query):
 
     session = requests.Session()
     session.verify = False
+    session.trust_env = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
     list_xml = _axl_post(session, cucm_host, _soap_list_trans_pattern(pattern_query))
@@ -208,6 +215,7 @@ def get_translation_pattern_full(cucm_host, cucm_user, cucm_pass, pattern, route
 
     session = requests.Session()
     session.verify = False
+    session.trust_env = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
     get_xml = _axl_post(
