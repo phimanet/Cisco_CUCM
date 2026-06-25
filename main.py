@@ -492,6 +492,120 @@ def _genesys_get_json(api_base: str, access_token: str, path: str, params: dict 
   return True, payload if isinstance(payload, dict) else {}, ""
 
 
+def _genesys_send_json(
+  method: str,
+  api_base: str,
+  access_token: str,
+  path: str,
+  payload: dict | None = None,
+  params: dict | None = None,
+) -> tuple[bool, dict, str, int]:
+  headers = {
+    "Authorization": f"Bearer {access_token}",
+    "Content-Type": "application/json",
+  }
+  url = f"{api_base}{path}"
+  try:
+    response = requests.request(
+      method=method.upper(),
+      url=url,
+      headers=headers,
+      params=params,
+      json=payload or {},
+      timeout=30,
+    )
+    body = response.json() if response.text else {}
+  except Exception as exc:
+    return False, {}, f"Genesys API request failed for {path}: {exc}", 0
+
+  success_codes = {200, 201, 202, 204}
+  if response.status_code not in success_codes:
+    message = str(body.get("message", "") or body.get("error", "")).strip() or f"HTTP {response.status_code}"
+    return False, body if isinstance(body, dict) else {}, message, response.status_code
+
+  return True, body if isinstance(body, dict) else {}, "", response.status_code
+
+
+def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id: str, user_name: str) -> dict:
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+  fallback_template = _load_genesys_webrtc_template()
+
+  site_id = str(fallback_template.get("site_id", "") or "").strip()
+  base_settings_id = str(fallback_template.get("phone_base_settings_id", "") or "").strip()
+  standalone = bool(fallback_template.get("standalone", False))
+  display_name = str(user_name or "").strip() or f"WebRTC-{user_id[:8]}"
+
+  if not site_id or not base_settings_id:
+    return {
+      "ok": False,
+      "error": "WebRTC template is missing site_id or phone_base_settings_id.",
+      "region": clean_region,
+    }
+
+  base_payload = {
+    "name": display_name,
+    "site": {"id": site_id},
+    "phoneBaseSettings": {"id": base_settings_id},
+    "standAlone": standalone,
+  }
+
+  attempts = [
+    ("webRtcUser", {**base_payload, "webRtcUser": {"id": user_id}}),
+    ("user", {**base_payload, "user": {"id": user_id}}),
+    ("base", base_payload),
+  ]
+
+  created_phone = {}
+  create_mode = ""
+  create_errors = []
+  for mode_name, payload in attempts:
+    ok_create, create_body, create_err, _ = _genesys_send_json(
+      "POST",
+      api_base,
+      access_token,
+      "/api/v2/telephony/providers/edges/phones",
+      payload,
+    )
+    if ok_create:
+      created_phone = create_body if isinstance(create_body, dict) else {}
+      create_mode = mode_name
+      break
+    create_errors.append(f"{mode_name}: {create_err}")
+
+  if not created_phone:
+    return {
+      "ok": False,
+      "error": " | ".join(create_errors) if create_errors else "Phone creation failed.",
+      "region": clean_region,
+    }
+
+  created_phone_id = str(created_phone.get("id", "") or "").strip()
+  created_phone_name = str(created_phone.get("name", "") or display_name).strip()
+
+  association_result = "Created"
+  if create_mode == "base" and created_phone_id:
+    ok_assoc, _, assoc_err, assoc_status = _genesys_send_json(
+      "POST",
+      api_base,
+      access_token,
+      f"/api/v2/users/{user_id}/stationassociations",
+      {"station": {"id": created_phone_id}},
+    )
+    if ok_assoc:
+      association_result = "Created+Associated"
+    else:
+      association_result = f"Created (association pending: {assoc_status} {assoc_err})"
+
+  return {
+    "ok": True,
+    "region": clean_region,
+    "phone_id": created_phone_id,
+    "phone_name": created_phone_name,
+    "create_mode": create_mode,
+    "association_result": association_result,
+  }
+
+
 def _genesys_extract_webrtc_phone(user_payload: dict, routing_payload: dict, station_associations_payload: dict | None = None) -> str:
   station = routing_payload.get("station") if isinstance(routing_payload, dict) else {}
   if isinstance(station, dict):
@@ -774,6 +888,8 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
     merged["phone_template_site_id"] = str(phone_template.get("site_id", "") or "")
     merged["phone_template_base_settings_id"] = str(phone_template.get("phone_base_settings_id", "") or "")
     merged["phone_template_line_count"] = int(phone_template.get("line_count", 0) or 0)
+    merged["has_webrtc_phone"] = bool(str(webrtc_phone or "").strip())
+    merged["can_build_webrtc"] = not bool(str(webrtc_phone or "").strip())
     merged["acd_skills"] = acd_skills_text
     merged["queues"] = queues_text
     enriched.append(merged)
@@ -4701,7 +4817,7 @@ def genesys_admin_placeholder(request: Request):
             }
 
             let html = "<table><thead><tr>";
-            html += "<th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>Template Source</th><th>Template Phone</th><th>Template Site ID</th><th>Template Base Settings</th><th>Template Lines</th><th>ACD Skills</th><th>Queues</th><th>State</th><th>User ID</th>";
+            html += "<th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>Action</th><th>Template Source</th><th>Template Phone</th><th>Template Site ID</th><th>Template Base Settings</th><th>Template Lines</th><th>ACD Skills</th><th>Queues</th><th>State</th><th>User ID</th>";
             html += "</tr></thead><tbody>";
             rows.forEach(function (row, i) {
               const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
@@ -4711,6 +4827,11 @@ def genesys_admin_placeholder(request: Request):
               html += "<td>" + (row.username || "") + "</td>";
               html += "<td>" + (row.division || "") + "</td>";
               html += "<td>" + (row.webrtc_phone || "") + "</td>";
+              if (row.can_build_webrtc) {
+                html += "<td><button type='button' class='genesys-build-btn' data-user-id='" + (row.id || "") + "' data-user-name='" + (row.name || "") + "'>Build + Associate</button></td>";
+              } else {
+                html += "<td><span style='color:#2d7a43;font-weight:700;'>Already Present</span></td>";
+              }
               html += "<td>" + (row.phone_template_source || "") + "</td>";
               html += "<td>" + (row.phone_template_name || "") + "</td>";
               html += "<td style='font-family:Consolas,monospace;'>" + (row.phone_template_site_id || "") + "</td>";
@@ -4724,6 +4845,44 @@ def genesys_admin_placeholder(request: Request):
             });
             html += "</tbody></table>";
             resultsEl.innerHTML = html;
+
+            const buildButtons = resultsEl.querySelectorAll(".genesys-build-btn");
+            buildButtons.forEach(function (btn) {
+              btn.addEventListener("click", async function () {
+                const userId = String(btn.getAttribute("data-user-id") || "").trim();
+                const userName = String(btn.getAttribute("data-user-name") || "").trim();
+                if (!userId) return;
+
+                btn.disabled = true;
+                const originalText = btn.textContent;
+                btn.textContent = "Building...";
+                statusEl.textContent = "Building WebRTC phone for " + userName + "...";
+
+                try {
+                  const buildForm = new FormData();
+                  buildForm.append("user_id", userId);
+                  buildForm.append("user_name", userName);
+
+                  const buildResponse = await fetch("/genesys/users/build-webrtc", {
+                    method: "POST",
+                    body: buildForm,
+                  });
+                  const buildPayload = await buildResponse.json();
+                  if (!buildResponse.ok || !buildPayload.ok) {
+                    throw new Error((buildPayload && buildPayload.error) || "Build failed.");
+                  }
+
+                  btn.textContent = "Built";
+                  btn.style.background = "#2d7a43";
+                  btn.style.color = "#fff";
+                  statusEl.textContent = "Build success for " + userName + ": " + (buildPayload.phone_name || "") + " (" + (buildPayload.association_result || "") + ")";
+                } catch (buildErr) {
+                  btn.disabled = false;
+                  btn.textContent = originalText;
+                  statusEl.textContent = "Build failed for " + userName + ": " + ((buildErr && buildErr.message) || "Unknown error.");
+                }
+              });
+            });
           } catch (err) {
             statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
           }
@@ -4833,6 +4992,47 @@ def genesys_extract_users_route(
     "warnings": enrich_result.get("warnings", []),
     "raw_download_url": f"/download/job-output/{raw_job_id}",
     "raw_filename": raw_filename,
+  })
+
+
+@app.post("/genesys/users/build-webrtc")
+def genesys_build_webrtc_route(
+  user_id: str = Form(""),
+  user_name: str = Form(""),
+):
+  clean_user_id = (user_id or "").strip()
+  clean_user_name = (user_name or "").strip()
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+
+  if not clean_user_id:
+    return JSONResponse({"ok": False, "error": "user_id is required."}, status_code=400)
+
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": token_result.get("error", "Genesys token request failed."),
+    }, status_code=400)
+
+  build_result = _genesys_build_webrtc_phone_for_user(
+    token_result.get("region", clean_region),
+    token_result.get("access_token", ""),
+    clean_user_id,
+    clean_user_name,
+  )
+  if not build_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": build_result.get("error", "WebRTC phone build failed."),
+    }, status_code=400)
+
+  return JSONResponse({
+    "ok": True,
+    "region": build_result.get("region", clean_region),
+    "phone_id": build_result.get("phone_id", ""),
+    "phone_name": build_result.get("phone_name", ""),
+    "create_mode": build_result.get("create_mode", ""),
+    "association_result": build_result.get("association_result", ""),
   })
 
 

@@ -124,6 +124,8 @@ Priority keys:
 - Updated Phone Management fallback matching to treat display-name fields (`displayName`, `stationName`, `phoneName`) as equivalent match candidates to `name`, aligned to WebRTC build naming convention.
 - Added persistent WebRTC template baseline file at `toolkit/genesys_webrtc_phone_template.json` (seeded from Michael Beecher phone) so future builds can use template IDs even if source user lookup is unavailable.
 - Genesys extraction table now surfaces template-ready fields per user: template source, template phone name, site ID, base settings ID, and line count.
+- Added inline Genesys action flow: when lookup shows no WebRTC phone, UI now offers **Build + Associate** button per user.
+- Added backend route `/genesys/users/build-webrtc` using template baseline + Genesys Phone Management creation path; attempts user association during create and falls back to station association call when needed.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.
