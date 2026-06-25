@@ -132,6 +132,9 @@ Priority keys:
 - Added priority queue membership probe support (`GENESYS_PRIORITY_QUEUE_IDS`, seeded with `df95c0ce-1ca4-4ab1-8ce3-f474642edf4d`) so known queues are checked first for user membership when direct queue listing is empty.
 - Raw Genesys extract output now includes `resolved_queues` and `queue_resolution_source` so queue fallback behavior can be verified even when direct `/users/{id}/queues` payload is empty.
 - Added new Page 3 function: queue lookup by queue name/ID in Genesys Admin; returns matched queues and member roster so queue membership can be validated directly.
+- Queue lookup now treats queue ID from real-world input (including full Genesys URL strings) as primary key; route extracts UUID and queries members directly before any name search.
+- Queue membership retrieval now uses multi-endpoint fallback (`/members`, `/members?expand=user`, `/users`) with per-strategy page diagnostics surfaced in the UI and response payload.
+- Queue-based user extraction fallback now reuses the same queue-members helper so membership checks benefit from identical endpoint fallback behavior.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.
