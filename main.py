@@ -1994,6 +1994,8 @@ def _fetch_platform_certificate_rows(hostname: str, username: str, password: str
     "/cupplatform/certificateFindList.do",
     "/cupplatform/certificateList.do",
     "/cuplatform/certificateFindList.do?sortColumn=expiration&sortAscend=true",
+    "/cuplatform/certificateFindList.do",
+    "/cuplatform/certificateList.do",
   ]
 
   session_obj = requests.Session()
@@ -2047,6 +2049,7 @@ def _fetch_platform_certificate_rows(hostname: str, username: str, password: str
         "/platform/j_security_check",
         "/cmplatform/j_security_check",
         "/cupplatform/j_security_check",
+        "/cuplatform/j_security_check",
         "/cuadmin/j_security_check",
         "/cupadmin/j_security_check",
       ]
@@ -2275,6 +2278,39 @@ def _collect_lab_certificate_inventory(cucm_user: str, cucm_pass: str, target_ho
 
     parsed_rows, fetch_status = _fetch_platform_certificate_rows(host, cucm_user, cucm_pass)
     if not parsed_rows:
+      probe_result = None
+      for port in CERT_MANAGER_PROBE_PORTS:
+        candidate = _probe_tls_certificate(host, str(target.get("ip", "") or "").strip(), int(port), timeout_seconds=6)
+        if candidate.get("reachable"):
+          probe_result = candidate
+          break
+        if probe_result is None:
+          probe_result = candidate
+
+      probe_result = probe_result or {}
+      fallback_days = probe_result.get("days_remaining")
+      fallback_status = str(probe_result.get("status", "") or "").strip()
+      fallback_expiration = str(probe_result.get("valid_until", "") or "").strip()
+      fallback_common_name = str(probe_result.get("common_name", "") or "").strip()
+      if probe_result.get("reachable") and fallback_expiration:
+        rows.append(
+          {
+            "system": str(target.get("system", "") or "").strip(),
+            "role": str(target.get("role", "") or "").strip(),
+            "hostname": host,
+            "ip": str(target.get("ip", "") or "").strip(),
+            "certificate": fallback_common_name,
+            "usage": "TLS probe fallback",
+            "type": "Leaf",
+            "expiration_date": fallback_expiration,
+            "days_remaining": fallback_days,
+            "common_name": fallback_common_name,
+            "issuer": str(probe_result.get("issuer", "") or "").strip(),
+            "status": f"TLS fallback used: platform inventory unavailable ({fetch_status})",
+          }
+        )
+        continue
+
       rows.append(
         {
           "system": str(target.get("system", "") or "").strip(),
@@ -2288,7 +2324,7 @@ def _collect_lab_certificate_inventory(cucm_user: str, cucm_pass: str, target_ho
           "days_remaining": None,
           "common_name": "",
           "issuer": "",
-          "status": f"Fetch failed: {fetch_status}",
+          "status": f"Fetch failed: {fetch_status or fallback_status or 'platform inventory unavailable'}",
         }
       )
       continue
