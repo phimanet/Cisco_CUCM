@@ -1305,6 +1305,7 @@ def _create_auth_session(cucm_host: str, username: str, cucm_pass: str) -> str:
   AUTH_SESSIONS[session_id] = {
     "cucm_host": (cucm_host or "").strip(),
     "username": (username or "").strip(),
+    "cucm_user": (username or "").strip(),
     "unity_user": (username or "").strip(),
     "created_at": now_epoch,
     "last_seen": now_epoch,
@@ -1380,7 +1381,7 @@ def _update_cached_credentials(
   if (cucm_host or "").strip():
     session["cucm_host"] = cucm_host.strip()
   if (cucm_user or "").strip():
-    session["username"] = cucm_user.strip()
+    session["cucm_user"] = cucm_user.strip()
   if (cucm_pass or "").strip():
     _cache_secret(session, "cucm_pass", cucm_pass)
     if secret_store is not None:
@@ -1435,7 +1436,10 @@ def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, 
     raise RuntimeError("Authentication required.")
 
   resolved_host = (cucm_host or "").strip() or session.get("cucm_host", "")
-  resolved_user = (cucm_user or "").strip() or session.get("username", "")
+  provided_user = (cucm_user or "").strip()
+  if provided_user:
+    session["cucm_user"] = provided_user
+  resolved_user = provided_user or session.get("cucm_user", "") or session.get("username", "")
   provided_pass = (cucm_pass or "").strip()
   session_id = request.cookies.get(SESSION_COOKIE_NAME, "")
   secret_store = AUTH_SESSION_SECRETS.get(session_id, {}) if session_id else {}
