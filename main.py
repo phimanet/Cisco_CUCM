@@ -1977,7 +1977,7 @@ def _parse_cisco_certificate_table(html_text: str) -> list:
   return []
 
 
-def _fetch_platform_certificate_rows(hostname: str, username: str, password: str, timeout_seconds: int = 6) -> tuple[list, str]:
+def _fetch_platform_certificate_rows(hostname: str, username: str, password: str, timeout_seconds: int = 3) -> tuple[list, str]:
   host = (hostname or "").strip()
   user = (username or "").strip()
   pwd = (password or "").strip()
@@ -2062,11 +2062,17 @@ def _fetch_platform_certificate_rows(hostname: str, username: str, password: str
         {"username": user, "password": pwd},
       ]
 
+      # Only attempt form-login retries when the response shape indicates auth flow.
+      # Skipping retries on 404 pages keeps deep inventory from hitting gateway timeout.
+      response_code = int(resp.status_code or 0)
+      response_url = (resp.url or "").lower()
       should_attempt_login = (
-        "j_security_check" in html_text
-        or "j_username" in html_text
-        or "login" in (resp.url or "").lower()
-        or "certificate list" not in (html_text or "").lower()
+        response_code in {200, 401, 403}
+        and (
+          "j_security_check" in html_text
+          or "j_username" in html_text
+          or "login" in response_url
+        )
       )
 
       if should_attempt_login:
