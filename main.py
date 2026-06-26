@@ -2094,6 +2094,30 @@ def _fetch_platform_certificate_rows(hostname: str, username: str, password: str
   return [], " ; ".join(errors) if errors else "Certificate table not found"
 
 
+def _summarize_platform_inventory_status(fetch_status: str) -> str:
+  status_text = str(fetch_status or "").strip()
+  lowered = status_text.lower()
+  if not status_text:
+    return "platform inventory unavailable"
+  if "missing platform credentials" in lowered:
+    return "missing platform credentials"
+  if "missing hostname" in lowered:
+    return "missing hostname"
+  if "401" in lowered or "403" in lowered:
+    return "platform authentication failed"
+  if "404" in lowered:
+    return "platform certificate page not available"
+  if "timeout" in lowered:
+    return "platform inventory request timed out"
+  if "name or service not known" in lowered or "nodename nor servname" in lowered or "failed to resolve" in lowered:
+    return "platform hostname resolution failed"
+  if "connection" in lowered or "ssl" in lowered:
+    return "platform connection failed"
+  if "certificate table not found" in lowered:
+    return "platform certificate table not found"
+  return "platform inventory unavailable"
+
+
 def _collect_lab_tls_quick_expiry(target_hostnames: list[str] | None = None) -> list:
   rows = []
   target_hosts = {
@@ -2277,6 +2301,7 @@ def _collect_lab_certificate_inventory(cucm_user: str, cucm_pass: str, target_ho
       continue
 
     parsed_rows, fetch_status = _fetch_platform_certificate_rows(host, cucm_user, cucm_pass)
+    fetch_summary = _summarize_platform_inventory_status(fetch_status)
     if not parsed_rows:
       probe_result = None
       for port in CERT_MANAGER_PROBE_PORTS:
@@ -2306,7 +2331,7 @@ def _collect_lab_certificate_inventory(cucm_user: str, cucm_pass: str, target_ho
             "days_remaining": fallback_days,
             "common_name": fallback_common_name,
             "issuer": str(probe_result.get("issuer", "") or "").strip(),
-            "status": f"TLS fallback used: platform inventory unavailable ({fetch_status})",
+            "status": f"TLS fallback used: {fetch_summary}",
           }
         )
         continue
@@ -2324,7 +2349,7 @@ def _collect_lab_certificate_inventory(cucm_user: str, cucm_pass: str, target_ho
           "days_remaining": None,
           "common_name": "",
           "issuer": "",
-          "status": f"Fetch failed: {fetch_status or fallback_status or 'platform inventory unavailable'}",
+          "status": f"Fetch failed: {fetch_summary or fallback_status or 'platform inventory unavailable'}",
         }
       )
       continue
