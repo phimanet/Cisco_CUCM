@@ -12305,6 +12305,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">⚙️ DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unityldapsync">Trigger Unity LDAP Sync</button>
+            <button type="button" class="portal-nav-btn" data-panel="sep-sms-report">📧 SMS Separation Email Process</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page4'">🔐 Server Certificate Manager (Page 4)</button>
           </div>
         </aside>
@@ -12634,6 +12635,30 @@ def menu_admin_page(request: Request):
         <p id="admin-bulk-extension-summary" style="color:#355978; min-height:18px;"></p>
         <p><a id="admin-bulk-extension-download" href="#" style="display:none; font-weight:700;">Download CSV Output</a></p>
         <textarea id="admin-bulk-extension-preview" rows="10" readonly style="width:100%;"></textarea>
+      </section>
+
+      <section class="panel tool-panel" data-panel="sep-sms-report">
+        <h3>SMS Separation Email Process</h3>
+        <p>Automatically emails a report of SMS numbers belonging to offboarded employees so they can be manually removed from Twilio or Aerialink. The scheduler runs at the configured time each day (or week).</p>
+
+        <div id="sep-sms-config-panel" style="background:#f0f4fa;border:1px solid #c5d4e8;border-radius:6px;padding:16px;margin-bottom:20px;">
+          <h4 style="margin:0 0 12px 0;color:#002f6c;">Current Scheduler Settings</h4>
+          <div id="sep-sms-config-loading" style="color:#888;font-size:13px;">Loading settings…</div>
+          <table id="sep-sms-config-table" style="display:none;font-size:13px;border-collapse:collapse;width:100%">
+            <tbody id="sep-sms-config-tbody"></tbody>
+          </table>
+        </div>
+
+        <div style="margin-bottom:20px;">
+          <button type="button" id="sep-sms-run-btn" style="background:#1a237e;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;">▶ Run Report Now</button>
+          <span style="font-size:12px;color:#888;margin-left:12px;">Runs the report for the previous day immediately and sends the email.</span>
+        </div>
+        <div id="sep-sms-run-status" style="min-height:18px;margin-bottom:16px;"></div>
+
+        <h4 style="color:#002f6c;margin-bottom:8px;">Recent Send History</h4>
+        <button type="button" id="sep-sms-history-btn" style="font-size:12px;padding:5px 14px;margin-bottom:10px;">Refresh History</button>
+        <div id="sep-sms-history-loading" style="color:#888;font-size:13px;display:none;">Loading…</div>
+        <div id="sep-sms-history-results" style="overflow-x:auto;"></div>
       </section>
 
       <script>
@@ -13992,6 +14017,139 @@ def menu_admin_page(request: Request):
             failedText: "Bulk extension lookup failed.",
             defaultFilename: "bulk_extension_lookup.csv",
           });
+
+          // ── SMS Separation Email Process panel ──────────────────────────────
+          (function () {
+            const configLoading = document.getElementById("sep-sms-config-loading");
+            const configTable = document.getElementById("sep-sms-config-table");
+            const configTbody = document.getElementById("sep-sms-config-tbody");
+            const runBtn = document.getElementById("sep-sms-run-btn");
+            const runStatus = document.getElementById("sep-sms-run-status");
+            const historyBtn = document.getElementById("sep-sms-history-btn");
+            const historyLoading = document.getElementById("sep-sms-history-loading");
+            const historyResults = document.getElementById("sep-sms-history-results");
+
+            function loadConfig() {
+              if (!configLoading) return;
+              configLoading.style.display = "";
+              if (configTable) configTable.style.display = "none";
+              fetch("/admin/separation-sms-report/config", { credentials: "same-origin" })
+                .then(r => r.json())
+                .then(data => {
+                  configLoading.style.display = "none";
+                  if (!configTable || !configTbody) return;
+                  const rows = [
+                    ["Enabled", data.enabled ? "✅ Yes" : "❌ No (SEPARATION_REPORT_ENABLED=false)"],
+                    ["Primary Recipient", data.recipient || "(not set)"],
+                    ["Second Recipient", data.recipient_2 || "(blank — not used)"],
+                    ["From Address", data.from_address || "(not set)"],
+                    ["Schedule", data.schedule_label],
+                    ["Frequency", data.frequency],
+                    ["Weekly Fire Day", data.weekly_day || "N/A"],
+                  ];
+                  configTbody.innerHTML = rows.map(([k, v]) =>
+                    `<tr><td style="padding:5px 10px;font-weight:600;color:#002f6c;white-space:nowrap">${k}</td>`
+                    + `<td style="padding:5px 10px">${v}</td></tr>`
+                  ).join("");
+                  configTable.style.display = "";
+                })
+                .catch(() => {
+                  if (configLoading) configLoading.textContent = "Failed to load settings.";
+                });
+            }
+
+            function loadHistory() {
+              if (!historyLoading || !historyResults) return;
+              historyLoading.style.display = "";
+              historyResults.innerHTML = "";
+              fetch("/admin/separation-sms-report/history", { credentials: "same-origin" })
+                .then(r => r.json())
+                .then(data => {
+                  historyLoading.style.display = "none";
+                  const rows = data.rows || [];
+                  if (!rows.length) {
+                    historyResults.innerHTML = '<p style="color:#888;font-size:13px;">No sends logged yet.</p>';
+                    return;
+                  }
+                  let html = '<table style="width:100%;font-size:13px;border-collapse:collapse">'
+                    + '<thead><tr style="background:#f5f5f5">'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Sent At</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Period</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Recipients</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Extensions Checked</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Triggered By</th>'
+                    + '</tr></thead><tbody>';
+                  rows.forEach((r, i) => {
+                    const bg = i % 2 === 0 ? "#fff" : "#f9f9f9";
+                    const extList = r.extension_deleted || "";
+                    const extCount = extList && extList !== "none" ? extList.split("|").filter(Boolean).length : 0;
+                    const extDisplay = extList && extList !== "none"
+                      ? `<span title="${extList}">${extCount} extension${extCount !== 1 ? "s" : ""}</span>`
+                      : "0 extensions";
+                    html += `<tr style="background:${bg}">`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap">${r.timestamp || ""}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;font-size:12px">${r.period || ""}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;font-size:12px">${(r.account || "").replace(/\|/g, "<br>")}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee">${extDisplay}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;color:#888;font-size:12px">${r.operator || ""}</td>`
+                      + `</tr>`;
+                  });
+                  html += "</tbody></table>";
+                  historyResults.innerHTML = html;
+                })
+                .catch(() => {
+                  if (historyLoading) historyLoading.style.display = "none";
+                  if (historyResults) historyResults.innerHTML = '<p style="color:#c00;font-size:13px;">Failed to load history.</p>';
+                });
+            }
+
+            if (runBtn) {
+              runBtn.addEventListener("click", function () {
+                runBtn.disabled = true;
+                runBtn.textContent = "Running…";
+                if (runStatus) runStatus.innerHTML = '<span style="color:#555;font-size:13px;">Sending report email…</span>';
+                fetch("/admin/separation-sms-report/run", { method: "POST", credentials: "same-origin" })
+                  .then(r => r.json())
+                  .then(data => {
+                    runBtn.disabled = false;
+                    runBtn.textContent = "▶ Run Report Now";
+                    if (runStatus) {
+                      if (data.ok) {
+                        runStatus.innerHTML = `<span style="color:#1b5e20;background:#e8f5e9;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">
+                          ✅ Sent to <strong>${(data.recipients || []).join(", ")}</strong> — period: ${data.date_range} — ${data.numbers_checked} extension(s) checked, ${data.numbers_found_in_sms} found in SMS platform(s)</span>`;
+                        loadHistory();
+                      } else {
+                        runStatus.innerHTML = `<span style="color:#b71c1c;background:#ffebee;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">❌ ${data.error || "Unknown error"}</span>`;
+                      }
+                    }
+                  })
+                  .catch(err => {
+                    runBtn.disabled = false;
+                    runBtn.textContent = "▶ Run Report Now";
+                    if (runStatus) runStatus.innerHTML = `<span style="color:#b71c1c;font-size:13px;">Network error: ${err.message}</span>`;
+                  });
+              });
+            }
+
+            if (historyBtn) {
+              historyBtn.addEventListener("click", loadHistory);
+            }
+
+            // Auto-load config and history when this panel becomes active.
+            const panelEl = document.querySelector('[data-panel="sep-sms-report"]');
+            if (panelEl) {
+              const observer = new MutationObserver(mutations => {
+                mutations.forEach(m => {
+                  if (m.attributeName === "class" && panelEl.classList.contains("active")) {
+                    loadConfig();
+                    loadHistory();
+                  }
+                });
+              });
+              observer.observe(panelEl, { attributes: true });
+            }
+          })();
+
         })();
       </script>
         </section>
@@ -18633,6 +18791,91 @@ def admin_unity_ldap_sync_route(
     })
 
   return _render_job_result("Unity LDAP Sync", data, filename, back_url="/page2")
+
+
+@app.get("/admin/separation-sms-report/config")
+def sep_sms_report_config_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+
+  freq = SEPARATION_REPORT_FREQUENCY
+  hour = SEPARATION_REPORT_HOUR
+  minute = SEPARATION_REPORT_MINUTE
+  schedule_label = f"{hour:02d}:{minute:02d} PST/PDT daily" if freq == "daily" else f"{SEPARATION_REPORT_WEEKLY_DAY.capitalize()} at {hour:02d}:{minute:02d} PST/PDT (prior Mon–Sun window)"
+
+  return JSONResponse({
+    "ok": True,
+    "enabled": SEPARATION_REPORT_ENABLED,
+    "recipient": SEPARATION_REPORT_RECIPIENT,
+    "recipient_2": SEPARATION_REPORT_RECIPIENT_2,
+    "from_address": SEPARATION_REPORT_FROM,
+    "frequency": freq,
+    "hour": hour,
+    "minute": minute,
+    "weekly_day": SEPARATION_REPORT_WEEKLY_DAY if freq == "weekly" else "",
+    "schedule_label": schedule_label,
+  })
+
+
+@app.post("/admin/separation-sms-report/run")
+def sep_sms_report_run_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+
+  operator = str(session.get("username", "manual")).strip() or "manual"
+  result = _run_separation_sms_report(triggered_by=f"manual:{operator}")
+  if result.get("success"):
+    return JSONResponse({
+      "ok": True,
+      "date_range": result.get("date_range", ""),
+      "numbers_checked": result.get("numbers_checked", 0),
+      "numbers_found_in_sms": result.get("numbers_found_in_sms", 0),
+      "recipients": result.get("recipients", []),
+    })
+  return JSONResponse({"ok": False, "error": result.get("error", "Unknown error")}, status_code=500)
+
+
+@app.get("/admin/separation-sms-report/history")
+def sep_sms_report_history_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+
+  if not os.path.exists(AUDIT_LOG_PATH):
+    return JSONResponse({"ok": True, "rows": []})
+
+  try:
+    with AUDIT_LOG_LOCK:
+      with open(AUDIT_LOG_PATH, "r", newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        all_rows = list(reader)
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+  history = []
+  for row in reversed(all_rows):
+    if (row.get("action") or "").strip() != "separation_sms_report_sent":
+      continue
+    # Parse the period out of target field: "period=XXXX;extensions_checked=N"
+    target_raw = row.get("target", "")
+    period = ""
+    for part in target_raw.split(";"):
+      if part.startswith("period="):
+        period = part[len("period="):]
+        break
+    history.append({
+      "timestamp": row.get("timestamp", ""),
+      "period": period,
+      "account": row.get("account", ""),
+      "extension_deleted": row.get("extension_deleted", ""),
+      "operator": row.get("operator", ""),
+    })
+    if len(history) >= 20:
+      break
+
+  return JSONResponse({"ok": True, "rows": history})
 
 
 @app.post("/called-name-change")
