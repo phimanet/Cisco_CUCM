@@ -13078,10 +13078,6 @@ def menu_admin_page(request: Request):
           <h4 style="margin:0 0 14px 0;color:#002f6c;">Scheduler Settings</h4>
           <div id="dn-report-config-loading" style="color:#888;font-size:13px;">Loading settings…</div>
           <div id="dn-report-config-form-wrap" style="display:none">
-            <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#664d03;">
-              ⚠️ CUCM credentials entered here are stored in <strong>settings.json</strong> on the server (plain text).
-              Use a read-only AXL service account if possible.
-            </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;margin-bottom:14px;">
               <div>
                 <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Primary Recipient *</label>
@@ -13118,14 +13114,6 @@ def menu_admin_page(request: Request):
               <div>
                 <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">CUCM Host</label>
                 <input id="dn-cfg-cucm-host" type="text" placeholder="lascucmpp01.ahs.int" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
-              </div>
-              <div>
-                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">CUCM Username</label>
-                <input id="dn-cfg-cucm-user" type="text" placeholder="axl-service-account" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
-              </div>
-              <div>
-                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">CUCM Password</label>
-                <input id="dn-cfg-cucm-pass" type="password" placeholder="••••••••" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
               </div>
               <div>
                 <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Frequency</label>
@@ -14723,8 +14711,6 @@ def menu_admin_page(request: Request):
                   set("dn-cfg-minute", String(data.minute ?? 0).padStart(2, "0"));
                   set("dn-cfg-threshold", data.low_threshold ?? 10);
                   set("dn-cfg-cucm-host", data.cucm_host || "");
-                  set("dn-cfg-cucm-user", data.cucm_user || "");
-                  // Never pre-fill password; leave blank
                   set("dn-cfg-frequency", data.frequency || "daily");
                   cfgWrap.style.display = "";
                 })
@@ -14749,8 +14735,6 @@ def menu_admin_page(request: Request):
                   minute: parseInt(document.getElementById("dn-cfg-minute")?.value || "0", 10),
                   low_threshold: parseInt(document.getElementById("dn-cfg-threshold")?.value || "10", 10),
                   cucm_host: (document.getElementById("dn-cfg-cucm-host")?.value || "").trim(),
-                  cucm_user: (document.getElementById("dn-cfg-cucm-user")?.value || "").trim(),
-                  cucm_pass: (document.getElementById("dn-cfg-cucm-pass")?.value || "").trim(),
                   frequency: document.getElementById("dn-cfg-frequency")?.value || "daily",
                 };
                 fetch("/admin/dn-avail-report/save-config", {
@@ -14764,9 +14748,6 @@ def menu_admin_page(request: Request):
                     saveBtn.disabled = false;
                     if (data.ok) {
                       saveStatus.innerHTML = '<span style="color:#1b5e20;background:#e8f5e9;padding:4px 10px;border-radius:4px">✅ Saved</span>';
-                      // Clear password field after save
-                      const passEl = document.getElementById("dn-cfg-cucm-pass");
-                      if (passEl) passEl.value = "";
                     } else {
                       saveStatus.innerHTML = `<span style="color:#b71c1c">❌ ${data.error || "Save failed"}</span>`;
                     }
@@ -19716,12 +19697,8 @@ async def dn_avail_report_save_config_route(request: Request):
   settings["dn_report_minute"] = str(minute)
   settings["dn_report_frequency"] = frequency
   settings["dn_report_cucm_host"] = (body.get("cucm_host") or "").strip()
-  settings["dn_report_cucm_user"] = (body.get("cucm_user") or "").strip()
   settings["dn_report_low_threshold"] = str(low_threshold)
-  # Only overwrite password if a new one was provided
-  new_pass = (body.get("cucm_pass") or "").strip()
-  if new_pass:
-    settings["dn_report_cucm_pass"] = new_pass
+  # CUCM username and password are hardcoded; never overwrite them via form
 
   if not _save_settings(settings):
     return JSONResponse({"ok": False, "error": "Failed to save settings file"}, status_code=500)
