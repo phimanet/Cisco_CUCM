@@ -367,6 +367,15 @@ DEFAULT_SETTINGS = {
   "twilio_loa_recipient_name": "Laura Alvarez",
   "twilio_loa_recipient_email": "laura.alvarez@amnhealthare.com",
   "twilio_loa_recipient_phone": "+18583503289",
+  # Separation SMS report scheduler (editable via Page 2 panel)
+  "sep_report_enabled": "true",
+  "sep_report_recipient": "",
+  "sep_report_recipient_2": "",
+  "sep_report_from": "",
+  "sep_report_hour": "",
+  "sep_report_minute": "",
+  "sep_report_frequency": "",
+  "sep_report_weekly_day": "",
 }
 SETTINGS_LOCK = threading.Lock()
 
@@ -1451,6 +1460,36 @@ def _get_dn_mapping():
     "recruiter": (settings.get("recruiter_prefix", "469"), "Recruiter"),
     "general": (settings.get("general_fte_prefix", "945"), "General FTE"),
     "strike": (settings.get("strike_prefix", "817"), "Strike"),
+  }
+
+
+def _get_sep_report_settings() -> dict:
+  """Return live separation report settings, preferring settings.json over .env constants."""
+  s = _load_settings()
+
+  def _str(key, fallback):
+    v = (s.get(key) or "").strip()
+    return v if v else fallback
+
+  def _int(key, fallback):
+    v = (s.get(key) or "").strip()
+    try:
+      return int(v) if v else fallback
+    except ValueError:
+      return fallback
+
+  enabled_raw = (s.get("sep_report_enabled") or "").strip().lower()
+  enabled = (SEPARATION_REPORT_ENABLED if not enabled_raw else enabled_raw in {"1", "true", "yes", "on"})
+
+  return {
+    "enabled": enabled,
+    "recipient": _str("sep_report_recipient", SEPARATION_REPORT_RECIPIENT),
+    "recipient_2": _str("sep_report_recipient_2", SEPARATION_REPORT_RECIPIENT_2),
+    "from_address": _str("sep_report_from", SEPARATION_REPORT_FROM),
+    "hour": _int("sep_report_hour", SEPARATION_REPORT_HOUR),
+    "minute": _int("sep_report_minute", SEPARATION_REPORT_MINUTE),
+    "frequency": _str("sep_report_frequency", SEPARATION_REPORT_FREQUENCY),
+    "weekly_day": _str("sep_report_weekly_day", SEPARATION_REPORT_WEEKLY_DAY),
   }
 
 
@@ -3154,10 +3193,11 @@ def _run_separation_sms_report(triggered_by: str = "scheduler") -> dict:
   Returns a summary dict with keys: success, numbers_found, numbers_emailed, error.
   """
   try:
+    cfg = _get_sep_report_settings()
     tz = ZoneInfo("America/Los_Angeles")
     now_pst = datetime.datetime.now(tz=tz).replace(tzinfo=None)
 
-    frequency = SEPARATION_REPORT_FREQUENCY
+    frequency = cfg["frequency"]
 
     if frequency == "weekly":
       # Previous Mon 00:00 → previous Sun 23:59:59
@@ -3196,10 +3236,10 @@ def _run_separation_sms_report(triggered_by: str = "scheduler") -> dict:
       + "\n\nRemoval from Twilio/Aerialink is manual — this email is for notification only."
     )
 
-    recipient = SEPARATION_REPORT_RECIPIENT
-    recipient_2 = SEPARATION_REPORT_RECIPIENT_2
+    recipient = cfg["recipient"]
+    recipient_2 = cfg["recipient_2"]
     recipients = [r for r in [recipient, recipient_2] if r]
-    sender = SEPARATION_REPORT_FROM or "noreply@amnhealthcare.com"
+    sender = cfg["from_address"] or "noreply@amnhealthcare.com"
 
     _send_smtp_email(
       sender=sender,
@@ -3245,17 +3285,18 @@ def _separation_report_scheduler_loop():
   while True:
     try:
       time.sleep(60)
-      if not SEPARATION_REPORT_ENABLED:
+      cfg = _get_sep_report_settings()
+      if not cfg["enabled"]:
         continue
 
       now = datetime.datetime.now(tz=tz)
       # Only fire at the configured hour:minute window (within the current minute)
-      if now.hour != SEPARATION_REPORT_HOUR or now.minute != SEPARATION_REPORT_MINUTE:
+      if now.hour != cfg["hour"] or now.minute != cfg["minute"]:
         continue
 
-      frequency = SEPARATION_REPORT_FREQUENCY
+      frequency = cfg["frequency"]
       if frequency == "weekly":
-        target_weekday = _DAY_ABBR.index(SEPARATION_REPORT_WEEKLY_DAY) if SEPARATION_REPORT_WEEKLY_DAY in _DAY_ABBR else 0
+        target_weekday = _DAY_ABBR.index(cfg["weekly_day"]) if cfg["weekly_day"] in _DAY_ABBR else 0
         if now.weekday() != target_weekday:
           continue
 
@@ -12641,12 +12682,62 @@ def menu_admin_page(request: Request):
         <h3>SMS Separation Email Process</h3>
         <p>Automatically emails a report of SMS numbers belonging to offboarded employees so they can be manually removed from Twilio or Aerialink. The scheduler runs at the configured time each day (or week).</p>
 
-        <div id="sep-sms-config-panel" style="background:#f0f4fa;border:1px solid #c5d4e8;border-radius:6px;padding:16px;margin-bottom:20px;">
-          <h4 style="margin:0 0 12px 0;color:#002f6c;">Current Scheduler Settings</h4>
+        <div style="background:#f0f4fa;border:1px solid #c5d4e8;border-radius:6px;padding:18px;margin-bottom:20px;">
+          <h4 style="margin:0 0 14px 0;color:#002f6c;">Scheduler Settings</h4>
           <div id="sep-sms-config-loading" style="color:#888;font-size:13px;">Loading settings…</div>
-          <table id="sep-sms-config-table" style="display:none;font-size:13px;border-collapse:collapse;width:100%">
-            <tbody id="sep-sms-config-tbody"></tbody>
-          </table>
+          <div id="sep-sms-config-form-wrap" style="display:none">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;margin-bottom:14px;">
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Primary Recipient *</label>
+                <input id="sep-cfg-recipient" type="email" placeholder="Laura.Alvarez@amnhealthcare.com" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Second Recipient <span style="font-weight:400;color:#888">(optional)</span></label>
+                <input id="sep-cfg-recipient-2" type="email" placeholder="Leave blank to disable" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">From Address</label>
+                <input id="sep-cfg-from" type="email" placeholder="noreply@amnhealthcare.com" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Enabled</label>
+                <select id="sep-cfg-enabled" style="width:100%;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <option value="true">✅ Yes — scheduler active</option>
+                  <option value="false">❌ No — paused</option>
+                </select>
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Send Time (PST/PDT)</label>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <input id="sep-cfg-hour" type="number" min="0" max="23" placeholder="8" style="width:70px;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <span style="color:#555">:</span>
+                  <input id="sep-cfg-minute" type="number" min="0" max="59" placeholder="0" style="width:70px;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <span style="font-size:12px;color:#888">24-hr PST/PDT</span>
+                </div>
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Frequency</label>
+                <select id="sep-cfg-frequency" style="width:100%;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <option value="daily">Daily (previous day window)</option>
+                  <option value="weekly">Weekly (previous Mon–Sun window)</option>
+                </select>
+              </div>
+              <div id="sep-cfg-weekly-day-row">
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Weekly Fire Day</label>
+                <select id="sep-cfg-weekly-day" style="width:100%;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <option value="monday">Monday</option>
+                  <option value="tuesday">Tuesday</option>
+                  <option value="wednesday">Wednesday</option>
+                  <option value="thursday">Thursday</option>
+                  <option value="friday">Friday</option>
+                  <option value="saturday">Saturday</option>
+                  <option value="sunday">Sunday</option>
+                </select>
+              </div>
+            </div>
+            <button type="button" id="sep-sms-save-btn" style="background:#1565c0;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">💾 Save Settings</button>
+            <span id="sep-sms-save-status" style="margin-left:12px;font-size:13px;"></span>
+          </div>
         </div>
 
         <div style="margin-bottom:20px;">
@@ -14021,41 +14112,91 @@ def menu_admin_page(request: Request):
           // ── SMS Separation Email Process panel ──────────────────────────────
           (function () {
             const configLoading = document.getElementById("sep-sms-config-loading");
-            const configTable = document.getElementById("sep-sms-config-table");
-            const configTbody = document.getElementById("sep-sms-config-tbody");
+            const configFormWrap = document.getElementById("sep-sms-config-form-wrap");
             const runBtn = document.getElementById("sep-sms-run-btn");
             const runStatus = document.getElementById("sep-sms-run-status");
             const historyBtn = document.getElementById("sep-sms-history-btn");
             const historyLoading = document.getElementById("sep-sms-history-loading");
             const historyResults = document.getElementById("sep-sms-history-results");
+            const saveBtn = document.getElementById("sep-sms-save-btn");
+            const saveStatus = document.getElementById("sep-sms-save-status");
+            const freqEl = document.getElementById("sep-cfg-frequency");
+            const weeklyDayRow = document.getElementById("sep-cfg-weekly-day-row");
+
+            function toggleWeeklyDay() {
+              if (freqEl && weeklyDayRow) {
+                weeklyDayRow.style.display = freqEl.value === "weekly" ? "" : "none";
+              }
+            }
+            if (freqEl) freqEl.addEventListener("change", toggleWeeklyDay);
 
             function loadConfig() {
               if (!configLoading) return;
               configLoading.style.display = "";
-              if (configTable) configTable.style.display = "none";
+              if (configFormWrap) configFormWrap.style.display = "none";
               fetch("/admin/separation-sms-report/config", { credentials: "same-origin" })
                 .then(r => r.json())
                 .then(data => {
                   configLoading.style.display = "none";
-                  if (!configTable || !configTbody) return;
-                  const rows = [
-                    ["Enabled", data.enabled ? "✅ Yes" : "❌ No (SEPARATION_REPORT_ENABLED=false)"],
-                    ["Primary Recipient", data.recipient || "(not set)"],
-                    ["Second Recipient", data.recipient_2 || "(blank — not used)"],
-                    ["From Address", data.from_address || "(not set)"],
-                    ["Schedule", data.schedule_label],
-                    ["Frequency", data.frequency],
-                    ["Weekly Fire Day", data.weekly_day || "N/A"],
-                  ];
-                  configTbody.innerHTML = rows.map(([k, v]) =>
-                    `<tr><td style="padding:5px 10px;font-weight:600;color:#002f6c;white-space:nowrap">${k}</td>`
-                    + `<td style="padding:5px 10px">${v}</td></tr>`
-                  ).join("");
-                  configTable.style.display = "";
+                  if (!configFormWrap) return;
+
+                  const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? ""; };
+                  set("sep-cfg-recipient", data.recipient || "");
+                  set("sep-cfg-recipient-2", data.recipient_2 || "");
+                  set("sep-cfg-from", data.from_address || "");
+                  set("sep-cfg-hour", data.hour ?? 8);
+                  set("sep-cfg-minute", String(data.minute ?? 0).padStart(2, "0"));
+                  set("sep-cfg-frequency", data.frequency || "daily");
+                  set("sep-cfg-weekly-day", data.weekly_day || "monday");
+                  set("sep-cfg-enabled", data.enabled ? "true" : "false");
+
+                  toggleWeeklyDay();
+                  configFormWrap.style.display = "";
                 })
                 .catch(() => {
                   if (configLoading) configLoading.textContent = "Failed to load settings.";
                 });
+            }
+
+            if (saveBtn) {
+              saveBtn.addEventListener("click", function () {
+                const recipient = (document.getElementById("sep-cfg-recipient")?.value || "").trim();
+                if (!recipient) {
+                  if (saveStatus) saveStatus.innerHTML = '<span style="color:#b71c1c">Primary recipient is required.</span>';
+                  return;
+                }
+                saveBtn.disabled = true;
+                if (saveStatus) saveStatus.textContent = "Saving…";
+                const payload = {
+                  recipient,
+                  recipient_2: (document.getElementById("sep-cfg-recipient-2")?.value || "").trim(),
+                  from_address: (document.getElementById("sep-cfg-from")?.value || "").trim(),
+                  enabled: document.getElementById("sep-cfg-enabled")?.value === "true",
+                  hour: parseInt(document.getElementById("sep-cfg-hour")?.value || "8", 10),
+                  minute: parseInt(document.getElementById("sep-cfg-minute")?.value || "0", 10),
+                  frequency: document.getElementById("sep-cfg-frequency")?.value || "daily",
+                  weekly_day: document.getElementById("sep-cfg-weekly-day")?.value || "monday",
+                };
+                fetch("/admin/separation-sms-report/save-config", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  credentials: "same-origin",
+                  body: JSON.stringify(payload),
+                })
+                  .then(r => r.json())
+                  .then(data => {
+                    saveBtn.disabled = false;
+                    if (data.ok) {
+                      if (saveStatus) saveStatus.innerHTML = '<span style="color:#1b5e20;background:#e8f5e9;padding:4px 10px;border-radius:4px">✅ Saved</span>';
+                    } else {
+                      if (saveStatus) saveStatus.innerHTML = `<span style="color:#b71c1c">❌ ${data.error || "Save failed"}</span>`;
+                    }
+                  })
+                  .catch(err => {
+                    saveBtn.disabled = false;
+                    if (saveStatus) saveStatus.innerHTML = `<span style="color:#b71c1c">Network error: ${err.message}</span>`;
+                  });
+              });
             }
 
             function loadHistory() {
@@ -18799,23 +18940,79 @@ def sep_sms_report_config_route(request: Request):
   if not session or not _is_admin_user(str(session.get("username", ""))):
     return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
 
-  freq = SEPARATION_REPORT_FREQUENCY
-  hour = SEPARATION_REPORT_HOUR
-  minute = SEPARATION_REPORT_MINUTE
-  schedule_label = f"{hour:02d}:{minute:02d} PST/PDT daily" if freq == "daily" else f"{SEPARATION_REPORT_WEEKLY_DAY.capitalize()} at {hour:02d}:{minute:02d} PST/PDT (prior Mon–Sun window)"
+  cfg = _get_sep_report_settings()
+  freq = cfg["frequency"]
+  hour = cfg["hour"]
+  minute = cfg["minute"]
+  schedule_label = (
+    f"{hour:02d}:{minute:02d} PST/PDT daily" if freq == "daily"
+    else f"{cfg['weekly_day'].capitalize()} at {hour:02d}:{minute:02d} PST/PDT (prior Mon\u2013Sun window)"
+  )
 
   return JSONResponse({
     "ok": True,
-    "enabled": SEPARATION_REPORT_ENABLED,
-    "recipient": SEPARATION_REPORT_RECIPIENT,
-    "recipient_2": SEPARATION_REPORT_RECIPIENT_2,
-    "from_address": SEPARATION_REPORT_FROM,
+    "enabled": cfg["enabled"],
+    "recipient": cfg["recipient"],
+    "recipient_2": cfg["recipient_2"],
+    "from_address": cfg["from_address"],
     "frequency": freq,
     "hour": hour,
     "minute": minute,
-    "weekly_day": SEPARATION_REPORT_WEEKLY_DAY if freq == "weekly" else "",
+    "weekly_day": cfg["weekly_day"] if freq == "weekly" else cfg["weekly_day"],
     "schedule_label": schedule_label,
   })
+
+
+@app.post("/admin/separation-sms-report/save-config")
+async def sep_sms_report_save_config_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+
+  try:
+    body = await request.json()
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Invalid JSON body"}, status_code=400)
+
+  recipient = (body.get("recipient") or "").strip()
+  recipient_2 = (body.get("recipient_2") or "").strip()
+  from_address = (body.get("from_address") or "").strip()
+  enabled = str(body.get("enabled", "true")).strip().lower() in {"1", "true", "yes", "on"}
+  frequency = (body.get("frequency") or "daily").strip().lower()
+  if frequency not in {"daily", "weekly"}:
+    frequency = "daily"
+  weekly_day = (body.get("weekly_day") or "monday").strip().lower()
+  _VALID_DAYS = {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}
+  if weekly_day not in _VALID_DAYS:
+    weekly_day = "monday"
+
+  try:
+    hour = int(body.get("hour", 8))
+    minute = int(body.get("minute", 0))
+  except (TypeError, ValueError):
+    return JSONResponse({"ok": False, "error": "Hour and minute must be integers"}, status_code=400)
+
+  if not (0 <= hour <= 23):
+    return JSONResponse({"ok": False, "error": "Hour must be 0–23"}, status_code=400)
+  if not (0 <= minute <= 59):
+    return JSONResponse({"ok": False, "error": "Minute must be 0–59"}, status_code=400)
+  if not recipient:
+    return JSONResponse({"ok": False, "error": "Primary recipient email is required"}, status_code=400)
+
+  settings = _load_settings()
+  settings["sep_report_enabled"] = "true" if enabled else "false"
+  settings["sep_report_recipient"] = recipient
+  settings["sep_report_recipient_2"] = recipient_2
+  settings["sep_report_from"] = from_address
+  settings["sep_report_hour"] = str(hour)
+  settings["sep_report_minute"] = str(minute)
+  settings["sep_report_frequency"] = frequency
+  settings["sep_report_weekly_day"] = weekly_day
+
+  if not _save_settings(settings):
+    return JSONResponse({"ok": False, "error": "Failed to save settings file"}, status_code=500)
+
+  return JSONResponse({"ok": True, "message": "Settings saved successfully."})
 
 
 @app.post("/admin/separation-sms-report/run")
