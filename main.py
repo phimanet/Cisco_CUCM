@@ -370,6 +370,30 @@ DEFAULT_SETTINGS = {
 }
 SETTINGS_LOCK = threading.Lock()
 
+# --- Separation SMS Report Scheduler ---
+SEPARATION_REPORT_ENABLED = (os.getenv("SEPARATION_REPORT_ENABLED", "true") or "true").strip().lower() in {
+  "1", "true", "yes", "on",
+}
+SEPARATION_REPORT_RECIPIENT = (
+  os.getenv("SEPARATION_REPORT_RECIPIENT", "Laura.Alvarez@amnhealthcare.com")
+  or "Laura.Alvarez@amnhealthcare.com"
+).strip()
+# Optional second recipient — leave blank to disable.
+SEPARATION_REPORT_RECIPIENT_2 = (os.getenv("SEPARATION_REPORT_RECIPIENT_2", "") or "").strip()
+SEPARATION_REPORT_FROM = (
+  os.getenv("SEPARATION_REPORT_FROM", "noreply@amnhealthcare.com")
+  or "noreply@amnhealthcare.com"
+).strip()
+# Hour and minute in PST/PDT (America/Los_Angeles) to send the report.
+SEPARATION_REPORT_HOUR = int((os.getenv("SEPARATION_REPORT_HOUR", "8") or "8").strip())
+SEPARATION_REPORT_MINUTE = int((os.getenv("SEPARATION_REPORT_MINUTE", "0") or "0").strip())
+# "daily" or "weekly"
+SEPARATION_REPORT_FREQUENCY = (os.getenv("SEPARATION_REPORT_FREQUENCY", "daily") or "daily").strip().lower()
+# For weekly mode: day name the report fires (e.g. "monday"). The window spans Mon–Sun of the prior week.
+SEPARATION_REPORT_WEEKLY_DAY = (os.getenv("SEPARATION_REPORT_WEEKLY_DAY", "monday") or "monday").strip().lower()
+_SEPARATION_REPORT_SCHEDULER_LAST_FIRED: dict[str, str] = {}
+_SEPARATION_REPORT_SCHEDULER_LOCK = threading.Lock()
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
@@ -2961,6 +2985,298 @@ def _append_audit_event(
     with open(AUDIT_LOG_PATH, "a", newline="", encoding="utf-8") as handle:
       writer = csv.writer(handle)
       writer.writerow(row)
+
+
+# ---------------------------------------------------------------------------
+# Separation SMS Report — scheduled email for offboarded employees
+# ---------------------------------------------------------------------------
+
+def _separation_report_read_offboard_rows(start_dt: datetime.datetime, end_dt: datetime.datetime) -> list[dict]:
+  """Return audit rows for offboard_user_option_10 whose timestamp falls in [start_dt, end_dt)."""
+  if not os.path.exists(AUDIT_LOG_PATH):
+    return []
+  try:
+    with AUDIT_LOG_LOCK:
+      with open(AUDIT_LOG_PATH, "r", newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        rows = list(reader)
+  except Exception:
+    return []
+
+  matched = []
+  for row in rows:
+    if (row.get("action") or "").strip() != "offboard_user_option_10":
+      continue
+    ts_text = (row.get("timestamp") or "").strip()
+    if not ts_text:
+      continue
+    try:
+      ts = datetime.datetime.strptime(ts_text, AUDIT_TIMESTAMP_FORMAT)
+    except ValueError:
+      continue
+    if start_dt <= ts < end_dt:
+      matched.append(row)
+  return matched
+
+
+def _separation_report_build_sms_rows(offboard_rows: list[dict]) -> list[dict]:
+  """For each offboard row, look up every deleted extension in SMS platforms."""
+  results = []
+  for row in offboard_rows:
+    account = (row.get("account") or "").strip()
+    ext_deleted_raw = (row.get("extension_deleted") or "").strip()
+    if not ext_deleted_raw or ext_deleted_raw.lower() == "none":
+      continue
+    extensions = [e.strip() for e in ext_deleted_raw.split("|") if e.strip()]
+    for ext in extensions:
+      telephone = ext
+
+      twilio_default = _lookup_twilio_number_by_phone(telephone, account="default")
+      twilio_sfdc = _lookup_twilio_number_by_phone(telephone, account="salesforce")
+      aerialink = _lookup_aerialink_account_code_by_phone(telephone)
+
+      found_in_parts = []
+      if twilio_default.get("found"):
+        found_in_parts.append("Twilio - AMIEWeb")
+      if twilio_sfdc.get("found"):
+        found_in_parts.append("Twilio - Salesforce")
+      if aerialink.get("provisioned"):
+        found_in_parts.append("Aerialink Classic")
+
+      sms_number = (
+        (twilio_default.get("phone_number") or "").strip()
+        or (twilio_sfdc.get("phone_number") or "").strip()
+        or (aerialink.get("matched_number") or "").strip()
+        or _normalize_phone_to_e164(telephone)
+        or telephone
+      )
+
+      configured_in = ", ".join(found_in_parts) if found_in_parts else "Not Found"
+
+      results.append({
+        "account": account,
+        "extension": ext,
+        "sms_number": sms_number or "-",
+        "configured_in": configured_in,
+        "timestamp": (row.get("timestamp") or "").strip(),
+        "operator": (row.get("operator") or "").strip(),
+        "cucm_host": (row.get("cucm_host") or "").strip(),
+      })
+
+  # Sort by configured_in (Not Found last), then by account name
+  def _sort_key(r: dict):
+    ci = r.get("configured_in", "")
+    return (0 if ci and ci != "Not Found" else 1, ci, r.get("account", ""))
+
+  results.sort(key=_sort_key)
+  return results
+
+
+def _separation_report_build_html(sms_rows: list[dict], date_range_label: str) -> str:
+  """Build the HTML email body for the separation SMS report."""
+  row_html_parts = []
+  for r in sms_rows:
+    bg = "#fff8e1" if r["configured_in"] == "Not Found" else "#ffffff"
+    badge_color = "#e53935" if r["configured_in"] == "Not Found" else "#1565c0"
+    row_html_parts.append(
+      f'<tr style="background:{bg}">'
+      f'<td style="padding:8px 12px;border-bottom:1px solid #eee">{escape(r["account"])}</td>'
+      f'<td style="padding:8px 12px;border-bottom:1px solid #eee;font-family:monospace">{escape(r["extension"])}</td>'
+      f'<td style="padding:8px 12px;border-bottom:1px solid #eee;font-family:monospace">{escape(r["sms_number"])}</td>'
+      f'<td style="padding:8px 12px;border-bottom:1px solid #eee">'
+      f'<span style="background:{badge_color};color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">'
+      f'{escape(r["configured_in"])}</span></td>'
+      f'<td style="padding:8px 12px;border-bottom:1px solid #eee;color:#888;font-size:12px">{escape(r["timestamp"])}</td>'
+      f'</tr>'
+    )
+  rows_html = "\n".join(row_html_parts) if row_html_parts else (
+    '<tr><td colspan="5" style="padding:16px;text-align:center;color:#888">No offboarded employees with extensions found in this period.</td></tr>'
+  )
+
+  found_count = sum(1 for r in sms_rows if r["configured_in"] != "Not Found")
+  not_found_count = len(sms_rows) - found_count
+
+  return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif;color:#333;margin:0;padding:0">
+<div style="max-width:900px;margin:24px auto;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden">
+  <div style="background:#1a237e;color:#fff;padding:20px 28px">
+    <h2 style="margin:0 0 4px 0">Separation SMS Number Report</h2>
+    <p style="margin:0;font-size:14px;opacity:.85">Period: {escape(date_range_label)}</p>
+  </div>
+  <div style="padding:20px 28px">
+    <p style="margin:0 0 16px 0;font-size:14px">
+      The following extensions were removed via the <strong>Offboard User (Option 10)</strong> workflow during the report period.
+      Numbers found in SMS platforms should be reviewed for removal from Twilio or Aerialink.
+    </p>
+    <div style="display:flex;gap:16px;margin-bottom:20px">
+      <div style="background:#e3f2fd;border-radius:6px;padding:12px 20px;flex:1;text-align:center">
+        <div style="font-size:28px;font-weight:bold;color:#1565c0">{found_count}</div>
+        <div style="font-size:12px;color:#555">Found in SMS Platform</div>
+      </div>
+      <div style="background:#fff8e1;border-radius:6px;padding:12px 20px;flex:1;text-align:center">
+        <div style="font-size:28px;font-weight:bold;color:#e65100">{not_found_count}</div>
+        <div style="font-size:12px;color:#555">Not Found / Already Removed</div>
+      </div>
+      <div style="background:#f3e5f5;border-radius:6px;padding:12px 20px;flex:1;text-align:center">
+        <div style="font-size:28px;font-weight:bold;color:#6a1b9a">{len(sms_rows)}</div>
+        <div style="font-size:12px;color:#555">Total Extensions Checked</div>
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <thead>
+        <tr style="background:#f5f5f5">
+          <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #ddd">Employee (Account)</th>
+          <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #ddd">Extension</th>
+          <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #ddd">SMS Number</th>
+          <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #ddd">Configured In</th>
+          <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #ddd">Offboarded At</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows_html}
+      </tbody>
+    </table>
+    <p style="margin:20px 0 0 0;font-size:12px;color:#aaa">
+      This is an automated report from the CUCM Voice Automation Portal.
+      Removal from Twilio/Aerialink is a manual process — this email serves as notification only.
+    </p>
+  </div>
+</div>
+</body>
+</html>"""
+
+
+def _run_separation_sms_report(triggered_by: str = "scheduler") -> dict:
+  """
+  Run the separation SMS report for the configured lookback window.
+  Returns a summary dict with keys: success, numbers_found, numbers_emailed, error.
+  """
+  try:
+    tz = ZoneInfo("America/Los_Angeles")
+    now_pst = datetime.datetime.now(tz=tz).replace(tzinfo=None)
+
+    frequency = SEPARATION_REPORT_FREQUENCY
+
+    if frequency == "weekly":
+      # Previous Mon 00:00 → previous Sun 23:59:59
+      today_weekday = now_pst.weekday()  # 0=Mon
+      days_since_monday = today_weekday
+      last_monday = (now_pst - datetime.timedelta(days=days_since_monday + 7)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+      )
+      end_dt = last_monday + datetime.timedelta(days=7)  # this Monday 00:00 == prior Sunday end
+      start_dt = last_monday
+      date_range_label = f"{start_dt.strftime('%Y-%m-%d')} (Mon) through {(end_dt - datetime.timedelta(seconds=1)).strftime('%Y-%m-%d')} (Sun)"
+    else:
+      # Previous calendar day
+      yesterday = now_pst - datetime.timedelta(days=1)
+      start_dt = yesterday.replace(hour=0, minute=0, second=0, microsecond=0)
+      end_dt = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999) + datetime.timedelta(microseconds=1)
+      date_range_label = start_dt.strftime("%Y-%m-%d")
+
+    offboard_rows = _separation_report_read_offboard_rows(start_dt, end_dt)
+    sms_rows = _separation_report_build_sms_rows(offboard_rows)
+
+    numbers_checked = [r["sms_number"] for r in sms_rows if r["sms_number"] != "-"]
+    extensions_checked = [r["extension"] for r in sms_rows]
+
+    subject = f"[CUCM] Separation SMS Number Report — {date_range_label}"
+    html_body = _separation_report_build_html(sms_rows, date_range_label)
+    plain_body = (
+      f"Separation SMS Number Report\nPeriod: {date_range_label}\n\n"
+      + "\n".join(
+        f"  {r['account']} | ext {r['extension']} | SMS {r['sms_number']} | {r['configured_in']}"
+        for r in sms_rows
+      )
+      + (
+        "\n\nNo extensions found." if not sms_rows else ""
+      )
+      + "\n\nRemoval from Twilio/Aerialink is manual — this email is for notification only."
+    )
+
+    recipient = SEPARATION_REPORT_RECIPIENT
+    recipient_2 = SEPARATION_REPORT_RECIPIENT_2
+    recipients = [r for r in [recipient, recipient_2] if r]
+    sender = SEPARATION_REPORT_FROM or "noreply@amnhealthcare.com"
+
+    _send_smtp_email(
+      sender=sender,
+      recipients=recipients,
+      subject=subject,
+      body=plain_body,
+      html_body=html_body,
+    )
+
+    # Log the send to the audit trail — extension_deleted holds all numbers included
+    numbers_pipe = "|".join(extensions_checked) if extensions_checked else "none"
+    recipients_logged = "|".join(recipients)
+    _append_audit_event(
+      action="separation_sms_report_sent",
+      cucm_host="",
+      operator=triggered_by,
+      target=f"period={date_range_label};extensions_checked={len(extensions_checked)}",
+      account=recipients_logged,
+      extension_added="",
+      extension_deleted=numbers_pipe,
+      output_filename=f"separation_sms_report_{start_dt.strftime('%Y%m%d')}.html",
+      inline_mode=False,
+    )
+
+    return {
+      "success": True,
+      "numbers_checked": len(extensions_checked),
+      "numbers_found_in_sms": sum(1 for r in sms_rows if r["configured_in"] != "Not Found"),
+      "date_range": date_range_label,
+      "recipients": recipients,
+      "error": None,
+    }
+  except Exception as exc:
+    logger.error("separation_sms_report failed: %s", exc, exc_info=True)
+    return {"success": False, "error": str(exc)}
+
+
+def _separation_report_scheduler_loop():
+  """Daemon thread: fires _run_separation_sms_report at the configured PST time."""
+  tz = ZoneInfo("America/Los_Angeles")
+  _DAY_ABBR = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+  while True:
+    try:
+      time.sleep(60)
+      if not SEPARATION_REPORT_ENABLED:
+        continue
+
+      now = datetime.datetime.now(tz=tz)
+      # Only fire at the configured hour:minute window (within the current minute)
+      if now.hour != SEPARATION_REPORT_HOUR or now.minute != SEPARATION_REPORT_MINUTE:
+        continue
+
+      frequency = SEPARATION_REPORT_FREQUENCY
+      if frequency == "weekly":
+        target_weekday = _DAY_ABBR.index(SEPARATION_REPORT_WEEKLY_DAY) if SEPARATION_REPORT_WEEKLY_DAY in _DAY_ABBR else 0
+        if now.weekday() != target_weekday:
+          continue
+
+      fire_key = now.strftime("%Y-%m-%d")
+      with _SEPARATION_REPORT_SCHEDULER_LOCK:
+        last_fired = _SEPARATION_REPORT_SCHEDULER_LAST_FIRED.get("last")
+        if last_fired == fire_key:
+          continue
+        _SEPARATION_REPORT_SCHEDULER_LAST_FIRED["last"] = fire_key
+
+      logger.info("separation_sms_report: firing report for key=%s", fire_key)
+      result = _run_separation_sms_report(triggered_by="scheduler")
+      logger.info("separation_sms_report: result=%s", result)
+
+    except Exception as exc:
+      logger.error("separation_report_scheduler_loop error: %s", exc, exc_info=True)
+
+
+# Start the separation SMS report scheduler daemon thread at import time.
+_sep_report_thread = threading.Thread(target=_separation_report_scheduler_loop, name="sep-sms-report-scheduler", daemon=True)
+_sep_report_thread.start()
 
 
 def _ensure_twilio_sms_hosting_audit_log():
