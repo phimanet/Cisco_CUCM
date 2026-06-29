@@ -3374,12 +3374,18 @@ _DN_REPORT_SCHEDULER_LOCK = threading.Lock()
 
 
 def _axl_list_dns_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, prefix: str) -> dict:
-  """Return total and unassigned DN counts by querying which DNs have phones assigned."""
+  """Return total and available DN counts using same criteria as Build User workflow.
+  
+  Available = DNs that are:
+    1. Inactive (active=false)
+    2. Have no associated devices
+  In Use = all other DNs
+  """
   session = requests.Session()
   session.verify = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
   
-  # First, list all DNs with this prefix in ENT_DEVICE_PT
+  # List all DNs with this prefix in ENT_DEVICE_PT
   soap_dns = f"""<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
   <soapenv:Body>
@@ -3405,7 +3411,7 @@ def _axl_list_dns_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, pref
     raise RuntimeError(f"listLine for prefix {prefix} failed (HTTP {resp.status_code})")
 
   root = ET.fromstring(resp.text)
-  all_dns = set()
+  all_dns = []
   for elem in root.iter():
     tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
     if tag == "line":
@@ -3414,49 +3420,54 @@ def _axl_list_dns_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, pref
         if ctag == "pattern":
           pattern_val = (child.text or "").strip()
           if pattern_val:
-            all_dns.add(pattern_val)
+            all_dns.append(pattern_val)
   
   total = len(all_dns)
+  available = 0
   
-  # Now query ALL phones to find which DNs are assigned to any device
-  # Use a large page size to avoid pagination issues
-  soap_phones = """<?xml version="1.0" encoding="UTF-8"?>
+  # For each DN, check if it's inactive AND has no associated devices (like Build User does)
+  for pattern in all_dns:
+    soap_get_line = f"""<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
   <soapenv:Body>
-    <axl:listPhone>
-      <searchCriteria/>
+    <axl:getLine>
+      <pattern>{xml_escape(pattern)}</pattern>
+      <routePartitionName>{xml_escape(_DN_REPORT_ROUTE_PARTITION)}</routePartitionName>
       <returnedTags>
-        <lines/>
+        <active/>
+        <associatedDevices>
+          <device/>
+        </associatedDevices>
       </returnedTags>
-    </axl:listPhone>
+    </axl:getLine>
   </soapenv:Body>
 </soapenv:Envelope>"""
+    try:
+      resp = session.post(
+        f"https://{cucm_host}:8443/axl/",
+        data=soap_get_line.encode("utf-8"),
+        headers={"Content-Type": "text/xml"},
+        timeout=30,
+        verify=False,
+      )
+      if resp.status_code == 200:
+        resp_root = ET.fromstring(resp.text)
+        active_val = ""
+        has_devices = False
+        for elem in resp_root.iter():
+          etag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+          if etag == "active":
+            active_val = (elem.text or "").strip().lower()
+          elif etag == "device" and elem.text and elem.text.strip():
+            has_devices = True
+        # Available = inactive AND no devices
+        is_inactive = active_val not in {"true", "t", "1", "yes"}
+        if is_inactive and not has_devices:
+          available += 1
+    except Exception:
+      pass
   
-  assigned_dns = set()
-  try:
-    resp = session.post(
-      f"https://{cucm_host}:8443/axl/",
-      data=soap_phones.encode("utf-8"),
-      headers={"Content-Type": "text/xml"},
-      timeout=60,
-      verify=False,
-    )
-    
-    if resp.status_code == 200:
-      root = ET.fromstring(resp.text)
-      # Extract all dnorpattern values from the response
-      for elem in root.iter():
-        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-        if tag == "dnorpattern":
-          dn_val = (elem.text or "").strip()
-          if dn_val and dn_val in all_dns:
-            assigned_dns.add(dn_val)
-  except Exception:
-    # If phone query fails, just count 0 as assigned
-    pass
-  
-  available = total - len(assigned_dns)
-  return {"total": total, "available": available, "in_use": len(assigned_dns)}
+  return {"total": total, "available": available, "in_use": total - available}
 
 
 def _dn_report_build_html(results: list[dict], run_at: str, cucm_host: str, low_threshold: int) -> str:
