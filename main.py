@@ -385,8 +385,8 @@ DEFAULT_SETTINGS = {
   "dn_report_minute": "0",
   "dn_report_frequency": "daily",
   "dn_report_cucm_host": "",
-  "dn_report_cucm_user": "",
-  "dn_report_cucm_pass": "",
+  "dn_report_cucm_user": "ucmappadmin",
+  "dn_report_cucm_pass": "abi3rto!",
   "dn_report_low_threshold": "10",
 }
 SETTINGS_LOCK = threading.Lock()
@@ -1532,8 +1532,8 @@ def _get_dn_report_settings() -> dict:
     "minute": _int("dn_report_minute", 0),
     "frequency": _str("dn_report_frequency", "daily"),
     "cucm_host": _str("dn_report_cucm_host", PROD_CUCM_HOST),
-    "cucm_user": _str("dn_report_cucm_user"),
-    "cucm_pass": _str("dn_report_cucm_pass"),
+    "cucm_user": _str("dn_report_cucm_user", "ucmappadmin"),
+    "cucm_pass": _str("dn_report_cucm_pass", "abi3rto!"),
     "low_threshold": _int("dn_report_low_threshold", 10),
   }
 
