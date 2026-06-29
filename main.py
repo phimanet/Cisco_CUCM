@@ -376,6 +376,18 @@ DEFAULT_SETTINGS = {
   "sep_report_minute": "",
   "sep_report_frequency": "",
   "sep_report_weekly_day": "",
+  # DN Availability report scheduler (editable via Page 2 panel)
+  "dn_report_enabled": "true",
+  "dn_report_recipient": "",
+  "dn_report_recipient_2": "",
+  "dn_report_from": "",
+  "dn_report_hour": "8",
+  "dn_report_minute": "0",
+  "dn_report_frequency": "daily",
+  "dn_report_cucm_host": "",
+  "dn_report_cucm_user": "",
+  "dn_report_cucm_pass": "",
+  "dn_report_low_threshold": "10",
 }
 SETTINGS_LOCK = threading.Lock()
 
@@ -1490,6 +1502,39 @@ def _get_sep_report_settings() -> dict:
     "minute": _int("sep_report_minute", SEPARATION_REPORT_MINUTE),
     "frequency": _str("sep_report_frequency", SEPARATION_REPORT_FREQUENCY),
     "weekly_day": _str("sep_report_weekly_day", SEPARATION_REPORT_WEEKLY_DAY),
+  }
+
+
+def _get_dn_report_settings() -> dict:
+  """Return live DN availability report settings from settings.json with env/constant fallbacks."""
+  s = _load_settings()
+
+  def _str(key, fallback=""):
+    v = (s.get(key) or "").strip()
+    return v if v else fallback
+
+  def _int(key, fallback):
+    v = (s.get(key) or "").strip()
+    try:
+      return int(v) if v else fallback
+    except ValueError:
+      return fallback
+
+  enabled_raw = (s.get("dn_report_enabled") or "").strip().lower()
+  enabled = True if not enabled_raw else enabled_raw in {"1", "true", "yes", "on"}
+
+  return {
+    "enabled": enabled,
+    "recipient": _str("dn_report_recipient"),
+    "recipient_2": _str("dn_report_recipient_2"),
+    "from_address": _str("dn_report_from", "noreply@amnhealthcare.com"),
+    "hour": _int("dn_report_hour", 8),
+    "minute": _int("dn_report_minute", 0),
+    "frequency": _str("dn_report_frequency", "daily"),
+    "cucm_host": _str("dn_report_cucm_host", PROD_CUCM_HOST),
+    "cucm_user": _str("dn_report_cucm_user"),
+    "cucm_pass": _str("dn_report_cucm_pass"),
+    "low_threshold": _int("dn_report_low_threshold", 10),
   }
 
 
@@ -3318,6 +3363,278 @@ def _separation_report_scheduler_loop():
 # Start the separation SMS report scheduler daemon thread at import time.
 _sep_report_thread = threading.Thread(target=_separation_report_scheduler_loop, name="sep-sms-report-scheduler", daemon=True)
 _sep_report_thread.start()
+
+
+# ---------------------------------------------------------------------------
+# DN Availability Report — scheduled email for number pool monitoring
+# ---------------------------------------------------------------------------
+_DN_REPORT_ROUTE_PARTITION = "ENT_DEVICE_PT"
+_DN_REPORT_SCHEDULER_LAST_FIRED: dict[str, str] = {}
+_DN_REPORT_SCHEDULER_LOCK = threading.Lock()
+
+
+def _axl_list_dns_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, prefix: str) -> dict:
+  """Return total and available (inactive) DN counts for a given prefix in ENT_DEVICE_PT."""
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+  soap = f"""<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Body>
+    <axl:listLine>
+      <searchCriteria>
+        <pattern>{xml_escape(prefix)}%</pattern>
+      </searchCriteria>
+      <returnedTags>
+        <pattern/>
+        <routePartitionName/>
+        <active/>
+      </returnedTags>
+    </axl:listLine>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+  resp = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=soap.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    timeout=60,
+    verify=False,
+  )
+  if resp.status_code != 200:
+    raise RuntimeError(f"listLine for prefix {prefix} failed (HTTP {resp.status_code})")
+
+  root = ET.fromstring(resp.text)
+  total = 0
+  available = 0
+  for elem in root.iter():
+    tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+    if tag != "line":
+      continue
+    pattern_val = ""
+    partition_val = ""
+    active_val = ""
+    for child in list(elem):
+      ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+      txt = (child.text or "").strip()
+      if ctag == "pattern":
+        pattern_val = txt
+      elif ctag == "routePartitionName":
+        partition_val = txt
+      elif ctag == "active":
+        active_val = txt.lower()
+    if not pattern_val or partition_val != _DN_REPORT_ROUTE_PARTITION:
+      continue
+    total += 1
+    if active_val not in {"true", "t", "1", "yes"}:
+      available += 1
+
+  return {"total": total, "available": available, "in_use": total - available}
+
+
+def _dn_report_build_html(results: list[dict], run_at: str, cucm_host: str, low_threshold: int) -> str:
+  """Build the HTML email body for the DN availability report."""
+  row_parts = []
+  for r in results:
+    avail = r["available"]
+    total = r["total"]
+    in_use = r["in_use"]
+    if avail == 0:
+      status_label = "CRITICAL — NONE LEFT"
+      status_color = "#b71c1c"
+      row_bg = "#fff5f5"
+      badge_bg = "#b71c1c"
+    elif avail < low_threshold:
+      status_label = f"LOW — order more soon"
+      status_color = "#e65100"
+      row_bg = "#fff8e1"
+      badge_bg = "#e65100"
+    else:
+      status_label = "OK"
+      status_color = "#1b5e20"
+      row_bg = "#ffffff"
+      badge_bg = "#2e7d32"
+
+    pct = f"{int(avail / total * 100)}%" if total else "N/A"
+    row_parts.append(
+      f'<tr style="background:{row_bg}">'
+      f'<td style="padding:10px 14px;border-bottom:1px solid #eee;font-weight:600">{escape(r["label"])}</td>'
+      f'<td style="padding:10px 14px;border-bottom:1px solid #eee;font-family:monospace">{escape(r["prefix"])}xxx</td>'
+      f'<td style="padding:10px 14px;border-bottom:1px solid #eee;font-size:20px;font-weight:700;color:{status_color}">{avail}</td>'
+      f'<td style="padding:10px 14px;border-bottom:1px solid #eee">{in_use}</td>'
+      f'<td style="padding:10px 14px;border-bottom:1px solid #eee">{total}</td>'
+      f'<td style="padding:10px 14px;border-bottom:1px solid #eee">{pct}</td>'
+      f'<td style="padding:10px 14px;border-bottom:1px solid #eee">'
+      f'<span style="background:{badge_bg};color:#fff;padding:3px 10px;border-radius:4px;font-size:12px;font-weight:600">'
+      f'{escape(status_label)}</span></td>'
+      f'</tr>'
+    )
+
+  rows_html = "\n".join(row_parts) if row_parts else (
+    '<tr><td colspan="7" style="padding:16px;text-align:center;color:#888">No DN data returned.</td></tr>'
+  )
+
+  critical_count = sum(1 for r in results if r["available"] == 0)
+  low_count = sum(1 for r in results if 0 < r["available"] < low_threshold)
+  ok_count = sum(1 for r in results if r["available"] >= low_threshold)
+
+  alert_banner = ""
+  if critical_count:
+    alert_banner = f'<div style="background:#b71c1c;color:#fff;padding:12px 20px;border-radius:6px;margin-bottom:16px;font-weight:600">⚠️ {critical_count} DN type(s) have ZERO available numbers — order immediately!</div>'
+  elif low_count:
+    alert_banner = f'<div style="background:#e65100;color:#fff;padding:12px 20px;border-radius:6px;margin-bottom:16px;font-weight:600">⚠️ {low_count} DN type(s) are running LOW (below threshold of {low_threshold}) — consider ordering more soon.</div>'
+
+  return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif;color:#333;margin:0;padding:0">
+<div style="max-width:860px;margin:24px auto;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden">
+  <div style="background:#1a237e;color:#fff;padding:20px 28px">
+    <h2 style="margin:0 0 4px 0">DN Number Pool Availability Report</h2>
+    <p style="margin:0;font-size:14px;opacity:.85">CUCM Host: {escape(cucm_host)} &nbsp;|&nbsp; Run at: {escape(run_at)}</p>
+  </div>
+  <div style="padding:20px 28px">
+    {alert_banner}
+    <div style="display:flex;gap:14px;margin-bottom:20px">
+      <div style="background:#e8f5e9;border-radius:6px;padding:12px 20px;flex:1;text-align:center">
+        <div style="font-size:26px;font-weight:bold;color:#2e7d32">{ok_count}</div>
+        <div style="font-size:12px;color:#555">Types OK</div>
+      </div>
+      <div style="background:#fff8e1;border-radius:6px;padding:12px 20px;flex:1;text-align:center">
+        <div style="font-size:26px;font-weight:bold;color:#e65100">{low_count}</div>
+        <div style="font-size:12px;color:#555">Types Low</div>
+      </div>
+      <div style="background:#ffebee;border-radius:6px;padding:12px 20px;flex:1;text-align:center">
+        <div style="font-size:26px;font-weight:bold;color:#b71c1c">{critical_count}</div>
+        <div style="font-size:12px;color:#555">Types Critical</div>
+      </div>
+    </div>
+    <table style="width:100%;border-collapse:collapse;font-size:14px">
+      <thead>
+        <tr style="background:#f5f5f5">
+          <th style="padding:9px 14px;text-align:left;border-bottom:2px solid #ddd">DN Type</th>
+          <th style="padding:9px 14px;text-align:left;border-bottom:2px solid #ddd">Prefix Range</th>
+          <th style="padding:9px 14px;text-align:left;border-bottom:2px solid #ddd">Available</th>
+          <th style="padding:9px 14px;text-align:left;border-bottom:2px solid #ddd">In Use</th>
+          <th style="padding:9px 14px;text-align:left;border-bottom:2px solid #ddd">Total</th>
+          <th style="padding:9px 14px;text-align:left;border-bottom:2px solid #ddd">Avail %</th>
+          <th style="padding:9px 14px;text-align:left;border-bottom:2px solid #ddd">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows_html}
+      </tbody>
+    </table>
+    <p style="margin:18px 0 0 0;font-size:12px;color:#aaa">
+      Low threshold: {low_threshold} numbers. Available = inactive DNs in ENT_DEVICE_PT.
+      This is an automated report from the CUCM Voice Automation Portal.
+    </p>
+  </div>
+</div>
+</body>
+</html>"""
+
+
+def _run_dn_availability_report(triggered_by: str = "scheduler") -> dict:
+  """Run the DN availability report and email results. Returns summary dict."""
+  try:
+    cfg = _get_dn_report_settings()
+    cucm_host = cfg["cucm_host"]
+    cucm_user = cfg["cucm_user"]
+    cucm_pass = cfg["cucm_pass"]
+    if not cucm_host or not cucm_user or not cucm_pass:
+      raise RuntimeError("CUCM credentials for DN report not configured. Set them in the DN Availability Report panel on Page 2.")
+
+    dn_map = _get_dn_mapping()
+    run_at = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+    low_threshold = cfg["low_threshold"]
+
+    results = []
+    errors = []
+    for key, (prefix, label) in dn_map.items():
+      try:
+        counts = _axl_list_dns_by_prefix(cucm_host, cucm_user, cucm_pass, prefix)
+        results.append({"key": key, "label": label, "prefix": prefix, **counts})
+      except Exception as exc:
+        errors.append(f"{label} ({prefix}): {exc}")
+        results.append({"key": key, "label": label, "prefix": prefix, "total": 0, "available": 0, "in_use": 0})
+
+    # Sort: General FTE, Recruiter, Strike (by label alphabetically fallback)
+    order = {"General FTE": 0, "Recruiter": 1, "Strike": 2}
+    results.sort(key=lambda r: order.get(r["label"], 99))
+
+    subject = f"[CUCM] DN Number Pool Report — {run_at[:10]}"
+    html_body = _dn_report_build_html(results, run_at, cucm_host, low_threshold)
+    plain_lines = [f"DN Number Pool Availability Report — {run_at}", f"CUCM: {cucm_host}", ""]
+    for r in results:
+      plain_lines.append(f"  {r['label']} ({r['prefix']}xxx): {r['available']} available / {r['in_use']} in-use / {r['total']} total")
+    if errors:
+      plain_lines += ["", "Errors:"] + [f"  {e}" for e in errors]
+    plain_body = "\n".join(plain_lines)
+
+    recipient = cfg["recipient"]
+    recipient_2 = cfg["recipient_2"]
+    recipients = [r for r in [recipient, recipient_2] if r]
+    if not recipients:
+      raise RuntimeError("No recipients configured for DN availability report.")
+    sender = cfg["from_address"] or "noreply@amnhealthcare.com"
+
+    _send_smtp_email(sender=sender, recipients=recipients, subject=subject, body=plain_body, html_body=html_body)
+
+    summary_parts = "|".join(f"{r['label']}:{r['available']}" for r in results)
+    _append_audit_event(
+      action="dn_avail_report_sent",
+      cucm_host=cucm_host,
+      operator=triggered_by,
+      target=f"run_at={run_at};summary={summary_parts}",
+      account="|".join(recipients),
+      extension_added="",
+      extension_deleted="",
+      output_filename=f"dn_avail_report_{run_at[:10].replace('-','')}.html",
+      inline_mode=False,
+    )
+
+    return {
+      "success": True,
+      "run_at": run_at,
+      "recipients": recipients,
+      "results": results,
+      "errors": errors,
+    }
+  except Exception as exc:
+    logger.error("dn_availability_report failed: %s", exc, exc_info=True)
+    return {"success": False, "error": str(exc)}
+
+
+def _dn_report_scheduler_loop():
+  """Daemon thread: fires _run_dn_availability_report at the configured PST time."""
+  tz = ZoneInfo("America/Los_Angeles")
+  while True:
+    try:
+      time.sleep(60)
+      cfg = _get_dn_report_settings()
+      if not cfg["enabled"]:
+        continue
+      now = datetime.datetime.now(tz=tz)
+      if now.hour != cfg["hour"] or now.minute != cfg["minute"]:
+        continue
+      if cfg["frequency"] == "weekly":
+        # simple weekly: only fire on Monday (or extend later)
+        if now.weekday() != 0:
+          continue
+      fire_key = now.strftime("%Y-%m-%d")
+      with _DN_REPORT_SCHEDULER_LOCK:
+        if _DN_REPORT_SCHEDULER_LAST_FIRED.get("last") == fire_key:
+          continue
+        _DN_REPORT_SCHEDULER_LAST_FIRED["last"] = fire_key
+      logger.info("dn_avail_report: firing for key=%s", fire_key)
+      result = _run_dn_availability_report(triggered_by="scheduler")
+      logger.info("dn_avail_report: result=%s", result)
+    except Exception as exc:
+      logger.error("dn_report_scheduler_loop error: %s", exc, exc_info=True)
+
+
+_dn_report_thread = threading.Thread(target=_dn_report_scheduler_loop, name="dn-avail-report-scheduler", daemon=True)
+_dn_report_thread.start()
 
 
 def _ensure_twilio_sms_hosting_audit_log():
@@ -12347,6 +12664,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unityldapsync">Trigger Unity LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="sep-sms-report">📧 SMS Separation Email Process</button>
+            <button type="button" class="portal-nav-btn" data-panel="dn-avail-report">📊 DN Number Pool Availability Report</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page4'">🔐 Server Certificate Manager (Page 4)</button>
           </div>
         </aside>
@@ -12750,6 +13068,89 @@ def menu_admin_page(request: Request):
         <button type="button" id="sep-sms-history-btn" style="font-size:12px;padding:5px 14px;margin-bottom:10px;">Refresh History</button>
         <div id="sep-sms-history-loading" style="color:#888;font-size:13px;display:none;">Loading…</div>
         <div id="sep-sms-history-results" style="overflow-x:auto;"></div>
+      </section>
+
+      <section class="panel tool-panel" data-panel="dn-avail-report">
+        <h3>DN Number Pool Availability Report</h3>
+        <p>Runs a daily check of how many Directory Numbers (DNs) are available for each type (General FTE, Recruiter, Strike) and emails a report. Use this to know when to order more numbers.</p>
+
+        <div style="background:#f0f4fa;border:1px solid #c5d4e8;border-radius:6px;padding:18px;margin-bottom:20px;">
+          <h4 style="margin:0 0 14px 0;color:#002f6c;">Scheduler Settings</h4>
+          <div id="dn-report-config-loading" style="color:#888;font-size:13px;">Loading settings…</div>
+          <div id="dn-report-config-form-wrap" style="display:none">
+            <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:10px 14px;margin-bottom:14px;font-size:13px;color:#664d03;">
+              ⚠️ CUCM credentials entered here are stored in <strong>settings.json</strong> on the server (plain text).
+              Use a read-only AXL service account if possible.
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;margin-bottom:14px;">
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Primary Recipient *</label>
+                <input id="dn-cfg-recipient" type="email" placeholder="admin@amnhealthcare.com" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Second Recipient <span style="font-weight:400;color:#888">(optional)</span></label>
+                <input id="dn-cfg-recipient-2" type="email" placeholder="Leave blank to disable" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">From Address</label>
+                <input id="dn-cfg-from" type="email" placeholder="noreply@amnhealthcare.com" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Enabled</label>
+                <select id="dn-cfg-enabled" style="width:100%;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <option value="true">✅ Yes — scheduler active</option>
+                  <option value="false">❌ No — paused</option>
+                </select>
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Send Time (PST/PDT)</label>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <input id="dn-cfg-hour" type="number" min="0" max="23" placeholder="8" style="width:70px;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <span style="color:#555">:</span>
+                  <input id="dn-cfg-minute" type="number" min="0" max="59" placeholder="0" style="width:70px;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <span style="font-size:12px;color:#888">24-hr PST/PDT</span>
+                </div>
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Low Threshold <span style="font-weight:400;color:#888">(warn if available &lt; this)</span></label>
+                <input id="dn-cfg-threshold" type="number" min="1" max="999" placeholder="10" style="width:100px;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">CUCM Host</label>
+                <input id="dn-cfg-cucm-host" type="text" placeholder="lascucmpp01.ahs.int" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">CUCM Username</label>
+                <input id="dn-cfg-cucm-user" type="text" placeholder="axl-service-account" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">CUCM Password</label>
+                <input id="dn-cfg-cucm-pass" type="password" placeholder="••••••••" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Frequency</label>
+                <select id="dn-cfg-frequency" style="width:100%;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly (Mondays)</option>
+                </select>
+              </div>
+            </div>
+            <button type="button" id="dn-report-save-btn" style="background:#1565c0;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">💾 Save Settings</button>
+            <span id="dn-report-save-status" style="margin-left:12px;font-size:13px;"></span>
+          </div>
+        </div>
+
+        <div style="margin-bottom:20px;">
+          <button type="button" id="dn-report-run-btn" style="background:#1a237e;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;">▶ Run Report Now</button>
+          <span style="font-size:12px;color:#888;margin-left:12px;">Queries CUCM and emails results immediately.</span>
+        </div>
+        <div id="dn-report-run-status" style="min-height:18px;margin-bottom:16px;"></div>
+        <div id="dn-report-run-preview" style="overflow-x:auto;margin-bottom:16px;"></div>
+
+        <h4 style="color:#002f6c;margin-bottom:8px;">Recent Send History</h4>
+        <button type="button" id="dn-report-history-btn" style="font-size:12px;padding:5px 14px;margin-bottom:10px;">Refresh History</button>
+        <div id="dn-report-history-loading" style="color:#888;font-size:13px;display:none;">Loading…</div>
+        <div id="dn-report-history-results" style="overflow-x:auto;"></div>
       </section>
 
       <script>
@@ -14288,6 +14689,188 @@ def menu_admin_page(request: Request):
                 });
               });
               observer.observe(panelEl, { attributes: true });
+            }
+          })();
+
+          // ── DN Number Pool Availability Report panel ─────────────────────────
+          (function () {
+            const cfgLoading = document.getElementById("dn-report-config-loading");
+            const cfgWrap = document.getElementById("dn-report-config-form-wrap");
+            const saveBtn = document.getElementById("dn-report-save-btn");
+            const saveStatus = document.getElementById("dn-report-save-status");
+            const runBtn = document.getElementById("dn-report-run-btn");
+            const runStatus = document.getElementById("dn-report-run-status");
+            const runPreview = document.getElementById("dn-report-run-preview");
+            const histBtn = document.getElementById("dn-report-history-btn");
+            const histLoading = document.getElementById("dn-report-history-loading");
+            const histResults = document.getElementById("dn-report-history-results");
+
+            function loadConfig() {
+              if (!cfgLoading) return;
+              cfgLoading.style.display = "";
+              if (cfgWrap) cfgWrap.style.display = "none";
+              fetch("/admin/dn-avail-report/config", { credentials: "same-origin" })
+                .then(r => r.json())
+                .then(data => {
+                  cfgLoading.style.display = "none";
+                  if (!cfgWrap) return;
+                  const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? ""; };
+                  set("dn-cfg-recipient", data.recipient || "");
+                  set("dn-cfg-recipient-2", data.recipient_2 || "");
+                  set("dn-cfg-from", data.from_address || "");
+                  set("dn-cfg-enabled", data.enabled ? "true" : "false");
+                  set("dn-cfg-hour", data.hour ?? 8);
+                  set("dn-cfg-minute", String(data.minute ?? 0).padStart(2, "0"));
+                  set("dn-cfg-threshold", data.low_threshold ?? 10);
+                  set("dn-cfg-cucm-host", data.cucm_host || "");
+                  set("dn-cfg-cucm-user", data.cucm_user || "");
+                  // Never pre-fill password; leave blank
+                  set("dn-cfg-frequency", data.frequency || "daily");
+                  cfgWrap.style.display = "";
+                })
+                .catch(() => { if (cfgLoading) cfgLoading.textContent = "Failed to load settings."; });
+            }
+
+            if (saveBtn) {
+              saveBtn.addEventListener("click", function () {
+                const recipient = (document.getElementById("dn-cfg-recipient")?.value || "").trim();
+                if (!recipient) {
+                  if (saveStatus) saveStatus.innerHTML = '<span style="color:#b71c1c">Primary recipient is required.</span>';
+                  return;
+                }
+                saveBtn.disabled = true;
+                if (saveStatus) saveStatus.textContent = "Saving…";
+                const payload = {
+                  recipient,
+                  recipient_2: (document.getElementById("dn-cfg-recipient-2")?.value || "").trim(),
+                  from_address: (document.getElementById("dn-cfg-from")?.value || "").trim(),
+                  enabled: document.getElementById("dn-cfg-enabled")?.value === "true",
+                  hour: parseInt(document.getElementById("dn-cfg-hour")?.value || "8", 10),
+                  minute: parseInt(document.getElementById("dn-cfg-minute")?.value || "0", 10),
+                  low_threshold: parseInt(document.getElementById("dn-cfg-threshold")?.value || "10", 10),
+                  cucm_host: (document.getElementById("dn-cfg-cucm-host")?.value || "").trim(),
+                  cucm_user: (document.getElementById("dn-cfg-cucm-user")?.value || "").trim(),
+                  cucm_pass: (document.getElementById("dn-cfg-cucm-pass")?.value || "").trim(),
+                  frequency: document.getElementById("dn-cfg-frequency")?.value || "daily",
+                };
+                fetch("/admin/dn-avail-report/save-config", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  credentials: "same-origin",
+                  body: JSON.stringify(payload),
+                })
+                  .then(r => r.json())
+                  .then(data => {
+                    saveBtn.disabled = false;
+                    if (data.ok) {
+                      saveStatus.innerHTML = '<span style="color:#1b5e20;background:#e8f5e9;padding:4px 10px;border-radius:4px">✅ Saved</span>';
+                      // Clear password field after save
+                      const passEl = document.getElementById("dn-cfg-cucm-pass");
+                      if (passEl) passEl.value = "";
+                    } else {
+                      saveStatus.innerHTML = `<span style="color:#b71c1c">❌ ${data.error || "Save failed"}</span>`;
+                    }
+                  })
+                  .catch(err => {
+                    saveBtn.disabled = false;
+                    saveStatus.innerHTML = `<span style="color:#b71c1c">Network error: ${err.message}</span>`;
+                  });
+              });
+            }
+
+            if (runBtn) {
+              runBtn.addEventListener("click", function () {
+                runBtn.disabled = true;
+                runBtn.textContent = "Running…";
+                if (runStatus) runStatus.innerHTML = '<span style="color:#555;font-size:13px;">Querying CUCM and sending email…</span>';
+                if (runPreview) runPreview.innerHTML = "";
+                fetch("/admin/dn-avail-report/run", { method: "POST", credentials: "same-origin" })
+                  .then(r => r.json())
+                  .then(data => {
+                    runBtn.disabled = false;
+                    runBtn.textContent = "▶ Run Report Now";
+                    if (data.ok) {
+                      if (runStatus) runStatus.innerHTML = `<span style="color:#1b5e20;background:#e8f5e9;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">✅ Sent to <strong>${(data.recipients || []).join(", ")}</strong></span>`;
+                      // Render inline mini-table
+                      if (runPreview && data.results) {
+                        const statusColor = r => r.available === 0 ? "#b71c1c" : r.available < (data.low_threshold || 10) ? "#e65100" : "#2e7d32";
+                        let t = '<table style="margin-top:12px;font-size:13px;border-collapse:collapse">'
+                          + '<tr style="background:#f5f5f5"><th style="padding:6px 12px;text-align:left;border-bottom:2px solid #ddd">Type</th>'
+                          + '<th style="padding:6px 12px;border-bottom:2px solid #ddd">Prefix</th>'
+                          + '<th style="padding:6px 12px;border-bottom:2px solid #ddd">Available</th>'
+                          + '<th style="padding:6px 12px;border-bottom:2px solid #ddd">In Use</th>'
+                          + '<th style="padding:6px 12px;border-bottom:2px solid #ddd">Total</th></tr>';
+                        data.results.forEach(r => {
+                          t += `<tr><td style="padding:6px 12px;border-bottom:1px solid #eee;font-weight:600">${r.label}</td>`
+                            + `<td style="padding:6px 12px;border-bottom:1px solid #eee;font-family:monospace">${r.prefix}xxx</td>`
+                            + `<td style="padding:6px 12px;border-bottom:1px solid #eee;font-weight:700;color:${statusColor(r)}">${r.available}</td>`
+                            + `<td style="padding:6px 12px;border-bottom:1px solid #eee">${r.in_use}</td>`
+                            + `<td style="padding:6px 12px;border-bottom:1px solid #eee">${r.total}</td></tr>`;
+                        });
+                        t += "</table>";
+                        runPreview.innerHTML = t;
+                      }
+                      loadHistory();
+                    } else {
+                      if (runStatus) runStatus.innerHTML = `<span style="color:#b71c1c;background:#ffebee;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">❌ ${data.error || "Unknown error"}</span>`;
+                    }
+                  })
+                  .catch(err => {
+                    runBtn.disabled = false;
+                    runBtn.textContent = "▶ Run Report Now";
+                    if (runStatus) runStatus.innerHTML = `<span style="color:#b71c1c;font-size:13px;">Network error: ${err.message}</span>`;
+                  });
+              });
+            }
+
+            function loadHistory() {
+              if (!histLoading || !histResults) return;
+              histLoading.style.display = "";
+              histResults.innerHTML = "";
+              fetch("/admin/dn-avail-report/history", { credentials: "same-origin" })
+                .then(r => r.json())
+                .then(data => {
+                  histLoading.style.display = "none";
+                  const rows = data.rows || [];
+                  if (!rows.length) { histResults.innerHTML = '<p style="color:#888;font-size:13px;">No sends logged yet.</p>'; return; }
+                  let html = '<table style="width:100%;font-size:13px;border-collapse:collapse">'
+                    + '<thead><tr style="background:#f5f5f5">'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Sent At</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Summary</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Recipients</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Triggered By</th>'
+                    + '</tr></thead><tbody>';
+                  rows.forEach((r, i) => {
+                    const bg = i % 2 === 0 ? "#fff" : "#f9f9f9";
+                    html += `<tr style="background:${bg}">`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap">${r.timestamp || ""}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;font-size:12px">${r.summary || ""}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;font-size:12px">${(r.account || "").replace(/\|/g, "<br>")}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;color:#888;font-size:12px">${r.operator || ""}</td>`
+                      + `</tr>`;
+                  });
+                  html += "</tbody></table>";
+                  histResults.innerHTML = html;
+                })
+                .catch(() => {
+                  if (histLoading) histLoading.style.display = "none";
+                  if (histResults) histResults.innerHTML = '<p style="color:#c00;font-size:13px;">Failed to load history.</p>';
+                });
+            }
+
+            if (histBtn) histBtn.addEventListener("click", loadHistory);
+
+            const dnPanelEl = document.querySelector('[data-panel="dn-avail-report"]');
+            if (dnPanelEl) {
+              const obs = new MutationObserver(mutations => {
+                mutations.forEach(m => {
+                  if (m.attributeName === "class" && dnPanelEl.classList.contains("active")) {
+                    loadConfig();
+                    loadHistory();
+                  }
+                });
+              });
+              obs.observe(dnPanelEl, { attributes: true });
             }
           })();
 
@@ -19072,6 +19655,131 @@ def sep_sms_report_history_route(request: Request):
     if len(history) >= 20:
       break
 
+  return JSONResponse({"ok": True, "rows": history})
+
+
+@app.get("/admin/dn-avail-report/config")
+def dn_avail_report_config_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  cfg = _get_dn_report_settings()
+  return JSONResponse({
+    "ok": True,
+    "enabled": cfg["enabled"],
+    "recipient": cfg["recipient"],
+    "recipient_2": cfg["recipient_2"],
+    "from_address": cfg["from_address"],
+    "hour": cfg["hour"],
+    "minute": cfg["minute"],
+    "frequency": cfg["frequency"],
+    "cucm_host": cfg["cucm_host"],
+    "cucm_user": cfg["cucm_user"],
+    # Never return password
+    "low_threshold": cfg["low_threshold"],
+  })
+
+
+@app.post("/admin/dn-avail-report/save-config")
+async def dn_avail_report_save_config_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  try:
+    body = await request.json()
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Invalid JSON body"}, status_code=400)
+
+  recipient = (body.get("recipient") or "").strip()
+  if not recipient:
+    return JSONResponse({"ok": False, "error": "Primary recipient email is required"}, status_code=400)
+  try:
+    hour = int(body.get("hour", 8))
+    minute = int(body.get("minute", 0))
+    low_threshold = int(body.get("low_threshold", 10))
+  except (TypeError, ValueError):
+    return JSONResponse({"ok": False, "error": "Hour, minute, and threshold must be integers"}, status_code=400)
+  if not (0 <= hour <= 23) or not (0 <= minute <= 59) or low_threshold < 1:
+    return JSONResponse({"ok": False, "error": "Invalid hour, minute, or threshold value"}, status_code=400)
+
+  enabled = str(body.get("enabled", "true")).strip().lower() in {"1", "true", "yes", "on"}
+  frequency = (body.get("frequency") or "daily").strip().lower()
+  if frequency not in {"daily", "weekly"}:
+    frequency = "daily"
+
+  settings = _load_settings()
+  settings["dn_report_enabled"] = "true" if enabled else "false"
+  settings["dn_report_recipient"] = recipient
+  settings["dn_report_recipient_2"] = (body.get("recipient_2") or "").strip()
+  settings["dn_report_from"] = (body.get("from_address") or "").strip()
+  settings["dn_report_hour"] = str(hour)
+  settings["dn_report_minute"] = str(minute)
+  settings["dn_report_frequency"] = frequency
+  settings["dn_report_cucm_host"] = (body.get("cucm_host") or "").strip()
+  settings["dn_report_cucm_user"] = (body.get("cucm_user") or "").strip()
+  settings["dn_report_low_threshold"] = str(low_threshold)
+  # Only overwrite password if a new one was provided
+  new_pass = (body.get("cucm_pass") or "").strip()
+  if new_pass:
+    settings["dn_report_cucm_pass"] = new_pass
+
+  if not _save_settings(settings):
+    return JSONResponse({"ok": False, "error": "Failed to save settings file"}, status_code=500)
+  return JSONResponse({"ok": True, "message": "Settings saved successfully."})
+
+
+@app.post("/admin/dn-avail-report/run")
+def dn_avail_report_run_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  operator = str(session.get("username", "manual")).strip() or "manual"
+  result = _run_dn_availability_report(triggered_by=f"manual:{operator}")
+  if result.get("success"):
+    cfg = _get_dn_report_settings()
+    return JSONResponse({
+      "ok": True,
+      "run_at": result.get("run_at", ""),
+      "recipients": result.get("recipients", []),
+      "results": result.get("results", []),
+      "errors": result.get("errors", []),
+      "low_threshold": cfg["low_threshold"],
+    })
+  return JSONResponse({"ok": False, "error": result.get("error", "Unknown error")}, status_code=500)
+
+
+@app.get("/admin/dn-avail-report/history")
+def dn_avail_report_history_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  if not os.path.exists(AUDIT_LOG_PATH):
+    return JSONResponse({"ok": True, "rows": []})
+  try:
+    with AUDIT_LOG_LOCK:
+      with open(AUDIT_LOG_PATH, "r", newline="", encoding="utf-8") as fh:
+        all_rows = list(csv.DictReader(fh))
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+  history = []
+  for row in reversed(all_rows):
+    if (row.get("action") or "").strip() != "dn_avail_report_sent":
+      continue
+    target_raw = row.get("target", "")
+    summary = ""
+    for part in target_raw.split(";"):
+      if part.startswith("summary="):
+        summary = part[len("summary="):]
+        break
+    history.append({
+      "timestamp": row.get("timestamp", ""),
+      "summary": summary,
+      "account": row.get("account", ""),
+      "operator": row.get("operator", ""),
+    })
+    if len(history) >= 20:
+      break
   return JSONResponse({"ok": True, "rows": history})
 
 
