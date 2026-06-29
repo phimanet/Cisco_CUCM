@@ -3374,7 +3374,7 @@ _DN_REPORT_SCHEDULER_LOCK = threading.Lock()
 
 
 def _axl_list_dns_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, prefix: str) -> dict:
-  """Return total and available (inactive) DN counts for a given prefix in ENT_DEVICE_PT."""
+  """Return total and unassigned (no device) DN counts for a given prefix in ENT_DEVICE_PT."""
   session = requests.Session()
   session.verify = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
@@ -3388,7 +3388,7 @@ def _axl_list_dns_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, pref
       <returnedTags>
         <pattern/>
         <routePartitionName/>
-        <active/>
+        <deviceName/>
       </returnedTags>
     </axl:listLine>
   </soapenv:Body>
@@ -3412,7 +3412,7 @@ def _axl_list_dns_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, pref
       continue
     pattern_val = ""
     partition_val = ""
-    active_val = ""
+    device_name = ""
     for child in list(elem):
       ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
       txt = (child.text or "").strip()
@@ -3420,12 +3420,12 @@ def _axl_list_dns_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, pref
         pattern_val = txt
       elif ctag == "routePartitionName":
         partition_val = txt
-      elif ctag == "active":
-        active_val = txt.lower()
+      elif ctag == "deviceName":
+        device_name = txt
     if not pattern_val or partition_val != _DN_REPORT_ROUTE_PARTITION:
       continue
     total += 1
-    if active_val not in {"true", "t", "1", "yes"}:
+    if not device_name:
       available += 1
 
   return {"total": total, "available": available, "in_use": total - available}
