@@ -17938,9 +17938,20 @@ def dashboard_page(request: Request):
       </section>
 
       <section class="kpi-grid">
-        <article class="kpi"><div class="label">Active Calls (Realtime)</div><div id="kpiActiveCalls" class="value">-</div></article>
+        <article class="kpi"><div class="label">Active Calls (Realtime Total)</div><div id="kpiActiveCalls" class="value">-</div></article>
         <article class="kpi"><div class="label">Jabber CSF Devices Configured</div><div id="kpiConfigured" class="value">-</div></article>
         <article class="kpi"><div class="label">Jabber CSF Devices Registered</div><div id="kpiRegistered" class="value">-</div></article>
+      </section>
+
+      <section class="panel">
+        <h3>Call Activity</h3>
+        <div style="overflow-x:auto;"><table><thead><tr><th>Path</th><th>Active Calls</th></tr></thead><tbody>
+          <tr><td>Ribbon SBC</td><td id="callRibbon" class="mono">-</td></tr>
+          <tr><td>Cisco CUBE</td><td id="callCube" class="mono">-</td></tr>
+          <tr><td>Cisco Jabber Endpoints</td><td id="callJabber" class="mono">-</td></tr>
+          <tr><td>Other SIP Trunks</td><td id="callOtherTrunk" class="mono">-</td></tr>
+          <tr><td><strong>Total Active Calls</strong></td><td id="callTotal" class="mono">-</td></tr>
+        </tbody></table></div>
       </section>
 
       <section class="panel">
@@ -17986,6 +17997,7 @@ def api_dashboard_stats(request: Request):
   registered_by_prefix = {"CSF": 0, "TCT": 0, "BOT": 0, "SEP": 0}
   by_server_registered = []
   active_calls = None
+  jabber_active_calls = None
   ris_available = True
   jabber_registered_total = 0
   trunk_activity = {
@@ -18023,6 +18035,8 @@ def api_dashboard_stats(request: Request):
     registered_by_prefix = ris.get("by_prefix_registered", registered_by_prefix)
     jabber_registered_total = int(ris.get("registered_total", sum(registered_by_prefix.values())) or 0)
     active_calls = ris.get("active_calls")
+    if active_calls is not None:
+      jabber_active_calls = int(active_calls or 0)
     by_server_map = ris.get("by_server_registered", {}) or {}
     by_server_registered = [
       {"server": server_name, "registered": count}
@@ -18094,6 +18108,25 @@ def api_dashboard_stats(request: Request):
   except Exception as trunk_exc:
     warnings.append(f"SIP trunk activity unavailable: {trunk_exc}")
 
+  ribbon_calls = int(trunk_activity.get("ribbon_active_calls", 0) or 0)
+  cube_calls = int(trunk_activity.get("cube_active_calls", 0) or 0)
+  other_trunk_calls = int(trunk_activity.get("other_active_calls", 0) or 0)
+  total_active_calls = int(active_calls or 0) if active_calls is not None else 0
+
+  jabber_calls_source = "ris"
+  if jabber_active_calls is None:
+    jabber_calls_source = "estimate_total_minus_trunks"
+    jabber_active_calls = max(0, total_active_calls - (ribbon_calls + cube_calls + other_trunk_calls))
+
+  call_activity = {
+    "ribbon_active_calls": ribbon_calls,
+    "cube_active_calls": cube_calls,
+    "jabber_active_calls": int(jabber_active_calls or 0),
+    "other_trunk_active_calls": other_trunk_calls,
+    "total_active_calls": total_active_calls,
+    "jabber_calls_source": jabber_calls_source,
+  }
+
   return JSONResponse(
     {
       "ok": True,
@@ -18111,6 +18144,7 @@ def api_dashboard_stats(request: Request):
         "registered_by_server": by_server_registered,
         "active_calls": active_calls,
         "trunk_activity": trunk_activity,
+        "call_activity": call_activity,
       },
       "warnings": warnings,
     }
@@ -18128,6 +18162,11 @@ def dashboard_script():
   const kpiActiveCalls = document.getElementById("kpiActiveCalls");
   const kpiConfigured = document.getElementById("kpiConfigured");
   const kpiRegistered = document.getElementById("kpiRegistered");
+  const callRibbon = document.getElementById("callRibbon");
+  const callCube = document.getElementById("callCube");
+  const callJabber = document.getElementById("callJabber");
+  const callOtherTrunk = document.getElementById("callOtherTrunk");
+  const callTotal = document.getElementById("callTotal");
   const prefixRows = document.getElementById("prefixRows");
   
 
@@ -18143,6 +18182,11 @@ def dashboard_script():
     if (kpiActiveCalls) kpiActiveCalls.textContent = "N/A";
     if (kpiConfigured) kpiConfigured.textContent = "0";
     if (kpiRegistered) kpiRegistered.textContent = "0";
+    if (callRibbon) callRibbon.textContent = "-";
+    if (callCube) callCube.textContent = "-";
+    if (callJabber) callJabber.textContent = "-";
+    if (callOtherTrunk) callOtherTrunk.textContent = "-";
+    if (callTotal) callTotal.textContent = "-";
   }
 
   function renderPrefixRows(configured, registered) {
@@ -18174,6 +18218,14 @@ def dashboard_script():
       if (kpiActiveCalls) kpiActiveCalls.textContent = stats.active_calls == null ? "N/A" : String(stats.active_calls);
       if (kpiConfigured) kpiConfigured.textContent = String(stats.jabber_csf_configured_total || 0);
       if (kpiRegistered) kpiRegistered.textContent = String(stats.jabber_csf_registered_total || 0);
+
+      const callActivity = stats.call_activity || {};
+      if (callRibbon) callRibbon.textContent = String(callActivity.ribbon_active_calls || 0);
+      if (callCube) callCube.textContent = String(callActivity.cube_active_calls || 0);
+      if (callJabber) callJabber.textContent = String(callActivity.jabber_active_calls || 0);
+      if (callOtherTrunk) callOtherTrunk.textContent = String(callActivity.other_trunk_active_calls || 0);
+      if (callTotal) callTotal.textContent = String(callActivity.total_active_calls || 0);
+
       renderPrefixRows(stats.configured_by_prefix || {}, stats.registered_by_prefix || {});
 
       if (lastRefreshEl) {
