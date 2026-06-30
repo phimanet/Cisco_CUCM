@@ -5148,6 +5148,7 @@ def _perfmon_collect_active_calls(cucm_host: str, cucm_user: str, cucm_pass: str
 
   root = _parse_xml_or_runtime_error(response.text, "PerfMon perfmonCollectCounterData")
   current_name = ""
+  counters: dict[str, int] = {}
   for elem in root.iter():
     tag = _strip_xml_ns(elem.tag)
     text = (elem.text or "").strip()
@@ -5157,12 +5158,35 @@ def _perfmon_collect_active_calls(cucm_host: str, cucm_user: str, cucm_pass: str
     if tag != "Value" or not current_name:
       continue
 
-    counter_name = current_name.split("\\")[-1].strip().lower()
-    if counter_name in {"activecalls", "callsactive", "numactivecalls", "numberofactivecalls"}:
-      try:
-        return int(float(text))
-      except Exception:
-        return None
+    try:
+      value = int(float(text))
+    except Exception:
+      continue
+    counter_name = current_name.split("\\")[-1].strip()
+    counters[counter_name] = value
+
+  if not counters:
+    return None
+
+  def _norm(name: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", (name or "").lower())
+
+  normalized = {_norm(name): value for name, value in counters.items()}
+  preferred = [
+    "activecalls",
+    "callsactive",
+    "numberofactivecalls",
+    "numofactivecalls",
+    "numactivecalls",
+    "totalactivecalls",
+  ]
+  for key in preferred:
+    if key in normalized:
+      return normalized[key]
+
+  for key, value in normalized.items():
+    if "active" in key and "call" in key and "failed" not in key and "attempt" not in key:
+      return value
 
   return None
 
