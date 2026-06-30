@@ -17715,7 +17715,7 @@ def api_dashboard_stats(request: Request):
   # not the interactive operator credentials.
   dn_cfg = _get_dn_report_settings()
   resolved_cucm_host = (session_cucm_host or dn_cfg.get("cucm_host", "") or "").strip()
-  resolved_cucm_user = (dn_cfg.get("cucm_user", "") or "").strip() or "ucmappadmin"
+  resolved_cucm_user = "ucmappadmin"
   resolved_cucm_pass = (dn_cfg.get("cucm_pass", "") or "").strip()
 
   if not resolved_cucm_host:
