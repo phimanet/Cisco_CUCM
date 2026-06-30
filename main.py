@@ -17855,11 +17855,6 @@ def dashboard_page(request: Request):
       </section>
 
       <section class="panel">
-        <h3>CUCM Servers and Jabber Registrations</h3>
-        <div style="overflow-x:auto;"><table><thead><tr><th>CUCM Server</th><th>Registered Jabber Devices</th></tr></thead><tbody id="serverRows"><tr><td colspan="2" class="muted">Waiting for data...</td></tr></tbody></table></div>
-      </section>
-
-      <section class="panel">
         <h3>Jabber Prefix Summary</h3>
         <div style="overflow-x:auto;"><table><thead><tr><th>Prefix</th><th>Configured (AXL)</th><th>Registered (RIS)</th></tr></thead><tbody id="prefixRows"><tr><td colspan="3" class="muted">Waiting for data...</td></tr></tbody></table></div>
       </section>
@@ -17956,6 +17951,26 @@ def api_dashboard_stats(request: Request):
           for server_name, count in sorted(perf_map.items(), key=lambda item: item[0].lower())
         ]
         jabber_registered_total = int(perf.get("registered_total", 0) or 0)
+        # RIS is unavailable in this cluster context; estimate prefix split by
+        # configured-device proportions so the prefix table is still useful.
+        cfg_total = sum(int(v or 0) for v in configured_by_prefix.values())
+        if cfg_total > 0 and jabber_registered_total > 0:
+          estimated = {}
+          remainders = []
+          assigned = 0
+          for prefix in ["CSF", "TCT", "BOT", "TAB"]:
+            configured_count = int(configured_by_prefix.get(prefix, 0) or 0)
+            exact = (jabber_registered_total * configured_count) / cfg_total
+            base = int(exact)
+            estimated[prefix] = base
+            assigned += base
+            remainders.append((exact - base, prefix))
+
+          remaining = jabber_registered_total - assigned
+          for _, prefix in sorted(remainders, key=lambda item: item[0], reverse=True)[:max(0, remaining)]:
+            estimated[prefix] = int(estimated.get(prefix, 0)) + 1
+
+          registered_by_prefix = estimated
         warnings.append("Using PerfMon fallback for registered-device totals because RIS realtime access is unavailable.")
       elif perf.get("errors"):
         warnings.append("PerfMon fallback unavailable: " + " | ".join(perf.get("errors", [])))
@@ -18007,11 +18022,10 @@ def dashboard_script():
   const kpiActiveCalls = document.getElementById("kpiActiveCalls");
   const kpiConfigured = document.getElementById("kpiConfigured");
   const kpiRegistered = document.getElementById("kpiRegistered");
-  const serverRows = document.getElementById("serverRows");
   const prefixRows = document.getElementById("prefixRows");
   
 
-  if (!refreshBtn || !intervalSelect || !autoRefreshCb || !serverRows || !prefixRows) {
+  if (!refreshBtn || !intervalSelect || !autoRefreshCb || !prefixRows) {
     return;
   }
 
@@ -18019,21 +18033,10 @@ def dashboard_script():
 
   function renderErrorRows(message) {
     const text = String(message || "Dashboard request failed");
-    serverRows.innerHTML = '<tr><td colspan="2" class="bad">' + text + '</td></tr>';
     prefixRows.innerHTML = '<tr><td colspan="3" class="bad">' + text + '</td></tr>';
     if (kpiActiveCalls) kpiActiveCalls.textContent = "N/A";
     if (kpiConfigured) kpiConfigured.textContent = "0";
     if (kpiRegistered) kpiRegistered.textContent = "0";
-  }
-
-  function renderServerRows(rows) {
-    if (!rows.length) {
-      serverRows.innerHTML = '<tr><td colspan="2" class="muted">No registration rows returned.</td></tr>';
-      return;
-    }
-    serverRows.innerHTML = rows
-      .map((r) => '<tr><td>' + (r.server || "Unknown") + '</td><td class="mono">' + String(r.registered || 0) + '</td></tr>')
-      .join('');
   }
 
   function renderPrefixRows(configured, registered) {
@@ -18065,7 +18068,6 @@ def dashboard_script():
       if (kpiActiveCalls) kpiActiveCalls.textContent = stats.active_calls == null ? "N/A" : String(stats.active_calls);
       if (kpiConfigured) kpiConfigured.textContent = String(stats.jabber_configured_total || 0);
       if (kpiRegistered) kpiRegistered.textContent = String(stats.jabber_registered_total || 0);
-      renderServerRows(stats.registered_by_server || []);
       renderPrefixRows(stats.configured_by_prefix || {}, stats.registered_by_prefix || {});
 
       if (lastRefreshEl) {
