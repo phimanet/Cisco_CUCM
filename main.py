@@ -18354,7 +18354,6 @@ def dashboard_page(request: Request):
       <section class="panel">
         <h3>Call Activity</h3>
         <div style="overflow-x:auto;"><table><thead><tr><th>Path</th><th>Active Calls</th></tr></thead><tbody>
-          <tr><td>Jabber/Expressway -> CUBE (PSTN)</td><td id="callPstnViaCube" class="mono">-</td></tr>
           <tr><td>Calls Active on MRA Nodes</td><td id="callMgrCallsActiveMraHosts" class="mono">-</td></tr>
           <tr><td>Cisco Jabber Endpoints</td><td id="callJabber" class="mono">-</td></tr>
           <tr><td><strong>Total Active Calls</strong></td><td id="callTotal" class="mono">-</td></tr>
@@ -18368,7 +18367,7 @@ def dashboard_page(request: Request):
 
     </main>
 
-    <script src="/dashboard.js?v=20260630o"></script>
+    <script src="/dashboard.js?v=20260630p"></script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
@@ -18617,7 +18616,6 @@ def dashboard_script():
   const kpiActiveCalls = document.getElementById("kpiActiveCalls");
   const kpiConfigured = document.getElementById("kpiConfigured");
   const kpiRegistered = document.getElementById("kpiRegistered");
-  const callPstnViaCube = document.getElementById("callPstnViaCube");
   const callMgrCallsActiveMraHosts = document.getElementById("callMgrCallsActiveMraHosts");
   const callJabber = document.getElementById("callJabber");
   const callTotal = document.getElementById("callTotal");
@@ -18636,7 +18634,6 @@ def dashboard_script():
     if (kpiActiveCalls) kpiActiveCalls.textContent = "N/A";
     if (kpiConfigured) kpiConfigured.textContent = "0";
     if (kpiRegistered) kpiRegistered.textContent = "0";
-    if (callPstnViaCube) callPstnViaCube.textContent = "-";
     if (callMgrCallsActiveMraHosts) callMgrCallsActiveMraHosts.textContent = "-";
     if (callJabber) callJabber.textContent = "-";
     if (callTotal) callTotal.textContent = "-";
@@ -18673,7 +18670,6 @@ def dashboard_script():
       if (kpiRegistered) kpiRegistered.textContent = String(stats.jabber_csf_registered_total || 0);
 
       const callActivity = stats.call_activity || {};
-      if (callPstnViaCube) callPstnViaCube.textContent = String(callActivity.pstn_via_cube_active_calls || 0);
       if (callMgrCallsActiveMraHosts) callMgrCallsActiveMraHosts.textContent = String(callActivity.callmanager_calls_active_on_mra_hosts || 0);
       if (callJabber) callJabber.textContent = String(callActivity.jabber_active_calls || 0);
       if (callTotal) callTotal.textContent = String(callActivity.total_active_calls || 0);
