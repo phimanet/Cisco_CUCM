@@ -5331,6 +5331,7 @@ def _perfmon_collect_sip_trunk_activity(cucm_host: str, cucm_user: str, cucm_pas
   current_name = ""
   result = {"ribbon": 0, "cube": 0, "other": 0}
   matched_counters = []
+  all_call_related_counters = []
   for elem in root.iter():
     tag = _strip_xml_ns(elem.tag)
     text = (elem.text or "").strip()
@@ -5340,26 +5341,35 @@ def _perfmon_collect_sip_trunk_activity(cucm_host: str, cucm_user: str, cucm_pas
     if tag != "Value" or not current_name:
       continue
 
-    if not _is_active_call_counter(current_name):
-      continue
     try:
       value = int(float(text))
     except Exception:
       continue
+
+    normalized_name = re.sub(r"[^a-z0-9]", "", (current_name or "").lower())
+    if "call" not in normalized_name:
+      continue
+
     bucket = _classify_trunk_counter_target(current_name)
+
+    row = {
+      "host": target_host,
+      "object": "Cisco SIP Trunk",
+      "bucket": bucket,
+      "counter": current_name,
+      "value": value,
+    }
+    all_call_related_counters.append(row)
+
+    if not _is_active_call_counter(current_name):
+      continue
+
     result[bucket] = int(result.get(bucket, 0) or 0) + value
 
-    matched_counters.append(
-      {
-        "host": target_host,
-        "object": "Cisco SIP Trunk",
-        "bucket": bucket,
-        "counter": current_name,
-        "value": value,
-      }
-    )
+    matched_counters.append(row)
 
   result["matched_counters"] = matched_counters
+  result["all_call_related_counters"] = all_call_related_counters
   return result
 
 
@@ -5368,16 +5378,25 @@ def _perfmon_trunk_activity_fallback(cucm_host: str, cucm_user: str, cucm_pass: 
   totals = {"ribbon": 0, "cube": 0, "other": 0}
   errors = []
   all_active_call_counters = []
+  all_call_related_counters = []
   for host in hosts:
     try:
       partial = _perfmon_collect_sip_trunk_activity(cucm_host, cucm_user, cucm_pass, host)
       for key in ["ribbon", "cube", "other"]:
         totals[key] = int(totals.get(key, 0) or 0) + int(partial.get(key, 0) or 0)
       all_active_call_counters.extend(list(partial.get("matched_counters", []) or []))
+      all_call_related_counters.extend(list(partial.get("all_call_related_counters", []) or []))
     except Exception as exc:
       errors.append(f"{host}: {exc}")
 
   all_active_call_counters.sort(
+    key=lambda item: (
+      -int(item.get("value", 0) or 0),
+      str(item.get("host", "") or "").lower(),
+      str(item.get("counter", "") or "").lower(),
+    )
+  )
+  all_call_related_counters.sort(
     key=lambda item: (
       -int(item.get("value", 0) or 0),
       str(item.get("host", "") or "").lower(),
@@ -5390,6 +5409,7 @@ def _perfmon_trunk_activity_fallback(cucm_host: str, cucm_user: str, cucm_pass: 
     "cube_active_calls": int(totals.get("cube", 0) or 0),
     "other_active_calls": int(totals.get("other", 0) or 0),
     "all_active_call_counters": all_active_call_counters[:300],
+    "all_call_related_counters": all_call_related_counters[:500],
     "ribbon_ips": list(RIBBON_SBC_IPS),
     "cube_ips": list(CUBE_IPS),
     "errors": errors,
@@ -18030,8 +18050,8 @@ def dashboard_page(request: Request):
       </section>
 
       <section class="panel">
-        <h3>All Active Call Counters (Preview)</h3>
-        <p class="muted" style="margin-top:0;">Raw matched PerfMon counters from Cisco SIP Trunk object. Use this list to identify exactly which counters should remain in the panel.</p>
+        <h3>All Call-Related Counters (Preview)</h3>
+        <p class="muted" style="margin-top:0;">Raw call-related PerfMon counters from Cisco SIP Trunk object. Use this list to identify exactly which counters should remain in the panel.</p>
         <div style="overflow-x:auto;"><table><thead><tr><th>Host</th><th>Bucket</th><th>Counter</th><th>Value</th></tr></thead><tbody id="callCounterRows"><tr><td colspan="4" class="muted">Waiting for data...</td></tr></tbody></table></div>
       </section>
 
@@ -18042,7 +18062,7 @@ def dashboard_page(request: Request):
 
     </main>
 
-    <script src="/dashboard.js?v=20260630e"></script>
+    <script src="/dashboard.js?v=20260630f"></script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
@@ -18216,7 +18236,7 @@ def api_dashboard_stats(request: Request):
     "jabber_active_calls": int(jabber_active_calls or 0),
     "other_trunk_active_calls": other_trunk_calls,
     "total_active_calls": total_active_calls,
-    "all_active_call_counters": list(trunk_activity.get("all_active_call_counters", []) or []),
+    "all_call_related_counters": list(trunk_activity.get("all_call_related_counters", []) or []),
     "jabber_calls_source": jabber_calls_source,
   }
 
@@ -18342,7 +18362,7 @@ def dashboard_script():
       if (callJabber) callJabber.textContent = String(callActivity.jabber_active_calls || 0);
       if (callOtherTrunk) callOtherTrunk.textContent = String(callActivity.other_trunk_active_calls || 0);
       if (callTotal) callTotal.textContent = String(callActivity.total_active_calls || 0);
-      renderCallCounterRows(callActivity.all_active_call_counters || []);
+      renderCallCounterRows(callActivity.all_call_related_counters || []);
 
       renderPrefixRows(stats.configured_by_prefix || {}, stats.registered_by_prefix || {});
 
