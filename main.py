@@ -17627,124 +17627,7 @@ def dashboard_page(request: Request):
       <section class="panel"><h3>Status</h3><pre id="statusBox" class="mono" style="white-space:pre-wrap;margin:0;">Ready.</pre></section>
     </main>
 
-    <script>
-      (function () {
-        const intervalSelect = document.getElementById("refreshInterval");
-        const autoRefreshCb = document.getElementById("autoRefresh");
-        const refreshBtn = document.getElementById("refreshNow");
-        const dataModeSelect = document.getElementById("dataMode");
-        const lastRefreshEl = document.getElementById("lastRefresh");
-        const statusBox = document.getElementById("statusBox");
-        const topStatus = document.getElementById("topStatus");
-        const kpiActiveCalls = document.getElementById("kpiActiveCalls");
-        const kpiConfigured = document.getElementById("kpiConfigured");
-        const kpiRegistered = document.getElementById("kpiRegistered");
-        const serverRows = document.getElementById("serverRows");
-        const prefixRows = document.getElementById("prefixRows");
-        const unityRows = document.getElementById("unityRows");
-        let timerId = null;
-
-        function setStatus(text, isError) {
-          const safeText = text || "";
-          statusBox.textContent = safeText;
-          if (topStatus) {
-            topStatus.textContent = safeText;
-            topStatus.classList.toggle("error", !!isError);
-          }
-        }
-
-        function renderErrorRows(message) {
-          const text = String(message || "Dashboard request failed");
-          serverRows.innerHTML = '<tr><td colspan="2" class="bad">' + text + '</td></tr>';
-          prefixRows.innerHTML = '<tr><td colspan="3" class="bad">' + text + '</td></tr>';
-          unityRows.innerHTML = '<tr><td colspan="6" class="bad">' + text + '</td></tr>';
-          kpiActiveCalls.textContent = 'N/A';
-          kpiConfigured.textContent = '0';
-          kpiRegistered.textContent = '0';
-        }
-        function renderServerRows(rows) {
-          if (!rows.length) {
-            serverRows.innerHTML = '<tr><td colspan="2" class="muted">No registration rows returned.</td></tr>';
-            return;
-          }
-          serverRows.innerHTML = rows.map((r) => '<tr><td>' + (r.server || 'Unknown') + '</td><td class="mono">' + String(r.registered || 0) + '</td></tr>').join('');
-        }
-        function renderPrefixRows(configured, registered) {
-          const prefixes = ['CSF','TCT','BOT','TAB'];
-          prefixRows.innerHTML = prefixes.map((p) => '<tr><td class="mono">' + p + '</td><td class="mono">' + String((configured && configured[p]) || 0) + '</td><td class="mono">' + String((registered && registered[p]) || 0) + '</td></tr>').join('');
-        }
-        function renderUnityRows(rows) {
-          if (!rows.length) {
-            unityRows.innerHTML = '<tr><td colspan="6" class="muted">No port probe rows returned.</td></tr>';
-            return;
-          }
-          unityRows.innerHTML = rows.map((r) => {
-            const cls = r.status === 'open' ? 'ok' : 'bad';
-            const latency = r.latency_ms == null ? '-' : String(r.latency_ms) + ' ms';
-            return '<tr><td>' + (r.host || '') + '</td><td class="mono">' + String(r.port || '') + '</td><td>' + (r.label || '') + '</td><td class="' + cls + '">' + (r.status || '') + '</td><td class="mono">' + latency + '</td><td class="mono">' + (r.error || '') + '</td></tr>';
-          }).join('');
-        }
-
-        async function loadStats() {
-          setStatus('Refreshing dashboard data...', false);
-          try {
-            const controller = new AbortController();
-            const selectedMode = (dataModeSelect && dataModeSelect.value) ? dataModeSelect.value : 'light';
-            const timeoutMs = selectedMode === 'full' ? 30000 : 12000;
-            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-            const resp = await fetch('/api/dashboard/stats?mode=' + encodeURIComponent(selectedMode), {
-              method: 'GET',
-              credentials: 'same-origin',
-              headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
-              signal: controller.signal,
-            });
-            clearTimeout(timeoutId);
-            const payload = await resp.json();
-            if (!resp.ok || !payload.ok) {
-              throw new Error((payload && (payload.error || payload.detail)) || 'Dashboard stats request failed');
-            }
-            const stats = payload.stats || {};
-            kpiActiveCalls.textContent = stats.active_calls == null ? 'N/A' : String(stats.active_calls);
-            kpiConfigured.textContent = String(stats.jabber_configured_total || 0);
-            kpiRegistered.textContent = String(stats.jabber_registered_total || 0);
-            renderServerRows(stats.registered_by_server || []);
-            renderPrefixRows(stats.configured_by_prefix || {}, stats.registered_by_prefix || {});
-            renderUnityRows(stats.unity_port_probes || []);
-
-            const warnings = payload.warnings || [];
-            let text = 'Dashboard refreshed successfully. Mode: ' + String(payload.mode || selectedMode || 'light');
-            if (warnings.length) {
-              text += '\nWarnings:\n- ' + warnings.join('\n- ');
-            }
-            setStatus(text, false);
-            lastRefreshEl.textContent = 'Last refresh: ' + new Date().toLocaleTimeString();
-          } catch (err) {
-            const msg = 'Dashboard refresh failed: ' + ((err && err.message) || 'Unknown error');
-            setStatus(msg, true);
-            renderErrorRows(msg);
-          }
-        }
-
-        function resetTimer() {
-          if (timerId) {
-            clearInterval(timerId);
-            timerId = null;
-          }
-          if (!autoRefreshCb.checked) {
-            return;
-          }
-          const seconds = parseInt(intervalSelect.value || '30', 10);
-          timerId = setInterval(loadStats, Math.max(5, seconds) * 1000);
-        }
-
-        refreshBtn.addEventListener('click', loadStats);
-        intervalSelect.addEventListener('change', resetTimer);
-        autoRefreshCb.addEventListener('change', resetTimer);
-
-        loadStats();
-        resetTimer();
-      })();
-    </script>
+    <script src="/dashboard.js?v=20260630a"></script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
@@ -17856,6 +17739,159 @@ def api_dashboard_stats(request: Request, mode: str = Query("light")):
       },
       "warnings": warnings,
     }
+  )
+
+
+@app.get("/dashboard.js")
+def dashboard_script():
+  js = """
+(function () {
+  const intervalSelect = document.getElementById("refreshInterval");
+  const autoRefreshCb = document.getElementById("autoRefresh");
+  const refreshBtn = document.getElementById("refreshNow");
+  const dataModeSelect = document.getElementById("dataMode");
+  const lastRefreshEl = document.getElementById("lastRefresh");
+  const statusBox = document.getElementById("statusBox");
+  const topStatus = document.getElementById("topStatus");
+  const kpiActiveCalls = document.getElementById("kpiActiveCalls");
+  const kpiConfigured = document.getElementById("kpiConfigured");
+  const kpiRegistered = document.getElementById("kpiRegistered");
+  const serverRows = document.getElementById("serverRows");
+  const prefixRows = document.getElementById("prefixRows");
+  const unityRows = document.getElementById("unityRows");
+
+  if (!refreshBtn || !intervalSelect || !autoRefreshCb || !statusBox || !serverRows || !prefixRows || !unityRows) {
+    return;
+  }
+
+  let timerId = null;
+
+  function setStatus(text, isError) {
+    const safeText = text || "";
+    statusBox.textContent = safeText;
+    if (topStatus) {
+      topStatus.textContent = safeText;
+      topStatus.classList.toggle("error", !!isError);
+    }
+  }
+
+  function renderErrorRows(message) {
+    const text = String(message || "Dashboard request failed");
+    serverRows.innerHTML = '<tr><td colspan="2" class="bad">' + text + '</td></tr>';
+    prefixRows.innerHTML = '<tr><td colspan="3" class="bad">' + text + '</td></tr>';
+    unityRows.innerHTML = '<tr><td colspan="6" class="bad">' + text + '</td></tr>';
+    if (kpiActiveCalls) kpiActiveCalls.textContent = "N/A";
+    if (kpiConfigured) kpiConfigured.textContent = "0";
+    if (kpiRegistered) kpiRegistered.textContent = "0";
+  }
+
+  function renderServerRows(rows) {
+    if (!rows.length) {
+      serverRows.innerHTML = '<tr><td colspan="2" class="muted">No registration rows returned.</td></tr>';
+      return;
+    }
+    serverRows.innerHTML = rows
+      .map((r) => '<tr><td>' + (r.server || "Unknown") + '</td><td class="mono">' + String(r.registered || 0) + '</td></tr>')
+      .join('');
+  }
+
+  function renderPrefixRows(configured, registered) {
+    const prefixes = ["CSF", "TCT", "BOT", "TAB"];
+    prefixRows.innerHTML = prefixes
+      .map((p) => '<tr><td class="mono">' + p + '</td><td class="mono">' + String((configured && configured[p]) || 0) + '</td><td class="mono">' + String((registered && registered[p]) || 0) + '</td></tr>')
+      .join('');
+  }
+
+  function renderUnityRows(rows) {
+    if (!rows.length) {
+      unityRows.innerHTML = '<tr><td colspan="6" class="muted">No port probe rows returned.</td></tr>';
+      return;
+    }
+    unityRows.innerHTML = rows
+      .map((r) => {
+        const cls = r.status === "open" ? "ok" : "bad";
+        const latency = r.latency_ms == null ? "-" : String(r.latency_ms) + " ms";
+        return '<tr><td>' + (r.host || "") + '</td><td class="mono">' + String(r.port || "") + '</td><td>' + (r.label || "") + '</td><td class="' + cls + '">' + (r.status || "") + '</td><td class="mono">' + latency + '</td><td class="mono">' + (r.error || "") + '</td></tr>';
+      })
+      .join('');
+  }
+
+  async function loadStats() {
+    setStatus("Refreshing dashboard data...", false);
+    try {
+      const controller = new AbortController();
+      const selectedMode = dataModeSelect && dataModeSelect.value ? dataModeSelect.value : "light";
+      const timeoutMs = selectedMode === "full" ? 30000 : 12000;
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      const resp = await fetch('/api/dashboard/stats?mode=' + encodeURIComponent(selectedMode), {
+        method: "GET",
+        credentials: "same-origin",
+        headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
+      const payload = await resp.json();
+      if (!resp.ok || !payload.ok) {
+        throw new Error((payload && (payload.error || payload.detail)) || "Dashboard stats request failed");
+      }
+
+      const stats = payload.stats || {};
+      if (kpiActiveCalls) kpiActiveCalls.textContent = stats.active_calls == null ? "N/A" : String(stats.active_calls);
+      if (kpiConfigured) kpiConfigured.textContent = String(stats.jabber_configured_total || 0);
+      if (kpiRegistered) kpiRegistered.textContent = String(stats.jabber_registered_total || 0);
+      renderServerRows(stats.registered_by_server || []);
+      renderPrefixRows(stats.configured_by_prefix || {}, stats.registered_by_prefix || {});
+      renderUnityRows(stats.unity_port_probes || []);
+
+      const warnings = payload.warnings || [];
+      let text = "Dashboard refreshed successfully. Mode: " + String(payload.mode || selectedMode || "light");
+      if (warnings.length) {
+        text += "\nWarnings:\n- " + warnings.join("\n- ");
+      }
+      setStatus(text, false);
+      if (lastRefreshEl) {
+        lastRefreshEl.textContent = "Last refresh: " + new Date().toLocaleTimeString();
+      }
+    } catch (err) {
+      const msg = "Dashboard refresh failed: " + ((err && err.message) || "Unknown error");
+      setStatus(msg, true);
+      renderErrorRows(msg);
+    }
+  }
+
+  function resetTimer() {
+    if (timerId) {
+      clearInterval(timerId);
+      timerId = null;
+    }
+    if (!autoRefreshCb.checked) {
+      return;
+    }
+    const seconds = parseInt(intervalSelect.value || "30", 10);
+    timerId = setInterval(loadStats, Math.max(5, seconds) * 1000);
+  }
+
+  refreshBtn.addEventListener("click", loadStats);
+  intervalSelect.addEventListener("change", resetTimer);
+  autoRefreshCb.addEventListener("change", resetTimer);
+  if (dataModeSelect) {
+    dataModeSelect.addEventListener("change", loadStats);
+  }
+
+  loadStats();
+  resetTimer();
+})();
+"""
+
+  return Response(
+    content=js,
+    media_type="application/javascript",
+    headers={
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    },
   )
 
 
