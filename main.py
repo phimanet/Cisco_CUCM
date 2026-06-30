@@ -8512,7 +8512,7 @@ def menu_page(request: Request):
           <span>Return to login and environment selection.</span>
         </a>
         <a class="hero-link-card" href="/dashboard">
-          <strong>CUCM Dashboard</strong>
+          <strong>Voice Dashboard</strong>
           <span>Live CUCM, Jabber registration, and Unity port telemetry.</span>
         </a>
 __ADMIN_CARD__
@@ -12895,7 +12895,7 @@ def menu_admin_page(request: Request):
             <span>Return to standard user-facing voice operations workflows.</span>
           </a>
           <a class="hero-link-card" href="/dashboard">
-            <strong>CUCM Dashboard</strong>
+            <strong>Voice Dashboard</strong>
             <span>Live CUCM, Jabber registration, and Unity port telemetry.</span>
           </a>
           <a class="hero-link-card" href="/audit-trail">
