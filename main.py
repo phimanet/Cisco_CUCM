@@ -990,6 +990,52 @@ def _genesys_lookup_phone_management_name(api_base: str, access_token: str, user
   return phone_name, matched_phone, payload, ""
 
 
+def _genesys_collect_paged_entities(
+  api_base: str,
+  access_token: str,
+  path: str,
+  page_size: int,
+  max_pages: int,
+) -> tuple[list[dict], int, str]:
+  entities_all = []
+  pages_scanned = 0
+  for page_number in range(1, max_pages + 1):
+    ok_page, payload, err_page = _genesys_get_json(
+      api_base,
+      access_token,
+      path,
+      {
+        "pageSize": page_size,
+        "pageNumber": page_number,
+      },
+    )
+    if not ok_page:
+      return entities_all, pages_scanned, err_page
+
+    entities = payload.get("entities", []) if isinstance(payload, dict) else []
+    if not isinstance(entities, list):
+      entities = []
+    entities_all.extend([item for item in entities if isinstance(item, dict)])
+    pages_scanned += 1
+
+    next_uri = str(payload.get("nextUri", "") or payload.get("next_uri", "")).strip()
+    page_count_raw = payload.get("pageCount", 0)
+    try:
+      page_count = int(page_count_raw or 0)
+    except Exception:
+      page_count = 0
+
+    if next_uri:
+      continue
+    if page_count and page_number < page_count:
+      continue
+    if len(entities) >= page_size:
+      continue
+    break
+
+  return entities_all, pages_scanned, ""
+
+
 def _genesys_queue_member_matches_user(member: dict, user_id: str, user_email: str, user_name: str) -> bool:
   if not isinstance(member, dict):
     return False
@@ -8066,6 +8112,7 @@ def genesys_admin_placeholder(request: Request):
                 <input name="first_name" placeholder="First Name (optional)" style="width:220px;">
                 <input name="username" placeholder="Username (optional)" style="width:220px;">
                 <button type="submit">Extract User Data</button>
+                <button type="button" id="genesys-org-snapshot-btn" style="background:#455a64;">Extract Org Snapshot (Debug)</button>
               </div>
             </form>
 
@@ -8101,6 +8148,7 @@ def genesys_admin_placeholder(request: Request):
         const resultsEl = document.getElementById("genesys-user-search-results");
         const debugWrapEl = document.getElementById("genesys-user-debug-wrap");
         const debugEl = document.getElementById("genesys-user-debug");
+        const orgSnapshotBtn = document.getElementById("genesys-org-snapshot-btn");
         const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn[data-panel-target]"));
         const panels = Array.from(document.querySelectorAll(".genesys-panel"));
         const queueForm = document.getElementById("genesys-queue-search-form");
@@ -8268,6 +8316,39 @@ def genesys_admin_placeholder(request: Request):
                 stage: "client-submit",
               });
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        }
+
+        if (orgSnapshotBtn && statusEl && rawDownloadEl && debugWrapEl && debugEl) {
+          orgSnapshotBtn.addEventListener("click", async function () {
+            const originalText = orgSnapshotBtn.textContent;
+            orgSnapshotBtn.disabled = true;
+            orgSnapshotBtn.textContent = "Extracting...";
+            statusEl.textContent = "Running Genesys org snapshot export...";
+            rawDownloadEl.innerHTML = "";
+            try {
+              const response = await fetch("/genesys/users/extract-org-snapshot", {
+                method: "POST",
+              });
+              const payload = await response.json();
+              debugEl.textContent = JSON.stringify(payload, null, 2);
+              debugWrapEl.style.display = "block";
+
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload && payload.error) || "Org snapshot failed.");
+              }
+
+              statusEl.textContent = "Org snapshot complete | Users: " + String(payload.users_count || 0) + " | Phones: " + String(payload.phones_count || 0);
+              if (payload.raw_download_url) {
+                const rawName = payload.raw_filename || "genesys_org_snapshot.json";
+                rawDownloadEl.innerHTML = "<a href='" + payload.raw_download_url + "' style='display:inline-block;padding:7px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Org Snapshot JSON (" + rawName + ")</a>";
+              }
+            } catch (err) {
+              statusEl.textContent = "Org snapshot failed: " + ((err && err.message) || "Unknown error.");
+            } finally {
+              orgSnapshotBtn.disabled = false;
+              orgSnapshotBtn.textContent = originalText;
             }
           });
         }
@@ -8524,6 +8605,72 @@ def genesys_extract_users_route(
     "pages_scanned": int(search_result.get("pages_scanned", 0) or 0),
     "users_scanned": int(search_result.get("users_scanned", 0) or 0),
     "warnings": enrich_result.get("warnings", []),
+    "raw_download_url": f"/download/job-output/{raw_job_id}",
+    "raw_filename": raw_filename,
+  })
+
+
+@app.post("/genesys/users/extract-org-snapshot")
+def genesys_extract_org_snapshot_route(request: Request):
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": token_result.get("error", "Genesys token request failed."),
+    }, status_code=400)
+
+  region = token_result.get("region", clean_region)
+  _, _, api_base = _genesys_region_to_urls(region)
+  access_token = token_result.get("access_token", "")
+
+  users_entities, users_pages, users_err = _genesys_collect_paged_entities(
+    api_base,
+    access_token,
+    "/api/v2/users",
+    page_size=max(25, min(GENESYS_USERS_PAGE_SIZE, 200)),
+    max_pages=200,
+  )
+  if users_err:
+    return JSONResponse({"ok": False, "error": f"Users snapshot failed: {users_err}"}, status_code=400)
+
+  phones_entities, phones_pages, phones_err = _genesys_collect_paged_entities(
+    api_base,
+    access_token,
+    "/api/v2/telephony/providers/edges/phones",
+    page_size=100,
+    max_pages=max(1, min(GENESYS_PHONE_LOOKUP_MAX_PAGES, 200)),
+  )
+
+  snapshot_payload = {
+    "generated_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+    "region": region,
+    "summary": {
+      "users_count": len(users_entities),
+      "users_pages": users_pages,
+      "phones_count": len(phones_entities),
+      "phones_pages": phones_pages,
+      "phones_error": phones_err,
+    },
+    "users": users_entities,
+    "phones": phones_entities,
+  }
+
+  raw_filename = f"genesys_org_snapshot_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+  raw_job_id = _store_job_output(
+    json.dumps(snapshot_payload, indent=2).encode("utf-8"),
+    raw_filename,
+    "application/json",
+  )
+
+  return JSONResponse({
+    "ok": True,
+    "region": region,
+    "users_count": len(users_entities),
+    "users_pages": users_pages,
+    "phones_count": len(phones_entities),
+    "phones_pages": phones_pages,
+    "phones_error": phones_err,
     "raw_download_url": f"/download/job-output/{raw_job_id}",
     "raw_filename": raw_filename,
   })
