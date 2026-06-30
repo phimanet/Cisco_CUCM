@@ -108,6 +108,11 @@ PERFMON_EXCLUDED_HOSTS = [
   for host in (os.getenv("PERFMON_EXCLUDED_HOSTS", "lascucmpp01.ahs.int") or "lascucmpp01.ahs.int").split(",")
   if (host or "").strip()
 ]
+PERFMON_MRA_SIGNALING_HOSTS = [
+  (host or "").strip().lower()
+  for host in (os.getenv("PERFMON_MRA_SIGNALING_HOSTS", "") or "").split(",")
+  if (host or "").strip()
+]
 PERFMON_CALL_COUNTER_OBJECTS = [
   (name or "").strip()
   for name in (os.getenv("PERFMON_CALL_COUNTER_OBJECTS", "Cisco SIP Trunk,Cisco CallManager,Cisco Voice Mail Port") or "Cisco SIP Trunk,Cisco CallManager,Cisco Voice Mail Port").split(",")
@@ -5666,6 +5671,8 @@ def _perfmon_callmanager_cluster_summary(cucm_host: str, cucm_user: str, cucm_pa
   }
   per_host = []
   errors = []
+  explicit_mra_hosts = set(PERFMON_MRA_SIGNALING_HOSTS)
+  mra_hosts_detected = set()
 
   for host in hosts:
     try:
@@ -5687,7 +5694,13 @@ def _perfmon_callmanager_cluster_summary(cucm_host: str, cucm_user: str, cucm_pa
     totals["calls_in_progress"] += host_calls_in_progress
     totals["registered_csf_jabber_mra"] += host_registered_csf_mra
     totals["registered_devices_mra"] += host_registered_devices_mra
-    if host_registered_csf_mra > 0 or host_registered_devices_mra > 0:
+    host_key = (host or "").strip().lower()
+    if explicit_mra_hosts:
+      is_mra_host = host_key in explicit_mra_hosts
+    else:
+      is_mra_host = (host_registered_csf_mra > 0 or host_registered_devices_mra > 0)
+    if is_mra_host:
+      mra_hosts_detected.add(host_key)
       totals["calls_active_on_mra_hosts"] += host_calls_active
 
     per_host.append(
@@ -5704,6 +5717,7 @@ def _perfmon_callmanager_cluster_summary(cucm_host: str, cucm_user: str, cucm_pa
   result = {
     "totals": totals,
     "hosts": per_host,
+    "mra_hosts_used": sorted(list(mra_hosts_detected)),
     "errors": errors,
   }
 
@@ -18579,6 +18593,7 @@ def api_dashboard_stats(request: Request):
     "callmanager_calls_in_progress": callmanager_calls_in_progress,
     "callmanager_registered_csf_mra": callmanager_registered_csf_mra,
     "callmanager_registered_devices_mra": callmanager_registered_devices_mra,
+    "callmanager_mra_hosts_used": list(callmanager_summary.get("mra_hosts_used", []) or []),
     "ribbon_active_calls": ribbon_calls,
     "cube_active_calls": cube_calls,
     "jabber_active_calls": int(jabber_active_calls or 0),
