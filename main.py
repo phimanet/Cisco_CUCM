@@ -184,7 +184,7 @@ GENESYS_CLIENT_ID = (os.getenv("GENESYS_CLIENT_ID", "") or "").strip()
 GENESYS_CLIENT_SECRET = (os.getenv("GENESYS_CLIENT_SECRET", "") or "").strip()
 GENESYS_USERS_PAGE_SIZE = int((os.getenv("GENESYS_USERS_PAGE_SIZE", "100") or "100").strip())
 GENESYS_PHONE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_PHONE_LOOKUP_MAX_PAGES", "50") or "50").strip())
-GENESYS_QUEUE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_LOOKUP_MAX_PAGES", "30") or "30").strip())
+GENESYS_QUEUE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_LOOKUP_MAX_PAGES", "200") or "200").strip())
 GENESYS_QUEUE_MEMBER_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_MEMBER_MAX_PAGES", "20") or "20").strip())
 GENESYS_QUEUE_ID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 GENESYS_PRIORITY_QUEUE_IDS = [
@@ -1044,6 +1044,12 @@ def _genesys_queue_member_matches_user(member: dict, user_id: str, user_email: s
   clean_user_email = str(user_email or "").strip().lower()
   clean_user_name = str(user_name or "").strip().lower()
 
+  def _normalized(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+  def _compact(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", _normalized(value))
+
   candidates = []
   for key in ["id", "userId", "memberId", "email", "username", "name"]:
     value = str(member.get(key, "") or "").strip().lower()
@@ -1060,7 +1066,20 @@ def _genesys_queue_member_matches_user(member: dict, user_id: str, user_email: s
     return True
   if clean_user_email and clean_user_email in candidates:
     return True
-  if clean_user_name and any(clean_user_name == item for item in candidates):
+  normalized_candidates = [_normalized(item) for item in candidates if item]
+  compact_candidates = [_compact(item) for item in candidates if item]
+
+  normalized_user_name = _normalized(clean_user_name)
+  compact_user_name = _compact(clean_user_name)
+
+  if normalized_user_name and any(
+    normalized_user_name == item
+    or normalized_user_name in item
+    or item in normalized_user_name
+    for item in normalized_candidates
+  ):
+    return True
+  if compact_user_name and compact_user_name in compact_candidates:
     return True
   return False
 
@@ -1444,10 +1463,25 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
       if ok_queues:
         entities = queues_payload.get("entities", []) or []
         queue_names = []
+        queue_ids = []
         for item in entities:
-          q_name = str(item.get("name", "") or "").strip() if isinstance(item, dict) else ""
+          if not isinstance(item, dict):
+            continue
+
+          queue_obj = item.get("queue") if isinstance(item.get("queue"), dict) else {}
+          q_name = str(item.get("name", "") or queue_obj.get("name", "") or "").strip()
+          q_id = str(item.get("id", "") or item.get("queueId", "") or queue_obj.get("id", "") or "").strip()
           if q_name:
             queue_names.append(q_name)
+          elif q_id:
+            queue_ids.append(q_id)
+
+        if not queue_names and queue_ids:
+          for q_id in queue_ids:
+            resolved_name = _genesys_get_queue_name(api_base, access_token, q_id)
+            if resolved_name:
+              queue_names.append(resolved_name)
+
         if queue_names:
           queues_text = ", ".join(sorted(set(queue_names), key=str.lower))
           queue_resolution_source = "direct-user-queues"
