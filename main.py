@@ -18355,7 +18355,6 @@ def dashboard_page(request: Request):
         <h3>Call Activity</h3>
         <div style="overflow-x:auto;"><table><thead><tr><th>Path</th><th>Active Calls</th></tr></thead><tbody>
           <tr><td>Jabber/Expressway -> CUBE (PSTN)</td><td id="callPstnViaCube" class="mono">-</td></tr>
-          <tr><td>Unity Voice Ports In Use</td><td id="callUnityPortsInUse" class="mono">-</td></tr>
           <tr><td>Calls Active on MRA Nodes</td><td id="callMgrCallsActiveMraHosts" class="mono">-</td></tr>
           <tr><td>CallManager Calls In Progress</td><td id="callMgrCallsInProgress" class="mono">-</td></tr>
           <tr><td>Registered CSF Jabber MRA</td><td id="callMgrRegisteredCsfMra" class="mono">-</td></tr>
@@ -18371,7 +18370,7 @@ def dashboard_page(request: Request):
 
     </main>
 
-    <script src="/dashboard.js?v=20260630m"></script>
+    <script src="/dashboard.js?v=20260630n"></script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
@@ -18410,11 +18409,6 @@ def api_dashboard_stats(request: Request):
   jabber_active_calls = None
   ris_available = True
   jabber_registered_total = 0
-  unity_voice_ports = {
-    "ports_in_use_total": None,
-    "matched_counters": [],
-    "errors": [],
-  }
   trunk_activity = {
     "ribbon_active_calls": 0,
     "cube_active_calls": 0,
@@ -18523,13 +18517,6 @@ def api_dashboard_stats(request: Request):
   except Exception as trunk_exc:
     warnings.append(f"SIP trunk activity unavailable: {trunk_exc}")
 
-  try:
-    unity_voice_ports = _perfmon_unity_voice_ports_in_use(resolved_cucm_host, resolved_cucm_user, resolved_cucm_pass)
-    if unity_voice_ports.get("errors"):
-      warnings.append("Unity voice-port counters partial data: " + " | ".join(unity_voice_ports.get("errors", [])))
-  except Exception as unity_ports_exc:
-    warnings.append(f"Unity voice-port counters unavailable: {unity_ports_exc}")
-
   ribbon_calls = int(trunk_activity.get("ribbon_active_calls", 0) or 0)
   cube_calls = int(trunk_activity.get("cube_active_calls", 0) or 0)
   other_trunk_calls = int(trunk_activity.get("other_active_calls", 0) or 0)
@@ -18585,7 +18572,6 @@ def api_dashboard_stats(request: Request):
 
   call_activity = {
     "pstn_via_cube_active_calls": pstn_via_cube_calls,
-    "unity_voice_ports_in_use": unity_voice_ports.get("ports_in_use_total"),
     "callmanager_calls_active": callmanager_calls_active,
     "callmanager_calls_active_on_mra_hosts": callmanager_calls_active_on_mra_hosts,
     "callmanager_calls_in_progress": callmanager_calls_in_progress,
@@ -18638,7 +18624,6 @@ def dashboard_script():
   const kpiConfigured = document.getElementById("kpiConfigured");
   const kpiRegistered = document.getElementById("kpiRegistered");
   const callPstnViaCube = document.getElementById("callPstnViaCube");
-  const callUnityPortsInUse = document.getElementById("callUnityPortsInUse");
   const callMgrCallsActiveMraHosts = document.getElementById("callMgrCallsActiveMraHosts");
   const callMgrCallsInProgress = document.getElementById("callMgrCallsInProgress");
   const callMgrRegisteredCsfMra = document.getElementById("callMgrRegisteredCsfMra");
@@ -18660,7 +18645,6 @@ def dashboard_script():
     if (kpiConfigured) kpiConfigured.textContent = "0";
     if (kpiRegistered) kpiRegistered.textContent = "0";
     if (callPstnViaCube) callPstnViaCube.textContent = "-";
-    if (callUnityPortsInUse) callUnityPortsInUse.textContent = "-";
     if (callMgrCallsActiveMraHosts) callMgrCallsActiveMraHosts.textContent = "-";
     if (callMgrCallsInProgress) callMgrCallsInProgress.textContent = "-";
     if (callMgrRegisteredCsfMra) callMgrRegisteredCsfMra.textContent = "-";
@@ -18700,10 +18684,6 @@ def dashboard_script():
 
       const callActivity = stats.call_activity || {};
       if (callPstnViaCube) callPstnViaCube.textContent = String(callActivity.pstn_via_cube_active_calls || 0);
-      if (callUnityPortsInUse) {
-        const ports = callActivity.unity_voice_ports_in_use;
-        callUnityPortsInUse.textContent = (ports == null ? "N/A" : String(ports));
-      }
       if (callMgrCallsActiveMraHosts) callMgrCallsActiveMraHosts.textContent = String(callActivity.callmanager_calls_active_on_mra_hosts || 0);
       if (callMgrCallsInProgress) callMgrCallsInProgress.textContent = String(callActivity.callmanager_calls_in_progress || 0);
       if (callMgrRegisteredCsfMra) callMgrRegisteredCsfMra.textContent = String(callActivity.callmanager_registered_csf_mra || 0);
