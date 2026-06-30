@@ -17939,8 +17939,8 @@ def dashboard_page(request: Request):
 
       <section class="kpi-grid">
         <article class="kpi"><div class="label">Active Calls (Realtime)</div><div id="kpiActiveCalls" class="value">-</div></article>
-        <article class="kpi"><div class="label">Jabber Devices Configured</div><div id="kpiConfigured" class="value">-</div></article>
-        <article class="kpi"><div class="label">Jabber Devices Registered</div><div id="kpiRegistered" class="value">-</div></article>
+        <article class="kpi"><div class="label">Jabber CSF Devices Configured</div><div id="kpiConfigured" class="value">-</div></article>
+        <article class="kpi"><div class="label">Jabber CSF Devices Registered</div><div id="kpiRegistered" class="value">-</div></article>
       </section>
 
       <section class="panel">
@@ -17950,7 +17950,7 @@ def dashboard_page(request: Request):
 
     </main>
 
-    <script src="/dashboard.js?v=20260630b"></script>
+    <script src="/dashboard.js?v=20260630c"></script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
@@ -18104,6 +18104,8 @@ def api_dashboard_stats(request: Request):
       "stats": {
         "configured_by_prefix": configured_by_prefix,
         "registered_by_prefix": registered_by_prefix,
+        "jabber_csf_configured_total": int(configured_by_prefix.get("CSF", 0) or 0),
+        "jabber_csf_registered_total": int(registered_by_prefix.get("CSF", 0) or 0),
         "jabber_configured_total": sum(configured_by_prefix.values()),
         "jabber_registered_total": jabber_registered_total,
         "registered_by_server": by_server_registered,
@@ -18170,8 +18172,8 @@ def dashboard_script():
 
       const stats = payload.stats || {};
       if (kpiActiveCalls) kpiActiveCalls.textContent = stats.active_calls == null ? "N/A" : String(stats.active_calls);
-      if (kpiConfigured) kpiConfigured.textContent = String(stats.jabber_configured_total || 0);
-      if (kpiRegistered) kpiRegistered.textContent = String(stats.jabber_registered_total || 0);
+      if (kpiConfigured) kpiConfigured.textContent = String(stats.jabber_csf_configured_total || 0);
+      if (kpiRegistered) kpiRegistered.textContent = String(stats.jabber_csf_registered_total || 0);
       renderPrefixRows(stats.configured_by_prefix || {}, stats.registered_by_prefix || {});
 
       if (lastRefreshEl) {
