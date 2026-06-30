@@ -8378,13 +8378,14 @@ def genesys_admin_placeholder(request: Request):
               return;
             }
 
-            let html = "<table><thead><tr><th>Name</th><th>Email</th><th>Username</th><th>State</th><th>User ID</th></tr></thead><tbody>";
+            let html = "<table><thead><tr><th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>State</th><th>User ID</th></tr></thead><tbody>";
             rows.forEach(function (row, i) {
               const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
               html += "<tr style='background:" + bg + ";'>";
               html += "<td>" + (row.name || "") + "</td>";
               html += "<td>" + (row.email || "") + "</td>";
               html += "<td>" + (row.username || "") + "</td>";
+              html += "<td>" + (row.division || "") + "</td>";
               html += "<td>" + (row.state || "") + "</td>";
               html += "<td style='font-family:Consolas,monospace;'>" + (row.id || "") + "</td>";
               html += "</tr>";
