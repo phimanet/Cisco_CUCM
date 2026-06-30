@@ -1,4 +1,4 @@
-import csv
+﻿import csv
 import datetime
 import hashlib
 import io
@@ -442,7 +442,7 @@ SEPARATION_REPORT_RECIPIENT = (
   os.getenv("SEPARATION_REPORT_RECIPIENT", "Laura.Alvarez@amnhealthcare.com")
   or "Laura.Alvarez@amnhealthcare.com"
 ).strip()
-# Optional second recipient — leave blank to disable.
+# Optional second recipient â€” leave blank to disable.
 SEPARATION_REPORT_RECIPIENT_2 = (os.getenv("SEPARATION_REPORT_RECIPIENT_2", "") or "").strip()
 SEPARATION_REPORT_FROM = (
   os.getenv("SEPARATION_REPORT_FROM", "noreply@amnhealthcare.com")
@@ -453,7 +453,7 @@ SEPARATION_REPORT_HOUR = int((os.getenv("SEPARATION_REPORT_HOUR", "8") or "8").s
 SEPARATION_REPORT_MINUTE = int((os.getenv("SEPARATION_REPORT_MINUTE", "0") or "0").strip())
 # "daily" or "weekly"
 SEPARATION_REPORT_FREQUENCY = (os.getenv("SEPARATION_REPORT_FREQUENCY", "daily") or "daily").strip().lower()
-# For weekly mode: day name the report fires (e.g. "monday"). The window spans Mon–Sun of the prior week.
+# For weekly mode: day name the report fires (e.g. "monday"). The window spans Monâ€“Sun of the prior week.
 SEPARATION_REPORT_WEEKLY_DAY = (os.getenv("SEPARATION_REPORT_WEEKLY_DAY", "monday") or "monday").strip().lower()
 _SEPARATION_REPORT_SCHEDULER_LAST_FIRED: dict[str, str] = {}
 _SEPARATION_REPORT_SCHEDULER_LOCK = threading.Lock()
@@ -3438,7 +3438,7 @@ def _append_audit_event(
 
 
 # ---------------------------------------------------------------------------
-# Separation SMS Report — scheduled email for offboarded employees
+# Separation SMS Report â€” scheduled email for offboarded employees
 # ---------------------------------------------------------------------------
 
 def _separation_report_read_offboard_rows(
@@ -3601,7 +3601,7 @@ def _separation_report_build_html(sms_rows: list[dict], date_range_label: str) -
     </table>
     <p style="margin:20px 0 0 0;font-size:12px;color:#aaa">
       This is an automated report from the CUCM Voice Automation Portal.
-      Removal from Twilio/Aerialink is a manual process — this email serves as notification only.
+      Removal from Twilio/Aerialink is a manual process â€” this email serves as notification only.
     </p>
   </div>
 </div>
@@ -3628,7 +3628,7 @@ def _run_separation_sms_report(triggered_by: str = "scheduler") -> dict:
     frequency = cfg["frequency"]
 
     if frequency == "weekly":
-      # Previous Mon 00:00 → previous Sun 23:59:59
+      # Previous Mon 00:00 â†’ previous Sun 23:59:59
       today_weekday = now_pst.weekday()  # 0=Mon
       days_since_monday = today_weekday
       last_monday = (now_pst - datetime.timedelta(days=days_since_monday + 7)).replace(
@@ -3659,7 +3659,7 @@ def _run_separation_sms_report(triggered_by: str = "scheduler") -> dict:
     numbers_checked = [r["sms_number"] for r in sms_rows if r["sms_number"] != "-"]
     extensions_checked = [r["extension"] for r in sms_rows]
 
-    subject = f"[CUCM] Separation SMS Number Report — {date_range_label}"
+    subject = f"[CUCM] Separation SMS Number Report â€” {date_range_label}"
     html_body = _separation_report_build_html(sms_rows, date_range_label)
     plain_body = (
       f"Separation SMS Number Report\nPeriod: {date_range_label}\n\n"
@@ -3670,7 +3670,7 @@ def _run_separation_sms_report(triggered_by: str = "scheduler") -> dict:
       + (
         "\n\nNo extensions found." if not sms_rows else ""
       )
-      + "\n\nRemoval from Twilio/Aerialink is manual — this email is for notification only."
+      + "\n\nRemoval from Twilio/Aerialink is manual â€” this email is for notification only."
     )
 
     recipient = cfg["recipient"]
@@ -3686,7 +3686,7 @@ def _run_separation_sms_report(triggered_by: str = "scheduler") -> dict:
       html_body=html_body,
     )
 
-    # Log the send to the audit trail — extension_deleted holds all numbers included
+    # Log the send to the audit trail â€” extension_deleted holds all numbers included
     numbers_pipe = "|".join(extensions_checked) if extensions_checked else "none"
     recipients_logged = "|".join(recipients)
     _append_audit_event(
@@ -3763,7 +3763,7 @@ else:
 
 
 # ---------------------------------------------------------------------------
-# DN Availability Report — scheduled email for number pool monitoring
+# DN Availability Report â€” scheduled email for number pool monitoring
 # ---------------------------------------------------------------------------
 _DN_REPORT_ROUTE_PARTITION = "ENT_DEVICE_PT"
 _DN_REPORT_SCHEDULER_LAST_FIRED: dict[str, str] = {}
@@ -3780,6 +3780,7 @@ def _axl_list_dns_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, pref
   """
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
   
   # List all DNs with this prefix in ENT_DEVICE_PT
@@ -3875,12 +3876,12 @@ def _dn_report_build_html(results: list[dict], run_at: str, cucm_host: str, low_
     total = r["total"]
     in_use = r["in_use"]
     if avail == 0:
-      status_label = "CRITICAL — NONE LEFT"
+      status_label = "CRITICAL â€” NONE LEFT"
       status_color = "#b71c1c"
       row_bg = "#fff5f5"
       badge_bg = "#b71c1c"
     elif avail < low_threshold:
-      status_label = f"LOW — order more soon"
+      status_label = f"LOW â€” order more soon"
       status_color = "#e65100"
       row_bg = "#fff8e1"
       badge_bg = "#e65100"
@@ -3915,9 +3916,9 @@ def _dn_report_build_html(results: list[dict], run_at: str, cucm_host: str, low_
 
   alert_banner = ""
   if critical_count:
-    alert_banner = f'<div style="background:#b71c1c;color:#fff;padding:12px 20px;border-radius:6px;margin-bottom:16px;font-weight:600">⚠️ {critical_count} DN type(s) have ZERO available numbers — order immediately!</div>'
+    alert_banner = f'<div style="background:#b71c1c;color:#fff;padding:12px 20px;border-radius:6px;margin-bottom:16px;font-weight:600">âš ï¸ {critical_count} DN type(s) have ZERO available numbers â€” order immediately!</div>'
   elif low_count:
-    alert_banner = f'<div style="background:#e65100;color:#fff;padding:12px 20px;border-radius:6px;margin-bottom:16px;font-weight:600">⚠️ {low_count} DN type(s) are running LOW (below threshold of {low_threshold}) — consider ordering more soon.</div>'
+    alert_banner = f'<div style="background:#e65100;color:#fff;padding:12px 20px;border-radius:6px;margin-bottom:16px;font-weight:600">âš ï¸ {low_count} DN type(s) are running LOW (below threshold of {low_threshold}) â€” consider ordering more soon.</div>'
 
   return f"""<!DOCTYPE html>
 <html>
@@ -3998,9 +3999,9 @@ def _run_dn_availability_report(triggered_by: str = "scheduler") -> dict:
     order = {"General FTE": 0, "Recruiter": 1, "Strike": 2}
     results.sort(key=lambda r: order.get(r["label"], 99))
 
-    subject = f"[CUCM] DN Number Pool Report — {run_at[:10]}"
+    subject = f"[CUCM] DN Number Pool Report â€” {run_at[:10]}"
     html_body = _dn_report_build_html(results, run_at, cucm_host, low_threshold)
-    plain_lines = [f"DN Number Pool Availability Report — {run_at}", f"CUCM: {cucm_host}", ""]
+    plain_lines = [f"DN Number Pool Availability Report â€” {run_at}", f"CUCM: {cucm_host}", ""]
     for r in results:
       plain_lines.append(f"  {r['label']} ({r['prefix']}xxx): {r['available']} available / {r['in_use']} in-use / {r['total']} total")
     if errors:
@@ -5267,6 +5268,7 @@ def _find_xml_child_text(elem: ET.Element, child_name: str) -> str:
 def _axl_count_phones_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, prefix: str) -> int:
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
@@ -5307,6 +5309,7 @@ def _axl_count_phones_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, 
 def _axl_list_process_nodes(cucm_host: str, cucm_user: str, cucm_pass: str) -> list:
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   soap_xml = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
@@ -5371,6 +5374,7 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
 
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   soap_xml = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
@@ -5476,6 +5480,7 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
 def _perfmon_collect_registered_other_station_devices(cucm_host: str, cucm_user: str, cucm_pass: str, target_host: str) -> int:
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
@@ -5519,6 +5524,7 @@ def _perfmon_collect_registered_other_station_devices(cucm_host: str, cucm_user:
 def _perfmon_collect_active_calls(cucm_host: str, cucm_user: str, cucm_pass: str, target_host: str) -> int | None:
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
@@ -5664,6 +5670,7 @@ def _select_perfmon_hosts(cucm_host: str, cucm_user: str, cucm_pass: str, max_ho
 def _perfmon_collect_counter_data_object(cucm_host: str, cucm_user: str, cucm_pass: str, target_host: str, object_name: str) -> tuple[dict[str, int], str | None]:
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
@@ -5816,6 +5823,7 @@ def _is_active_call_counter(counter_name: str) -> bool:
 def _perfmon_collect_sip_trunk_activity(cucm_host: str, cucm_user: str, cucm_pass: str, target_host: str) -> dict:
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
@@ -6330,6 +6338,7 @@ def _list_verasmart_queue_runs(limit: int = 10) -> list[dict]:
 def _get_line_external_number_mask(cucm_host: str, cucm_user: str, cucm_pass: str, pattern: str, partition: str = "ENT_DEVICE_PT") -> str:
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   soap = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -6388,6 +6397,7 @@ def _find_jabber_extension(cucm_host: str, cucm_user: str, cucm_pass: str, targe
 
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   soap = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -6449,6 +6459,7 @@ def _find_jabber_extension(cucm_host: str, cucm_user: str, cucm_pass: str, targe
 def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[dict]:
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   soap = f"""<?xml version="1.0" encoding="utf-8"?>
@@ -6529,6 +6540,7 @@ def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str)
 def _list_in_use_strike_mask_patterns(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[dict]:
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   soap = f"""<?xml version="1.0" encoding="utf-8"?>
@@ -6673,6 +6685,7 @@ def _reverse_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str,
 
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   new_description = f"Strike Mask - {trans_pattern} Available"
@@ -6947,6 +6960,7 @@ def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, t
 
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   new_description = f"Strike Mask - {clean_target} {jabber_extension}"
@@ -7086,6 +7100,7 @@ def _list_translation_patterns_by_description(cucm_host: str, cucm_user: str, cu
 
     session = requests.Session()
     session.verify = False
+    session.trust_env = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
     soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
@@ -7226,6 +7241,7 @@ def _update_twilio_inbound_verification_pattern(
 
     session = requests.Session()
     session.verify = False
+    session.trust_env = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
     soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
@@ -7542,6 +7558,7 @@ def _lookup_user_contact(cucm_host: str, cucm_user: str, cucm_pass: str, target_
 
     session = requests.Session()
     session.verify = False
+    session.trust_env = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
     response = session.post(
@@ -7598,6 +7615,7 @@ def _lookup_user_primary_extension(cucm_host: str, cucm_user: str, cucm_pass: st
 
     session = requests.Session()
     session.verify = False
+    session.trust_env = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
     response = session.post(
@@ -11983,7 +12001,7 @@ __ADMIN_CARD__
             return;
           }
 
-          // Skip hidden inputs — they are filled programmatically, not by the user.
+          // Skip hidden inputs â€” they are filled programmatically, not by the user.
           if (field.type === "hidden") {
             return;
           }
@@ -12097,7 +12115,7 @@ __ADMIN_CARD__
           outputEl.value = result.output_text || "";
           statusEl.textContent = `Completed: ${result.filename || "option2_output.csv"}`;
           if (result.email_status) {
-            statusEl.textContent += " — " + result.email_status;
+            statusEl.textContent += " â€” " + result.email_status;
           }
           downloadEl.href = result.download_url;
           downloadEl.style.display = "inline";
@@ -12454,7 +12472,7 @@ __ADMIN_CARD__
         });
       }
 
-      // ── Jabber Notify panel (Page 1) ──────────────────────────────────────
+      // â”€â”€ Jabber Notify panel (Page 1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       (function () {
         var jnForm = document.getElementById("jabbernotify-form");
         var jnStatus = document.getElementById("jabbernotify-search-status");
@@ -12527,9 +12545,9 @@ __ADMIN_CARD__
           }
         });
       })();
-      // ── End Jabber Notify panel ──────────────────────────────────────
+      // â”€â”€ End Jabber Notify panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-      // ── Mobile Jabber Notify panel (Page 1) ──────────────────────────
+      // â”€â”€ Mobile Jabber Notify panel (Page 1) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       (function () {
         var form = document.getElementById("mobile-jabber-notify-form");
         var statusEl = document.getElementById("mobile-jabber-notify-status");
@@ -12697,7 +12715,7 @@ __ADMIN_CARD__
           });
         }
       })();
-      // ── End Mobile Jabber Notify panel ───────────────────────────────
+      // â”€â”€ End Mobile Jabber Notify panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
       const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
       const panels = Array.from(document.querySelectorAll(".tool-panel"));
@@ -12777,7 +12795,7 @@ __ADMIN_CARD__
 
 
 
-      // ── Duplicate device pre-check ──────────────────────────────────────────
+      // â”€â”€ Duplicate device pre-check â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
       // Runs before Build CSF, TCT, BOT, and Strike forms submit.
       // Calls /check/user-devices, warns if the relevant device type already exists.
 
@@ -12804,7 +12822,7 @@ __ADMIN_CARD__
           });
           result = await resp.json();
         } catch (_err) {
-          // Network/auth error — don't block, let the main action surface it.
+          // Network/auth error â€” don't block, let the main action surface it.
           return true;
         }
 
@@ -12819,7 +12837,7 @@ __ADMIN_CARD__
 
         const displayName = result.display_name ? ` (${result.display_name})` : "";
         return confirm(
-          `Duplicate device warning\\n\\nUser "${targetUser}"${displayName} already has:\\n  • ${found.join("\\n  • ")}\\n\\nDo you want to continue anyway?`
+          `Duplicate device warning\\n\\nUser "${targetUser}"${displayName} already has:\\n  â€¢ ${found.join("\\n  â€¢ ")}\\n\\nDo you want to continue anyway?`
         );
       }
 
@@ -14534,11 +14552,11 @@ def menu_admin_page(request: Request):
             <span>Review recent portal actions and download the audit CSV.</span>
           </a>
           <a class="hero-link-card" href="/page3?panel=sms-number-look">
-            <strong>📞 SMS Item Menu</strong>
+            <strong>ðŸ“ž SMS Item Menu</strong>
             <span>Manage Twilio number verification and lookup operations.</span>
           </a>
           <a class="hero-link-card" href="/page4">
-            <strong>🔐 Server Certificate Manager</strong>
+            <strong>ðŸ” Server Certificate Manager</strong>
             <span>LAB-only read-only certificate inventory for CUCM, IM and Presence, and Unity.</span>
           </a>
         </div>
@@ -14567,13 +14585,13 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
-            <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">📞 SMS Item Menu (Page 3)</button>
-            <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">⚙️ DN Prefix Settings</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">ðŸ“ž SMS Item Menu (Page 3)</button>
+            <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">âš™ï¸ DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unityldapsync">Trigger Unity LDAP Sync</button>
-            <button type="button" class="portal-nav-btn" data-panel="sep-sms-report">📧 SMS Separation Email Process</button>
-            <button type="button" class="portal-nav-btn" data-panel="dn-avail-report">📊 DN Number Pool Availability Report</button>
-            <button type="button" class="portal-nav-btn" onclick="window.location.href='/page4'">🔐 Server Certificate Manager (Page 4)</button>
+            <button type="button" class="portal-nav-btn" data-panel="sep-sms-report">ðŸ“§ SMS Separation Email Process</button>
+            <button type="button" class="portal-nav-btn" data-panel="dn-avail-report">ðŸ“Š DN Number Pool Availability Report</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/page4'">ðŸ” Server Certificate Manager (Page 4)</button>
           </div>
         </aside>
 
@@ -14910,7 +14928,7 @@ def menu_admin_page(request: Request):
 
         <div style="background:#f0f4fa;border:1px solid #c5d4e8;border-radius:6px;padding:18px;margin-bottom:20px;">
           <h4 style="margin:0 0 14px 0;color:#002f6c;">Scheduler Settings</h4>
-          <div id="sep-sms-config-loading" style="color:#888;font-size:13px;">Loading settings…</div>
+          <div id="sep-sms-config-loading" style="color:#888;font-size:13px;">Loading settingsâ€¦</div>
           <div id="sep-sms-config-form-wrap" style="display:none">
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;margin-bottom:14px;">
               <div>
@@ -14928,8 +14946,8 @@ def menu_admin_page(request: Request):
               <div>
                 <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Enabled</label>
                 <select id="sep-cfg-enabled" style="width:100%;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
-                  <option value="true">✅ Yes — scheduler active</option>
-                  <option value="false">❌ No — paused</option>
+                  <option value="true">âœ… Yes â€” scheduler active</option>
+                  <option value="false">âŒ No â€” paused</option>
                 </select>
               </div>
               <div>
@@ -14945,7 +14963,7 @@ def menu_admin_page(request: Request):
                 <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Frequency</label>
                 <select id="sep-cfg-frequency" style="width:100%;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
                   <option value="daily">Daily (previous day window)</option>
-                  <option value="weekly">Weekly (previous Mon–Sun window)</option>
+                  <option value="weekly">Weekly (previous Monâ€“Sun window)</option>
                 </select>
               </div>
               <div id="sep-cfg-weekly-day-row">
@@ -14961,20 +14979,20 @@ def menu_admin_page(request: Request):
                 </select>
               </div>
             </div>
-            <button type="button" id="sep-sms-save-btn" style="background:#1565c0;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">💾 Save Settings</button>
+            <button type="button" id="sep-sms-save-btn" style="background:#1565c0;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">ðŸ’¾ Save Settings</button>
             <span id="sep-sms-save-status" style="margin-left:12px;font-size:13px;"></span>
           </div>
         </div>
 
         <div style="margin-bottom:20px;">
-          <button type="button" id="sep-sms-run-btn" style="background:#1a237e;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;">▶ Run Report Now</button>
+          <button type="button" id="sep-sms-run-btn" style="background:#1a237e;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;">â–¶ Run Report Now</button>
           <span style="font-size:12px;color:#888;margin-left:12px;">Runs the report for the previous day immediately and sends the email.</span>
         </div>
         <div id="sep-sms-run-status" style="min-height:18px;margin-bottom:16px;"></div>
 
         <h4 style="color:#002f6c;margin-bottom:8px;">Recent Send History</h4>
         <button type="button" id="sep-sms-history-btn" style="font-size:12px;padding:5px 14px;margin-bottom:10px;">Refresh History</button>
-        <div id="sep-sms-history-loading" style="color:#888;font-size:13px;display:none;">Loading…</div>
+        <div id="sep-sms-history-loading" style="color:#888;font-size:13px;display:none;">Loadingâ€¦</div>
         <div id="sep-sms-history-results" style="overflow-x:auto;"></div>
       </section>
 
@@ -14984,7 +15002,7 @@ def menu_admin_page(request: Request):
 
         <div style="background:#f0f4fa;border:1px solid #c5d4e8;border-radius:6px;padding:18px;margin-bottom:20px;">
           <h4 style="margin:0 0 14px 0;color:#002f6c;">Scheduler Settings</h4>
-          <div id="dn-report-config-loading" style="color:#888;font-size:13px;">Loading settings…</div>
+          <div id="dn-report-config-loading" style="color:#888;font-size:13px;">Loading settingsâ€¦</div>
           <div id="dn-report-config-form-wrap" style="display:none">
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;margin-bottom:14px;">
               <div>
@@ -15002,8 +15020,8 @@ def menu_admin_page(request: Request):
               <div>
                 <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Enabled</label>
                 <select id="dn-cfg-enabled" style="width:100%;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
-                  <option value="true">✅ Yes — scheduler active</option>
-                  <option value="false">❌ No — paused</option>
+                  <option value="true">âœ… Yes â€” scheduler active</option>
+                  <option value="false">âŒ No â€” paused</option>
                 </select>
               </div>
               <div>
@@ -15031,13 +15049,13 @@ def menu_admin_page(request: Request):
                 </select>
               </div>
             </div>
-            <button type="button" id="dn-report-save-btn" style="background:#1565c0;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">💾 Save Settings</button>
+            <button type="button" id="dn-report-save-btn" style="background:#1565c0;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">ðŸ’¾ Save Settings</button>
             <span id="dn-report-save-status" style="margin-left:12px;font-size:13px;"></span>
           </div>
         </div>
 
         <div style="margin-bottom:20px;">
-          <button type="button" id="dn-report-run-btn" style="background:#1a237e;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;">▶ Run Report Now</button>
+          <button type="button" id="dn-report-run-btn" style="background:#1a237e;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;">â–¶ Run Report Now</button>
           <span style="font-size:12px;color:#888;margin-left:12px;">Queries CUCM and emails results immediately.</span>
         </div>
         <div id="dn-report-run-status" style="min-height:18px;margin-bottom:16px;"></div>
@@ -15045,7 +15063,7 @@ def menu_admin_page(request: Request):
 
         <h4 style="color:#002f6c;margin-bottom:8px;">Recent Send History</h4>
         <button type="button" id="dn-report-history-btn" style="font-size:12px;padding:5px 14px;margin-bottom:10px;">Refresh History</button>
-        <div id="dn-report-history-loading" style="color:#888;font-size:13px;display:none;">Loading…</div>
+        <div id="dn-report-history-loading" style="color:#888;font-size:13px;display:none;">Loadingâ€¦</div>
         <div id="dn-report-history-results" style="overflow-x:auto;"></div>
       </section>
 
@@ -15087,7 +15105,7 @@ def menu_admin_page(request: Request):
 
           startCredentialTimer();
 
-          // ── Jabber Notify panel ──────────────────────────────────────────────
+          // â”€â”€ Jabber Notify panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
           const jabberNotifyForm = document.getElementById("jabbernotify-form");
           const jabberNotifyStatus = document.getElementById("jabbernotify-search-status");
           const jabberNotifyResults = document.getElementById("jabbernotify-results");
@@ -15197,7 +15215,7 @@ def menu_admin_page(request: Request):
               }
             });
           }
-          // ── End Jabber Notify panel ──────────────────────────────────────────
+          // â”€â”€ End Jabber Notify panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
           const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
           const panels = Array.from(document.querySelectorAll(".tool-panel"));
@@ -15916,7 +15934,7 @@ def menu_admin_page(request: Request):
 
                             btn.textContent = "Applied";
                             statusEl.textContent =
-                              "✓ Applied Strike Mask for " + userId
+                              "âœ“ Applied Strike Mask for " + userId
                               + " | Pattern: " + (applyData.translation_pattern || "")
                               + " | Transform Mask: " + (applyData.new_transform_mask || "")
                               + " | Operation ID: " + (applyData.operation_id || "")
@@ -16012,7 +16030,7 @@ def menu_admin_page(request: Request):
 
                       btn.textContent = "Reversed";
                       statusEl.textContent =
-                        "✓ Reversed Strike Mask for " + userId
+                        "âœ“ Reversed Strike Mask for " + userId
                         + " | Operation ID: " + (targetOp.operation_id || "")
                         + " | Pattern: " + (reverseData.translation_pattern || "");
                     } catch (err) {
@@ -16154,7 +16172,7 @@ def menu_admin_page(request: Request):
                   return;
                 }
 
-                statusEl.textContent = "✓ Strike Mask reversed successfully!";
+                statusEl.textContent = "âœ“ Strike Mask reversed successfully!";
                 const reverted = data.devices_reverted || [];
                 let summary = "Pattern: " + data.translation_pattern + " | Devices: " + reverted.length;
                 reverted.forEach(function (dev) {
@@ -16406,7 +16424,7 @@ def menu_admin_page(request: Request):
             defaultFilename: "bulk_extension_lookup.csv",
           });
 
-          // ── SMS Separation Email Process panel ──────────────────────────────
+          // â”€â”€ SMS Separation Email Process panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
           (function () {
             const configLoading = document.getElementById("sep-sms-config-loading");
             const configFormWrap = document.getElementById("sep-sms-config-form-wrap");
@@ -16463,7 +16481,7 @@ def menu_admin_page(request: Request):
                   return;
                 }
                 saveBtn.disabled = true;
-                if (saveStatus) saveStatus.textContent = "Saving…";
+                if (saveStatus) saveStatus.textContent = "Savingâ€¦";
                 const payload = {
                   recipient,
                   recipient_2: (document.getElementById("sep-cfg-recipient-2")?.value || "").trim(),
@@ -16484,9 +16502,9 @@ def menu_admin_page(request: Request):
                   .then(data => {
                     saveBtn.disabled = false;
                     if (data.ok) {
-                      if (saveStatus) saveStatus.innerHTML = '<span style="color:#1b5e20;background:#e8f5e9;padding:4px 10px;border-radius:4px">✅ Saved</span>';
+                      if (saveStatus) saveStatus.innerHTML = '<span style="color:#1b5e20;background:#e8f5e9;padding:4px 10px;border-radius:4px">âœ… Saved</span>';
                     } else {
-                      if (saveStatus) saveStatus.innerHTML = `<span style="color:#b71c1c">❌ ${data.error || "Save failed"}</span>`;
+                      if (saveStatus) saveStatus.innerHTML = `<span style="color:#b71c1c">âŒ ${data.error || "Save failed"}</span>`;
                     }
                   })
                   .catch(err => {
@@ -16544,26 +16562,26 @@ def menu_admin_page(request: Request):
             if (runBtn) {
               runBtn.addEventListener("click", function () {
                 runBtn.disabled = true;
-                runBtn.textContent = "Running…";
-                if (runStatus) runStatus.innerHTML = '<span style="color:#555;font-size:13px;">Sending report email…</span>';
+                runBtn.textContent = "Runningâ€¦";
+                if (runStatus) runStatus.innerHTML = '<span style="color:#555;font-size:13px;">Sending report emailâ€¦</span>';
                 fetch("/admin/separation-sms-report/run", { method: "POST", credentials: "same-origin" })
                   .then(r => r.json())
                   .then(data => {
                     runBtn.disabled = false;
-                    runBtn.textContent = "▶ Run Report Now";
+                    runBtn.textContent = "â–¶ Run Report Now";
                     if (runStatus) {
                       if (data.ok) {
                         runStatus.innerHTML = `<span style="color:#1b5e20;background:#e8f5e9;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">
-                          ✅ Sent to <strong>${(data.recipients || []).join(", ")}</strong> — period: ${data.date_range} — ${data.numbers_checked} extension(s) checked, ${data.numbers_found_in_sms} found in SMS platform(s)</span>`;
+                          âœ… Sent to <strong>${(data.recipients || []).join(", ")}</strong> â€” period: ${data.date_range} â€” ${data.numbers_checked} extension(s) checked, ${data.numbers_found_in_sms} found in SMS platform(s)</span>`;
                         loadHistory();
                       } else {
-                        runStatus.innerHTML = `<span style="color:#b71c1c;background:#ffebee;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">❌ ${data.error || "Unknown error"}</span>`;
+                        runStatus.innerHTML = `<span style="color:#b71c1c;background:#ffebee;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">âŒ ${data.error || "Unknown error"}</span>`;
                       }
                     }
                   })
                   .catch(err => {
                     runBtn.disabled = false;
-                    runBtn.textContent = "▶ Run Report Now";
+                    runBtn.textContent = "â–¶ Run Report Now";
                     if (runStatus) runStatus.innerHTML = `<span style="color:#b71c1c;font-size:13px;">Network error: ${err.message}</span>`;
                   });
               });
@@ -16588,7 +16606,7 @@ def menu_admin_page(request: Request):
             }
           })();
 
-          // ── DN Number Pool Availability Report panel ─────────────────────────
+          // â”€â”€ DN Number Pool Availability Report panel â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
           (function () {
             const cfgLoading = document.getElementById("dn-report-config-loading");
             const cfgWrap = document.getElementById("dn-report-config-form-wrap");
@@ -16633,7 +16651,7 @@ def menu_admin_page(request: Request):
                   return;
                 }
                 saveBtn.disabled = true;
-                if (saveStatus) saveStatus.textContent = "Saving…";
+                if (saveStatus) saveStatus.textContent = "Savingâ€¦";
                 const payload = {
                   recipient,
                   recipient_2: (document.getElementById("dn-cfg-recipient-2")?.value || "").trim(),
@@ -16655,9 +16673,9 @@ def menu_admin_page(request: Request):
                   .then(data => {
                     saveBtn.disabled = false;
                     if (data.ok) {
-                      saveStatus.innerHTML = '<span style="color:#1b5e20;background:#e8f5e9;padding:4px 10px;border-radius:4px">✅ Saved</span>';
+                      saveStatus.innerHTML = '<span style="color:#1b5e20;background:#e8f5e9;padding:4px 10px;border-radius:4px">âœ… Saved</span>';
                     } else {
-                      saveStatus.innerHTML = `<span style="color:#b71c1c">❌ ${data.error || "Save failed"}</span>`;
+                      saveStatus.innerHTML = `<span style="color:#b71c1c">âŒ ${data.error || "Save failed"}</span>`;
                     }
                   })
                   .catch(err => {
@@ -16670,16 +16688,16 @@ def menu_admin_page(request: Request):
             if (runBtn) {
               runBtn.addEventListener("click", function () {
                 runBtn.disabled = true;
-                runBtn.textContent = "Running…";
-                if (runStatus) runStatus.innerHTML = '<span style="color:#555;font-size:13px;">Querying CUCM and sending email…</span>';
+                runBtn.textContent = "Runningâ€¦";
+                if (runStatus) runStatus.innerHTML = '<span style="color:#555;font-size:13px;">Querying CUCM and sending emailâ€¦</span>';
                 if (runPreview) runPreview.innerHTML = "";
                 fetch("/admin/dn-avail-report/run", { method: "POST", credentials: "same-origin" })
                   .then(r => r.json())
                   .then(data => {
                     runBtn.disabled = false;
-                    runBtn.textContent = "▶ Run Report Now";
+                    runBtn.textContent = "â–¶ Run Report Now";
                     if (data.ok) {
-                      if (runStatus) runStatus.innerHTML = `<span style="color:#1b5e20;background:#e8f5e9;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">✅ Sent to <strong>${(data.recipients || []).join(", ")}</strong></span>`;
+                      if (runStatus) runStatus.innerHTML = `<span style="color:#1b5e20;background:#e8f5e9;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">âœ… Sent to <strong>${(data.recipients || []).join(", ")}</strong></span>`;
                       // Render inline mini-table
                       if (runPreview && data.results) {
                         const statusColor = r => r.available === 0 ? "#b71c1c" : r.available < (data.low_threshold || 10) ? "#e65100" : "#2e7d32";
@@ -16701,12 +16719,12 @@ def menu_admin_page(request: Request):
                       }
                       loadHistory();
                     } else {
-                      if (runStatus) runStatus.innerHTML = `<span style="color:#b71c1c;background:#ffebee;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">❌ ${data.error || "Unknown error"}</span>`;
+                      if (runStatus) runStatus.innerHTML = `<span style="color:#b71c1c;background:#ffebee;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">âŒ ${data.error || "Unknown error"}</span>`;
                     }
                   })
                   .catch(err => {
                     runBtn.disabled = false;
-                    runBtn.textContent = "▶ Run Report Now";
+                    runBtn.textContent = "â–¶ Run Report Now";
                     if (runStatus) runStatus.innerHTML = `<span style="color:#b71c1c;font-size:13px;">Network error: ${err.message}</span>`;
                   });
               });
@@ -17384,7 +17402,7 @@ def page3_twilio_items(request: Request):
       </div>
       <div class="hero-link-grid">
         <a class="hero-link-card" href="/page2">
-          <strong>← Back to Administrative Items</strong>
+          <strong>â† Back to Administrative Items</strong>
         </a>
       </div>
     </section>
@@ -17947,12 +17965,12 @@ def page3_twilio_items(request: Request):
                 const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
                 const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
                 const uid = r.userid || "";
-                const telephone = r.telephone || "—";
+                const telephone = r.telephone || "â€”";
                 const twilio = r.twilio_lookup || {};
-                const twilioNumber = twilio.phone_number || "—";
-                const twilioSid = twilio.sid || "—";
-                const twilioAccount = twilio.lookup_account_name || "—";
-                const twilioStatus = twilio.status || "—";
+                const twilioNumber = twilio.phone_number || "â€”";
+                const twilioSid = twilio.sid || "â€”";
+                const twilioAccount = twilio.lookup_account_name || "â€”";
+                const twilioStatus = twilio.status || "â€”";
 
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
@@ -18012,11 +18030,11 @@ def page3_twilio_items(request: Request):
               const rows = [
                 { label: "Phone Number", value: phoneNumber },
                 { label: "Found", value: result.found ? "Yes" : "No" },
-                { label: "Twilio Number", value: result.phone_number || "—" },
-                { label: "Phone SID", value: result.sid || "—" },
-                { label: "Lookup Account Name", value: result.lookup_account_name || "—" },
-                { label: "Lookup Account SID", value: result.lookup_account_sid || "—" },
-                { label: "Status", value: result.status || "—" },
+                { label: "Twilio Number", value: result.phone_number || "â€”" },
+                { label: "Phone SID", value: result.sid || "â€”" },
+                { label: "Lookup Account Name", value: result.lookup_account_name || "â€”" },
+                { label: "Lookup Account SID", value: result.lookup_account_sid || "â€”" },
+                { label: "Status", value: result.status || "â€”" },
               ];
 
               rows.forEach(function (row, i) {
@@ -18028,7 +18046,7 @@ def page3_twilio_items(request: Request):
               });
 
               html += '</tbody></table>';
-              statusEl.textContent = result.found ? "✓ Found in Twilio" : "✗ Not found in Twilio";
+              statusEl.textContent = result.found ? "âœ“ Found in Twilio" : "âœ— Not found in Twilio";
               resultsEl.innerHTML = html;
             } catch (err) {
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
@@ -18144,9 +18162,9 @@ def page3_twilio_items(request: Request):
                 + '<p style="margin:0 0 8px 0;color:#355978;">Item ' + (idx + 1) + ' of ' + total + ' | Verified: ' + completed + '</p>'
                 + (loaLine ? ('<p style="margin:0 0 8px 0;color:#355978;">' + loaLine + '</p>') : '')
                 + '<p style="margin:0 0 6px 0;"><strong>Number:</strong> ' + (current.normalized || current.input || '') + '</p>'
-                + '<p style="margin:0 0 8px 0;"><strong>Phone SID:</strong> <span style="font-family:Consolas,monospace;">' + (current.sid || '—') + '</span></p>'
+                + '<p style="margin:0 0 8px 0;"><strong>Phone SID:</strong> <span style="font-family:Consolas,monospace;">' + (current.sid || 'â€”') + '</span></p>'
                 + '<div style="font-family:Consolas,monospace;font-size:22px;font-weight:700;color:#002f6c;background:#fff;border:1px solid #b7d0e6;border-radius:6px;padding:8px 10px;display:inline-block;">'
-                + (current.verification_code || '—')
+                + (current.verification_code || 'â€”')
                 + '</div>'
                 + '<p style="margin:8px 0 10px 0;color:#355978;">Read this code, trigger the Twilio ownership call, answer on selected Jabber target, then key in this code.</p>'
                 + '<div style="display:flex;flex-wrap:wrap;gap:8px;">'
@@ -18276,9 +18294,9 @@ def page3_twilio_items(request: Request):
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
                 html += '<td style="padding:7px 10px;">' + (row.input || "") + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.normalized || "") + '</td>';
-                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.sid || "—") + '</td>';
-                html += '<td style="padding:7px 10px;">' + (row.friendly_name || "—") + '</td>';
-                html += '<td style="padding:7px 10px; font-family:Consolas,monospace; font-weight:700; color:#002f6c;">' + (row.verification_code || "—") + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.sid || "â€”") + '</td>';
+                html += '<td style="padding:7px 10px;">' + (row.friendly_name || "â€”") + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace; font-weight:700; color:#002f6c;">' + (row.verification_code || "â€”") + '</td>';
                 html += '<td style="padding:7px 10px; font-weight:700; color:' + (row.ok ? '#145c2e' : '#a01818') + ';">' + result + '</td>';
                 html += '<td style="padding:7px 10px;">' + (row.status || "") + '</td>';
                 html += '</tr>';
@@ -18411,11 +18429,11 @@ def page3_twilio_items(request: Request):
                 const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
                 const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
                 const uid = r.userid || "";
-                const telephone = r.telephone || "—";
+                const telephone = r.telephone || "â€”";
                 const twilio = r.twilio_lookup || {};
-                const twilioNumber = twilio.phone_number || "—";
-                const twilioSid = twilio.sid || "—";
-                const twilioStatus = twilio.status || "—";
+                const twilioNumber = twilio.phone_number || "â€”";
+                const twilioSid = twilio.sid || "â€”";
+                const twilioStatus = twilio.status || "â€”";
 
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
@@ -18474,9 +18492,9 @@ def page3_twilio_items(request: Request):
               const rows = [
                 { label: "Phone Number", value: phoneNumber },
                 { label: "Found", value: result.found ? "Yes" : "No" },
-                { label: "Twilio Number", value: result.phone_number || "—" },
-                { label: "Phone SID", value: result.sid || "—" },
-                { label: "Status", value: result.status || "—" },
+                { label: "Twilio Number", value: result.phone_number || "â€”" },
+                { label: "Phone SID", value: result.sid || "â€”" },
+                { label: "Status", value: result.status || "â€”" },
               ];
 
               rows.forEach(function (row, i) {
@@ -18488,7 +18506,7 @@ def page3_twilio_items(request: Request):
               });
 
               html += '</tbody></table>';
-              statusEl.textContent = result.found ? "✓ Found in Twilio (Salesforce)" : "✗ Not found in Twilio (Salesforce)";
+              statusEl.textContent = result.found ? "âœ“ Found in Twilio (Salesforce)" : "âœ— Not found in Twilio (Salesforce)";
               resultsEl.innerHTML = html;
             } catch (err) {
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
@@ -18547,12 +18565,12 @@ def page3_twilio_items(request: Request):
                 const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
                 const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
                 const uid = r.userid || "";
-                const telephone = r.telephone || "—";
+                const telephone = r.telephone || "â€”";
                 const aerialink = r.aerialink_lookup || {};
-                const requested = aerialink.requested_number || "—";
-                const matched = aerialink.matched_number || "—";
+                const requested = aerialink.requested_number || "â€”";
+                const matched = aerialink.matched_number || "â€”";
                 const provisioned = aerialink.provisioned ? "Yes" : "No";
-                const lookupStatus = aerialink.status || "—";
+                const lookupStatus = aerialink.status || "â€”";
 
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
@@ -18614,9 +18632,9 @@ def page3_twilio_items(request: Request):
                 { label: "Enabled", value: result.enabled ? "Yes" : "No" },
                 { label: "Found", value: result.found ? "Yes" : "No" },
                 { label: "Provisioned", value: result.provisioned ? "Yes" : "No" },
-                { label: "Requested Number", value: result.requested_number || "—" },
-                { label: "Matched Number", value: result.matched_number || "—" },
-                { label: "Status", value: result.status || "—" },
+                { label: "Requested Number", value: result.requested_number || "â€”" },
+                { label: "Matched Number", value: result.matched_number || "â€”" },
+                { label: "Status", value: result.status || "â€”" },
               ];
 
               rows.forEach(function (row, i) {
@@ -18628,7 +18646,7 @@ def page3_twilio_items(request: Request):
               });
 
               html += '</tbody></table>';
-              statusEl.textContent = result.provisioned ? "✓ Provisioned in Aerialink" : "✗ Not provisioned in Aerialink";
+              statusEl.textContent = result.provisioned ? "âœ“ Provisioned in Aerialink" : "âœ— Not provisioned in Aerialink";
               resultsEl.innerHTML = html;
             } catch (err) {
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
@@ -21908,9 +21926,9 @@ async def sep_sms_report_save_config_route(request: Request):
     return JSONResponse({"ok": False, "error": "Hour and minute must be integers"}, status_code=400)
 
   if not (0 <= hour <= 23):
-    return JSONResponse({"ok": False, "error": "Hour must be 0–23"}, status_code=400)
+    return JSONResponse({"ok": False, "error": "Hour must be 0â€“23"}, status_code=400)
   if not (0 <= minute <= 59):
-    return JSONResponse({"ok": False, "error": "Minute must be 0–59"}, status_code=400)
+    return JSONResponse({"ok": False, "error": "Minute must be 0â€“59"}, status_code=400)
   if not recipient:
     return JSONResponse({"ok": False, "error": "Primary recipient email is required"}, status_code=400)
 
@@ -22461,3 +22479,5 @@ def extract_rpo_phones_route(
       })
 
     return _render_job_result("Extract RPO Phones (Option 18)", data, filename, back_url="/page2")
+
+
