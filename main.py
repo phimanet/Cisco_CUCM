@@ -17708,19 +17708,20 @@ def api_dashboard_stats(request: Request):
   if not session:
     return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
 
-  cucm_host = str(session.get("cucm_host", "") or "")
-  cucm_user = str(session.get("cucm_user", "") or session.get("username", "") or "")
+  session_cucm_host = str(session.get("cucm_host", "") or "")
   warnings = []
 
-  try:
-    resolved_cucm_host, resolved_cucm_user, resolved_cucm_pass = _resolve_cucm_credentials(
-      request,
-      cucm_host,
-      cucm_user,
-      "",
-    )
-  except Exception as exc:
-    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+  # Dashboard must use the DN report service credentials (ucmappadmin),
+  # not the interactive operator credentials.
+  dn_cfg = _get_dn_report_settings()
+  resolved_cucm_host = (session_cucm_host or dn_cfg.get("cucm_host", "") or "").strip()
+  resolved_cucm_user = (dn_cfg.get("cucm_user", "") or "").strip() or "ucmappadmin"
+  resolved_cucm_pass = (dn_cfg.get("cucm_pass", "") or "").strip()
+
+  if not resolved_cucm_host:
+    return JSONResponse({"ok": False, "error": "Dashboard CUCM host is missing."}, status_code=400)
+  if not resolved_cucm_user or not resolved_cucm_pass:
+    return JSONResponse({"ok": False, "error": "Dashboard service credentials are missing. Configure DN report CUCM user/password in settings."}, status_code=400)
 
   configured_by_prefix = {"CSF": 0, "TCT": 0, "BOT": 0, "TAB": 0}
   with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
