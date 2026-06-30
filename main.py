@@ -18362,7 +18362,7 @@ def dashboard_page(request: Request):
       </section>
 
       <section class="panel">
-        <h3>Jabber Prefix Summary</h3>
+        <h3>Configured Device Summary</h3>
         <div style="overflow-x:auto;"><table><thead><tr><th>Prefix</th><th>Configured (AXL)</th><th>Registered (RIS)</th></tr></thead><tbody id="prefixRows"><tr><td colspan="3" class="muted">Waiting for data...</td></tr></tbody></table></div>
       </section>
 
