@@ -82,6 +82,8 @@ AUTH_SESSIONS = {}
 AUTH_SESSION_SECRETS = {}
 PERFMON_TRUNK_CACHE = {}
 PERFMON_TRUNK_CACHE_LOCK = threading.Lock()
+PERFMON_CALLMANAGER_CACHE = {}
+PERFMON_CALLMANAGER_CACHE_LOCK = threading.Lock()
 TWILIO_INCOMING_PHONE_NUMBER_CACHE = {}
 TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK = threading.Lock()
 TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS = 5 * 60
@@ -95,6 +97,7 @@ APP_START_EPOCH = time.time()
 DASHBOARD_REQUEST_TIMEOUT_SECONDS = int((os.getenv("DASHBOARD_REQUEST_TIMEOUT_SECONDS", "8") or "8").strip())
 PERFMON_MAX_HOSTS = int((os.getenv("PERFMON_MAX_HOSTS", "8") or "8").strip())
 PERFMON_TRUNK_CACHE_TTL_SECONDS = int((os.getenv("PERFMON_TRUNK_CACHE_TTL_SECONDS", "60") or "60").strip())
+PERFMON_CALLMANAGER_CACHE_TTL_SECONDS = int((os.getenv("PERFMON_CALLMANAGER_CACHE_TTL_SECONDS", "60") or "60").strip())
 PERFMON_INCLUDED_HOSTS = [
   (host or "").strip().lower()
   for host in (os.getenv("PERFMON_INCLUDED_HOSTS", "") or "").split(",")
@@ -5626,6 +5629,91 @@ def _aggregate_callmanager_counter_values(counter_rows: list[dict], suffix: str)
     except Exception:
       continue
   return total
+
+
+def _sum_counter_suffix_from_map(counters: dict[str, int], suffix: str) -> int:
+  needle = "\\" + str(suffix or "").strip().lower()
+  total = 0
+  for name, value in dict(counters or {}).items():
+    if str(name or "").strip().lower().endswith(needle):
+      try:
+        total += int(value or 0)
+      except Exception:
+        continue
+  return total
+
+
+def _perfmon_callmanager_cluster_summary(cucm_host: str, cucm_user: str, cucm_pass: str) -> dict:
+  cache_key = f"{(cucm_host or '').strip().lower()}|{(cucm_user or '').strip().lower()}"
+  now = time.time()
+  ttl_seconds = max(10, int(PERFMON_CALLMANAGER_CACHE_TTL_SECONDS or 60))
+
+  with PERFMON_CALLMANAGER_CACHE_LOCK:
+    cached = PERFMON_CALLMANAGER_CACHE.get(cache_key)
+    if isinstance(cached, dict):
+      cached_ts = float(cached.get("timestamp", 0) or 0)
+      cached_data = cached.get("data")
+      if cached_data and (now - cached_ts) < ttl_seconds:
+        return dict(cached_data)
+
+  hosts = _select_perfmon_hosts(cucm_host, cucm_user, cucm_pass, max_hosts=None)
+  totals = {
+    "calls_active": 0,
+    "calls_in_progress": 0,
+    "registered_csf_jabber_mra": 0,
+    "registered_devices_mra": 0,
+    "calls_active_on_mra_hosts": 0,
+  }
+  per_host = []
+  errors = []
+
+  for host in hosts:
+    try:
+      counters, err = _perfmon_collect_counter_data_object(cucm_host, cucm_user, cucm_pass, host, "Cisco CallManager")
+    except Exception as exc:
+      errors.append(f"{host}/Cisco CallManager: {exc}")
+      continue
+
+    if err:
+      errors.append(f"{host}/Cisco CallManager: {err}")
+      continue
+
+    host_calls_active = _sum_counter_suffix_from_map(counters, "CallsActive")
+    host_calls_in_progress = _sum_counter_suffix_from_map(counters, "CallsInProgress")
+    host_registered_csf_mra = _sum_counter_suffix_from_map(counters, "RegisteredCSFJabberMRA")
+    host_registered_devices_mra = _sum_counter_suffix_from_map(counters, "RegisteredDevicesMRA")
+
+    totals["calls_active"] += host_calls_active
+    totals["calls_in_progress"] += host_calls_in_progress
+    totals["registered_csf_jabber_mra"] += host_registered_csf_mra
+    totals["registered_devices_mra"] += host_registered_devices_mra
+    if host_registered_csf_mra > 0 or host_registered_devices_mra > 0:
+      totals["calls_active_on_mra_hosts"] += host_calls_active
+
+    per_host.append(
+      {
+        "host": host,
+        "calls_active": host_calls_active,
+        "calls_in_progress": host_calls_in_progress,
+        "registered_csf_jabber_mra": host_registered_csf_mra,
+        "registered_devices_mra": host_registered_devices_mra,
+      }
+    )
+
+  per_host.sort(key=lambda item: str(item.get("host", "") or "").lower())
+  result = {
+    "totals": totals,
+    "hosts": per_host,
+    "errors": errors,
+  }
+
+  with PERFMON_CALLMANAGER_CACHE_LOCK:
+    PERFMON_CALLMANAGER_CACHE[cache_key] = {
+      "timestamp": now,
+      "data": dict(result),
+    }
+
+  return result
 
 
 def _probe_tcp_port(host: str, port: int, timeout_seconds: float = 1.5) -> dict:
@@ -18254,6 +18342,7 @@ def dashboard_page(request: Request):
         <div style="overflow-x:auto;"><table><thead><tr><th>Path</th><th>Active Calls</th></tr></thead><tbody>
           <tr><td>Jabber/Expressway -> CUBE (PSTN)</td><td id="callPstnViaCube" class="mono">-</td></tr>
           <tr><td>Unity Voice Ports In Use</td><td id="callUnityPortsInUse" class="mono">-</td></tr>
+          <tr><td>Calls Active on MRA Nodes (selected hosts)</td><td id="callMgrCallsActiveMraHosts" class="mono">-</td></tr>
           <tr><td>CallManager Calls In Progress (selected nodes)</td><td id="callMgrCallsInProgress" class="mono">-</td></tr>
           <tr><td>Registered CSF Jabber MRA (selected nodes)</td><td id="callMgrRegisteredCsfMra" class="mono">-</td></tr>
           <tr><td>Registered Devices MRA (selected nodes)</td><td id="callMgrRegisteredDevicesMra" class="mono">-</td></tr>
@@ -18279,7 +18368,7 @@ def dashboard_page(request: Request):
 
     </main>
 
-    <script src="/dashboard.js?v=20260630i"></script>
+    <script src="/dashboard.js?v=20260630j"></script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
@@ -18329,6 +18418,17 @@ def api_dashboard_stats(request: Request):
     "other_active_calls": 0,
     "ribbon_ips": list(RIBBON_SBC_IPS),
     "cube_ips": list(CUBE_IPS),
+  }
+  callmanager_summary = {
+    "totals": {
+      "calls_active": 0,
+      "calls_in_progress": 0,
+      "registered_csf_jabber_mra": 0,
+      "registered_devices_mra": 0,
+      "calls_active_on_mra_hosts": 0,
+    },
+    "hosts": [],
+    "errors": [],
   }
 
   with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
@@ -18438,25 +18538,22 @@ def api_dashboard_stats(request: Request):
   except Exception as unity_ports_exc:
     warnings.append(f"Unity voice-port counters unavailable: {unity_ports_exc}")
 
+  try:
+    callmanager_summary = _perfmon_callmanager_cluster_summary(resolved_cucm_host, resolved_cucm_user, resolved_cucm_pass)
+    if callmanager_summary.get("errors"):
+      warnings.append("CallManager counter summary partial data: " + " | ".join(callmanager_summary.get("errors", [])))
+  except Exception as cm_summary_exc:
+    warnings.append(f"CallManager counter summary unavailable: {cm_summary_exc}")
+
   ribbon_calls = int(trunk_activity.get("ribbon_active_calls", 0) or 0)
   cube_calls = int(trunk_activity.get("cube_active_calls", 0) or 0)
   other_trunk_calls = int(trunk_activity.get("other_active_calls", 0) or 0)
-  callmanager_calls_active = _aggregate_callmanager_counter_values(
-    trunk_activity.get("all_call_related_counters", []),
-    "CallsActive",
-  )
-  callmanager_calls_in_progress = _aggregate_callmanager_counter_values(
-    trunk_activity.get("all_call_related_counters", []),
-    "CallsInProgress",
-  )
-  callmanager_registered_csf_mra = _aggregate_callmanager_counter_values(
-    trunk_activity.get("all_call_related_counters", []),
-    "RegisteredCSFJabberMRA",
-  )
-  callmanager_registered_devices_mra = _aggregate_callmanager_counter_values(
-    trunk_activity.get("all_call_related_counters", []),
-    "RegisteredDevicesMRA",
-  )
+  callmanager_totals = callmanager_summary.get("totals", {}) or {}
+  callmanager_calls_active = int(callmanager_totals.get("calls_active", 0) or 0)
+  callmanager_calls_in_progress = int(callmanager_totals.get("calls_in_progress", 0) or 0)
+  callmanager_registered_csf_mra = int(callmanager_totals.get("registered_csf_jabber_mra", 0) or 0)
+  callmanager_registered_devices_mra = int(callmanager_totals.get("registered_devices_mra", 0) or 0)
+  callmanager_calls_active_on_mra_hosts = int(callmanager_totals.get("calls_active_on_mra_hosts", 0) or 0)
   # CUBE and Ribbon can represent the same call path for contact-center calls;
   # avoid summing them directly when estimating endpoint calls.
   trunk_dominant_calls = max(ribbon_calls, cube_calls, other_trunk_calls)
@@ -18478,6 +18575,7 @@ def api_dashboard_stats(request: Request):
     "pstn_via_cube_active_calls": pstn_via_cube_calls,
     "unity_voice_ports_in_use": unity_voice_ports.get("ports_in_use_total"),
     "callmanager_calls_active": callmanager_calls_active,
+    "callmanager_calls_active_on_mra_hosts": callmanager_calls_active_on_mra_hosts,
     "callmanager_calls_in_progress": callmanager_calls_in_progress,
     "callmanager_registered_csf_mra": callmanager_registered_csf_mra,
     "callmanager_registered_devices_mra": callmanager_registered_devices_mra,
@@ -18528,6 +18626,7 @@ def dashboard_script():
   const kpiRegistered = document.getElementById("kpiRegistered");
   const callPstnViaCube = document.getElementById("callPstnViaCube");
   const callUnityPortsInUse = document.getElementById("callUnityPortsInUse");
+  const callMgrCallsActiveMraHosts = document.getElementById("callMgrCallsActiveMraHosts");
   const callMgrCallsInProgress = document.getElementById("callMgrCallsInProgress");
   const callMgrRegisteredCsfMra = document.getElementById("callMgrRegisteredCsfMra");
   const callMgrRegisteredDevicesMra = document.getElementById("callMgrRegisteredDevicesMra");
@@ -18555,6 +18654,7 @@ def dashboard_script():
     if (kpiRegistered) kpiRegistered.textContent = "0";
     if (callPstnViaCube) callPstnViaCube.textContent = "-";
     if (callUnityPortsInUse) callUnityPortsInUse.textContent = "-";
+    if (callMgrCallsActiveMraHosts) callMgrCallsActiveMraHosts.textContent = "-";
     if (callMgrCallsInProgress) callMgrCallsInProgress.textContent = "-";
     if (callMgrRegisteredCsfMra) callMgrRegisteredCsfMra.textContent = "-";
     if (callMgrRegisteredDevicesMra) callMgrRegisteredDevicesMra.textContent = "-";
@@ -18634,6 +18734,7 @@ def dashboard_script():
         const ports = callActivity.unity_voice_ports_in_use;
         callUnityPortsInUse.textContent = (ports == null ? "N/A" : String(ports));
       }
+      if (callMgrCallsActiveMraHosts) callMgrCallsActiveMraHosts.textContent = String(callActivity.callmanager_calls_active_on_mra_hosts || 0);
       if (callMgrCallsInProgress) callMgrCallsInProgress.textContent = String(callActivity.callmanager_calls_in_progress || 0);
       if (callMgrRegisteredCsfMra) callMgrRegisteredCsfMra.textContent = String(callActivity.callmanager_registered_csf_mra || 0);
       if (callMgrRegisteredDevicesMra) callMgrRegisteredDevicesMra.textContent = String(callActivity.callmanager_registered_devices_mra || 0);
