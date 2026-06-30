@@ -8856,6 +8856,98 @@ def genesys_build_webrtc_route(
   })
 
 
+@app.post("/genesys/users/queues-by-id")
+def genesys_user_queues_by_id_route(
+  user_id: str = Form(""),
+  user_name: str = Form(""),
+  user_email: str = Form(""),
+):
+  clean_user_id = (user_id or "").strip()
+  clean_user_name = (user_name or "").strip()
+  clean_user_email = (user_email or "").strip()
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+
+  if not clean_user_id:
+    return JSONResponse({"ok": False, "error": "user_id is required."}, status_code=400)
+
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": token_result.get("error", "Genesys token request failed."),
+    }, status_code=400)
+
+  region = token_result.get("region", clean_region)
+  _, _, api_base = _genesys_region_to_urls(region)
+  access_token = token_result.get("access_token", "")
+
+  warnings = []
+  queue_names = []
+  queue_resolution_source = "none"
+
+  # Fetch profile to improve fallback matching when caller only provides user_id.
+  ok_user, user_payload, err_user = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}")
+  if ok_user:
+    clean_user_name = clean_user_name or str(user_payload.get("name", "") or "").strip()
+    clean_user_email = clean_user_email or str(user_payload.get("email", "") or "").strip()
+  elif err_user:
+    warnings.append(f"user profile: {err_user}")
+
+  ok_queues, queues_payload, err_queues = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}/queues")
+  if ok_queues:
+    entities = queues_payload.get("entities", []) or []
+    queue_ids = []
+    for item in entities:
+      if not isinstance(item, dict):
+        continue
+
+      queue_obj = item.get("queue") if isinstance(item.get("queue"), dict) else {}
+      q_name = str(item.get("name", "") or queue_obj.get("name", "") or "").strip()
+      q_id = str(item.get("id", "") or item.get("queueId", "") or queue_obj.get("id", "") or "").strip()
+      if q_name:
+        queue_names.append(q_name)
+      elif q_id:
+        queue_ids.append(q_id)
+
+    if not queue_names and queue_ids:
+      for q_id in queue_ids:
+        resolved_name = _genesys_get_queue_name(api_base, access_token, q_id)
+        if resolved_name:
+          queue_names.append(resolved_name)
+
+    if queue_names:
+      queue_resolution_source = "direct-user-queues"
+
+  if not queue_names:
+    fallback_queue_names, fallback_queue_err = _genesys_lookup_user_queues_via_membership(
+      api_base,
+      access_token,
+      clean_user_id,
+      clean_user_email,
+      clean_user_name,
+    )
+    if fallback_queue_names:
+      queue_names = list(fallback_queue_names)
+      queue_resolution_source = "membership-fallback" if ok_queues else "membership-fallback-after-direct-error"
+    elif fallback_queue_err:
+      warnings.append(f"queue membership fallback: {fallback_queue_err}")
+
+  if err_queues:
+    warnings.append(f"direct user queues: {err_queues}")
+
+  queue_names = sorted(set([q for q in queue_names if str(q or "").strip()]), key=str.lower)
+  return JSONResponse({
+    "ok": True,
+    "region": region,
+    "user_id": clean_user_id,
+    "user_name": clean_user_name,
+    "user_email": clean_user_email,
+    "queues": queue_names,
+    "queue_resolution_source": queue_resolution_source,
+    "warnings": warnings,
+  })
+
+
 @app.post("/login")
 def login(
   cucm_host: str = Form(...),
