@@ -3058,7 +3058,18 @@ def _check_aerialink_feasibility(force_refresh: bool = False) -> dict:
 
 
 def _is_public_path(path: str):
-  return path in {"/", "/login", "/genesys-admin", "/genesys/users/extract", "/healthz", "/api/dashboard/stats"}
+  return path in {
+    "/",
+    "/login",
+    "/genesys-admin",
+    "/genesys/users/extract",
+    "/genesys/users/extract-org-snapshot",
+    "/genesys/queues/lookup",
+    "/genesys/users/build-webrtc",
+    "/genesys/users/queues-by-id",
+    "/healthz",
+    "/api/dashboard/stats",
+  }
 
 
 def _wants_json_response(request: Request) -> bool:
