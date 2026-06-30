@@ -95,7 +95,7 @@ SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
 CREDENTIAL_CACHE_TTL_SECONDS = 60 * 60
 APP_START_EPOCH = time.time()
 DASHBOARD_REQUEST_TIMEOUT_SECONDS = int((os.getenv("DASHBOARD_REQUEST_TIMEOUT_SECONDS", "8") or "8").strip())
-PERFMON_MAX_HOSTS = int((os.getenv("PERFMON_MAX_HOSTS", "8") or "8").strip())
+PERFMON_MAX_HOSTS = int((os.getenv("PERFMON_MAX_HOSTS", "50") or "50").strip())
 PERFMON_TRUNK_CACHE_TTL_SECONDS = int((os.getenv("PERFMON_TRUNK_CACHE_TTL_SECONDS", "60") or "60").strip())
 PERFMON_CALLMANAGER_CACHE_TTL_SECONDS = int((os.getenv("PERFMON_CALLMANAGER_CACHE_TTL_SECONDS", "60") or "60").strip())
 PERFMON_INCLUDED_HOSTS = [
@@ -105,7 +105,7 @@ PERFMON_INCLUDED_HOSTS = [
 ]
 PERFMON_EXCLUDED_HOSTS = [
   (host or "").strip().lower()
-  for host in (os.getenv("PERFMON_EXCLUDED_HOSTS", "lascucmpp01.ahs.int") or "lascucmpp01.ahs.int").split(",")
+  for host in (os.getenv("PERFMON_EXCLUDED_HOSTS", "") or "").split(",")
   if (host or "").strip()
 ]
 PERFMON_MRA_SIGNALING_HOSTS = [
@@ -18430,17 +18430,6 @@ def api_dashboard_stats(request: Request):
     "ribbon_ips": list(RIBBON_SBC_IPS),
     "cube_ips": list(CUBE_IPS),
   }
-  callmanager_summary = {
-    "totals": {
-      "calls_active": 0,
-      "calls_in_progress": 0,
-      "registered_csf_jabber_mra": 0,
-      "registered_devices_mra": 0,
-      "calls_active_on_mra_hosts": 0,
-    },
-    "hosts": [],
-    "errors": [],
-  }
 
   with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
     future_map = {
@@ -18549,22 +18538,42 @@ def api_dashboard_stats(request: Request):
   except Exception as unity_ports_exc:
     warnings.append(f"Unity voice-port counters unavailable: {unity_ports_exc}")
 
-  try:
-    callmanager_summary = _perfmon_callmanager_cluster_summary(resolved_cucm_host, resolved_cucm_user, resolved_cucm_pass)
-    if callmanager_summary.get("errors"):
-      warnings.append("CallManager counter summary partial data: " + " | ".join(callmanager_summary.get("errors", [])))
-  except Exception as cm_summary_exc:
-    warnings.append(f"CallManager counter summary unavailable: {cm_summary_exc}")
-
   ribbon_calls = int(trunk_activity.get("ribbon_active_calls", 0) or 0)
   cube_calls = int(trunk_activity.get("cube_active_calls", 0) or 0)
   other_trunk_calls = int(trunk_activity.get("other_active_calls", 0) or 0)
-  callmanager_totals = callmanager_summary.get("totals", {}) or {}
-  callmanager_calls_active = int(callmanager_totals.get("calls_active", 0) or 0)
-  callmanager_calls_in_progress = int(callmanager_totals.get("calls_in_progress", 0) or 0)
-  callmanager_registered_csf_mra = int(callmanager_totals.get("registered_csf_jabber_mra", 0) or 0)
-  callmanager_registered_devices_mra = int(callmanager_totals.get("registered_devices_mra", 0) or 0)
-  callmanager_calls_active_on_mra_hosts = int(callmanager_totals.get("calls_active_on_mra_hosts", 0) or 0)
+  cm_rows = [
+    row
+    for row in list(trunk_activity.get("all_call_related_counters", []) or [])
+    if str((row or {}).get("object", "") or "").strip().lower() == "cisco callmanager"
+  ]
+  callmanager_calls_active = _aggregate_callmanager_counter_values(cm_rows, "CallsActive")
+  callmanager_calls_in_progress = _aggregate_callmanager_counter_values(cm_rows, "CallsInProgress")
+  callmanager_registered_csf_mra = _aggregate_callmanager_counter_values(cm_rows, "RegisteredCSFJabberMRA")
+  callmanager_registered_devices_mra = _aggregate_callmanager_counter_values(cm_rows, "RegisteredDevicesMRA")
+
+  mra_host_set = set()
+  for row in cm_rows:
+    counter_name = str((row or {}).get("counter", "") or "").strip().lower()
+    if not (counter_name.endswith("\\registeredcsfjabbermra") or counter_name.endswith("\\registereddevicesmra")):
+      continue
+    try:
+      if int((row or {}).get("value", 0) or 0) > 0:
+        mra_host_set.add(str((row or {}).get("host", "") or "").strip().lower())
+    except Exception:
+      continue
+
+  callmanager_calls_active_on_mra_hosts = 0
+  for row in cm_rows:
+    host = str((row or {}).get("host", "") or "").strip().lower()
+    counter_name = str((row or {}).get("counter", "") or "").strip().lower()
+    if host not in mra_host_set:
+      continue
+    if not counter_name.endswith("\\callsactive"):
+      continue
+    try:
+      callmanager_calls_active_on_mra_hosts += int((row or {}).get("value", 0) or 0)
+    except Exception:
+      continue
   # CUBE and Ribbon can represent the same call path for contact-center calls;
   # avoid summing them directly when estimating endpoint calls.
   trunk_dominant_calls = max(ribbon_calls, cube_calls, other_trunk_calls)
@@ -18590,7 +18599,7 @@ def api_dashboard_stats(request: Request):
     "callmanager_calls_in_progress": callmanager_calls_in_progress,
     "callmanager_registered_csf_mra": callmanager_registered_csf_mra,
     "callmanager_registered_devices_mra": callmanager_registered_devices_mra,
-    "callmanager_mra_hosts_used": list(callmanager_summary.get("mra_hosts_used", []) or []),
+    "callmanager_mra_hosts_used": sorted(list(mra_host_set)),
     "ribbon_active_calls": ribbon_calls,
     "cube_active_calls": cube_calls,
     "jabber_active_calls": int(jabber_active_calls or 0),
