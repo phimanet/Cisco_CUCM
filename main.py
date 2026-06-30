@@ -895,6 +895,21 @@ def _genesys_extract_phone_management_name(phone_payload: dict, user_id: str, us
   def _normalized(value: str) -> str:
     return " ".join(str(value or "").strip().lower().split())
 
+  def _is_user_named_phone(normalized_phone_name: str, normalized_user_name: str) -> bool:
+    if not normalized_phone_name or not normalized_user_name:
+      return False
+    if normalized_phone_name == normalized_user_name:
+      return True
+    # Common naming pattern: "<Display Name> WebRTC"
+    if normalized_phone_name.startswith(normalized_user_name + " "):
+      return True
+    # Normalized compact fallback to handle punctuation differences.
+    compact_phone = re.sub(r"[^a-z0-9]", "", normalized_phone_name)
+    compact_user = re.sub(r"[^a-z0-9]", "", normalized_user_name)
+    if compact_user and compact_phone.startswith(compact_user):
+      return True
+    return False
+
   for item in entities or []:
     if not isinstance(item, dict):
       continue
@@ -929,8 +944,8 @@ def _genesys_extract_phone_management_name(phone_payload: dict, user_id: str, us
       is_match = True
     elif clean_user_name and any(clean_user_name in token for token in owner_tokens if token):
       is_match = True
-    elif (not owner_tokens) and normalized_user_name and any(pn == normalized_user_name for pn in normalized_phone_names if pn):
-      # Some orgs return phones without owner linkage; use exact-name fallback.
+    elif (not owner_tokens) and normalized_user_name and any(_is_user_named_phone(pn, normalized_user_name) for pn in normalized_phone_names if pn):
+      # Some orgs return phones without owner linkage; use user-name WebRTC fallback.
       is_match = True
 
     if not is_match:
