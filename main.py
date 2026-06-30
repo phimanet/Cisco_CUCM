@@ -95,6 +95,16 @@ APP_START_EPOCH = time.time()
 DASHBOARD_REQUEST_TIMEOUT_SECONDS = int((os.getenv("DASHBOARD_REQUEST_TIMEOUT_SECONDS", "8") or "8").strip())
 PERFMON_MAX_HOSTS = int((os.getenv("PERFMON_MAX_HOSTS", "8") or "8").strip())
 PERFMON_TRUNK_CACHE_TTL_SECONDS = int((os.getenv("PERFMON_TRUNK_CACHE_TTL_SECONDS", "60") or "60").strip())
+PERFMON_INCLUDED_HOSTS = [
+  (host or "").strip().lower()
+  for host in (os.getenv("PERFMON_INCLUDED_HOSTS", "") or "").split(",")
+  if (host or "").strip()
+]
+PERFMON_EXCLUDED_HOSTS = [
+  (host or "").strip().lower()
+  for host in (os.getenv("PERFMON_EXCLUDED_HOSTS", "lascucmpp01.ahs.int") or "lascucmpp01.ahs.int").split(",")
+  if (host or "").strip()
+]
 PERFMON_CALL_COUNTER_OBJECTS = [
   (name or "").strip()
   for name in (os.getenv("PERFMON_CALL_COUNTER_OBJECTS", "Cisco SIP Trunk,Cisco CallManager,Cisco Voice Mail Port") or "Cisco SIP Trunk,Cisco CallManager,Cisco Voice Mail Port").split(",")
@@ -5263,6 +5273,10 @@ def _select_perfmon_hosts(cucm_host: str, cucm_user: str, cucm_pass: str, max_ho
     key = (host or "").strip().lower()
     if not key or key in seen:
       return
+    if PERFMON_INCLUDED_HOSTS and key not in PERFMON_INCLUDED_HOSTS:
+      return
+    if key in PERFMON_EXCLUDED_HOSTS:
+      return
     seen.add(key)
     selected.append((host or "").strip())
 
@@ -5596,6 +5610,22 @@ def _perfmon_trunk_activity_fallback(cucm_host: str, cucm_user: str, cucm_pass: 
     }
 
   return result
+
+
+def _aggregate_callmanager_counter_values(counter_rows: list[dict], suffix: str) -> int:
+  needle = "\\" + str(suffix or "").strip().lower()
+  total = 0
+  for row in list(counter_rows or []):
+    if str((row or {}).get("object", "") or "").strip().lower() != "cisco callmanager":
+      continue
+    counter_name = str((row or {}).get("counter", "") or "").strip().lower()
+    if not counter_name.endswith(needle):
+      continue
+    try:
+      total += int((row or {}).get("value", 0) or 0)
+    except Exception:
+      continue
+  return total
 
 
 def _probe_tcp_port(host: str, port: int, timeout_seconds: float = 1.5) -> dict:
@@ -18224,6 +18254,9 @@ def dashboard_page(request: Request):
         <div style="overflow-x:auto;"><table><thead><tr><th>Path</th><th>Active Calls</th></tr></thead><tbody>
           <tr><td>Jabber/Expressway -> CUBE (PSTN)</td><td id="callPstnViaCube" class="mono">-</td></tr>
           <tr><td>Unity Voice Ports In Use</td><td id="callUnityPortsInUse" class="mono">-</td></tr>
+          <tr><td>CallManager Calls In Progress (selected nodes)</td><td id="callMgrCallsInProgress" class="mono">-</td></tr>
+          <tr><td>Registered CSF Jabber MRA (selected nodes)</td><td id="callMgrRegisteredCsfMra" class="mono">-</td></tr>
+          <tr><td>Registered Devices MRA (selected nodes)</td><td id="callMgrRegisteredDevicesMra" class="mono">-</td></tr>
           <tr><td>Ribbon SBC</td><td id="callRibbon" class="mono">-</td></tr>
           <tr><td>Cisco CUBE</td><td id="callCube" class="mono">-</td></tr>
           <tr><td>Cisco Jabber Endpoints</td><td id="callJabber" class="mono">-</td></tr>
@@ -18246,7 +18279,7 @@ def dashboard_page(request: Request):
 
     </main>
 
-    <script src="/dashboard.js?v=20260630h"></script>
+    <script src="/dashboard.js?v=20260630i"></script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
@@ -18408,6 +18441,22 @@ def api_dashboard_stats(request: Request):
   ribbon_calls = int(trunk_activity.get("ribbon_active_calls", 0) or 0)
   cube_calls = int(trunk_activity.get("cube_active_calls", 0) or 0)
   other_trunk_calls = int(trunk_activity.get("other_active_calls", 0) or 0)
+  callmanager_calls_active = _aggregate_callmanager_counter_values(
+    trunk_activity.get("all_call_related_counters", []),
+    "CallsActive",
+  )
+  callmanager_calls_in_progress = _aggregate_callmanager_counter_values(
+    trunk_activity.get("all_call_related_counters", []),
+    "CallsInProgress",
+  )
+  callmanager_registered_csf_mra = _aggregate_callmanager_counter_values(
+    trunk_activity.get("all_call_related_counters", []),
+    "RegisteredCSFJabberMRA",
+  )
+  callmanager_registered_devices_mra = _aggregate_callmanager_counter_values(
+    trunk_activity.get("all_call_related_counters", []),
+    "RegisteredDevicesMRA",
+  )
   # CUBE and Ribbon can represent the same call path for contact-center calls;
   # avoid summing them directly when estimating endpoint calls.
   trunk_dominant_calls = max(ribbon_calls, cube_calls, other_trunk_calls)
@@ -18428,6 +18477,10 @@ def api_dashboard_stats(request: Request):
   call_activity = {
     "pstn_via_cube_active_calls": pstn_via_cube_calls,
     "unity_voice_ports_in_use": unity_voice_ports.get("ports_in_use_total"),
+    "callmanager_calls_active": callmanager_calls_active,
+    "callmanager_calls_in_progress": callmanager_calls_in_progress,
+    "callmanager_registered_csf_mra": callmanager_registered_csf_mra,
+    "callmanager_registered_devices_mra": callmanager_registered_devices_mra,
     "ribbon_active_calls": ribbon_calls,
     "cube_active_calls": cube_calls,
     "jabber_active_calls": int(jabber_active_calls or 0),
@@ -18475,6 +18528,9 @@ def dashboard_script():
   const kpiRegistered = document.getElementById("kpiRegistered");
   const callPstnViaCube = document.getElementById("callPstnViaCube");
   const callUnityPortsInUse = document.getElementById("callUnityPortsInUse");
+  const callMgrCallsInProgress = document.getElementById("callMgrCallsInProgress");
+  const callMgrRegisteredCsfMra = document.getElementById("callMgrRegisteredCsfMra");
+  const callMgrRegisteredDevicesMra = document.getElementById("callMgrRegisteredDevicesMra");
   const callRibbon = document.getElementById("callRibbon");
   const callCube = document.getElementById("callCube");
   const callJabber = document.getElementById("callJabber");
@@ -18499,6 +18555,9 @@ def dashboard_script():
     if (kpiRegistered) kpiRegistered.textContent = "0";
     if (callPstnViaCube) callPstnViaCube.textContent = "-";
     if (callUnityPortsInUse) callUnityPortsInUse.textContent = "-";
+    if (callMgrCallsInProgress) callMgrCallsInProgress.textContent = "-";
+    if (callMgrRegisteredCsfMra) callMgrRegisteredCsfMra.textContent = "-";
+    if (callMgrRegisteredDevicesMra) callMgrRegisteredDevicesMra.textContent = "-";
     if (callRibbon) callRibbon.textContent = "-";
     if (callCube) callCube.textContent = "-";
     if (callJabber) callJabber.textContent = "-";
@@ -18575,6 +18634,9 @@ def dashboard_script():
         const ports = callActivity.unity_voice_ports_in_use;
         callUnityPortsInUse.textContent = (ports == null ? "N/A" : String(ports));
       }
+      if (callMgrCallsInProgress) callMgrCallsInProgress.textContent = String(callActivity.callmanager_calls_in_progress || 0);
+      if (callMgrRegisteredCsfMra) callMgrRegisteredCsfMra.textContent = String(callActivity.callmanager_registered_csf_mra || 0);
+      if (callMgrRegisteredDevicesMra) callMgrRegisteredDevicesMra.textContent = String(callActivity.callmanager_registered_devices_mra || 0);
       if (callRibbon) callRibbon.textContent = String(callActivity.ribbon_active_calls || 0);
       if (callCube) callCube.textContent = String(callActivity.cube_active_calls || 0);
       if (callJabber) callJabber.textContent = String(callActivity.jabber_active_calls || 0);
