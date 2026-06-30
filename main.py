@@ -4978,14 +4978,14 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
   session.verify = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
-  soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+  soap_xml = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:ris=\"http://schemas.cisco.com/ast/soap\">
   <soapenv:Header/>
   <soapenv:Body>
-    <ris:SelectCmDeviceExt>
+    <ris:selectCmDevice>
       <StateInfo></StateInfo>
       <CmSelectionCriteria>
-        <MaxReturnedDevices>20000</MaxReturnedDevices>
+        <MaxReturnedDevices>2000</MaxReturnedDevices>
         <DeviceClass>Phone</DeviceClass>
         <Model>255</Model>
         <Status>Any</Status>
@@ -4993,13 +4993,13 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
         <SelectBy>Name</SelectBy>
         <SelectItems>
           <item>
-            <Item>%</Item>
+            <Item>*</Item>
           </item>
         </SelectItems>
         <Protocol>Any</Protocol>
         <DownloadStatus>Any</DownloadStatus>
       </CmSelectionCriteria>
-    </ris:SelectCmDeviceExt>
+    </ris:selectCmDevice>
   </soapenv:Body>
 </soapenv:Envelope>"""
 
@@ -5016,7 +5016,7 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
         response = session.post(
           ris_url,
           data=soap_xml.encode("utf-8"),
-          headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 SelectCmDeviceExt"},
+          headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 selectCmDevice"},
           timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
         )
       except Exception as exc:
@@ -5027,7 +5027,7 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
         endpoint_errors.append(f"{ris_url}: {err or ('HTTP ' + str(response.status_code))}")
         continue
 
-      root = _parse_xml_or_runtime_error(response.text, "RIS SelectCmDeviceExt")
+      root = _parse_xml_or_runtime_error(response.text, "RIS selectCmDevice")
       successful_ris_host = ris_host
       break
 
