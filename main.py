@@ -107,6 +107,16 @@ PROD_UNITY_HOST = "SANCUTYP01.ahs.int"
 LAB_UNITY_HOST = "lascutypl01.ahs.int"
 RIBBON_SBC_IPS = ["10.241.16.217", "10.141.16.40"]
 CUBE_IPS = ["10.241.255.3", "10.141.255.13"]
+RIBBON_TRUNK_KEYWORDS = [
+  (k or "").strip().lower()
+  for k in (os.getenv("RIBBON_TRUNK_KEYWORDS", "ribbon,sbc") or "ribbon,sbc").split(",")
+  if (k or "").strip()
+]
+CUBE_TRUNK_KEYWORDS = [
+  (k or "").strip().lower()
+  for k in (os.getenv("CUBE_TRUNK_KEYWORDS", "cube,cubes,cub") or "cube,cubes,cub").split(",")
+  if (k or "").strip()
+]
 PROD_LDAP_AGREEMENT = "LDAP_AMN"
 LAB_LDAP_AGREEMENT = "LAB_LDAP_AMN"
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp1.ahs.int").strip() or "smtp1.ahs.int"
@@ -5237,17 +5247,45 @@ def _perfmon_active_calls_fallback(cucm_host: str, cucm_user: str, cucm_pass: st
 
 def _classify_trunk_counter_target(counter_name: str) -> str:
   normalized = re.sub(r"[^a-z0-9]", "", (counter_name or "").lower())
+  plain = (counter_name or "").lower()
   for ip in RIBBON_SBC_IPS:
     if ip.replace(".", "") in normalized:
       return "ribbon"
   for ip in CUBE_IPS:
     if ip.replace(".", "") in normalized:
       return "cube"
+  for keyword in RIBBON_TRUNK_KEYWORDS:
+    compact_keyword = re.sub(r"[^a-z0-9]", "", keyword)
+    if (keyword and keyword in plain) or (compact_keyword and compact_keyword in normalized):
+      return "ribbon"
+  for keyword in CUBE_TRUNK_KEYWORDS:
+    compact_keyword = re.sub(r"[^a-z0-9]", "", keyword)
+    if (keyword and keyword in plain) or (compact_keyword and compact_keyword in normalized):
+      return "cube"
   if "ribbon" in normalized:
     return "ribbon"
   if "cube" in normalized:
     return "cube"
   return "other"
+
+
+def _is_active_call_counter(counter_name: str) -> bool:
+  normalized = re.sub(r"[^a-z0-9]", "", (counter_name or "").lower())
+  if not normalized or "active" not in normalized or "call" not in normalized:
+    return False
+  blocked_tokens = [
+    "failed",
+    "failure",
+    "attempt",
+    "setup",
+    "register",
+    "reject",
+    "busy",
+  ]
+  for token in blocked_tokens:
+    if token in normalized:
+      return False
+  return True
 
 
 def _perfmon_collect_sip_trunk_activity(cucm_host: str, cucm_user: str, cucm_pass: str, target_host: str) -> dict:
@@ -5287,8 +5325,7 @@ def _perfmon_collect_sip_trunk_activity(cucm_host: str, cucm_user: str, cucm_pas
     if tag != "Value" or not current_name:
       continue
 
-    counter_leaf = current_name.split("\\")[-1].strip().lower()
-    if counter_leaf not in {"activecalls", "callsactive", "numberofactivecalls", "numofactivecalls", "numactivecalls", "totalactivecalls"}:
+    if not _is_active_call_counter(current_name):
       continue
     try:
       value = int(float(text))
@@ -18111,12 +18148,16 @@ def api_dashboard_stats(request: Request):
   ribbon_calls = int(trunk_activity.get("ribbon_active_calls", 0) or 0)
   cube_calls = int(trunk_activity.get("cube_active_calls", 0) or 0)
   other_trunk_calls = int(trunk_activity.get("other_active_calls", 0) or 0)
-  total_active_calls = int(active_calls or 0) if active_calls is not None else 0
+  trunk_total_calls = ribbon_calls + cube_calls + other_trunk_calls
 
   jabber_calls_source = "ris"
   if jabber_active_calls is None:
     jabber_calls_source = "estimate_total_minus_trunks"
-    jabber_active_calls = max(0, total_active_calls - (ribbon_calls + cube_calls + other_trunk_calls))
+    cluster_total_calls = int(active_calls or 0) if active_calls is not None else 0
+    jabber_active_calls = max(0, cluster_total_calls - trunk_total_calls)
+
+  total_active_calls = int(jabber_active_calls or 0) + trunk_total_calls
+  active_calls = total_active_calls
 
   call_activity = {
     "ribbon_active_calls": ribbon_calls,
