@@ -105,6 +105,8 @@ PROD_CUCM_HOST = "lascucmpp01.ahs.int"
 LAB_CUCM_HOST = "lascucmpl01.ahs.int"
 PROD_UNITY_HOST = "SANCUTYP01.ahs.int"
 LAB_UNITY_HOST = "lascutypl01.ahs.int"
+RIBBON_SBC_IPS = ["10.241.16.217", "10.141.16.40"]
+CUBE_IPS = ["10.241.255.3", "10.141.255.13"]
 PROD_LDAP_AGREEMENT = "LDAP_AMN"
 LAB_LDAP_AGREEMENT = "LAB_LDAP_AMN"
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp1.ahs.int").strip() or "smtp1.ahs.int"
@@ -4968,7 +4970,7 @@ def _axl_list_process_nodes(cucm_host: str, cucm_user: str, cucm_pass: str) -> l
 
 def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: str):
   ris_hosts = _axl_list_process_nodes(cucm_host, cucm_user, cucm_pass) or [cucm_host]
-  jabber_prefixes = ["CSF", "TCT", "BOT", "TAB"]
+  jabber_prefixes = ["CSF", "TCT", "BOT", "SEP"]
   by_prefix_registered = {prefix: 0 for prefix in jabber_prefixes}
   by_server_registered = {}
   active_calls_total = 0
@@ -5229,6 +5231,93 @@ def _perfmon_active_calls_fallback(cucm_host: str, cucm_user: str, cucm_pass: st
   return {
     "active_calls_total": total if seen_value else None,
     "by_server_active_calls": by_server,
+    "errors": errors,
+  }
+
+
+def _classify_trunk_counter_target(counter_name: str) -> str:
+  normalized = re.sub(r"[^a-z0-9]", "", (counter_name or "").lower())
+  for ip in RIBBON_SBC_IPS:
+    if ip.replace(".", "") in normalized:
+      return "ribbon"
+  for ip in CUBE_IPS:
+    if ip.replace(".", "") in normalized:
+      return "cube"
+  if "ribbon" in normalized:
+    return "ribbon"
+  if "cube" in normalized:
+    return "cube"
+  return "other"
+
+
+def _perfmon_collect_sip_trunk_activity(cucm_host: str, cucm_user: str, cucm_pass: str, target_host: str) -> dict:
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:soap=\"http://schemas.cisco.com/ast/soap\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <soap:perfmonCollectCounterData>
+      <soap:Host>{xml_escape(target_host)}</soap:Host>
+      <soap:Object>Cisco SIP Trunk</soap:Object>
+    </soap:perfmonCollectCounterData>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/perfmonservice2/services/PerfmonService",
+    data=soap_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml; charset=utf-8"},
+    timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
+  )
+  if response.status_code != 200:
+    raise RuntimeError(_extract_soap_error(response.text or "") or ("HTTP " + str(response.status_code)))
+
+  root = _parse_xml_or_runtime_error(response.text, "PerfMon Cisco SIP Trunk")
+  current_name = ""
+  result = {"ribbon": 0, "cube": 0, "other": 0}
+  for elem in root.iter():
+    tag = _strip_xml_ns(elem.tag)
+    text = (elem.text or "").strip()
+    if tag == "Name":
+      current_name = text
+      continue
+    if tag != "Value" or not current_name:
+      continue
+
+    counter_leaf = current_name.split("\\")[-1].strip().lower()
+    if counter_leaf not in {"activecalls", "callsactive", "numberofactivecalls", "numofactivecalls", "numactivecalls", "totalactivecalls"}:
+      continue
+    try:
+      value = int(float(text))
+    except Exception:
+      continue
+    bucket = _classify_trunk_counter_target(current_name)
+    result[bucket] = int(result.get(bucket, 0) or 0) + value
+
+  return result
+
+
+def _perfmon_trunk_activity_fallback(cucm_host: str, cucm_user: str, cucm_pass: str) -> dict:
+  hosts = _axl_list_process_nodes(cucm_host, cucm_user, cucm_pass) or [cucm_host]
+  totals = {"ribbon": 0, "cube": 0, "other": 0}
+  errors = []
+  for host in hosts:
+    try:
+      partial = _perfmon_collect_sip_trunk_activity(cucm_host, cucm_user, cucm_pass, host)
+      for key in ["ribbon", "cube", "other"]:
+        totals[key] = int(totals.get(key, 0) or 0) + int(partial.get(key, 0) or 0)
+    except Exception as exc:
+      errors.append(f"{host}: {exc}")
+
+  return {
+    "ribbon_active_calls": int(totals.get("ribbon", 0) or 0),
+    "cube_active_calls": int(totals.get("cube", 0) or 0),
+    "other_active_calls": int(totals.get("other", 0) or 0),
+    "ribbon_ips": list(RIBBON_SBC_IPS),
+    "cube_ips": list(CUBE_IPS),
     "errors": errors,
   }
 
@@ -17893,12 +17982,19 @@ def api_dashboard_stats(request: Request):
   if not resolved_cucm_user or not resolved_cucm_pass:
     return JSONResponse({"ok": False, "error": "Dashboard service credentials are missing. Configure DN report CUCM user/password in settings."}, status_code=400)
 
-  configured_by_prefix = {"CSF": 0, "TCT": 0, "BOT": 0, "TAB": 0}
-  registered_by_prefix = {"CSF": 0, "TCT": 0, "BOT": 0, "TAB": 0}
+  configured_by_prefix = {"CSF": 0, "TCT": 0, "BOT": 0, "SEP": 0}
+  registered_by_prefix = {"CSF": 0, "TCT": 0, "BOT": 0, "SEP": 0}
   by_server_registered = []
   active_calls = None
   ris_available = True
   jabber_registered_total = 0
+  trunk_activity = {
+    "ribbon_active_calls": 0,
+    "cube_active_calls": 0,
+    "other_active_calls": 0,
+    "ribbon_ips": list(RIBBON_SBC_IPS),
+    "cube_ips": list(CUBE_IPS),
+  }
 
   with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
     future_map = {
@@ -17958,7 +18054,7 @@ def api_dashboard_stats(request: Request):
           estimated = {}
           remainders = []
           assigned = 0
-          for prefix in ["CSF", "TCT", "BOT", "TAB"]:
+          for prefix in ["CSF", "TCT", "BOT", "SEP"]:
             configured_count = int(configured_by_prefix.get(prefix, 0) or 0)
             exact = (jabber_registered_total * configured_count) / cfg_total
             base = int(exact)
@@ -17991,6 +18087,13 @@ def api_dashboard_stats(request: Request):
   if ris_available and active_calls is None:
     warnings.append("Realtime active-call counter not returned by this CUCM response; showing N/A.")
 
+  try:
+    trunk_activity = _perfmon_trunk_activity_fallback(resolved_cucm_host, resolved_cucm_user, resolved_cucm_pass)
+    if trunk_activity.get("errors"):
+      warnings.append("SIP trunk activity partial data: " + " | ".join(trunk_activity.get("errors", [])))
+  except Exception as trunk_exc:
+    warnings.append(f"SIP trunk activity unavailable: {trunk_exc}")
+
   return JSONResponse(
     {
       "ok": True,
@@ -18005,6 +18108,7 @@ def api_dashboard_stats(request: Request):
         "jabber_registered_total": jabber_registered_total,
         "registered_by_server": by_server_registered,
         "active_calls": active_calls,
+        "trunk_activity": trunk_activity,
       },
       "warnings": warnings,
     }
@@ -18040,7 +18144,7 @@ def dashboard_script():
   }
 
   function renderPrefixRows(configured, registered) {
-    const prefixes = ["CSF", "TCT", "BOT", "TAB"];
+    const prefixes = ["CSF", "TCT", "BOT", "SEP"];
     prefixRows.innerHTML = prefixes
       .map((p) => '<tr><td class="mono">' + p + '</td><td class="mono">' + String((configured && configured[p]) || 0) + '</td><td class="mono">' + String((registered && registered[p]) || 0) + '</td></tr>')
       .join('');
