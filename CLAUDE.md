@@ -40,6 +40,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [x] [P2][Done] Refresh the web portal theme to align with AMN Healthcare visual style (brand colors, typography, spacing, and overall look/feel).
 - [x] [P2][Done] Add per-option success/failure summary panel in the UI after CSV generation.
 - [ ] [P2][Idea] Add a lightweight audit trail (who ran what option and when) for internal operations.
+- [ ] [P2][Idea] Add call-record explorer page with filters for extension/calling/called number, datetime range, call length, username/device name, and SIP message/call trace retrieval in the same workflow.
 - [ ] [P3][Idea] Add optional dry-run mode for high-impact actions before execution.
 
 Status keys:
