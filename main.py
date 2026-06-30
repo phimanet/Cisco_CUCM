@@ -1140,6 +1140,7 @@ def _genesys_queue_member_matches_user(member: dict, user_id: str, user_email: s
 
   normalized_user_name = _normalized(clean_user_name)
   compact_user_name = _compact(clean_user_name)
+  user_name_tokens = [tok for tok in re.split(r"[^a-z0-9]+", normalized_user_name) if tok]
 
   if normalized_user_name and any(
     normalized_user_name == item
@@ -1150,6 +1151,19 @@ def _genesys_queue_member_matches_user(member: dict, user_id: str, user_email: s
     return True
   if compact_user_name and compact_user_name in compact_candidates:
     return True
+
+  # Handle display-name order differences such as "Smith, Jakilah" vs "Jakilah Smith".
+  if user_name_tokens:
+    user_token_set = set(user_name_tokens)
+    for cand in normalized_candidates:
+      cand_tokens = [tok for tok in re.split(r"[^a-z0-9]+", cand) if tok]
+      if not cand_tokens:
+        continue
+      cand_token_set = set(cand_tokens)
+      if user_token_set == cand_token_set:
+        return True
+      if user_token_set.issubset(cand_token_set):
+        return True
   return False
 
 
@@ -3165,6 +3179,7 @@ def _is_public_path(path: str):
     "/genesys/users/extract",
     "/genesys/users/extract-org-snapshot",
     "/genesys/queues/lookup",
+    "/genesys/queues/extract-all",
     "/genesys/users/build-webrtc",
     "/genesys/users/queues-by-id",
     "/healthz",
@@ -8294,9 +8309,11 @@ def genesys_admin_placeholder(request: Request):
               <div class="search-filter-row">
                 <input name="queue_name" placeholder="Queue Name or Queue ID *" style="width:340px;" required>
                 <button type="submit">Lookup Queue Members</button>
+                <button type="button" id="genesys-queue-extract-all-btn" style="background:#455a64;">Extract All Queues</button>
               </div>
             </form>
             <p id="genesys-queue-search-status" style="color:#2c5c8a; min-height:18px;">Ready.</p>
+            <div id="genesys-queue-raw-download" style="margin:6px 0 10px 0;"></div>
             <div id="genesys-queue-search-results" style="overflow-x:auto;"></div>
           </div>
         </section>
@@ -8317,6 +8334,8 @@ def genesys_admin_placeholder(request: Request):
         const queueForm = document.getElementById("genesys-queue-search-form");
         const queueStatusEl = document.getElementById("genesys-queue-search-status");
         const queueResultsEl = document.getElementById("genesys-queue-search-results");
+        const queueRawDownloadEl = document.getElementById("genesys-queue-raw-download");
+        const queueExtractAllBtn = document.getElementById("genesys-queue-extract-all-btn");
 
         function renderUserDebug(payload) {
           if (!debugWrapEl || !debugEl) {
@@ -8520,6 +8539,9 @@ def genesys_admin_placeholder(request: Request):
             event.preventDefault();
             queueStatusEl.textContent = "Running queue lookup...";
             queueResultsEl.innerHTML = "";
+            if (queueRawDownloadEl) {
+              queueRawDownloadEl.innerHTML = "";
+            }
 
             try {
               const formData = new FormData(queueForm);
@@ -8568,6 +8590,61 @@ def genesys_admin_placeholder(request: Request):
               queueResultsEl.innerHTML = html;
             } catch (err) {
               queueStatusEl.textContent = "Queue lookup failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        }
+
+        if (queueExtractAllBtn && queueStatusEl && queueResultsEl) {
+          queueExtractAllBtn.addEventListener("click", async function () {
+            const originalText = queueExtractAllBtn.textContent;
+            queueExtractAllBtn.disabled = true;
+            queueExtractAllBtn.textContent = "Extracting...";
+            queueStatusEl.textContent = "Extracting all queue names...";
+            queueResultsEl.innerHTML = "";
+            if (queueRawDownloadEl) {
+              queueRawDownloadEl.innerHTML = "";
+            }
+
+            try {
+              const response = await fetch("/genesys/queues/extract-all", {
+                method: "POST",
+              });
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload && payload.error) || "Queue extract failed.");
+              }
+
+              const rows = Array.isArray(payload.queues) ? payload.queues : [];
+              queueStatusEl.textContent = "Region: " + (payload.region || "") + " | Queue Pages: " + String(payload.pages_scanned || 0) + " | Queues: " + rows.length;
+              if (queueRawDownloadEl && payload.raw_download_url) {
+                const rawName = payload.raw_filename || "genesys_all_queues.json";
+                queueRawDownloadEl.innerHTML = "<a href='" + payload.raw_download_url + "' style='display:inline-block;padding:7px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Queue JSON (" + rawName + ")</a>";
+              }
+
+              if (!rows.length) {
+                queueResultsEl.innerHTML = "<p style='color:#4e6a84;'>No queues returned by API.</p>";
+                return;
+              }
+
+              let html = "<table><thead><tr>";
+              html += "<th>Queue Name</th><th>Queue ID</th><th>Division</th><th>Member Count</th>";
+              html += "</tr></thead><tbody>";
+              rows.forEach(function (row, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                html += "<tr style='background:" + bg + ";'>";
+                html += "<td>" + (row.name || "") + "</td>";
+                html += "<td style='font-family:Consolas,monospace;'>" + (row.id || "") + "</td>";
+                html += "<td>" + (row.division || "") + "</td>";
+                html += "<td>" + String(row.member_count || 0) + "</td>";
+                html += "</tr>";
+              });
+              html += "</tbody></table>";
+              queueResultsEl.innerHTML = html;
+            } catch (err) {
+              queueStatusEl.textContent = "Queue extract failed: " + ((err && err.message) || "Unknown error.");
+            } finally {
+              queueExtractAllBtn.disabled = false;
+              queueExtractAllBtn.textContent = originalText;
             }
           });
         }
@@ -8923,6 +9000,82 @@ def genesys_queue_lookup_route(queue_name: str = Form("")):
     "rows": rows,
     "warnings": warnings,
     "diagnostics": diagnostics,
+  })
+
+
+@app.post("/genesys/queues/extract-all")
+def genesys_extract_all_queues_route():
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": token_result.get("error", "Genesys token request failed."),
+    }, status_code=400)
+
+  region = token_result.get("region", clean_region)
+  _, _, api_base = _genesys_region_to_urls(region)
+  access_token = token_result.get("access_token", "")
+
+  queue_entities, pages_scanned, queue_err = _genesys_collect_paged_entities(
+    api_base,
+    access_token,
+    "/api/v2/routing/queues",
+    page_size=100,
+    max_pages=max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 500)),
+  )
+  if queue_err:
+    return JSONResponse({"ok": False, "error": queue_err}, status_code=400)
+
+  rows = []
+  for item in queue_entities:
+    if not isinstance(item, dict):
+      continue
+    q_id = str(item.get("id", "") or "").strip()
+    q_name = str(item.get("name", "") or "").strip()
+    division = item.get("division") if isinstance(item.get("division"), dict) else {}
+    division_name = str(division.get("name", "") or "").strip()
+    member_count_raw = item.get("memberCount", item.get("membersCount", 0))
+    try:
+      member_count = int(member_count_raw or 0)
+    except Exception:
+      member_count = 0
+
+    if not q_id and not q_name:
+      continue
+
+    rows.append({
+      "id": q_id,
+      "name": q_name,
+      "division": division_name,
+      "member_count": member_count,
+    })
+
+  rows.sort(key=lambda r: ((r.get("name") or "").lower(), (r.get("id") or "").lower()))
+
+  raw_payload = {
+    "generated_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+    "region": region,
+    "pages_scanned": pages_scanned,
+    "queue_count": len(rows),
+    "queues": rows,
+  }
+  raw_filename = f"genesys_all_queues_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+  raw_job_id = _store_job_output(
+    json.dumps(raw_payload, indent=2).encode("utf-8"),
+    raw_filename,
+    "application/json",
+  )
+
+  return JSONResponse({
+    "ok": True,
+    "region": region,
+    "pages_scanned": pages_scanned,
+    "queue_count": len(rows),
+    "queues": rows,
+    "raw_download_url": f"/download/job-output/{raw_job_id}",
+    "raw_filename": raw_filename,
   })
 
 
