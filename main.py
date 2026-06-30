@@ -3142,7 +3142,10 @@ def _separation_report_read_offboard_rows(
   end_dt: datetime.datetime,
   required_cucm_host: str = PROD_CUCM_HOST,
 ) -> list[dict]:
-  """Return PROD offboard audit rows for option_10 in [start_dt, end_dt)."""
+  """Return PROD offboard audit rows for option_10 in [start_dt, end_dt).
+
+  Intentionally does not filter by operator so all logged-in user actions are included.
+  """
   if not os.path.exists(AUDIT_LOG_PATH):
     return []
   try:
@@ -3342,6 +3345,11 @@ def _run_separation_sms_report(triggered_by: str = "scheduler") -> dict:
       end_dt,
       required_cucm_host=PROD_CUCM_HOST,
     )
+    operators_included = sorted({
+      str((row or {}).get("operator", "") or "").strip()
+      for row in offboard_rows
+      if str((row or {}).get("operator", "") or "").strip()
+    })
     sms_rows = _separation_report_build_sms_rows(offboard_rows)
 
     numbers_checked = [r["sms_number"] for r in sms_rows if r["sms_number"] != "-"]
@@ -3381,7 +3389,7 @@ def _run_separation_sms_report(triggered_by: str = "scheduler") -> dict:
       action="separation_sms_report_sent",
       cucm_host="",
       operator=triggered_by,
-      target=f"period={date_range_label};extensions_checked={len(extensions_checked)}",
+      target=f"period={date_range_label};extensions_checked={len(extensions_checked)};operators_included={len(operators_included)}",
       account=recipients_logged,
       extension_added="",
       extension_deleted=numbers_pipe,
@@ -3393,6 +3401,7 @@ def _run_separation_sms_report(triggered_by: str = "scheduler") -> dict:
       "success": True,
       "numbers_checked": len(extensions_checked),
       "numbers_found_in_sms": sum(1 for r in sms_rows if r["configured_in"] != "Not Found"),
+      "operators_included": operators_included,
       "date_range": date_range_label,
       "recipients": recipients,
       "error": None,
@@ -21113,11 +21122,14 @@ def sep_sms_report_run_route(request: Request):
   operator = str(session.get("username", "manual")).strip() or "manual"
   result = _run_separation_sms_report(triggered_by=f"manual:{operator}")
   if result.get("success"):
+    operators_included = list(result.get("operators_included", []) or [])
     return JSONResponse({
       "ok": True,
       "date_range": result.get("date_range", ""),
       "numbers_checked": result.get("numbers_checked", 0),
       "numbers_found_in_sms": result.get("numbers_found_in_sms", 0),
+      "operators_included_count": len(operators_included),
+      "operators_included": operators_included,
       "recipients": result.get("recipients", []),
     })
   return JSONResponse({"ok": False, "error": result.get("error", "Unknown error")}, status_code=500)
