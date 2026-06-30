@@ -95,6 +95,11 @@ APP_START_EPOCH = time.time()
 DASHBOARD_REQUEST_TIMEOUT_SECONDS = int((os.getenv("DASHBOARD_REQUEST_TIMEOUT_SECONDS", "8") or "8").strip())
 PERFMON_MAX_HOSTS = int((os.getenv("PERFMON_MAX_HOSTS", "8") or "8").strip())
 PERFMON_TRUNK_CACHE_TTL_SECONDS = int((os.getenv("PERFMON_TRUNK_CACHE_TTL_SECONDS", "60") or "60").strip())
+PERFMON_CALL_COUNTER_OBJECTS = [
+  (name or "").strip()
+  for name in (os.getenv("PERFMON_CALL_COUNTER_OBJECTS", "Cisco SIP Trunk,Cisco CallManager,Cisco Voice Mail Port") or "Cisco SIP Trunk,Cisco CallManager,Cisco Voice Mail Port").split(",")
+  if (name or "").strip()
+]
 CREDENTIAL_ENCRYPTION_KEY = (os.getenv("CUCM_CREDENTIAL_ENCRYPTION_KEY", "") or "").strip()
 if _FERNET_AVAILABLE and not CREDENTIAL_ENCRYPTION_KEY:
   # Generate an in-memory key when env key is absent so caching is still encrypted.
@@ -5527,6 +5532,35 @@ def _perfmon_trunk_activity_fallback(cucm_host: str, cucm_user: str, cucm_pass: 
       all_call_related_counters.extend(list(partial.get("all_call_related_counters", []) or []))
     except Exception as exc:
       errors.append(f"{host}: {exc}")
+
+    # Pull additional call-related counters from configured PerfMon objects so
+    # operators can inspect raw names and choose which metrics to keep.
+    for object_name in PERFMON_CALL_COUNTER_OBJECTS:
+      if (object_name or "").strip().lower() == "cisco sip trunk":
+        continue
+      try:
+        counters, err = _perfmon_collect_counter_data_object(cucm_host, cucm_user, cucm_pass, host, object_name)
+      except Exception as exc:
+        errors.append(f"{host}/{object_name}: {exc}")
+        continue
+
+      if err:
+        errors.append(f"{host}/{object_name}: {err}")
+        continue
+
+      for counter_name, value in counters.items():
+        normalized_name = re.sub(r"[^a-z0-9]", "", (counter_name or "").lower())
+        if not any(token in normalized_name for token in ["call", "conversation", "session", "dialog"]):
+          continue
+        all_call_related_counters.append(
+          {
+            "host": host,
+            "object": object_name,
+            "bucket": _classify_trunk_counter_target(counter_name),
+            "counter": counter_name,
+            "value": int(value or 0),
+          }
+        )
 
   all_active_call_counters.sort(
     key=lambda item: (
@@ -18200,9 +18234,9 @@ def dashboard_page(request: Request):
 
       <section class="panel">
         <h3>All Call-Related Counters (Preview)</h3>
-        <p class="muted" style="margin-top:0;">Raw call-related PerfMon counters from Cisco SIP Trunk object. Use this list to identify exactly which counters should remain in the panel.</p>
+        <p class="muted" style="margin-top:0;">Raw call-related PerfMon counters from configured CUCM objects (for example Cisco SIP Trunk/CallManager/Voice Mail Port). Use this list to identify exactly which counters should remain in the panel.</p>
         <div id="callCounterErrors" class="muted" style="margin:0 0 8px 0;"></div>
-        <div style="overflow-x:auto;"><table><thead><tr><th>Host</th><th>Bucket</th><th>Counter</th><th>Value</th></tr></thead><tbody id="callCounterRows"><tr><td colspan="4" class="muted">Waiting for data...</td></tr></tbody></table></div>
+        <div style="overflow-x:auto;"><table><thead><tr><th>Host</th><th>Object</th><th>Bucket</th><th>Counter</th><th>Value</th></tr></thead><tbody id="callCounterRows"><tr><td colspan="5" class="muted">Waiting for data...</td></tr></tbody></table></div>
       </section>
 
       <section class="panel">
@@ -18212,7 +18246,7 @@ def dashboard_page(request: Request):
 
     </main>
 
-    <script src="/dashboard.js?v=20260630g"></script>
+    <script src="/dashboard.js?v=20260630h"></script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
@@ -18485,16 +18519,17 @@ def dashboard_script():
     }
     const items = Array.isArray(counters) ? counters : [];
     if (!items.length) {
-      callCounterRows.innerHTML = '<tr><td colspan="4" class="muted">No active call counters matched yet.</td></tr>';
+      callCounterRows.innerHTML = '<tr><td colspan="5" class="muted">No call-related counters returned yet.</td></tr>';
       return;
     }
     callCounterRows.innerHTML = items
       .map((item) => {
         const host = String((item && item.host) || "");
+        const objectName = String((item && item.object) || "");
         const bucket = String((item && item.bucket) || "other");
         const counter = String((item && item.counter) || "");
         const value = String((item && item.value) || 0);
-        return '<tr><td class="mono">' + host + '</td><td class="mono">' + bucket + '</td><td class="mono">' + counter + '</td><td class="mono">' + value + '</td></tr>';
+        return '<tr><td class="mono">' + host + '</td><td class="mono">' + objectName + '</td><td class="mono">' + bucket + '</td><td class="mono">' + counter + '</td><td class="mono">' + value + '</td></tr>';
       })
       .join('');
   }
