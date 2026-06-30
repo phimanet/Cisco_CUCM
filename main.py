@@ -18356,20 +18356,12 @@ def dashboard_page(request: Request):
         <div style="overflow-x:auto;"><table><thead><tr><th>Path</th><th>Active Calls</th></tr></thead><tbody>
           <tr><td>Jabber/Expressway -> CUBE (PSTN)</td><td id="callPstnViaCube" class="mono">-</td></tr>
           <tr><td>Unity Voice Ports In Use</td><td id="callUnityPortsInUse" class="mono">-</td></tr>
-          <tr><td>Calls Active on MRA Nodes (selected hosts)</td><td id="callMgrCallsActiveMraHosts" class="mono">-</td></tr>
-          <tr><td>CallManager Calls In Progress (selected nodes)</td><td id="callMgrCallsInProgress" class="mono">-</td></tr>
-          <tr><td>Registered CSF Jabber MRA (selected nodes)</td><td id="callMgrRegisteredCsfMra" class="mono">-</td></tr>
-          <tr><td>Registered Devices MRA (selected nodes)</td><td id="callMgrRegisteredDevicesMra" class="mono">-</td></tr>
+          <tr><td>Calls Active on MRA Nodes</td><td id="callMgrCallsActiveMraHosts" class="mono">-</td></tr>
+          <tr><td>CallManager Calls In Progress</td><td id="callMgrCallsInProgress" class="mono">-</td></tr>
+          <tr><td>Registered CSF Jabber MRA</td><td id="callMgrRegisteredCsfMra" class="mono">-</td></tr>
           <tr><td>Cisco Jabber Endpoints</td><td id="callJabber" class="mono">-</td></tr>
           <tr><td><strong>Total Active Calls</strong></td><td id="callTotal" class="mono">-</td></tr>
         </tbody></table></div>
-      </section>
-
-      <section class="panel">
-        <h3>All Call-Related Counters (Preview)</h3>
-        <p class="muted" style="margin-top:0;">Raw call-related PerfMon counters from configured CUCM objects (for example Cisco SIP Trunk/CallManager/Voice Mail Port). Use this list to identify exactly which counters should remain in the panel.</p>
-        <div id="callCounterErrors" class="muted" style="margin:0 0 8px 0;"></div>
-        <div style="overflow-x:auto;"><table><thead><tr><th>Host</th><th>Object</th><th>Bucket</th><th>Counter</th><th>Value</th></tr></thead><tbody id="callCounterRows"><tr><td colspan="5" class="muted">Waiting for data...</td></tr></tbody></table></div>
       </section>
 
       <section class="panel">
@@ -18379,7 +18371,7 @@ def dashboard_page(request: Request):
 
     </main>
 
-    <script src="/dashboard.js?v=20260630k"></script>
+    <script src="/dashboard.js?v=20260630m"></script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
@@ -18650,11 +18642,8 @@ def dashboard_script():
   const callMgrCallsActiveMraHosts = document.getElementById("callMgrCallsActiveMraHosts");
   const callMgrCallsInProgress = document.getElementById("callMgrCallsInProgress");
   const callMgrRegisteredCsfMra = document.getElementById("callMgrRegisteredCsfMra");
-  const callMgrRegisteredDevicesMra = document.getElementById("callMgrRegisteredDevicesMra");
   const callJabber = document.getElementById("callJabber");
   const callTotal = document.getElementById("callTotal");
-  const callCounterRows = document.getElementById("callCounterRows");
-  const callCounterErrors = document.getElementById("callCounterErrors");
   const prefixRows = document.getElementById("prefixRows");
   
 
@@ -18675,7 +18664,6 @@ def dashboard_script():
     if (callMgrCallsActiveMraHosts) callMgrCallsActiveMraHosts.textContent = "-";
     if (callMgrCallsInProgress) callMgrCallsInProgress.textContent = "-";
     if (callMgrRegisteredCsfMra) callMgrRegisteredCsfMra.textContent = "-";
-    if (callMgrRegisteredDevicesMra) callMgrRegisteredDevicesMra.textContent = "-";
     if (callJabber) callJabber.textContent = "-";
     if (callTotal) callTotal.textContent = "-";
   }
@@ -18685,39 +18673,6 @@ def dashboard_script():
     prefixRows.innerHTML = prefixes
       .map((p) => '<tr><td class="mono">' + p + '</td><td class="mono">' + String((configured && configured[p]) || 0) + '</td><td class="mono">' + String((registered && registered[p]) || 0) + '</td></tr>')
       .join('');
-  }
-
-  function renderCallCounterRows(counters) {
-    if (!callCounterRows) {
-      return;
-    }
-    const items = Array.isArray(counters) ? counters : [];
-    if (!items.length) {
-      callCounterRows.innerHTML = '<tr><td colspan="5" class="muted">No call-related counters returned yet.</td></tr>';
-      return;
-    }
-    callCounterRows.innerHTML = items
-      .map((item) => {
-        const host = String((item && item.host) || "");
-        const objectName = String((item && item.object) || "");
-        const bucket = String((item && item.bucket) || "other");
-        const counter = String((item && item.counter) || "");
-        const value = String((item && item.value) || 0);
-        return '<tr><td class="mono">' + host + '</td><td class="mono">' + objectName + '</td><td class="mono">' + bucket + '</td><td class="mono">' + counter + '</td><td class="mono">' + value + '</td></tr>';
-      })
-      .join('');
-  }
-
-  function renderCallCounterErrors(errors) {
-    if (!callCounterErrors) {
-      return;
-    }
-    const items = Array.isArray(errors) ? errors : [];
-    if (!items.length) {
-      callCounterErrors.textContent = "Counter collection status: no collection errors reported.";
-      return;
-    }
-    callCounterErrors.textContent = "Counter collection issues: " + items.join(" | ");
   }
 
   async function loadStats() {
@@ -18752,11 +18707,8 @@ def dashboard_script():
       if (callMgrCallsActiveMraHosts) callMgrCallsActiveMraHosts.textContent = String(callActivity.callmanager_calls_active_on_mra_hosts || 0);
       if (callMgrCallsInProgress) callMgrCallsInProgress.textContent = String(callActivity.callmanager_calls_in_progress || 0);
       if (callMgrRegisteredCsfMra) callMgrRegisteredCsfMra.textContent = String(callActivity.callmanager_registered_csf_mra || 0);
-      if (callMgrRegisteredDevicesMra) callMgrRegisteredDevicesMra.textContent = String(callActivity.callmanager_registered_devices_mra || 0);
       if (callJabber) callJabber.textContent = String(callActivity.jabber_active_calls || 0);
       if (callTotal) callTotal.textContent = String(callActivity.total_active_calls || 0);
-      renderCallCounterRows(callActivity.all_call_related_counters || []);
-      renderCallCounterErrors(callActivity.counter_collection_errors || []);
 
       renderPrefixRows(stats.configured_by_prefix || {}, stats.registered_by_prefix || {});
 
