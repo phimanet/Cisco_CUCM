@@ -8043,6 +8043,10 @@ def genesys_admin_placeholder(request: Request):
             <p id="genesys-user-search-status" style="color:#2c5c8a; min-height:18px;">Ready.</p>
             <div id="genesys-user-raw-download" style="margin:6px 0 10px 0;"></div>
             <div id="genesys-user-search-results" style="overflow-x:auto;"></div>
+            <div id="genesys-user-debug-wrap" style="display:none; margin-top:10px;">
+              <h4 style="margin:0 0 6px 0; color:#0a2f5d;">Debug Output</h4>
+              <pre id="genesys-user-debug" style="margin:0; max-height:260px; overflow:auto; background:#f5f9ff; border:1px solid #c8dbee; border-radius:8px; padding:10px; font-size:12px; line-height:1.35;"></pre>
+            </div>
           </div>
 
           <div id="genesys-queue-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
@@ -8066,11 +8070,30 @@ def genesys_admin_placeholder(request: Request):
         const statusEl = document.getElementById("genesys-user-search-status");
         const rawDownloadEl = document.getElementById("genesys-user-raw-download");
         const resultsEl = document.getElementById("genesys-user-search-results");
+        const debugWrapEl = document.getElementById("genesys-user-debug-wrap");
+        const debugEl = document.getElementById("genesys-user-debug");
         const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn[data-panel-target]"));
         const panels = Array.from(document.querySelectorAll(".genesys-panel"));
         const queueForm = document.getElementById("genesys-queue-search-form");
         const queueStatusEl = document.getElementById("genesys-queue-search-status");
         const queueResultsEl = document.getElementById("genesys-queue-search-results");
+
+        function renderUserDebug(payload) {
+          if (!debugWrapEl || !debugEl) {
+            return;
+          }
+          if (!payload) {
+            debugEl.textContent = "";
+            debugWrapEl.style.display = "none";
+            return;
+          }
+          try {
+            debugEl.textContent = JSON.stringify(payload, null, 2);
+          } catch (err) {
+            debugEl.textContent = String(payload);
+          }
+          debugWrapEl.style.display = "block";
+        }
 
         if (navButtons.length && panels.length) {
           const showPanel = function (panelId) {
@@ -8100,6 +8123,7 @@ def genesys_admin_placeholder(request: Request):
             statusEl.textContent = "Running Genesys lookup...";
             rawDownloadEl.innerHTML = "";
             resultsEl.innerHTML = "";
+            renderUserDebug(null);
 
             try {
               const formData = new FormData(form);
@@ -8107,7 +8131,17 @@ def genesys_admin_placeholder(request: Request):
                 method: "POST",
                 body: formData,
               });
-              const payload = await response.json();
+              let payload = null;
+              try {
+                payload = await response.json();
+              } catch (jsonErr) {
+                payload = {
+                  ok: false,
+                  error: "Response was not valid JSON.",
+                  http_status: response.status,
+                };
+              }
+              renderUserDebug(payload);
               if (!response.ok || !payload.ok) {
                 throw new Error((payload && payload.error) || "Genesys lookup failed.");
               }
@@ -8196,6 +8230,11 @@ def genesys_admin_placeholder(request: Request):
                 });
               });
             } catch (err) {
+              renderUserDebug({
+                ok: false,
+                error: ((err && err.message) || "Unknown error."),
+                stage: "client-submit",
+              });
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
             }
           });
