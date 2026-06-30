@@ -18356,8 +18356,6 @@ def dashboard_page(request: Request):
         <div style="overflow-x:auto;"><table><thead><tr><th>Path</th><th>Active Calls</th></tr></thead><tbody>
           <tr><td>Jabber/Expressway -> CUBE (PSTN)</td><td id="callPstnViaCube" class="mono">-</td></tr>
           <tr><td>Calls Active on MRA Nodes</td><td id="callMgrCallsActiveMraHosts" class="mono">-</td></tr>
-          <tr><td>CallManager Calls In Progress</td><td id="callMgrCallsInProgress" class="mono">-</td></tr>
-          <tr><td>Registered CSF Jabber MRA</td><td id="callMgrRegisteredCsfMra" class="mono">-</td></tr>
           <tr><td>Cisco Jabber Endpoints</td><td id="callJabber" class="mono">-</td></tr>
           <tr><td><strong>Total Active Calls</strong></td><td id="callTotal" class="mono">-</td></tr>
         </tbody></table></div>
@@ -18370,7 +18368,7 @@ def dashboard_page(request: Request):
 
     </main>
 
-    <script src="/dashboard.js?v=20260630n"></script>
+    <script src="/dashboard.js?v=20260630o"></script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
@@ -18526,8 +18524,6 @@ def api_dashboard_stats(request: Request):
     if str((row or {}).get("object", "") or "").strip().lower() == "cisco callmanager"
   ]
   callmanager_calls_active = _aggregate_callmanager_counter_values(cm_rows, "CallsActive")
-  callmanager_calls_in_progress = _aggregate_callmanager_counter_values(cm_rows, "CallsInProgress")
-  callmanager_registered_csf_mra = _aggregate_callmanager_counter_values(cm_rows, "RegisteredCSFJabberMRA")
   callmanager_registered_devices_mra = _aggregate_callmanager_counter_values(cm_rows, "RegisteredDevicesMRA")
 
   mra_host_set = set()
@@ -18574,8 +18570,6 @@ def api_dashboard_stats(request: Request):
     "pstn_via_cube_active_calls": pstn_via_cube_calls,
     "callmanager_calls_active": callmanager_calls_active,
     "callmanager_calls_active_on_mra_hosts": callmanager_calls_active_on_mra_hosts,
-    "callmanager_calls_in_progress": callmanager_calls_in_progress,
-    "callmanager_registered_csf_mra": callmanager_registered_csf_mra,
     "callmanager_registered_devices_mra": callmanager_registered_devices_mra,
     "callmanager_mra_hosts_used": sorted(list(mra_host_set)),
     "ribbon_active_calls": ribbon_calls,
@@ -18625,8 +18619,6 @@ def dashboard_script():
   const kpiRegistered = document.getElementById("kpiRegistered");
   const callPstnViaCube = document.getElementById("callPstnViaCube");
   const callMgrCallsActiveMraHosts = document.getElementById("callMgrCallsActiveMraHosts");
-  const callMgrCallsInProgress = document.getElementById("callMgrCallsInProgress");
-  const callMgrRegisteredCsfMra = document.getElementById("callMgrRegisteredCsfMra");
   const callJabber = document.getElementById("callJabber");
   const callTotal = document.getElementById("callTotal");
   const prefixRows = document.getElementById("prefixRows");
@@ -18646,8 +18638,6 @@ def dashboard_script():
     if (kpiRegistered) kpiRegistered.textContent = "0";
     if (callPstnViaCube) callPstnViaCube.textContent = "-";
     if (callMgrCallsActiveMraHosts) callMgrCallsActiveMraHosts.textContent = "-";
-    if (callMgrCallsInProgress) callMgrCallsInProgress.textContent = "-";
-    if (callMgrRegisteredCsfMra) callMgrRegisteredCsfMra.textContent = "-";
     if (callJabber) callJabber.textContent = "-";
     if (callTotal) callTotal.textContent = "-";
   }
@@ -18685,8 +18675,6 @@ def dashboard_script():
       const callActivity = stats.call_activity || {};
       if (callPstnViaCube) callPstnViaCube.textContent = String(callActivity.pstn_via_cube_active_calls || 0);
       if (callMgrCallsActiveMraHosts) callMgrCallsActiveMraHosts.textContent = String(callActivity.callmanager_calls_active_on_mra_hosts || 0);
-      if (callMgrCallsInProgress) callMgrCallsInProgress.textContent = String(callActivity.callmanager_calls_in_progress || 0);
-      if (callMgrRegisteredCsfMra) callMgrRegisteredCsfMra.textContent = String(callActivity.callmanager_registered_csf_mra || 0);
       if (callJabber) callJabber.textContent = String(callActivity.jabber_active_calls || 0);
       if (callTotal) callTotal.textContent = String(callActivity.total_active_calls || 0);
 
