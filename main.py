@@ -4946,9 +4946,18 @@ def _axl_list_process_nodes(cucm_host: str, cucm_user: str, cucm_pass: str) -> l
     if node_name:
       discovered.append(node_name)
 
+  def _is_resolvable_host(hostname: str) -> bool:
+    try:
+      socket.getaddrinfo(hostname, 8443)
+      return True
+    except Exception:
+      return False
+
   ordered = []
   seen = set()
   for host in [cucm_host] + discovered:
+    if host.lower() != cucm_host.lower() and not _is_resolvable_host(host):
+      continue
     key = host.lower()
     if key in seen:
       continue
@@ -5003,12 +5012,16 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
       f"https://{ris_host}:8443/realtimeservice/services/RISService70",
     ]
     for ris_url in ris_urls:
-      response = session.post(
-        ris_url,
-        data=soap_xml.encode("utf-8"),
-        headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 SelectCmDeviceExt"},
-        timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
-      )
+      try:
+        response = session.post(
+          ris_url,
+          data=soap_xml.encode("utf-8"),
+          headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 SelectCmDeviceExt"},
+          timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
+        )
+      except Exception as exc:
+        endpoint_errors.append(f"{ris_url}: {exc}")
+        continue
       if response.status_code != 200:
         err = _extract_soap_error(response.text or "")
         endpoint_errors.append(f"{ris_url}: {err or ('HTTP ' + str(response.status_code))}")
