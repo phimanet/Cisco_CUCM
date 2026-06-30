@@ -8243,7 +8243,7 @@ def genesys_admin_placeholder(request: Request):
               }
 
               let html = "<table><thead><tr>";
-              html += "<th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>Action</th><th>Template Source</th><th>Template Phone</th><th>Template Site ID</th><th>Template Base Settings</th><th>Template Lines</th><th>ACD Skills</th><th>Queues</th><th>State</th><th>User ID</th>";
+              html += "<th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>Action</th><th>Template Source</th><th>Template Phone</th><th>Template Site ID</th><th>Template Base Settings</th><th>Template Lines</th><th>ACD Skills</th><th>Queues</th><th>State</th>";
               html += "</tr></thead><tbody>";
               rows.forEach(function (row, i) {
                 const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
@@ -8266,7 +8266,6 @@ def genesys_admin_placeholder(request: Request):
                 html += "<td>" + (row.acd_skills || "") + "</td>";
                 html += "<td>" + (row.queues || "") + "</td>";
                 html += "<td>" + (row.state || "") + "</td>";
-                html += "<td style='font-family:Consolas,monospace;'>" + (row.id || "") + "</td>";
                 html += "</tr>";
               });
               html += "</tbody></table>";
@@ -8472,7 +8471,7 @@ def genesys_admin_placeholder(request: Request):
               return;
             }
 
-            let html = "<table><thead><tr><th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>State</th><th>User ID</th></tr></thead><tbody>";
+            let html = "<table><thead><tr><th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>State</th></tr></thead><tbody>";
             rows.forEach(function (row, i) {
               const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
               html += "<tr style='background:" + bg + ";'>";
@@ -8480,8 +8479,8 @@ def genesys_admin_placeholder(request: Request):
               html += "<td>" + (row.email || "") + "</td>";
               html += "<td>" + (row.username || "") + "</td>";
               html += "<td>" + (row.division || "") + "</td>";
+              html += "<td>" + (row.webrtc_phone || "") + "</td>";
               html += "<td>" + (row.state || "") + "</td>";
-              html += "<td style='font-family:Consolas,monospace;'>" + (row.id || "") + "</td>";
               html += "</tr>";
             });
             html += "</tbody></table>";
