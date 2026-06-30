@@ -4849,6 +4849,185 @@ def _extract_soap_error(response_text: str) -> str:
   return response_text[:150]
 
 
+def _strip_xml_ns(tag: str) -> str:
+  return tag.split("}", 1)[-1] if "}" in tag else tag
+
+
+def _find_xml_child(elem: ET.Element, child_name: str):
+  for child in list(elem):
+    if _strip_xml_ns(child.tag) == child_name:
+      return child
+  return None
+
+
+def _find_xml_child_text(elem: ET.Element, child_name: str) -> str:
+  child = _find_xml_child(elem, child_name)
+  if child is None or child.text is None:
+    return ""
+  return child.text.strip()
+
+
+def _axl_count_phones_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, prefix: str) -> int:
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Body>
+    <axl:listPhone>
+      <searchCriteria>
+        <name>{xml_escape(prefix)}%</name>
+      </searchCriteria>
+      <returnedTags>
+        <name/>
+      </returnedTags>
+    </axl:listPhone>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=soap_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    timeout=60,
+  )
+  if response.status_code != 200:
+    err = _extract_soap_error(response.text or "")
+    raise RuntimeError(f"AXL listPhone failed for prefix {prefix}: {err or ('HTTP ' + str(response.status_code))}")
+
+  root = _parse_xml_or_runtime_error(response.text, f"AXL listPhone {prefix}")
+  names = set()
+  for elem in root.iter():
+    if _strip_xml_ns(elem.tag) != "phone":
+      continue
+    name = _find_xml_child_text(elem, "name")
+    if name and name.upper().startswith(prefix.upper()):
+      names.add(name)
+  return len(names)
+
+
+def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: str):
+  url = f"https://{cucm_host}:8443/realtimeservice2/services/RISService70"
+  jabber_prefixes = ["CSF", "TCT", "BOT", "TAB"]
+  by_prefix_registered = {prefix: 0 for prefix in jabber_prefixes}
+  by_server_registered = {}
+  active_calls_total = 0
+  active_calls_seen = False
+
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  for prefix in jabber_prefixes:
+    soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:ris=\"http://schemas.cisco.com/ast/soap\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ris:SelectCmDeviceExt>
+      <StateInfo></StateInfo>
+      <CmSelectionCriteria>
+        <MaxReturnedDevices>20000</MaxReturnedDevices>
+        <DeviceClass>Phone</DeviceClass>
+        <Model>255</Model>
+        <Status>Any</Status>
+        <NodeName></NodeName>
+        <SelectBy>Name</SelectBy>
+        <SelectItems>
+          <item>
+            <Item>{xml_escape(prefix)}%</Item>
+          </item>
+        </SelectItems>
+        <Protocol>Any</Protocol>
+        <DownloadStatus>Any</DownloadStatus>
+      </CmSelectionCriteria>
+    </ris:SelectCmDeviceExt>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = session.post(
+      url,
+      data=soap_xml.encode("utf-8"),
+      headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 SelectCmDeviceExt"},
+      timeout=60,
+    )
+    if response.status_code != 200:
+      err = _extract_soap_error(response.text or "")
+      raise RuntimeError(f"RIS query failed for {prefix}: {err or ('HTTP ' + str(response.status_code))}")
+
+    root = _parse_xml_or_runtime_error(response.text, f"RIS SelectCmDeviceExt {prefix}")
+
+    for node in root.iter():
+      cm_devices = _find_xml_child(node, "CmDevices")
+      if cm_devices is None:
+        continue
+
+      node_name = _find_xml_child_text(node, "Name") or "Unknown"
+      for dev in list(cm_devices):
+        dev_name = _find_xml_child_text(dev, "Name")
+        if not dev_name or not dev_name.upper().startswith(prefix):
+          continue
+
+        status_text = (_find_xml_child_text(dev, "Status") or "").strip().lower()
+        if status_text == "registered":
+          by_prefix_registered[prefix] += 1
+          by_server_registered[node_name] = by_server_registered.get(node_name, 0) + 1
+
+        for calls_tag in ["NumOfActiveCalls", "NumberOfActiveCalls", "ActiveCalls"]:
+          calls_text = _find_xml_child_text(dev, calls_tag)
+          if calls_text.isdigit():
+            active_calls_total += int(calls_text)
+            active_calls_seen = True
+            break
+
+  return {
+    "by_prefix_registered": by_prefix_registered,
+    "registered_total": sum(by_prefix_registered.values()),
+    "by_server_registered": by_server_registered,
+    "active_calls": active_calls_total if active_calls_seen else None,
+  }
+
+
+def _probe_tcp_port(host: str, port: int, timeout_seconds: float = 1.5) -> dict:
+  started = time.time()
+  try:
+    with socket.create_connection((host, port), timeout=timeout_seconds):
+      latency_ms = int((time.time() - started) * 1000)
+      return {
+        "host": host,
+        "port": port,
+        "status": "open",
+        "latency_ms": latency_ms,
+        "error": "",
+      }
+  except Exception as exc:
+    return {
+      "host": host,
+      "port": port,
+      "status": "closed",
+      "latency_ms": None,
+      "error": str(exc),
+    }
+
+
+def _build_unity_port_probe(unity_host: str) -> list[dict]:
+  monitored_ports = [
+    {"port": 443, "label": "HTTPS Admin/API"},
+    {"port": 5060, "label": "SIP TCP"},
+    {"port": 5061, "label": "SIP TLS"},
+    {"port": 5222, "label": "XMPP/Jabber services"},
+    {"port": 2748, "label": "Unity Connection services"},
+    {"port": 8443, "label": "Cisco web services"},
+  ]
+
+  results = []
+  for entry in monitored_ports:
+    probe = _probe_tcp_port(unity_host, int(entry["port"]))
+    probe["label"] = entry["label"]
+    results.append(probe)
+  return results
+
+
 def _strip_invalid_xml_chars(text: str) -> str:
   """Remove XML-invalid control characters that can break ElementTree parsing."""
   if not text:
@@ -8280,6 +8459,10 @@ def menu_page(request: Request):
         <a class="hero-link-card" href="/">
           <strong>Landing Page</strong>
           <span>Return to login and environment selection.</span>
+        </a>
+        <a class="hero-link-card" href="/dashboard">
+          <strong>CUCM Dashboard</strong>
+          <span>Live CUCM, Jabber registration, and Unity port telemetry.</span>
         </a>
 __ADMIN_CARD__
         <a class="hero-link-card" href="/audit-trail">
@@ -12659,6 +12842,10 @@ def menu_admin_page(request: Request):
           <a class="hero-link-card" href="/menu">
             <strong>Main Operations</strong>
             <span>Return to standard user-facing voice operations workflows.</span>
+          </a>
+          <a class="hero-link-card" href="/dashboard">
+            <strong>CUCM Dashboard</strong>
+            <span>Live CUCM, Jabber registration, and Unity port telemetry.</span>
           </a>
           <a class="hero-link-card" href="/audit-trail">
             <strong>Action History</strong>
@@ -17277,6 +17464,287 @@ def strike_mask_translation_upload(
     return JSONResponse({"detail": str(re)}, status_code=400)
   except Exception as e:
     return JSONResponse({"detail": f"Error: {str(e)[:400]}"}, status_code=500)
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard_page(request: Request):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", "") or "")
+  auth_user = escape(session_username)
+  auth_cucm_host = str(session.get("cucm_host", "") or "")
+  env_text, env_css_class = _get_environment_label(auth_cucm_host)
+
+  html = """
+<html>
+  <head>
+    <title>CUCM Dashboard</title>
+    <style>
+      :root { --amn-blue:#005eb8; --amn-navy:#002f6c; --amn-text:#12304a; --amn-border:#c8dbee; }
+      body { margin:0; font-family:"Segoe UI",Tahoma,Arial,sans-serif; background:linear-gradient(180deg,#f7fbff 0%,#edf5fc 100%); color:var(--amn-text); }
+      .topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 16px; background:linear-gradient(120deg, rgba(0,47,108,0.98), rgba(0,94,184,0.94)); color:#fff; }
+      .brand { font-weight:800; letter-spacing:0.3px; }
+      .actions a { display:inline-block; margin-left:8px; padding:7px 11px; border-radius:10px; border:1px solid rgba(255,255,255,0.55); color:#fff; text-decoration:none; font-weight:700; font-size:12px; }
+      .actions a:hover { background:rgba(255,255,255,0.15); }
+      .content { max-width:1240px; margin:14px auto; padding:0 14px 14px; }
+      .panel { background:#fff; border:1px solid var(--amn-border); border-radius:12px; padding:12px; margin-bottom:12px; }
+      .control-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; }
+      .env-banner { display:inline-block; padding:6px 10px; border-radius:10px; font-size:12px; font-weight:700; }
+      .env-banner-prod { color:#083252; background:#d8ecff; border:1px solid #8bb9e2; }
+      .env-banner-lab { color:#5c2700; background:#ffe6cc; border:1px solid #f7b267; }
+      .kpi-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; margin-bottom:12px; }
+      .kpi { background:#fff; border:1px solid var(--amn-border); border-radius:12px; padding:12px; }
+      .kpi .label { font-size:12px; color:#4e6a84; font-weight:700; }
+      .kpi .value { font-size:30px; color:var(--amn-navy); font-weight:800; margin-top:6px; }
+      table { width:100%; border-collapse:collapse; }
+      th, td { text-align:left; padding:8px; border-bottom:1px solid #e7eef5; font-size:13px; }
+      th { color:#274d70; background:#f6fbff; }
+      .mono { font-family:Consolas,monospace; }
+      .muted { color:#4e6a84; font-size:12px; }
+      .ok { color:#1f7a3d; font-weight:700; }
+      .bad { color:#b42318; font-weight:700; }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div>
+        <div class="brand">AMN Voice Operations - CUCM Dashboard</div>
+        <div style="font-size:12px;opacity:0.9;">Authenticated Operator: __AUTH_USER__</div>
+      </div>
+      <div class="actions">
+        <a href="/menu">Back to Main Operations</a>
+        <a href="/page2">Back to Administrative Items</a>
+        <a href="/logout">Log Out</a>
+      </div>
+    </header>
+    <main class="content">
+      <section class="panel">
+        <h2 style="margin:0;color:#002f6c;">Cisco CUCM Realtime Dashboard</h2>
+        <p style="margin:8px 0 0 0;color:#4e6a84;">Baseline dashboard with refreshable CUCM/Jabber metrics and Unity port probes.</p>
+        <div class="control-row">
+          <span class="env-banner __ENV_CLASS__">__ENV_TEXT__</span>
+          <label for="refreshInterval"><strong>Refresh Rate:</strong></label>
+          <select id="refreshInterval">
+            <option value="10">10 seconds</option>
+            <option value="30" selected>30 seconds</option>
+            <option value="60">1 minute</option>
+          </select>
+          <label><input type="checkbox" id="autoRefresh" checked> Auto Refresh</label>
+          <button id="refreshNow" type="button">Refresh Now</button>
+          <span id="lastRefresh" class="muted"></span>
+        </div>
+      </section>
+
+      <section class="kpi-grid">
+        <article class="kpi"><div class="label">Active Calls (Realtime)</div><div id="kpiActiveCalls" class="value">-</div></article>
+        <article class="kpi"><div class="label">Jabber Devices Configured</div><div id="kpiConfigured" class="value">-</div></article>
+        <article class="kpi"><div class="label">Jabber Devices Registered</div><div id="kpiRegistered" class="value">-</div></article>
+      </section>
+
+      <section class="panel">
+        <h3>CUCM Servers and Jabber Registrations</h3>
+        <div style="overflow-x:auto;"><table><thead><tr><th>CUCM Server</th><th>Registered Jabber Devices</th></tr></thead><tbody id="serverRows"><tr><td colspan="2" class="muted">Waiting for data...</td></tr></tbody></table></div>
+      </section>
+
+      <section class="panel">
+        <h3>Jabber Prefix Summary</h3>
+        <div style="overflow-x:auto;"><table><thead><tr><th>Prefix</th><th>Configured (AXL)</th><th>Registered (RIS)</th></tr></thead><tbody id="prefixRows"><tr><td colspan="3" class="muted">Waiting for data...</td></tr></tbody></table></div>
+      </section>
+
+      <section class="panel">
+        <h3>Unity Voicemail Port Probes</h3>
+        <p class="muted">Realtime TCP probes from this portal host to Unity endpoints/ports.</p>
+        <div style="overflow-x:auto;"><table><thead><tr><th>Unity Host</th><th>Port</th><th>Purpose</th><th>Status</th><th>Latency</th><th>Error</th></tr></thead><tbody id="unityRows"><tr><td colspan="6" class="muted">Waiting for data...</td></tr></tbody></table></div>
+      </section>
+
+      <section class="panel"><h3>Status</h3><pre id="statusBox" class="mono" style="white-space:pre-wrap;margin:0;">Ready.</pre></section>
+    </main>
+
+    <script>
+      (function () {
+        const intervalSelect = document.getElementById("refreshInterval");
+        const autoRefreshCb = document.getElementById("autoRefresh");
+        const refreshBtn = document.getElementById("refreshNow");
+        const lastRefreshEl = document.getElementById("lastRefresh");
+        const statusBox = document.getElementById("statusBox");
+        const kpiActiveCalls = document.getElementById("kpiActiveCalls");
+        const kpiConfigured = document.getElementById("kpiConfigured");
+        const kpiRegistered = document.getElementById("kpiRegistered");
+        const serverRows = document.getElementById("serverRows");
+        const prefixRows = document.getElementById("prefixRows");
+        const unityRows = document.getElementById("unityRows");
+        let timerId = null;
+
+        function setStatus(text) { statusBox.textContent = text; }
+        function renderServerRows(rows) {
+          if (!rows.length) {
+            serverRows.innerHTML = '<tr><td colspan="2" class="muted">No registration rows returned.</td></tr>';
+            return;
+          }
+          serverRows.innerHTML = rows.map((r) => '<tr><td>' + (r.server || 'Unknown') + '</td><td class="mono">' + String(r.registered || 0) + '</td></tr>').join('');
+        }
+        function renderPrefixRows(configured, registered) {
+          const prefixes = ['CSF','TCT','BOT','TAB'];
+          prefixRows.innerHTML = prefixes.map((p) => '<tr><td class="mono">' + p + '</td><td class="mono">' + String((configured && configured[p]) || 0) + '</td><td class="mono">' + String((registered && registered[p]) || 0) + '</td></tr>').join('');
+        }
+        function renderUnityRows(rows) {
+          if (!rows.length) {
+            unityRows.innerHTML = '<tr><td colspan="6" class="muted">No port probe rows returned.</td></tr>';
+            return;
+          }
+          unityRows.innerHTML = rows.map((r) => {
+            const cls = r.status === 'open' ? 'ok' : 'bad';
+            const latency = r.latency_ms == null ? '-' : String(r.latency_ms) + ' ms';
+            return '<tr><td>' + (r.host || '') + '</td><td class="mono">' + String(r.port || '') + '</td><td>' + (r.label || '') + '</td><td class="' + cls + '">' + (r.status || '') + '</td><td class="mono">' + latency + '</td><td class="mono">' + (r.error || '') + '</td></tr>';
+          }).join('');
+        }
+
+        async function loadStats() {
+          setStatus('Refreshing dashboard data...');
+          try {
+            const resp = await fetch('/api/dashboard/stats', {
+              method: 'GET',
+              credentials: 'same-origin',
+              headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+            });
+            const payload = await resp.json();
+            if (!resp.ok || !payload.ok) {
+              throw new Error((payload && (payload.error || payload.detail)) || 'Dashboard stats request failed');
+            }
+            const stats = payload.stats || {};
+            kpiActiveCalls.textContent = stats.active_calls == null ? 'N/A' : String(stats.active_calls);
+            kpiConfigured.textContent = String(stats.jabber_configured_total || 0);
+            kpiRegistered.textContent = String(stats.jabber_registered_total || 0);
+            renderServerRows(stats.registered_by_server || []);
+            renderPrefixRows(stats.configured_by_prefix || {}, stats.registered_by_prefix || {});
+            renderUnityRows(stats.unity_port_probes || []);
+
+            const warnings = payload.warnings || [];
+            let text = 'Dashboard refreshed successfully.';
+            if (warnings.length) {
+              text += '\nWarnings:\n- ' + warnings.join('\n- ');
+            }
+            setStatus(text);
+            lastRefreshEl.textContent = 'Last refresh: ' + new Date().toLocaleTimeString();
+          } catch (err) {
+            setStatus('Dashboard refresh failed: ' + ((err && err.message) || 'Unknown error'));
+          }
+        }
+
+        function resetTimer() {
+          if (timerId) {
+            clearInterval(timerId);
+            timerId = null;
+          }
+          if (!autoRefreshCb.checked) {
+            return;
+          }
+          const seconds = parseInt(intervalSelect.value || '30', 10);
+          timerId = setInterval(loadStats, Math.max(5, seconds) * 1000);
+        }
+
+        refreshBtn.addEventListener('click', loadStats);
+        intervalSelect.addEventListener('change', resetTimer);
+        autoRefreshCb.addEventListener('change', resetTimer);
+
+        loadStats();
+        resetTimer();
+      })();
+    </script>
+  </body>
+</html>
+""".replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
+
+  return HTMLResponse(
+    content=html,
+    headers={
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    },
+  )
+
+
+@app.get("/api/dashboard/stats")
+def api_dashboard_stats(request: Request):
+  session = _get_auth_session(request)
+  if not session:
+    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
+
+  cucm_host = str(session.get("cucm_host", "") or "")
+  cucm_user = str(session.get("cucm_user", "") or session.get("username", "") or "")
+  warnings = []
+
+  try:
+    resolved_cucm_host, resolved_cucm_user, resolved_cucm_pass = _resolve_cucm_credentials(
+      request,
+      cucm_host,
+      cucm_user,
+      "",
+    )
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+  configured_by_prefix = {"CSF": 0, "TCT": 0, "BOT": 0, "TAB": 0}
+  for prefix in list(configured_by_prefix.keys()):
+    try:
+      configured_by_prefix[prefix] = _axl_count_phones_by_prefix(
+        resolved_cucm_host,
+        resolved_cucm_user,
+        resolved_cucm_pass,
+        prefix,
+      )
+    except Exception as exc:
+      warnings.append(str(exc))
+
+  registered_by_prefix = {"CSF": 0, "TCT": 0, "BOT": 0, "TAB": 0}
+  by_server_registered = []
+  active_calls = None
+  try:
+    ris = _ris_fetch_jabber_registrations(
+      resolved_cucm_host,
+      resolved_cucm_user,
+      resolved_cucm_pass,
+    )
+    registered_by_prefix = ris.get("by_prefix_registered", registered_by_prefix)
+    active_calls = ris.get("active_calls")
+    by_server_map = ris.get("by_server_registered", {}) or {}
+    by_server_registered = [
+      {"server": server_name, "registered": count}
+      for server_name, count in sorted(by_server_map.items(), key=lambda item: item[0].lower())
+    ]
+  except Exception as exc:
+    warnings.append(str(exc))
+
+  if active_calls is None:
+    warnings.append("Realtime active-call counter not returned by this CUCM response; showing N/A.")
+
+  unity_host = ""
+  unity_port_probes = []
+  try:
+    unity_host = _get_unity_server_for_session(request)
+    unity_port_probes = _build_unity_port_probe(unity_host)
+  except Exception as exc:
+    warnings.append(f"Unity probe unavailable: {exc}")
+
+  return JSONResponse(
+    {
+      "ok": True,
+      "generated_at": datetime.datetime.now().strftime(AUDIT_TIMESTAMP_FORMAT),
+      "environment": "LAB" if _is_lab_environment(resolved_cucm_host) else "PROD",
+      "cucm_host": resolved_cucm_host,
+      "unity_host": unity_host,
+      "stats": {
+        "configured_by_prefix": configured_by_prefix,
+        "registered_by_prefix": registered_by_prefix,
+        "jabber_configured_total": sum(configured_by_prefix.values()),
+        "jabber_registered_total": sum(registered_by_prefix.values()),
+        "registered_by_server": by_server_registered,
+        "active_calls": active_calls,
+        "unity_port_probes": unity_port_probes,
+      },
+      "warnings": warnings,
+    }
+  )
 
 
 @app.get("/healthz")
