@@ -5209,14 +5209,32 @@ def _probe_unity_vmrest_auth(unity_host: str, username: str, password: str) -> d
         "error": "",
       }
 
-    detail = _extract_soap_error(response.text or "") if response.text else ""
+    detail = ""
+    body = response.text or ""
+    if body:
+      lowered = body.lower()
+      if "<html" in lowered or "<!doctype" in lowered:
+        detail = "HTML login/error page returned"
+      else:
+        detail = _extract_soap_error(body)
+        if detail and ("<" in detail or "{" in detail):
+          detail = "Unexpected non-API response"
+
+    status_label = f"HTTP {response.status_code}"
+    if response.status_code == 401:
+      status_label += " Unauthorized"
+    elif response.status_code == 403:
+      status_label += " Forbidden"
+    elif response.status_code == 404:
+      status_label += " Not Found"
+
     return {
       "host": unity_host,
       "port": "443-auth",
       "label": f"Unity VMREST auth ({username})",
       "status": "closed",
       "latency_ms": latency_ms,
-      "error": detail or f"HTTP {response.status_code}",
+      "error": detail or status_label,
     }
   except Exception as exc:
     return {
