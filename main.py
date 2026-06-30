@@ -17808,8 +17808,6 @@ def dashboard_page(request: Request):
       .kpi { background:#fff; border:1px solid var(--amn-border); border-radius:12px; padding:12px; }
       .kpi .label { font-size:12px; color:#4e6a84; font-weight:700; }
       .kpi .value { font-size:30px; color:var(--amn-navy); font-weight:800; margin-top:6px; }
-      .status-banner { margin-top:10px; padding:8px 10px; border-radius:8px; border:1px solid #c8dbee; background:#f6fbff; color:#274d70; font-size:12px; white-space:pre-wrap; }
-      .status-banner.error { border-color:#f1b6b6; background:#fff5f5; color:#8a1c1c; }
       table { width:100%; border-collapse:collapse; }
       th, td { text-align:left; padding:8px; border-bottom:1px solid #e7eef5; font-size:13px; }
       th { color:#274d70; background:#f6fbff; }
@@ -17848,7 +17846,6 @@ def dashboard_page(request: Request):
           <button id="refreshNow" type="button">Refresh Now</button>
           <span id="lastRefresh" class="muted"></span>
         </div>
-        <div id="topStatus" class="status-banner">Ready.</div>
       </section>
 
       <section class="kpi-grid">
@@ -17867,7 +17864,6 @@ def dashboard_page(request: Request):
         <div style="overflow-x:auto;"><table><thead><tr><th>Prefix</th><th>Configured (AXL)</th><th>Registered (RIS)</th></tr></thead><tbody id="prefixRows"><tr><td colspan="3" class="muted">Waiting for data...</td></tr></tbody></table></div>
       </section>
 
-      <section class="panel"><h3>Status</h3><pre id="statusBox" class="mono" style="white-space:pre-wrap;margin:0;">Ready.</pre></section>
     </main>
 
     <script src="/dashboard.js?v=20260630b"></script>
@@ -18008,8 +18004,6 @@ def dashboard_script():
   const autoRefreshCb = document.getElementById("autoRefresh");
   const refreshBtn = document.getElementById("refreshNow");
   const lastRefreshEl = document.getElementById("lastRefresh");
-  const statusBox = document.getElementById("statusBox");
-  const topStatus = document.getElementById("topStatus");
   const kpiActiveCalls = document.getElementById("kpiActiveCalls");
   const kpiConfigured = document.getElementById("kpiConfigured");
   const kpiRegistered = document.getElementById("kpiRegistered");
@@ -18017,20 +18011,11 @@ def dashboard_script():
   const prefixRows = document.getElementById("prefixRows");
   
 
-  if (!refreshBtn || !intervalSelect || !autoRefreshCb || !statusBox || !serverRows || !prefixRows) {
+  if (!refreshBtn || !intervalSelect || !autoRefreshCb || !serverRows || !prefixRows) {
     return;
   }
 
   let timerId = null;
-
-  function setStatus(text, isError) {
-    const safeText = text || "";
-    statusBox.textContent = safeText;
-    if (topStatus) {
-      topStatus.textContent = safeText;
-      topStatus.classList.toggle("error", !!isError);
-    }
-  }
 
   function renderErrorRows(message) {
     const text = String(message || "Dashboard request failed");
@@ -18059,7 +18044,6 @@ def dashboard_script():
   }
 
   async function loadStats() {
-    setStatus("Refreshing dashboard data...", false);
     try {
       const controller = new AbortController();
       const timeoutMs = 30000;
@@ -18084,19 +18068,11 @@ def dashboard_script():
       renderServerRows(stats.registered_by_server || []);
       renderPrefixRows(stats.configured_by_prefix || {}, stats.registered_by_prefix || {});
 
-      const warnings = payload.warnings || [];
-      let text = "Dashboard refreshed successfully. Mode: " + String(payload.mode || "full");
-      if (warnings.length) {
-        text += "\\nWarnings:\\n- " + warnings.join("\\n- ");
-      }
-      setStatus(text, false);
       if (lastRefreshEl) {
         lastRefreshEl.textContent = "Last refresh: " + new Date().toLocaleTimeString();
       }
     } catch (err) {
-      const msg = "Dashboard refresh failed: " + ((err && err.message) || "Unknown error");
-      setStatus(msg, true);
-      renderErrorRows(msg);
+      renderErrorRows("Dashboard refresh failed: " + ((err && err.message) || "Unknown error"));
     }
   }
 
