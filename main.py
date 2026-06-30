@@ -5271,8 +5271,22 @@ def _classify_trunk_counter_target(counter_name: str) -> str:
 
 def _is_active_call_counter(counter_name: str) -> bool:
   normalized = re.sub(r"[^a-z0-9]", "", (counter_name or "").lower())
-  if not normalized or "active" not in normalized or "call" not in normalized:
+  if not normalized:
     return False
+
+  positive_patterns = [
+    ("active", "call"),
+    ("calls", "inprogress"),
+    ("call", "inprogress"),
+    ("calls", "inuse"),
+    ("call", "inuse"),
+    ("current", "call"),
+    ("connected", "call"),
+    ("established", "call"),
+  ]
+  if not any(a in normalized and b in normalized for a, b in positive_patterns):
+    return False
+
   blocked_tokens = [
     "failed",
     "failure",
@@ -5316,6 +5330,7 @@ def _perfmon_collect_sip_trunk_activity(cucm_host: str, cucm_user: str, cucm_pas
   root = _parse_xml_or_runtime_error(response.text, "PerfMon Cisco SIP Trunk")
   current_name = ""
   result = {"ribbon": 0, "cube": 0, "other": 0}
+  matched_counters = []
   for elem in root.iter():
     tag = _strip_xml_ns(elem.tag)
     text = (elem.text or "").strip()
@@ -5334,6 +5349,17 @@ def _perfmon_collect_sip_trunk_activity(cucm_host: str, cucm_user: str, cucm_pas
     bucket = _classify_trunk_counter_target(current_name)
     result[bucket] = int(result.get(bucket, 0) or 0) + value
 
+    matched_counters.append(
+      {
+        "host": target_host,
+        "object": "Cisco SIP Trunk",
+        "bucket": bucket,
+        "counter": current_name,
+        "value": value,
+      }
+    )
+
+  result["matched_counters"] = matched_counters
   return result
 
 
@@ -5341,18 +5367,29 @@ def _perfmon_trunk_activity_fallback(cucm_host: str, cucm_user: str, cucm_pass: 
   hosts = _axl_list_process_nodes(cucm_host, cucm_user, cucm_pass) or [cucm_host]
   totals = {"ribbon": 0, "cube": 0, "other": 0}
   errors = []
+  all_active_call_counters = []
   for host in hosts:
     try:
       partial = _perfmon_collect_sip_trunk_activity(cucm_host, cucm_user, cucm_pass, host)
       for key in ["ribbon", "cube", "other"]:
         totals[key] = int(totals.get(key, 0) or 0) + int(partial.get(key, 0) or 0)
+      all_active_call_counters.extend(list(partial.get("matched_counters", []) or []))
     except Exception as exc:
       errors.append(f"{host}: {exc}")
+
+  all_active_call_counters.sort(
+    key=lambda item: (
+      -int(item.get("value", 0) or 0),
+      str(item.get("host", "") or "").lower(),
+      str(item.get("counter", "") or "").lower(),
+    )
+  )
 
   return {
     "ribbon_active_calls": int(totals.get("ribbon", 0) or 0),
     "cube_active_calls": int(totals.get("cube", 0) or 0),
     "other_active_calls": int(totals.get("other", 0) or 0),
+    "all_active_call_counters": all_active_call_counters[:300],
     "ribbon_ips": list(RIBBON_SBC_IPS),
     "cube_ips": list(CUBE_IPS),
     "errors": errors,
@@ -17993,13 +18030,19 @@ def dashboard_page(request: Request):
       </section>
 
       <section class="panel">
+        <h3>All Active Call Counters (Preview)</h3>
+        <p class="muted" style="margin-top:0;">Raw matched PerfMon counters from Cisco SIP Trunk object. Use this list to identify exactly which counters should remain in the panel.</p>
+        <div style="overflow-x:auto;"><table><thead><tr><th>Host</th><th>Bucket</th><th>Counter</th><th>Value</th></tr></thead><tbody id="callCounterRows"><tr><td colspan="4" class="muted">Waiting for data...</td></tr></tbody></table></div>
+      </section>
+
+      <section class="panel">
         <h3>Jabber Prefix Summary</h3>
         <div style="overflow-x:auto;"><table><thead><tr><th>Prefix</th><th>Configured (AXL)</th><th>Registered (RIS)</th></tr></thead><tbody id="prefixRows"><tr><td colspan="3" class="muted">Waiting for data...</td></tr></tbody></table></div>
       </section>
 
     </main>
 
-    <script src="/dashboard.js?v=20260630d"></script>
+    <script src="/dashboard.js?v=20260630e"></script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
@@ -18173,6 +18216,7 @@ def api_dashboard_stats(request: Request):
     "jabber_active_calls": int(jabber_active_calls or 0),
     "other_trunk_active_calls": other_trunk_calls,
     "total_active_calls": total_active_calls,
+    "all_active_call_counters": list(trunk_activity.get("all_active_call_counters", []) or []),
     "jabber_calls_source": jabber_calls_source,
   }
 
@@ -18217,6 +18261,7 @@ def dashboard_script():
   const callJabber = document.getElementById("callJabber");
   const callOtherTrunk = document.getElementById("callOtherTrunk");
   const callTotal = document.getElementById("callTotal");
+  const callCounterRows = document.getElementById("callCounterRows");
   const prefixRows = document.getElementById("prefixRows");
   
 
@@ -18244,6 +18289,26 @@ def dashboard_script():
     const prefixes = ["CSF", "TCT", "BOT", "SEP"];
     prefixRows.innerHTML = prefixes
       .map((p) => '<tr><td class="mono">' + p + '</td><td class="mono">' + String((configured && configured[p]) || 0) + '</td><td class="mono">' + String((registered && registered[p]) || 0) + '</td></tr>')
+      .join('');
+  }
+
+  function renderCallCounterRows(counters) {
+    if (!callCounterRows) {
+      return;
+    }
+    const items = Array.isArray(counters) ? counters : [];
+    if (!items.length) {
+      callCounterRows.innerHTML = '<tr><td colspan="4" class="muted">No active call counters matched yet.</td></tr>';
+      return;
+    }
+    callCounterRows.innerHTML = items
+      .map((item) => {
+        const host = String((item && item.host) || "");
+        const bucket = String((item && item.bucket) || "other");
+        const counter = String((item && item.counter) || "");
+        const value = String((item && item.value) || 0);
+        return '<tr><td class="mono">' + host + '</td><td class="mono">' + bucket + '</td><td class="mono">' + counter + '</td><td class="mono">' + value + '</td></tr>';
+      })
       .join('');
   }
 
@@ -18277,6 +18342,7 @@ def dashboard_script():
       if (callJabber) callJabber.textContent = String(callActivity.jabber_active_calls || 0);
       if (callOtherTrunk) callOtherTrunk.textContent = String(callActivity.other_trunk_active_calls || 0);
       if (callTotal) callTotal.textContent = String(callActivity.total_active_calls || 0);
+      renderCallCounterRows(callActivity.all_active_call_counters || []);
 
       renderPrefixRows(stats.configured_by_prefix || {}, stats.registered_by_prefix || {});
 
