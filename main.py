@@ -1254,8 +1254,8 @@ def _load_genesys_webrtc_template() -> dict:
     pass
 
   return {
-    "template_name": "Default WebRTC Template",
-    "source_phone_name": "Michael Beecher",
+    "template_name": "Local WebRTC Baseline",
+    "source_phone_name": "",
     "site_id": "",
     "phone_base_settings_id": "",
     "standalone": False,
