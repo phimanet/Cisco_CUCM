@@ -8243,13 +8243,12 @@ def genesys_admin_placeholder(request: Request):
               }
 
               let html = "<table><thead><tr>";
-              html += "<th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>Action</th><th>Template Source</th><th>Template Phone</th><th>Template Site ID</th><th>Template Base Settings</th><th>Template Lines</th><th>ACD Skills</th><th>Queues</th><th>State</th>";
+              html += "<th>Name</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>Action</th><th>Template Source</th><th>Template Phone</th><th>Template Site ID</th><th>Template Base Settings</th><th>Template Lines</th><th>ACD Skills</th><th>Queues</th><th>State</th>";
               html += "</tr></thead><tbody>";
               rows.forEach(function (row, i) {
                 const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
                 html += "<tr style='background:" + bg + ";'>";
                 html += "<td>" + (row.name || "") + "</td>";
-                html += "<td>" + (row.email || "") + "</td>";
                 html += "<td>" + (row.username || "") + "</td>";
                 html += "<td>" + (row.division || "") + "</td>";
                 html += "<td>" + (row.webrtc_phone || "") + "</td>";
@@ -8471,12 +8470,11 @@ def genesys_admin_placeholder(request: Request):
               return;
             }
 
-            let html = "<table><thead><tr><th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>State</th></tr></thead><tbody>";
+            let html = "<table><thead><tr><th>Name</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>State</th></tr></thead><tbody>";
             rows.forEach(function (row, i) {
               const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
               html += "<tr style='background:" + bg + ";'>";
               html += "<td>" + (row.name || "") + "</td>";
-              html += "<td>" + (row.email || "") + "</td>";
               html += "<td>" + (row.username || "") + "</td>";
               html += "<td>" + (row.division || "") + "</td>";
               html += "<td>" + (row.webrtc_phone || "") + "</td>";
