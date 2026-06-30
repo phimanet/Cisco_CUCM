@@ -4909,11 +4909,56 @@ def _axl_count_phones_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, 
   return len(names)
 
 
+def _axl_list_process_nodes(cucm_host: str, cucm_user: str, cucm_pass: str) -> list:
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  soap_xml = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/12.5\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:executeSQLQuery>
+      <sql>select name from processnode</sql>
+    </axl:executeSQLQuery>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=soap_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
+  )
+  if response.status_code != 200:
+    return []
+
+  try:
+    root = ET.fromstring(response.text)
+  except ET.ParseError:
+    return []
+
+  discovered = []
+  for elem in root.iter():
+    if _strip_xml_ns(elem.tag) != "name":
+      continue
+    node_name = (elem.text or "").strip()
+    if node_name:
+      discovered.append(node_name)
+
+  ordered = []
+  seen = set()
+  for host in [cucm_host] + discovered:
+    key = host.lower()
+    if key in seen:
+      continue
+    seen.add(key)
+    ordered.append(host)
+  return ordered
+
+
 def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: str):
-  ris_urls = [
-    f"https://{cucm_host}:8443/realtimeservice2/services/RISService70",
-    f"https://{cucm_host}:8443/realtimeservice/services/RISService70",
-  ]
+  ris_hosts = _axl_list_process_nodes(cucm_host, cucm_user, cucm_pass) or [cucm_host]
   jabber_prefixes = ["CSF", "TCT", "BOT", "TAB"]
   by_prefix_registered = {prefix: 0 for prefix in jabber_prefixes}
   by_server_registered = {}
@@ -4950,21 +4995,31 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
 </soapenv:Envelope>"""
 
   root = None
+  successful_ris_host = None
   endpoint_errors = []
-  for ris_url in ris_urls:
-    response = session.post(
-      ris_url,
-      data=soap_xml.encode("utf-8"),
-      headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 SelectCmDeviceExt"},
-      timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
-    )
-    if response.status_code != 200:
-      err = _extract_soap_error(response.text or "")
-      endpoint_errors.append(f"{ris_url}: {err or ('HTTP ' + str(response.status_code))}")
-      continue
+  for ris_host in ris_hosts:
+    ris_urls = [
+      f"https://{ris_host}:8443/realtimeservice2/services/RISService70",
+      f"https://{ris_host}:8443/realtimeservice/services/RISService70",
+    ]
+    for ris_url in ris_urls:
+      response = session.post(
+        ris_url,
+        data=soap_xml.encode("utf-8"),
+        headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 SelectCmDeviceExt"},
+        timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
+      )
+      if response.status_code != 200:
+        err = _extract_soap_error(response.text or "")
+        endpoint_errors.append(f"{ris_url}: {err or ('HTTP ' + str(response.status_code))}")
+        continue
 
-    root = _parse_xml_or_runtime_error(response.text, "RIS SelectCmDeviceExt")
-    break
+      root = _parse_xml_or_runtime_error(response.text, "RIS SelectCmDeviceExt")
+      successful_ris_host = ris_host
+      break
+
+    if root is not None:
+      break
 
   if root is None:
     raise RuntimeError("RIS query failed: " + " | ".join(endpoint_errors))
@@ -5006,6 +5061,7 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
     "registered_total": sum(by_prefix_registered.values()),
     "by_server_registered": by_server_registered,
     "active_calls": active_calls_total if active_calls_seen else None,
+    "ris_source_host": successful_ris_host or cucm_host,
   }
 
 
