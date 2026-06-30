@@ -90,7 +90,7 @@ SESSION_COOKIE_NAME = "cucm_web_session"
 SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
 CREDENTIAL_CACHE_TTL_SECONDS = 60 * 60
 APP_START_EPOCH = time.time()
-DASHBOARD_REQUEST_TIMEOUT_SECONDS = int((os.getenv("DASHBOARD_REQUEST_TIMEOUT_SECONDS", "12") or "12").strip())
+DASHBOARD_REQUEST_TIMEOUT_SECONDS = int((os.getenv("DASHBOARD_REQUEST_TIMEOUT_SECONDS", "8") or "8").strip())
 CREDENTIAL_ENCRYPTION_KEY = (os.getenv("CUCM_CREDENTIAL_ENCRYPTION_KEY", "") or "").strip()
 if _FERNET_AVAILABLE and not CREDENTIAL_ENCRYPTION_KEY:
   # Generate an in-memory key when env key is absent so caching is still encrypted.
@@ -2839,7 +2839,7 @@ def _check_aerialink_feasibility(force_refresh: bool = False) -> dict:
 
 
 def _is_public_path(path: str):
-  return path in {"/", "/login", "/genesys-admin", "/genesys/users/extract", "/healthz"}
+  return path in {"/", "/login", "/genesys-admin", "/genesys/users/extract", "/healthz", "/api/dashboard/stats"}
 
 
 def _wants_json_response(request: Request) -> bool:
@@ -5020,19 +5020,29 @@ def _probe_tcp_port(host: str, port: int, timeout_seconds: float = 1.5) -> dict:
     }
 
 
-def _build_unity_port_probe(unity_host: str) -> list[dict]:
-  monitored_ports = [
-    {"port": 443, "label": "HTTPS Admin/API"},
-    {"port": 5060, "label": "SIP TCP"},
-    {"port": 5061, "label": "SIP TLS"},
-    {"port": 5222, "label": "XMPP/Jabber services"},
-    {"port": 2748, "label": "Unity Connection services"},
-    {"port": 8443, "label": "Cisco web services"},
-  ]
+def _build_unity_port_probe(unity_host: str, mode: str = "light") -> list[dict]:
+  mode_text = (mode or "light").strip().lower()
+  if mode_text == "full":
+    monitored_ports = [
+      {"port": 443, "label": "HTTPS Admin/API"},
+      {"port": 5060, "label": "SIP TCP"},
+      {"port": 5061, "label": "SIP TLS"},
+      {"port": 5222, "label": "XMPP/Jabber services"},
+      {"port": 2748, "label": "Unity Connection services"},
+      {"port": 8443, "label": "Cisco web services"},
+    ]
+    probe_timeout = 1.5
+  else:
+    # Fast-start mode: minimal probes so dashboard returns quickly.
+    monitored_ports = [
+      {"port": 443, "label": "HTTPS Admin/API"},
+      {"port": 8443, "label": "Cisco web services"},
+    ]
+    probe_timeout = 0.8
 
   results = []
   for entry in monitored_ports:
-    probe = _probe_tcp_port(unity_host, int(entry["port"]))
+    probe = _probe_tcp_port(unity_host, int(entry["port"]), timeout_seconds=probe_timeout)
     probe["label"] = entry["label"]
     results.append(probe)
   return results
@@ -17679,9 +17689,9 @@ def dashboard_page(request: Request):
           setStatus('Refreshing dashboard data...', false);
           try {
             const controller = new AbortController();
-            const timeoutMs = 20000;
-            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
             const selectedMode = (dataModeSelect && dataModeSelect.value) ? dataModeSelect.value : 'light';
+            const timeoutMs = selectedMode === 'full' ? 30000 : 12000;
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
             const resp = await fetch('/api/dashboard/stats?mode=' + encodeURIComponent(selectedMode), {
               method: 'GET',
               credentials: 'same-origin',
@@ -17751,10 +17761,6 @@ def dashboard_page(request: Request):
 
 @app.get("/api/dashboard/stats")
 def api_dashboard_stats(request: Request, mode: str = Query("light")):
-  session = _get_auth_session(request)
-  if not session:
-    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
-
   warnings = []
   pull_mode = (mode or "light").strip().lower()
   if pull_mode not in {"light", "full"}:
@@ -17820,11 +17826,14 @@ def api_dashboard_stats(request: Request, mode: str = Query("light")):
   unity_host = PROD_UNITY_HOST
   unity_port_probes = []
   try:
-    unity_port_probes = _build_unity_port_probe(unity_host)
-    unity_vmrest_probe = _probe_unity_vmrest_auth(unity_host, resolved_cucm_user, resolved_cucm_pass)
-    unity_port_probes.append(unity_vmrest_probe)
-    if unity_vmrest_probe.get("status") != "open":
-      warnings.append(f"Unity VMREST auth failed: {unity_vmrest_probe.get('error', 'unknown error')}")
+    unity_port_probes = _build_unity_port_probe(unity_host, mode=pull_mode)
+    if pull_mode == "full":
+      unity_vmrest_probe = _probe_unity_vmrest_auth(unity_host, resolved_cucm_user, resolved_cucm_pass)
+      unity_port_probes.append(unity_vmrest_probe)
+      if unity_vmrest_probe.get("status") != "open":
+        warnings.append(f"Unity VMREST auth failed: {unity_vmrest_probe.get('error', 'unknown error')}")
+    else:
+      warnings.append("Unity authenticated VMREST check is skipped in Initial mode. Use Full mode when ready.")
   except Exception as exc:
     warnings.append(f"Unity probe unavailable: {exc}")
 
