@@ -17481,8 +17481,7 @@ def dashboard_page(request: Request):
   session = _get_auth_session(request) or {}
   session_username = str(session.get("username", "") or "")
   auth_user = escape(session_username)
-  auth_cucm_host = str(session.get("cucm_host", "") or "")
-  env_text, env_css_class = _get_environment_label(auth_cucm_host)
+  env_text, env_css_class = _get_environment_label(PROD_CUCM_HOST)
 
   html = """
 <html>
@@ -17708,13 +17707,12 @@ def api_dashboard_stats(request: Request):
   if not session:
     return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
 
-  session_cucm_host = str(session.get("cucm_host", "") or "")
   warnings = []
 
   # Dashboard must use the DN report service credentials (ucmappadmin),
   # not the interactive operator credentials.
   dn_cfg = _get_dn_report_settings()
-  resolved_cucm_host = (session_cucm_host or dn_cfg.get("cucm_host", "") or "").strip()
+  resolved_cucm_host = PROD_CUCM_HOST
   resolved_cucm_user = "ucmappadmin"
   resolved_cucm_pass = (dn_cfg.get("cucm_pass", "") or "").strip()
 
@@ -17764,10 +17762,9 @@ def api_dashboard_stats(request: Request):
   if active_calls is None:
     warnings.append("Realtime active-call counter not returned by this CUCM response; showing N/A.")
 
-  unity_host = ""
+  unity_host = PROD_UNITY_HOST
   unity_port_probes = []
   try:
-    unity_host = _get_unity_server_for_session(request)
     unity_port_probes = _build_unity_port_probe(unity_host)
   except Exception as exc:
     warnings.append(f"Unity probe unavailable: {exc}")
