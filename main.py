@@ -1050,6 +1050,24 @@ def _genesys_queue_member_matches_user(member: dict, user_id: str, user_email: s
   def _compact(value: str) -> str:
     return re.sub(r"[^a-z0-9]", "", _normalized(value))
 
+  # Collect scalar values recursively because queue member payloads vary by
+  # endpoint/tenant shape (nested user/member objects, alternate id fields, etc.).
+  recursive_values = set()
+
+  def _collect_values(node):
+    if isinstance(node, dict):
+      for value in node.values():
+        _collect_values(value)
+      return
+    if isinstance(node, list):
+      for item in node:
+        _collect_values(item)
+      return
+    if isinstance(node, (str, int, float, bool)):
+      text = str(node).strip().lower()
+      if text:
+        recursive_values.add(text)
+
   candidates = []
   for key in ["id", "userId", "memberId", "email", "username", "name"]:
     value = str(member.get(key, "") or "").strip().lower()
@@ -1061,6 +1079,9 @@ def _genesys_queue_member_matches_user(member: dict, user_id: str, user_email: s
     value = str(user_obj.get(key, "") or "").strip().lower()
     if value:
       candidates.append(value)
+
+  _collect_values(member)
+  candidates.extend([value for value in recursive_values if value])
 
   if clean_user_id and clean_user_id in candidates:
     return True
