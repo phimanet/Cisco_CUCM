@@ -5347,7 +5347,7 @@ def _perfmon_collect_sip_trunk_activity(cucm_host: str, cucm_user: str, cucm_pas
       continue
 
     normalized_name = re.sub(r"[^a-z0-9]", "", (current_name or "").lower())
-    if "call" not in normalized_name:
+    if not any(token in normalized_name for token in ["call", "conversation", "session", "dialog"]):
       continue
 
     bucket = _classify_trunk_counter_target(current_name)
@@ -5410,6 +5410,7 @@ def _perfmon_trunk_activity_fallback(cucm_host: str, cucm_user: str, cucm_pass: 
     "other_active_calls": int(totals.get("other", 0) or 0),
     "all_active_call_counters": all_active_call_counters[:300],
     "all_call_related_counters": all_call_related_counters[:500],
+    "counter_collection_errors": errors,
     "ribbon_ips": list(RIBBON_SBC_IPS),
     "cube_ips": list(CUBE_IPS),
     "errors": errors,
@@ -18052,6 +18053,7 @@ def dashboard_page(request: Request):
       <section class="panel">
         <h3>All Call-Related Counters (Preview)</h3>
         <p class="muted" style="margin-top:0;">Raw call-related PerfMon counters from Cisco SIP Trunk object. Use this list to identify exactly which counters should remain in the panel.</p>
+        <div id="callCounterErrors" class="muted" style="margin:0 0 8px 0;"></div>
         <div style="overflow-x:auto;"><table><thead><tr><th>Host</th><th>Bucket</th><th>Counter</th><th>Value</th></tr></thead><tbody id="callCounterRows"><tr><td colspan="4" class="muted">Waiting for data...</td></tr></tbody></table></div>
       </section>
 
@@ -18237,6 +18239,7 @@ def api_dashboard_stats(request: Request):
     "other_trunk_active_calls": other_trunk_calls,
     "total_active_calls": total_active_calls,
     "all_call_related_counters": list(trunk_activity.get("all_call_related_counters", []) or []),
+    "counter_collection_errors": list(trunk_activity.get("counter_collection_errors", []) or []),
     "jabber_calls_source": jabber_calls_source,
   }
 
@@ -18282,6 +18285,7 @@ def dashboard_script():
   const callOtherTrunk = document.getElementById("callOtherTrunk");
   const callTotal = document.getElementById("callTotal");
   const callCounterRows = document.getElementById("callCounterRows");
+  const callCounterErrors = document.getElementById("callCounterErrors");
   const prefixRows = document.getElementById("prefixRows");
   
 
@@ -18332,6 +18336,18 @@ def dashboard_script():
       .join('');
   }
 
+  function renderCallCounterErrors(errors) {
+    if (!callCounterErrors) {
+      return;
+    }
+    const items = Array.isArray(errors) ? errors : [];
+    if (!items.length) {
+      callCounterErrors.textContent = "Counter collection status: no collection errors reported.";
+      return;
+    }
+    callCounterErrors.textContent = "Counter collection issues: " + items.join(" | ");
+  }
+
   async function loadStats() {
     try {
       const controller = new AbortController();
@@ -18363,6 +18379,7 @@ def dashboard_script():
       if (callOtherTrunk) callOtherTrunk.textContent = String(callActivity.other_trunk_active_calls || 0);
       if (callTotal) callTotal.textContent = String(callActivity.total_active_calls || 0);
       renderCallCounterRows(callActivity.all_call_related_counters || []);
+      renderCallCounterErrors(callActivity.counter_collection_errors || []);
 
       renderPrefixRows(stats.configured_by_prefix || {}, stats.registered_by_prefix || {});
 
