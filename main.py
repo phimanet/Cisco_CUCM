@@ -1796,6 +1796,11 @@ def _is_lab_environment(cucm_host: str = ""):
   return _is_lab_host(cucm_host)
 
 
+def _is_prod_runtime_host_strict() -> bool:
+  """Return True only when runtime host is explicitly identified as PROD."""
+  return _is_lab_runtime_host() is False
+
+
 def _get_runtime_cucm_host(default_host: str = ""):
   runtime_is_lab = _is_lab_runtime_host()
   if runtime_is_lab is True:
@@ -3132,8 +3137,12 @@ def _append_audit_event(
 # Separation SMS Report — scheduled email for offboarded employees
 # ---------------------------------------------------------------------------
 
-def _separation_report_read_offboard_rows(start_dt: datetime.datetime, end_dt: datetime.datetime) -> list[dict]:
-  """Return audit rows for offboard_user_option_10 whose timestamp falls in [start_dt, end_dt)."""
+def _separation_report_read_offboard_rows(
+  start_dt: datetime.datetime,
+  end_dt: datetime.datetime,
+  required_cucm_host: str = PROD_CUCM_HOST,
+) -> list[dict]:
+  """Return PROD offboard audit rows for option_10 in [start_dt, end_dt)."""
   if not os.path.exists(AUDIT_LOG_PATH):
     return []
   try:
@@ -3145,8 +3154,12 @@ def _separation_report_read_offboard_rows(start_dt: datetime.datetime, end_dt: d
     return []
 
   matched = []
+  required_host = (required_cucm_host or "").strip().lower()
   for row in rows:
     if (row.get("action") or "").strip() != "offboard_user_option_10":
+      continue
+    row_host = (row.get("cucm_host") or "").strip().lower()
+    if required_host and row_host != required_host:
       continue
     ts_text = (row.get("timestamp") or "").strip()
     if not ts_text:
@@ -3295,6 +3308,12 @@ def _run_separation_sms_report(triggered_by: str = "scheduler") -> dict:
   Returns a summary dict with keys: success, numbers_found, numbers_emailed, error.
   """
   try:
+    if not _is_prod_runtime_host_strict():
+      return {
+        "success": False,
+        "error": "Separation SMS report is restricted to PROD web server runtime.",
+      }
+
     cfg = _get_sep_report_settings()
     tz = ZoneInfo("America/Los_Angeles")
     now_pst = datetime.datetime.now(tz=tz).replace(tzinfo=None)
@@ -3318,7 +3337,11 @@ def _run_separation_sms_report(triggered_by: str = "scheduler") -> dict:
       end_dt = yesterday.replace(hour=23, minute=59, second=59, microsecond=999999) + datetime.timedelta(microseconds=1)
       date_range_label = start_dt.strftime("%Y-%m-%d")
 
-    offboard_rows = _separation_report_read_offboard_rows(start_dt, end_dt)
+    offboard_rows = _separation_report_read_offboard_rows(
+      start_dt,
+      end_dt,
+      required_cucm_host=PROD_CUCM_HOST,
+    )
     sms_rows = _separation_report_build_sms_rows(offboard_rows)
 
     numbers_checked = [r["sms_number"] for r in sms_rows if r["sms_number"] != "-"]
@@ -3417,9 +3440,13 @@ def _separation_report_scheduler_loop():
       logger.error("separation_report_scheduler_loop error: %s", exc, exc_info=True)
 
 
-# Start the separation SMS report scheduler daemon thread at import time.
-_sep_report_thread = threading.Thread(target=_separation_report_scheduler_loop, name="sep-sms-report-scheduler", daemon=True)
-_sep_report_thread.start()
+# Start the separation SMS report scheduler daemon thread only on PROD runtime.
+_sep_report_thread = None
+if _is_prod_runtime_host_strict():
+  _sep_report_thread = threading.Thread(target=_separation_report_scheduler_loop, name="sep-sms-report-scheduler", daemon=True)
+  _sep_report_thread.start()
+else:
+  logger.info("separation_sms_report scheduler disabled on non-PROD runtime host")
 
 
 # ---------------------------------------------------------------------------
@@ -20995,6 +21022,8 @@ def sep_sms_report_config_route(request: Request):
   session = _get_auth_session(request)
   if not session or not _is_admin_user(str(session.get("username", ""))):
     return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  if not _is_prod_runtime_host_strict():
+    return JSONResponse({"ok": False, "error": "Separation SMS report is available only on PROD web server."}, status_code=403)
 
   cfg = _get_sep_report_settings()
   freq = cfg["frequency"]
@@ -21024,6 +21053,8 @@ async def sep_sms_report_save_config_route(request: Request):
   session = _get_auth_session(request)
   if not session or not _is_admin_user(str(session.get("username", ""))):
     return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  if not _is_prod_runtime_host_strict():
+    return JSONResponse({"ok": False, "error": "Separation SMS report is available only on PROD web server."}, status_code=403)
 
   try:
     body = await request.json()
@@ -21076,6 +21107,8 @@ def sep_sms_report_run_route(request: Request):
   session = _get_auth_session(request)
   if not session or not _is_admin_user(str(session.get("username", ""))):
     return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  if not _is_prod_runtime_host_strict():
+    return JSONResponse({"ok": False, "error": "Separation SMS report is available only on PROD web server."}, status_code=403)
 
   operator = str(session.get("username", "manual")).strip() or "manual"
   result = _run_separation_sms_report(triggered_by=f"manual:{operator}")
@@ -21095,6 +21128,8 @@ def sep_sms_report_history_route(request: Request):
   session = _get_auth_session(request)
   if not session or not _is_admin_user(str(session.get("username", ""))):
     return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  if not _is_prod_runtime_host_strict():
+    return JSONResponse({"ok": False, "error": "Separation SMS report is available only on PROD web server."}, status_code=403)
 
   if not os.path.exists(AUDIT_LOG_PATH):
     return JSONResponse({"ok": True, "rows": []})
