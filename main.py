@@ -610,8 +610,14 @@ def _genesys_search_users_by_name(
   max_pages = 200
   headers = {"Authorization": f"Bearer {access_token}"}
 
+  def _normalized_text(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
   rows = []
+  seen_ids = set()
   page_number = 1
+  pages_scanned = 0
+  users_scanned = 0
   while page_number <= max_pages:
     try:
       response = requests.get(
@@ -632,18 +638,43 @@ def _genesys_search_users_by_name(
       return {"ok": False, "error": f"Genesys user lookup failed: {message}"}
 
     entities = payload.get("entities", []) or []
+    pages_scanned += 1
+    users_scanned += len(entities)
     for user in entities:
       name = str(user.get("name", "") or "").strip()
       email = str(user.get("email", "") or "").strip()
       username = str(user.get("username", "") or "").strip()
-      haystack = " ".join([name.lower(), email.lower(), username.lower()])
+      user_id = str(user.get("id", "") or "").strip()
+
+      # Match against both raw and normalized forms so username-like input
+      # (john.smith, john_smith, johnsmith) still resolves reliably.
+      raw_haystack = " ".join([
+        name.lower(),
+        email.lower(),
+        username.lower(),
+        user_id.lower(),
+      ]).strip()
+      normalized_haystack = _normalized_text(raw_haystack)
+
       email_match = bool(email and email.lower() in clean_email_targets)
-      name_match = clean_last in haystack and ((not clean_first) or (clean_first in haystack))
+      if clean_first:
+        name_match_raw = (clean_last in raw_haystack and clean_first in raw_haystack)
+        name_match_norm = (_normalized_text(clean_last) in normalized_haystack and _normalized_text(clean_first) in normalized_haystack)
+      else:
+        name_match_raw = clean_last in raw_haystack
+        name_match_norm = _normalized_text(clean_last) in normalized_haystack
+
+      name_match = bool(name_match_raw or name_match_norm)
       if not (email_match or name_match):
         continue
 
+      if user_id and user_id in seen_ids:
+        continue
+      if user_id:
+        seen_ids.add(user_id)
+
       rows.append({
-        "id": str(user.get("id", "") or "").strip(),
+        "id": user_id,
         "name": name,
         "email": email,
         "username": username,
@@ -675,6 +706,8 @@ def _genesys_search_users_by_name(
     "ok": True,
     "region": clean_region,
     "rows": rows,
+    "pages_scanned": pages_scanned,
+    "users_scanned": users_scanned,
   }
 
 
@@ -8081,8 +8114,10 @@ def genesys_admin_placeholder(request: Request):
 
               const rows = payload.rows || [];
               const emailTargetCount = Number(payload.cucm_email_targets || 0);
+              const pagesScanned = Number(payload.pages_scanned || 0);
+              const usersScanned = Number(payload.users_scanned || 0);
               const warningCount = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
-              statusEl.textContent = "Region: " + (payload.region || "") + " | CUCM Emails: " + emailTargetCount + " | Matches: " + rows.length + " | Warnings: " + warningCount;
+              statusEl.textContent = "Region: " + (payload.region || "") + " | Pages: " + pagesScanned + " | Users: " + usersScanned + " | CUCM Emails: " + emailTargetCount + " | Matches: " + rows.length + " | Warnings: " + warningCount;
               if (payload.raw_download_url) {
                 const rawName = payload.raw_filename || "genesys_user_extract.json";
                 rawDownloadEl.innerHTML = "<a href='" + payload.raw_download_url + "' style='display:inline-block;padding:7px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Raw Genesys JSON (" + rawName + ")</a>";
@@ -8324,6 +8359,8 @@ def genesys_extract_users_route(
     "region": enrich_result.get("region", search_result.get("region", clean_region)),
     "rows": enrich_result.get("rows", search_result.get("rows", [])),
     "cucm_email_targets": len(cucm_email_targets),
+    "pages_scanned": int(search_result.get("pages_scanned", 0) or 0),
+    "users_scanned": int(search_result.get("users_scanned", 0) or 0),
     "warnings": enrich_result.get("warnings", []),
     "raw_download_url": f"/download/job-output/{raw_job_id}",
     "raw_filename": raw_filename,
