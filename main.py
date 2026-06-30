@@ -17581,6 +17581,11 @@ def dashboard_page(request: Request):
             <option value="60">1 minute</option>
           </select>
           <label><input type="checkbox" id="autoRefresh" checked> Auto Refresh</label>
+          <label for="dataMode"><strong>Data Pull:</strong></label>
+          <select id="dataMode">
+            <option value="light" selected>Initial (Unity + quick checks)</option>
+            <option value="full">Full (CUCM + Unity)</option>
+          </select>
           <button id="refreshNow" type="button">Refresh Now</button>
           <span id="lastRefresh" class="muted"></span>
         </div>
@@ -17617,6 +17622,7 @@ def dashboard_page(request: Request):
         const intervalSelect = document.getElementById("refreshInterval");
         const autoRefreshCb = document.getElementById("autoRefresh");
         const refreshBtn = document.getElementById("refreshNow");
+        const dataModeSelect = document.getElementById("dataMode");
         const lastRefreshEl = document.getElementById("lastRefresh");
         const statusBox = document.getElementById("statusBox");
         const topStatus = document.getElementById("topStatus");
@@ -17675,7 +17681,8 @@ def dashboard_page(request: Request):
             const controller = new AbortController();
             const timeoutMs = 20000;
             const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-            const resp = await fetch('/api/dashboard/stats', {
+            const selectedMode = (dataModeSelect && dataModeSelect.value) ? dataModeSelect.value : 'light';
+            const resp = await fetch('/api/dashboard/stats?mode=' + encodeURIComponent(selectedMode), {
               method: 'GET',
               credentials: 'same-origin',
               headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
@@ -17695,7 +17702,7 @@ def dashboard_page(request: Request):
             renderUnityRows(stats.unity_port_probes || []);
 
             const warnings = payload.warnings || [];
-            let text = 'Dashboard refreshed successfully.';
+            let text = 'Dashboard refreshed successfully. Mode: ' + String(payload.mode || selectedMode || 'light');
             if (warnings.length) {
               text += '\nWarnings:\n- ' + warnings.join('\n- ');
             }
@@ -17743,12 +17750,15 @@ def dashboard_page(request: Request):
 
 
 @app.get("/api/dashboard/stats")
-def api_dashboard_stats(request: Request):
+def api_dashboard_stats(request: Request, mode: str = Query("light")):
   session = _get_auth_session(request)
   if not session:
     return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
 
   warnings = []
+  pull_mode = (mode or "light").strip().lower()
+  if pull_mode not in {"light", "full"}:
+    pull_mode = "light"
 
   # Dashboard must use the DN report service credentials (ucmappadmin),
   # not the interactive operator credentials.
@@ -17763,45 +17773,49 @@ def api_dashboard_stats(request: Request):
     return JSONResponse({"ok": False, "error": "Dashboard service credentials are missing. Configure DN report CUCM user/password in settings."}, status_code=400)
 
   configured_by_prefix = {"CSF": 0, "TCT": 0, "BOT": 0, "TAB": 0}
-  with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-    future_map = {
-      pool.submit(
-        _axl_count_phones_by_prefix,
-        resolved_cucm_host,
-        resolved_cucm_user,
-        resolved_cucm_pass,
-        prefix,
-      ): prefix
-      for prefix in list(configured_by_prefix.keys())
-    }
-    for future in concurrent.futures.as_completed(future_map):
-      prefix = future_map[future]
-      try:
-        configured_by_prefix[prefix] = int(future.result())
-      except Exception as exc:
-        warnings.append(str(exc))
-
   registered_by_prefix = {"CSF": 0, "TCT": 0, "BOT": 0, "TAB": 0}
   by_server_registered = []
   active_calls = None
-  try:
-    ris = _ris_fetch_jabber_registrations(
-      resolved_cucm_host,
-      resolved_cucm_user,
-      resolved_cucm_pass,
-    )
-    registered_by_prefix = ris.get("by_prefix_registered", registered_by_prefix)
-    active_calls = ris.get("active_calls")
-    by_server_map = ris.get("by_server_registered", {}) or {}
-    by_server_registered = [
-      {"server": server_name, "registered": count}
-      for server_name, count in sorted(by_server_map.items(), key=lambda item: item[0].lower())
-    ]
-  except Exception as exc:
-    warnings.append(str(exc))
 
-  if active_calls is None:
-    warnings.append("Realtime active-call counter not returned by this CUCM response; showing N/A.")
+  if pull_mode == "full":
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+      future_map = {
+        pool.submit(
+          _axl_count_phones_by_prefix,
+          resolved_cucm_host,
+          resolved_cucm_user,
+          resolved_cucm_pass,
+          prefix,
+        ): prefix
+        for prefix in list(configured_by_prefix.keys())
+      }
+      for future in concurrent.futures.as_completed(future_map):
+        prefix = future_map[future]
+        try:
+          configured_by_prefix[prefix] = int(future.result())
+        except Exception as exc:
+          warnings.append(str(exc))
+
+    try:
+      ris = _ris_fetch_jabber_registrations(
+        resolved_cucm_host,
+        resolved_cucm_user,
+        resolved_cucm_pass,
+      )
+      registered_by_prefix = ris.get("by_prefix_registered", registered_by_prefix)
+      active_calls = ris.get("active_calls")
+      by_server_map = ris.get("by_server_registered", {}) or {}
+      by_server_registered = [
+        {"server": server_name, "registered": count}
+        for server_name, count in sorted(by_server_map.items(), key=lambda item: item[0].lower())
+      ]
+    except Exception as exc:
+      warnings.append(str(exc))
+
+    if active_calls is None:
+      warnings.append("Realtime active-call counter not returned by this CUCM response; showing N/A.")
+  else:
+    warnings.append("CUCM heavy data pull is throttled in Initial mode. Switch Data Pull to Full when ready.")
 
   unity_host = PROD_UNITY_HOST
   unity_port_probes = []
@@ -17817,6 +17831,7 @@ def api_dashboard_stats(request: Request):
   return JSONResponse(
     {
       "ok": True,
+      "mode": pull_mode,
       "generated_at": datetime.datetime.now().strftime(AUDIT_TIMESTAMP_FORMAT),
       "environment": "LAB" if _is_lab_environment(resolved_cucm_host) else "PROD",
       "cucm_host": resolved_cucm_host,
