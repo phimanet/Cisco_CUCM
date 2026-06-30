@@ -5038,6 +5038,47 @@ def _build_unity_port_probe(unity_host: str) -> list[dict]:
   return results
 
 
+def _probe_unity_vmrest_auth(unity_host: str, username: str, password: str) -> dict:
+  started = time.time()
+  try:
+    response = requests.get(
+      f"https://{unity_host}/vmrest/version",
+      auth=HTTPBasicAuth(username, password),
+      headers={"Accept": "application/json"},
+      verify=False,
+      timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
+    )
+    latency_ms = int((time.time() - started) * 1000)
+    if response.status_code == 200:
+      return {
+        "host": unity_host,
+        "port": "443-auth",
+        "label": "Unity VMREST auth (ucmappadmin)",
+        "status": "open",
+        "latency_ms": latency_ms,
+        "error": "",
+      }
+
+    detail = _extract_soap_error(response.text or "") if response.text else ""
+    return {
+      "host": unity_host,
+      "port": "443-auth",
+      "label": "Unity VMREST auth (ucmappadmin)",
+      "status": "closed",
+      "latency_ms": latency_ms,
+      "error": detail or f"HTTP {response.status_code}",
+    }
+  except Exception as exc:
+    return {
+      "host": unity_host,
+      "port": "443-auth",
+      "label": "Unity VMREST auth (ucmappadmin)",
+      "status": "closed",
+      "latency_ms": None,
+      "error": str(exc),
+    }
+
+
 def _strip_invalid_xml_chars(text: str) -> str:
   """Remove XML-invalid control characters that can break ElementTree parsing."""
   if not text:
@@ -17766,6 +17807,10 @@ def api_dashboard_stats(request: Request):
   unity_port_probes = []
   try:
     unity_port_probes = _build_unity_port_probe(unity_host)
+    unity_vmrest_probe = _probe_unity_vmrest_auth(unity_host, resolved_cucm_user, resolved_cucm_pass)
+    unity_port_probes.append(unity_vmrest_probe)
+    if unity_vmrest_probe.get("status") != "open":
+      warnings.append(f"Unity VMREST auth failed: {unity_vmrest_probe.get('error', 'unknown error')}")
   except Exception as exc:
     warnings.append(f"Unity probe unavailable: {exc}")
 
