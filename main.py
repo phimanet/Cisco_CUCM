@@ -4910,7 +4910,10 @@ def _axl_count_phones_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, 
 
 
 def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: str):
-  url = f"https://{cucm_host}:8443/realtimeservice2/services/RISService70"
+  ris_urls = [
+    f"https://{cucm_host}:8443/realtimeservice2/services/RISService70",
+    f"https://{cucm_host}:8443/realtimeservice/services/RISService70",
+  ]
   jabber_prefixes = ["CSF", "TCT", "BOT", "TAB"]
   by_prefix_registered = {prefix: 0 for prefix in jabber_prefixes}
   by_server_registered = {}
@@ -4946,17 +4949,25 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
   </soapenv:Body>
 </soapenv:Envelope>"""
 
-  response = session.post(
-    url,
-    data=soap_xml.encode("utf-8"),
-    headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 SelectCmDeviceExt"},
-    timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
-  )
-  if response.status_code != 200:
-    err = _extract_soap_error(response.text or "")
-    raise RuntimeError(f"RIS query failed: {err or ('HTTP ' + str(response.status_code))}")
+  root = None
+  endpoint_errors = []
+  for ris_url in ris_urls:
+    response = session.post(
+      ris_url,
+      data=soap_xml.encode("utf-8"),
+      headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 SelectCmDeviceExt"},
+      timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
+    )
+    if response.status_code != 200:
+      err = _extract_soap_error(response.text or "")
+      endpoint_errors.append(f"{ris_url}: {err or ('HTTP ' + str(response.status_code))}")
+      continue
 
-  root = _parse_xml_or_runtime_error(response.text, "RIS SelectCmDeviceExt")
+    root = _parse_xml_or_runtime_error(response.text, "RIS SelectCmDeviceExt")
+    break
+
+  if root is None:
+    raise RuntimeError("RIS query failed: " + " | ".join(endpoint_errors))
 
   for node in root.iter():
     cm_devices = _find_xml_child(node, "CmDevices")
