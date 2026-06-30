@@ -17670,6 +17670,7 @@ def api_dashboard_stats(request: Request):
   registered_by_prefix = {"CSF": 0, "TCT": 0, "BOT": 0, "TAB": 0}
   by_server_registered = []
   active_calls = None
+  ris_available = True
 
   with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
     future_map = {
@@ -17703,9 +17704,16 @@ def api_dashboard_stats(request: Request):
       for server_name, count in sorted(by_server_map.items(), key=lambda item: item[0].lower())
     ]
   except Exception as exc:
-    warnings.append(str(exc))
+    ris_available = False
+    ris_err = str(exc)
+    if "No target service to authorize for" in ris_err:
+      warnings.append("Realtime RIS data is not authorized for dashboard service account 'ucmappadmin'. Configure RIS/serviceability permissions to enable registered-device and active-call metrics.")
+    elif "endpoint reference (EPR)" in ris_err:
+      warnings.append("Realtime RIS endpoint is not available on this CUCM service path. Registered-device and active-call metrics are temporarily unavailable.")
+    else:
+      warnings.append(f"Realtime RIS data unavailable: {ris_err}")
 
-  if active_calls is None:
+  if ris_available and active_calls is None:
     warnings.append("Realtime active-call counter not returned by this CUCM response; showing N/A.")
 
   unity_host = PROD_UNITY_HOST
