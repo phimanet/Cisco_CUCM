@@ -1317,6 +1317,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
       skills_payload = {}
       queues_payload = {}
       station_associations_payload = {}
+      phone_management_payload = {}
 
       ok_user, user_payload, err_user = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}")
       if ok_user:
@@ -1343,6 +1344,20 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         routing_payload if ok_routing else {},
         station_associations_payload if ok_station_assoc else {},
       )
+
+      # Detect existing WebRTC phones from Phone Management inventory only as
+      # a presence signal; template source remains local baseline file.
+      phone_management_name, _phone_management_match, phone_management_payload, err_phone_mgmt = _genesys_lookup_phone_management_name(
+        api_base,
+        access_token,
+        user_id,
+        str(row.get("name", "") or ""),
+        str(row.get("email", "") or ""),
+      )
+      if phone_management_name and not webrtc_phone:
+        webrtc_phone = phone_management_name
+      if err_phone_mgmt and not webrtc_phone:
+        warnings.append(f"{row.get('name', user_id)} phone management lookup: {err_phone_mgmt}")
 
       ok_skills, skills_payload, err_skills = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}/routingskills")
       if ok_skills:
@@ -1401,6 +1416,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         "user": user_payload if ok_user else {},
         "routing_status": routing_payload if ok_routing else {},
         "station_associations": station_associations_payload if ok_station_assoc else {},
+        "phone_management": phone_management_payload,
         "phone_template": phone_template,
         "routing_skills": skills_payload if ok_skills else {},
         "queues": queues_payload if ok_queues else {},
