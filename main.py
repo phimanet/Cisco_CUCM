@@ -592,17 +592,19 @@ def _genesys_search_users_by_name(
   access_token: str,
   last_name: str,
   first_name: str = "",
+  username_query: str = "",
   email_targets: set[str] | None = None,
 ) -> dict:
   clean_last = (last_name or "").strip().lower()
   clean_first = (first_name or "").strip().lower()
+  clean_username = (username_query or "").strip().lower()
   clean_email_targets = {
     (item or "").strip().lower()
     for item in (email_targets or set())
     if (item or "").strip()
   }
-  if not clean_last:
-    return {"ok": False, "error": "Last name is required."}
+  if not clean_last and not clean_username:
+    return {"ok": False, "error": "Last name or username is required."}
 
   clean_region, _, api_base = _genesys_region_to_urls(region)
   users_url = f"{api_base}/api/v2/users"
@@ -661,11 +663,24 @@ def _genesys_search_users_by_name(
         name_match_raw = (clean_last in raw_haystack and clean_first in raw_haystack)
         name_match_norm = (_normalized_text(clean_last) in normalized_haystack and _normalized_text(clean_first) in normalized_haystack)
       else:
-        name_match_raw = clean_last in raw_haystack
-        name_match_norm = _normalized_text(clean_last) in normalized_haystack
+        if clean_last:
+          name_match_raw = clean_last in raw_haystack
+          name_match_norm = _normalized_text(clean_last) in normalized_haystack
+        else:
+          name_match_raw = False
+          name_match_norm = False
 
       name_match = bool(name_match_raw or name_match_norm)
-      if not (email_match or name_match):
+      username_match = False
+      if clean_username:
+        username_match = (
+          clean_username in username.lower()
+          or _normalized_text(clean_username) in _normalized_text(username)
+          or clean_username in email.lower()
+          or _normalized_text(clean_username) in _normalized_text(email)
+        )
+
+      if not (email_match or name_match or username_match):
         continue
 
       if user_id and user_id in seen_ids:
@@ -8015,7 +8030,7 @@ def genesys_admin_placeholder(request: Request):
     <main class="content">
       <section class="page-hero">
         <h2 class="page-title">Genesys Admin</h2>
-        <p class="page-subtitle">Starter workflow: extract Genesys Cloud users by last name and optional first name.</p>
+        <p class="page-subtitle">Starter workflow: extract Genesys Cloud users by last name/first name or username.</p>
       </section>
 
       <div class="portal-shell">
@@ -8034,8 +8049,9 @@ def genesys_admin_placeholder(request: Request):
               <input type="hidden" name="cucm_user" value="__AUTH_USER__">
               <input type="hidden" name="cucm_pass" value="">
               <div class="search-filter-row">
-                <input name="last_name" placeholder="Last Name *" style="width:220px;" required>
+                <input name="last_name" placeholder="Last Name (optional)" style="width:220px;">
                 <input name="first_name" placeholder="First Name (optional)" style="width:220px;">
+                <input name="username" placeholder="Username (optional)" style="width:220px;">
                 <button type="submit">Extract User Data</button>
               </div>
             </form>
@@ -8151,7 +8167,9 @@ def genesys_admin_placeholder(request: Request):
               const pagesScanned = Number(payload.pages_scanned || 0);
               const usersScanned = Number(payload.users_scanned || 0);
               const warningCount = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
-              statusEl.textContent = "Region: " + (payload.region || "") + " | Pages: " + pagesScanned + " | Users: " + usersScanned + " | CUCM Emails: " + emailTargetCount + " | Matches: " + rows.length + " | Warnings: " + warningCount;
+              const queryUsername = String((payload.lookup && payload.lookup.username) || "").trim();
+              const queryLabel = queryUsername ? ("Query Username: " + queryUsername + " | ") : "";
+              statusEl.textContent = "Region: " + (payload.region || "") + " | " + queryLabel + "Pages: " + pagesScanned + " | Users: " + usersScanned + " | CUCM Emails: " + emailTargetCount + " | Matches: " + rows.length + " | Warnings: " + warningCount;
               if (payload.raw_download_url) {
                 const rawName = payload.raw_filename || "genesys_user_extract.json";
                 rawDownloadEl.innerHTML = "<a href='" + payload.raw_download_url + "' style='display:inline-block;padding:7px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Raw Genesys JSON (" + rawName + ")</a>";
@@ -8312,6 +8330,7 @@ def genesys_extract_users_route(
   region: str = Form(""),
   last_name: str = Form(""),
   first_name: str = Form(""),
+  username: str = Form(""),
   cucm_host: str = Form(""),
   cucm_user: str = Form(""),
   cucm_pass: str = Form(""),
@@ -8322,12 +8341,13 @@ def genesys_extract_users_route(
   clean_client_secret = GENESYS_CLIENT_SECRET
   clean_last = (last_name or "").strip()
   clean_first = (first_name or "").strip()
+  clean_username = (username or "").strip()
   clean_cucm_host = (cucm_host or "").strip() or str(session.get("cucm_host", "") or "").strip()
   clean_cucm_user = (cucm_user or "").strip() or str(session.get("username", "") or "").strip()
   clean_cucm_pass = (cucm_pass or "").strip() or _get_cached_secret(session, "cucm_pass")
 
-  if not clean_last:
-    return JSONResponse({"ok": False, "error": "Last name is required.", "rows": []}, status_code=400)
+  if not clean_last and not clean_username:
+    return JSONResponse({"ok": False, "error": "Last name or username is required.", "rows": []}, status_code=400)
 
   token_result = _genesys_get_access_token(clean_region, clean_client_id, clean_client_secret)
   if not token_result.get("ok"):
@@ -8360,6 +8380,7 @@ def genesys_extract_users_route(
     token_result.get("access_token", ""),
     clean_last,
     clean_first,
+    clean_username,
     cucm_email_targets,
   )
   if not search_result.get("ok"):
@@ -8381,6 +8402,7 @@ def genesys_extract_users_route(
     "lookup": {
       "last_name": clean_last,
       "first_name": clean_first,
+      "username": clean_username,
       "cucm_email_targets": sorted(cucm_email_targets),
     },
     "warnings": enrich_result.get("warnings", []),
@@ -8396,6 +8418,11 @@ def genesys_extract_users_route(
   return JSONResponse({
     "ok": True,
     "region": enrich_result.get("region", search_result.get("region", clean_region)),
+    "lookup": {
+      "last_name": clean_last,
+      "first_name": clean_first,
+      "username": clean_username,
+    },
     "rows": enrich_result.get("rows", search_result.get("rows", [])),
     "cucm_email_targets": len(cucm_email_targets),
     "pages_scanned": int(search_result.get("pages_scanned", 0) or 0),
