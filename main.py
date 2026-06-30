@@ -607,11 +607,12 @@ def _genesys_search_users_by_name(
   clean_region, _, api_base = _genesys_region_to_urls(region)
   users_url = f"{api_base}/api/v2/users"
   page_size = max(25, min(GENESYS_USERS_PAGE_SIZE, 200))
+  max_pages = 200
   headers = {"Authorization": f"Bearer {access_token}"}
 
   rows = []
   page_number = 1
-  while True:
+  while page_number <= max_pages:
     try:
       response = requests.get(
         users_url,
@@ -649,10 +650,25 @@ def _genesys_search_users_by_name(
         "state": str(user.get("state", "") or "").strip(),
       })
 
-    page_count = int(payload.get("pageCount", 0) or 0)
-    if not page_count or page_number >= page_count:
-      break
-    page_number += 1
+    next_uri = str(payload.get("nextUri", "") or payload.get("next_uri", "")).strip()
+    page_count_raw = payload.get("pageCount", 0)
+    try:
+      page_count = int(page_count_raw or 0)
+    except Exception:
+      page_count = 0
+
+    # Pagination metadata can vary by org/endpoint; follow best signal first.
+    if next_uri:
+      page_number += 1
+      continue
+    if page_count and page_number < page_count:
+      page_number += 1
+      continue
+    # Fallback when pageCount is missing: keep walking while pages are full.
+    if len(entities) >= page_size:
+      page_number += 1
+      continue
+    break
 
   rows.sort(key=lambda item: ((item.get("name") or "").lower(), (item.get("email") or "").lower()))
   return {
