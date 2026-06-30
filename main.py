@@ -5078,6 +5078,66 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
   }
 
 
+def _perfmon_collect_registered_other_station_devices(cucm_host: str, cucm_user: str, cucm_pass: str, target_host: str) -> int:
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:soap=\"http://schemas.cisco.com/ast/soap\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <soap:perfmonCollectCounterData>
+      <soap:Host>{xml_escape(target_host)}</soap:Host>
+      <soap:Object>Cisco CallManager</soap:Object>
+    </soap:perfmonCollectCounterData>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/perfmonservice2/services/PerfmonService",
+    data=soap_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml; charset=utf-8"},
+    timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
+  )
+  if response.status_code != 200:
+    err = _extract_soap_error(response.text or "")
+    raise RuntimeError(err or ("HTTP " + str(response.status_code)))
+
+  root = _parse_xml_or_runtime_error(response.text, "PerfMon perfmonCollectCounterData")
+  current_name = ""
+  for elem in root.iter():
+    tag = _strip_xml_ns(elem.tag)
+    text = (elem.text or "").strip()
+    if tag == "Name":
+      current_name = text
+      continue
+    if tag == "Value" and current_name:
+      if "RegisteredOtherStationDevices" in current_name:
+        try:
+          return int(float(text))
+        except Exception:
+          return 0
+  return 0
+
+
+def _perfmon_registered_fallback(cucm_host: str, cucm_user: str, cucm_pass: str) -> dict:
+  hosts = _axl_list_process_nodes(cucm_host, cucm_user, cucm_pass) or [cucm_host]
+  by_server = {}
+  errors = []
+  for host in hosts:
+    try:
+      by_server[host] = _perfmon_collect_registered_other_station_devices(cucm_host, cucm_user, cucm_pass, host)
+    except Exception as exc:
+      errors.append(f"{host}: {exc}")
+
+  return {
+    "by_server_registered": by_server,
+    "registered_total": sum(by_server.values()),
+    "errors": errors,
+  }
+
+
 def _probe_tcp_port(host: str, port: int, timeout_seconds: float = 1.5) -> dict:
   started = time.time()
   try:
@@ -17740,6 +17800,7 @@ def api_dashboard_stats(request: Request):
   by_server_registered = []
   active_calls = None
   ris_available = True
+  jabber_registered_total = 0
 
   with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
     future_map = {
@@ -17766,6 +17827,7 @@ def api_dashboard_stats(request: Request):
       resolved_cucm_pass,
     )
     registered_by_prefix = ris.get("by_prefix_registered", registered_by_prefix)
+    jabber_registered_total = int(ris.get("registered_total", sum(registered_by_prefix.values())) or 0)
     active_calls = ris.get("active_calls")
     by_server_map = ris.get("by_server_registered", {}) or {}
     by_server_registered = [
@@ -17781,6 +17843,21 @@ def api_dashboard_stats(request: Request):
       warnings.append("Realtime RIS endpoint is not available on this CUCM service path. Registered-device and active-call metrics are temporarily unavailable.")
     else:
       warnings.append(f"Realtime RIS data unavailable: {ris_err}")
+
+    try:
+      perf = _perfmon_registered_fallback(resolved_cucm_host, resolved_cucm_user, resolved_cucm_pass)
+      perf_map = perf.get("by_server_registered", {}) or {}
+      if perf_map:
+        by_server_registered = [
+          {"server": server_name, "registered": count}
+          for server_name, count in sorted(perf_map.items(), key=lambda item: item[0].lower())
+        ]
+        jabber_registered_total = int(perf.get("registered_total", 0) or 0)
+        warnings.append("Using PerfMon fallback for registered-device totals because RIS realtime access is unavailable.")
+      elif perf.get("errors"):
+        warnings.append("PerfMon fallback unavailable: " + " | ".join(perf.get("errors", [])))
+    except Exception as perf_exc:
+      warnings.append(f"PerfMon fallback unavailable: {perf_exc}")
 
   if ris_available and active_calls is None:
     warnings.append("Realtime active-call counter not returned by this CUCM response; showing N/A.")
@@ -17808,7 +17885,7 @@ def api_dashboard_stats(request: Request):
         "configured_by_prefix": configured_by_prefix,
         "registered_by_prefix": registered_by_prefix,
         "jabber_configured_total": sum(configured_by_prefix.values()),
-        "jabber_registered_total": sum(registered_by_prefix.values()),
+        "jabber_registered_total": jabber_registered_total,
         "registered_by_server": by_server_registered,
         "active_calls": active_calls,
         "unity_port_probes": unity_port_probes,
