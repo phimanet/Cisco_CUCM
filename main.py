@@ -18360,10 +18360,7 @@ def dashboard_page(request: Request):
           <tr><td>CallManager Calls In Progress (selected nodes)</td><td id="callMgrCallsInProgress" class="mono">-</td></tr>
           <tr><td>Registered CSF Jabber MRA (selected nodes)</td><td id="callMgrRegisteredCsfMra" class="mono">-</td></tr>
           <tr><td>Registered Devices MRA (selected nodes)</td><td id="callMgrRegisteredDevicesMra" class="mono">-</td></tr>
-          <tr><td>Ribbon SBC</td><td id="callRibbon" class="mono">-</td></tr>
-          <tr><td>Cisco CUBE</td><td id="callCube" class="mono">-</td></tr>
           <tr><td>Cisco Jabber Endpoints</td><td id="callJabber" class="mono">-</td></tr>
-          <tr><td>Other SIP Trunks</td><td id="callOtherTrunk" class="mono">-</td></tr>
           <tr><td><strong>Total Active Calls</strong></td><td id="callTotal" class="mono">-</td></tr>
         </tbody></table></div>
       </section>
@@ -18382,7 +18379,7 @@ def dashboard_page(request: Request):
 
     </main>
 
-    <script src="/dashboard.js?v=20260630j"></script>
+    <script src="/dashboard.js?v=20260630k"></script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
@@ -18645,10 +18642,7 @@ def dashboard_script():
   const callMgrCallsInProgress = document.getElementById("callMgrCallsInProgress");
   const callMgrRegisteredCsfMra = document.getElementById("callMgrRegisteredCsfMra");
   const callMgrRegisteredDevicesMra = document.getElementById("callMgrRegisteredDevicesMra");
-  const callRibbon = document.getElementById("callRibbon");
-  const callCube = document.getElementById("callCube");
   const callJabber = document.getElementById("callJabber");
-  const callOtherTrunk = document.getElementById("callOtherTrunk");
   const callTotal = document.getElementById("callTotal");
   const callCounterRows = document.getElementById("callCounterRows");
   const callCounterErrors = document.getElementById("callCounterErrors");
@@ -18673,10 +18667,7 @@ def dashboard_script():
     if (callMgrCallsInProgress) callMgrCallsInProgress.textContent = "-";
     if (callMgrRegisteredCsfMra) callMgrRegisteredCsfMra.textContent = "-";
     if (callMgrRegisteredDevicesMra) callMgrRegisteredDevicesMra.textContent = "-";
-    if (callRibbon) callRibbon.textContent = "-";
-    if (callCube) callCube.textContent = "-";
     if (callJabber) callJabber.textContent = "-";
-    if (callOtherTrunk) callOtherTrunk.textContent = "-";
     if (callTotal) callTotal.textContent = "-";
   }
 
@@ -18753,10 +18744,7 @@ def dashboard_script():
       if (callMgrCallsInProgress) callMgrCallsInProgress.textContent = String(callActivity.callmanager_calls_in_progress || 0);
       if (callMgrRegisteredCsfMra) callMgrRegisteredCsfMra.textContent = String(callActivity.callmanager_registered_csf_mra || 0);
       if (callMgrRegisteredDevicesMra) callMgrRegisteredDevicesMra.textContent = String(callActivity.callmanager_registered_devices_mra || 0);
-      if (callRibbon) callRibbon.textContent = String(callActivity.ribbon_active_calls || 0);
-      if (callCube) callCube.textContent = String(callActivity.cube_active_calls || 0);
       if (callJabber) callJabber.textContent = String(callActivity.jabber_active_calls || 0);
-      if (callOtherTrunk) callOtherTrunk.textContent = String(callActivity.other_trunk_active_calls || 0);
       if (callTotal) callTotal.textContent = String(callActivity.total_active_calls || 0);
       renderCallCounterRows(callActivity.all_call_related_counters || []);
       renderCallCounterErrors(callActivity.counter_collection_errors || []);
