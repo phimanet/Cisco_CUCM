@@ -5203,7 +5203,7 @@ def _probe_unity_vmrest_auth(unity_host: str, username: str, password: str) -> d
       return {
         "host": unity_host,
         "port": "443-auth",
-        "label": "Unity VMREST auth (ucmappadmin)",
+        "label": f"Unity VMREST auth ({username})",
         "status": "open",
         "latency_ms": latency_ms,
         "error": "",
@@ -5213,7 +5213,7 @@ def _probe_unity_vmrest_auth(unity_host: str, username: str, password: str) -> d
     return {
       "host": unity_host,
       "port": "443-auth",
-      "label": "Unity VMREST auth (ucmappadmin)",
+      "label": f"Unity VMREST auth ({username})",
       "status": "closed",
       "latency_ms": latency_ms,
       "error": detail or f"HTTP {response.status_code}",
@@ -5222,7 +5222,7 @@ def _probe_unity_vmrest_auth(unity_host: str, username: str, password: str) -> d
     return {
       "host": unity_host,
       "port": "443-auth",
-      "label": "Unity VMREST auth (ucmappadmin)",
+      "label": f"Unity VMREST auth ({username})",
       "status": "closed",
       "latency_ms": None,
       "error": str(exc),
@@ -17787,7 +17787,7 @@ def api_dashboard_stats(request: Request):
   # not the interactive operator credentials.
   dn_cfg = _get_dn_report_settings()
   resolved_cucm_host = PROD_CUCM_HOST
-  resolved_cucm_user = "ucmappadmin"
+  resolved_cucm_user = "ucmciscoadminapp"
   resolved_cucm_pass = (dn_cfg.get("cucm_pass", "") or "").strip()
 
   if not resolved_cucm_host:
@@ -17838,7 +17838,7 @@ def api_dashboard_stats(request: Request):
     ris_available = False
     ris_err = str(exc)
     if "No target service to authorize for" in ris_err:
-      warnings.append("Realtime RIS data is not authorized for dashboard service account 'ucmappadmin'. Configure RIS/serviceability permissions to enable registered-device and active-call metrics.")
+      warnings.append(f"Realtime RIS data is not authorized for dashboard service account '{resolved_cucm_user}'. Configure RIS/serviceability permissions to enable registered-device and active-call metrics.")
     elif "endpoint reference (EPR)" in ris_err:
       warnings.append("Realtime RIS endpoint is not available on this CUCM service path. Registered-device and active-call metrics are temporarily unavailable.")
     else:
