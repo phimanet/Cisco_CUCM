@@ -17847,7 +17847,7 @@ def dashboard_script():
       const warnings = payload.warnings || [];
       let text = "Dashboard refreshed successfully. Mode: " + String(payload.mode || selectedMode || "light");
       if (warnings.length) {
-        text += "\nWarnings:\n- " + warnings.join("\n- ");
+        text += "\\nWarnings:\\n- " + warnings.join("\\n- ");
       }
       setStatus(text, false);
       if (lastRefreshEl) {
