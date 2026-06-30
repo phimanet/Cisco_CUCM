@@ -93,7 +93,7 @@ SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
 CREDENTIAL_CACHE_TTL_SECONDS = 60 * 60
 APP_START_EPOCH = time.time()
 DASHBOARD_REQUEST_TIMEOUT_SECONDS = int((os.getenv("DASHBOARD_REQUEST_TIMEOUT_SECONDS", "8") or "8").strip())
-PERFMON_MAX_HOSTS = int((os.getenv("PERFMON_MAX_HOSTS", "2") or "2").strip())
+PERFMON_MAX_HOSTS = int((os.getenv("PERFMON_MAX_HOSTS", "8") or "8").strip())
 PERFMON_TRUNK_CACHE_TTL_SECONDS = int((os.getenv("PERFMON_TRUNK_CACHE_TTL_SECONDS", "60") or "60").strip())
 CREDENTIAL_ENCRYPTION_KEY = (os.getenv("CUCM_CREDENTIAL_ENCRYPTION_KEY", "") or "").strip()
 if _FERNET_AVAILABLE and not CREDENTIAL_ENCRYPTION_KEY:
@@ -5225,7 +5225,7 @@ def _perfmon_registered_fallback(cucm_host: str, cucm_user: str, cucm_pass: str)
 
 
 def _perfmon_active_calls_fallback(cucm_host: str, cucm_user: str, cucm_pass: str) -> dict:
-  hosts = _select_perfmon_hosts(cucm_host, cucm_user, cucm_pass)
+  hosts = _select_perfmon_hosts(cucm_host, cucm_user, cucm_pass, max_hosts=None)
   by_server = {}
   errors = []
   total = 0
@@ -5249,7 +5249,7 @@ def _perfmon_active_calls_fallback(cucm_host: str, cucm_user: str, cucm_pass: st
   }
 
 
-def _select_perfmon_hosts(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[str]:
+def _select_perfmon_hosts(cucm_host: str, cucm_user: str, cucm_pass: str, max_hosts: int | None = PERFMON_MAX_HOSTS) -> list[str]:
   discovered = _axl_list_process_nodes(cucm_host, cucm_user, cucm_pass) or [cucm_host]
   selected = []
   seen = set()
@@ -5273,8 +5273,9 @@ def _select_perfmon_hosts(cucm_host: str, cucm_user: str, cucm_pass: str) -> lis
     for host in discovered:
       _add(host)
 
-  max_hosts = max(1, int(PERFMON_MAX_HOSTS or 1))
-  return selected[:max_hosts]
+  if max_hosts is None:
+    return selected
+  return selected[:max(1, int(max_hosts or 1))]
 
 
 def _perfmon_collect_counter_data_object(cucm_host: str, cucm_user: str, cucm_pass: str, target_host: str, object_name: str) -> tuple[dict[str, int], str | None]:
@@ -5322,7 +5323,7 @@ def _perfmon_collect_counter_data_object(cucm_host: str, cucm_user: str, cucm_pa
 
 
 def _perfmon_unity_voice_ports_in_use(cucm_host: str, cucm_user: str, cucm_pass: str) -> dict:
-  hosts = _select_perfmon_hosts(cucm_host, cucm_user, cucm_pass)
+  hosts = _select_perfmon_hosts(cucm_host, cucm_user, cucm_pass, max_hosts=PERFMON_MAX_HOSTS)
   object_candidates = [
     "Cisco Voice Mail Port",
     "Cisco VoiceMail Port",
@@ -5512,7 +5513,7 @@ def _perfmon_trunk_activity_fallback(cucm_host: str, cucm_user: str, cucm_pass: 
       if cached_data and (now - cached_ts) < ttl_seconds:
         return dict(cached_data)
 
-  hosts = _select_perfmon_hosts(cucm_host, cucm_user, cucm_pass)
+  hosts = _select_perfmon_hosts(cucm_host, cucm_user, cucm_pass, max_hosts=PERFMON_MAX_HOSTS)
   totals = {"ribbon": 0, "cube": 0, "other": 0}
   errors = []
   all_active_call_counters = []
