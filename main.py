@@ -80,6 +80,8 @@ CERT_RENEWAL_RUNS_LOCK = threading.Lock()
 CERT_RENEWAL_MAX_RUNS = 200
 AUTH_SESSIONS = {}
 AUTH_SESSION_SECRETS = {}
+PERFMON_TRUNK_CACHE = {}
+PERFMON_TRUNK_CACHE_LOCK = threading.Lock()
 TWILIO_INCOMING_PHONE_NUMBER_CACHE = {}
 TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK = threading.Lock()
 TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS = 5 * 60
@@ -91,6 +93,8 @@ SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
 CREDENTIAL_CACHE_TTL_SECONDS = 60 * 60
 APP_START_EPOCH = time.time()
 DASHBOARD_REQUEST_TIMEOUT_SECONDS = int((os.getenv("DASHBOARD_REQUEST_TIMEOUT_SECONDS", "8") or "8").strip())
+PERFMON_MAX_HOSTS = int((os.getenv("PERFMON_MAX_HOSTS", "2") or "2").strip())
+PERFMON_TRUNK_CACHE_TTL_SECONDS = int((os.getenv("PERFMON_TRUNK_CACHE_TTL_SECONDS", "60") or "60").strip())
 CREDENTIAL_ENCRYPTION_KEY = (os.getenv("CUCM_CREDENTIAL_ENCRYPTION_KEY", "") or "").strip()
 if _FERNET_AVAILABLE and not CREDENTIAL_ENCRYPTION_KEY:
   # Generate an in-memory key when env key is absent so caching is still encrypted.
@@ -5221,7 +5225,7 @@ def _perfmon_registered_fallback(cucm_host: str, cucm_user: str, cucm_pass: str)
 
 
 def _perfmon_active_calls_fallback(cucm_host: str, cucm_user: str, cucm_pass: str) -> dict:
-  hosts = _axl_list_process_nodes(cucm_host, cucm_user, cucm_pass) or [cucm_host]
+  hosts = _select_perfmon_hosts(cucm_host, cucm_user, cucm_pass)
   by_server = {}
   errors = []
   total = 0
@@ -5241,6 +5245,129 @@ def _perfmon_active_calls_fallback(cucm_host: str, cucm_user: str, cucm_pass: st
   return {
     "active_calls_total": total if seen_value else None,
     "by_server_active_calls": by_server,
+    "errors": errors,
+  }
+
+
+def _select_perfmon_hosts(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[str]:
+  discovered = _axl_list_process_nodes(cucm_host, cucm_user, cucm_pass) or [cucm_host]
+  selected = []
+  seen = set()
+
+  def _add(host: str):
+    key = (host or "").strip().lower()
+    if not key or key in seen:
+      return
+    seen.add(key)
+    selected.append((host or "").strip())
+
+  # Prefer publisher first, then CUCM call-processing nodes only.
+  _add(cucm_host)
+  for host in discovered:
+    lowered = (host or "").strip().lower()
+    if "cucm" in lowered and "imp" not in lowered:
+      _add(host)
+
+  # Fallback: if filtering removed too much, include discovered list in order.
+  if len(selected) <= 1:
+    for host in discovered:
+      _add(host)
+
+  max_hosts = max(1, int(PERFMON_MAX_HOSTS or 1))
+  return selected[:max_hosts]
+
+
+def _perfmon_collect_counter_data_object(cucm_host: str, cucm_user: str, cucm_pass: str, target_host: str, object_name: str) -> tuple[dict[str, int], str | None]:
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:soap=\"http://schemas.cisco.com/ast/soap\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <soap:perfmonCollectCounterData>
+      <soap:Host>{xml_escape(target_host)}</soap:Host>
+      <soap:Object>{xml_escape(object_name)}</soap:Object>
+    </soap:perfmonCollectCounterData>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/perfmonservice2/services/PerfmonService",
+    data=soap_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml; charset=utf-8"},
+    timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
+  )
+  if response.status_code != 200:
+    return {}, _extract_soap_error(response.text or "") or ("HTTP " + str(response.status_code))
+
+  root = _parse_xml_or_runtime_error(response.text, f"PerfMon {object_name}")
+  counters: dict[str, int] = {}
+  current_name = ""
+  for elem in root.iter():
+    tag = _strip_xml_ns(elem.tag)
+    text = (elem.text or "").strip()
+    if tag == "Name":
+      current_name = text
+      continue
+    if tag != "Value" or not current_name:
+      continue
+    try:
+      counters[current_name] = int(float(text))
+    except Exception:
+      continue
+
+  return counters, None
+
+
+def _perfmon_unity_voice_ports_in_use(cucm_host: str, cucm_user: str, cucm_pass: str) -> dict:
+  hosts = _select_perfmon_hosts(cucm_host, cucm_user, cucm_pass)
+  object_candidates = [
+    "Cisco Voice Mail Port",
+    "Cisco VoiceMail Port",
+    "Cisco Unity Connection Port",
+  ]
+  total_in_use = 0
+  rows = []
+  errors = []
+
+  for host in hosts:
+    host_matched = False
+    for object_name in object_candidates:
+      try:
+        counters, err = _perfmon_collect_counter_data_object(cucm_host, cucm_user, cucm_pass, host, object_name)
+      except Exception as exc:
+        errors.append(f"{host}/{object_name}: {exc}")
+        continue
+
+      if err:
+        continue
+
+      for counter_name, value in counters.items():
+        normalized = re.sub(r"[^a-z0-9]", "", (counter_name or "").lower())
+        if "port" not in normalized:
+          continue
+        if not any(token in normalized for token in ["inuse", "active", "busy", "current"]):
+          continue
+        total_in_use += int(value or 0)
+        rows.append(
+          {
+            "host": host,
+            "object": object_name,
+            "counter": counter_name,
+            "value": int(value or 0),
+          }
+        )
+        host_matched = True
+
+      if host_matched:
+        break
+
+  rows.sort(key=lambda item: (-int(item.get("value", 0) or 0), str(item.get("host", "") or "").lower()))
+  return {
+    "ports_in_use_total": total_in_use,
+    "matched_counters": rows,
     "errors": errors,
   }
 
@@ -5374,7 +5501,18 @@ def _perfmon_collect_sip_trunk_activity(cucm_host: str, cucm_user: str, cucm_pas
 
 
 def _perfmon_trunk_activity_fallback(cucm_host: str, cucm_user: str, cucm_pass: str) -> dict:
-  hosts = _axl_list_process_nodes(cucm_host, cucm_user, cucm_pass) or [cucm_host]
+  cache_key = f"{(cucm_host or '').strip().lower()}|{(cucm_user or '').strip().lower()}"
+  now = time.time()
+  ttl_seconds = max(10, int(PERFMON_TRUNK_CACHE_TTL_SECONDS or 60))
+  with PERFMON_TRUNK_CACHE_LOCK:
+    cached = PERFMON_TRUNK_CACHE.get(cache_key)
+    if isinstance(cached, dict):
+      cached_ts = float(cached.get("timestamp", 0) or 0)
+      cached_data = cached.get("data")
+      if cached_data and (now - cached_ts) < ttl_seconds:
+        return dict(cached_data)
+
+  hosts = _select_perfmon_hosts(cucm_host, cucm_user, cucm_pass)
   totals = {"ribbon": 0, "cube": 0, "other": 0}
   errors = []
   all_active_call_counters = []
@@ -5404,7 +5542,7 @@ def _perfmon_trunk_activity_fallback(cucm_host: str, cucm_user: str, cucm_pass: 
     )
   )
 
-  return {
+  result = {
     "ribbon_active_calls": int(totals.get("ribbon", 0) or 0),
     "cube_active_calls": int(totals.get("cube", 0) or 0),
     "other_active_calls": int(totals.get("other", 0) or 0),
@@ -5415,6 +5553,14 @@ def _perfmon_trunk_activity_fallback(cucm_host: str, cucm_user: str, cucm_pass: 
     "cube_ips": list(CUBE_IPS),
     "errors": errors,
   }
+
+  with PERFMON_TRUNK_CACHE_LOCK:
+    PERFMON_TRUNK_CACHE[cache_key] = {
+      "timestamp": now,
+      "data": dict(result),
+    }
+
+  return result
 
 
 def _probe_tcp_port(host: str, port: int, timeout_seconds: float = 1.5) -> dict:
@@ -18042,6 +18188,7 @@ def dashboard_page(request: Request):
         <h3>Call Activity</h3>
         <div style="overflow-x:auto;"><table><thead><tr><th>Path</th><th>Active Calls</th></tr></thead><tbody>
           <tr><td>Jabber/Expressway -> CUBE (PSTN)</td><td id="callPstnViaCube" class="mono">-</td></tr>
+          <tr><td>Unity Voice Ports In Use</td><td id="callUnityPortsInUse" class="mono">-</td></tr>
           <tr><td>Ribbon SBC</td><td id="callRibbon" class="mono">-</td></tr>
           <tr><td>Cisco CUBE</td><td id="callCube" class="mono">-</td></tr>
           <tr><td>Cisco Jabber Endpoints</td><td id="callJabber" class="mono">-</td></tr>
@@ -18064,7 +18211,7 @@ def dashboard_page(request: Request):
 
     </main>
 
-    <script src="/dashboard.js?v=20260630f"></script>
+    <script src="/dashboard.js?v=20260630g"></script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
@@ -18103,6 +18250,11 @@ def api_dashboard_stats(request: Request):
   jabber_active_calls = None
   ris_available = True
   jabber_registered_total = 0
+  unity_voice_ports = {
+    "ports_in_use_total": None,
+    "matched_counters": [],
+    "errors": [],
+  }
   trunk_activity = {
     "ribbon_active_calls": 0,
     "cube_active_calls": 0,
@@ -18211,6 +18363,13 @@ def api_dashboard_stats(request: Request):
   except Exception as trunk_exc:
     warnings.append(f"SIP trunk activity unavailable: {trunk_exc}")
 
+  try:
+    unity_voice_ports = _perfmon_unity_voice_ports_in_use(resolved_cucm_host, resolved_cucm_user, resolved_cucm_pass)
+    if unity_voice_ports.get("errors"):
+      warnings.append("Unity voice-port counters partial data: " + " | ".join(unity_voice_ports.get("errors", [])))
+  except Exception as unity_ports_exc:
+    warnings.append(f"Unity voice-port counters unavailable: {unity_ports_exc}")
+
   ribbon_calls = int(trunk_activity.get("ribbon_active_calls", 0) or 0)
   cube_calls = int(trunk_activity.get("cube_active_calls", 0) or 0)
   other_trunk_calls = int(trunk_activity.get("other_active_calls", 0) or 0)
@@ -18233,6 +18392,7 @@ def api_dashboard_stats(request: Request):
 
   call_activity = {
     "pstn_via_cube_active_calls": pstn_via_cube_calls,
+    "unity_voice_ports_in_use": unity_voice_ports.get("ports_in_use_total"),
     "ribbon_active_calls": ribbon_calls,
     "cube_active_calls": cube_calls,
     "jabber_active_calls": int(jabber_active_calls or 0),
@@ -18279,6 +18439,7 @@ def dashboard_script():
   const kpiConfigured = document.getElementById("kpiConfigured");
   const kpiRegistered = document.getElementById("kpiRegistered");
   const callPstnViaCube = document.getElementById("callPstnViaCube");
+  const callUnityPortsInUse = document.getElementById("callUnityPortsInUse");
   const callRibbon = document.getElementById("callRibbon");
   const callCube = document.getElementById("callCube");
   const callJabber = document.getElementById("callJabber");
@@ -18302,6 +18463,7 @@ def dashboard_script():
     if (kpiConfigured) kpiConfigured.textContent = "0";
     if (kpiRegistered) kpiRegistered.textContent = "0";
     if (callPstnViaCube) callPstnViaCube.textContent = "-";
+    if (callUnityPortsInUse) callUnityPortsInUse.textContent = "-";
     if (callRibbon) callRibbon.textContent = "-";
     if (callCube) callCube.textContent = "-";
     if (callJabber) callJabber.textContent = "-";
@@ -18373,6 +18535,10 @@ def dashboard_script():
 
       const callActivity = stats.call_activity || {};
       if (callPstnViaCube) callPstnViaCube.textContent = String(callActivity.pstn_via_cube_active_calls || 0);
+      if (callUnityPortsInUse) {
+        const ports = callActivity.unity_voice_ports_in_use;
+        callUnityPortsInUse.textContent = (ports == null ? "N/A" : String(ports));
+      }
       if (callRibbon) callRibbon.textContent = String(callActivity.ribbon_active_calls || 0);
       if (callCube) callCube.textContent = String(callActivity.cube_active_calls || 0);
       if (callJabber) callJabber.textContent = String(callActivity.jabber_active_calls || 0);
