@@ -1501,8 +1501,25 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
             queue_resolution_source = "none"
             if fallback_queue_err:
               warnings.append(f"{row.get('name', user_id)} queue membership fallback: {fallback_queue_err}")
-      elif err_queues:
-        warnings.append(f"{row.get('name', user_id)} queues: {err_queues}")
+      else:
+        fallback_queue_names, fallback_queue_err = _genesys_lookup_user_queues_via_membership(
+          api_base,
+          access_token,
+          user_id,
+          str(row.get("email", "") or ""),
+          str(row.get("name", "") or ""),
+        )
+        if fallback_queue_names:
+          queues_text = ", ".join(fallback_queue_names)
+          queue_resolution_source = "membership-fallback-after-direct-error"
+        else:
+          queues_text = "(none)"
+          queue_resolution_source = "none"
+
+        if err_queues:
+          warnings.append(f"{row.get('name', user_id)} queues: {err_queues}")
+        if fallback_queue_err:
+          warnings.append(f"{row.get('name', user_id)} queue membership fallback: {fallback_queue_err}")
 
       raw_items.append({
         "user_id": user_id,
@@ -1531,6 +1548,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
     merged["can_build_webrtc"] = not bool(str(webrtc_phone or "").strip())
     merged["acd_skills"] = acd_skills_text
     merged["queues"] = queues_text
+    merged["queue_resolution_source"] = queue_resolution_source
     enriched.append(merged)
 
   return {
@@ -8277,7 +8295,7 @@ def genesys_admin_placeholder(request: Request):
               }
 
               let html = "<table><thead><tr>";
-              html += "<th>Name</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>Action</th><th>Template Source</th><th>Template Phone</th><th>Template Site ID</th><th>Template Base Settings</th><th>Template Lines</th><th>ACD Skills</th><th>Queues</th><th>State</th>";
+              html += "<th>Name</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>Action</th><th>Template Source</th><th>Template Phone</th><th>Template Site ID</th><th>Template Base Settings</th><th>Template Lines</th><th>ACD Skills</th><th>Queues</th><th>Queue Source</th><th>State</th>";
               html += "</tr></thead><tbody>";
               rows.forEach(function (row, i) {
                 const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
@@ -8298,6 +8316,7 @@ def genesys_admin_placeholder(request: Request):
                 html += "<td>" + (row.phone_template_line_count || 0) + "</td>";
                 html += "<td>" + (row.acd_skills || "") + "</td>";
                 html += "<td>" + (row.queues || "") + "</td>";
+                html += "<td>" + (row.queue_resolution_source || "") + "</td>";
                 html += "<td>" + (row.state || "") + "</td>";
                 html += "</tr>";
               });
