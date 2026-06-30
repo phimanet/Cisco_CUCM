@@ -17505,6 +17505,8 @@ def dashboard_page(request: Request):
       .kpi { background:#fff; border:1px solid var(--amn-border); border-radius:12px; padding:12px; }
       .kpi .label { font-size:12px; color:#4e6a84; font-weight:700; }
       .kpi .value { font-size:30px; color:var(--amn-navy); font-weight:800; margin-top:6px; }
+      .status-banner { margin-top:10px; padding:8px 10px; border-radius:8px; border:1px solid #c8dbee; background:#f6fbff; color:#274d70; font-size:12px; white-space:pre-wrap; }
+      .status-banner.error { border-color:#f1b6b6; background:#fff5f5; color:#8a1c1c; }
       table { width:100%; border-collapse:collapse; }
       th, td { text-align:left; padding:8px; border-bottom:1px solid #e7eef5; font-size:13px; }
       th { color:#274d70; background:#f6fbff; }
@@ -17542,6 +17544,7 @@ def dashboard_page(request: Request):
           <button id="refreshNow" type="button">Refresh Now</button>
           <span id="lastRefresh" class="muted"></span>
         </div>
+        <div id="topStatus" class="status-banner">Ready.</div>
       </section>
 
       <section class="kpi-grid">
@@ -17576,6 +17579,7 @@ def dashboard_page(request: Request):
         const refreshBtn = document.getElementById("refreshNow");
         const lastRefreshEl = document.getElementById("lastRefresh");
         const statusBox = document.getElementById("statusBox");
+        const topStatus = document.getElementById("topStatus");
         const kpiActiveCalls = document.getElementById("kpiActiveCalls");
         const kpiConfigured = document.getElementById("kpiConfigured");
         const kpiRegistered = document.getElementById("kpiRegistered");
@@ -17584,7 +17588,24 @@ def dashboard_page(request: Request):
         const unityRows = document.getElementById("unityRows");
         let timerId = null;
 
-        function setStatus(text) { statusBox.textContent = text; }
+        function setStatus(text, isError) {
+          const safeText = text || "";
+          statusBox.textContent = safeText;
+          if (topStatus) {
+            topStatus.textContent = safeText;
+            topStatus.classList.toggle("error", !!isError);
+          }
+        }
+
+        function renderErrorRows(message) {
+          const text = String(message || "Dashboard request failed");
+          serverRows.innerHTML = '<tr><td colspan="2" class="bad">' + text + '</td></tr>';
+          prefixRows.innerHTML = '<tr><td colspan="3" class="bad">' + text + '</td></tr>';
+          unityRows.innerHTML = '<tr><td colspan="6" class="bad">' + text + '</td></tr>';
+          kpiActiveCalls.textContent = 'N/A';
+          kpiConfigured.textContent = '0';
+          kpiRegistered.textContent = '0';
+        }
         function renderServerRows(rows) {
           if (!rows.length) {
             serverRows.innerHTML = '<tr><td colspan="2" class="muted">No registration rows returned.</td></tr>';
@@ -17609,13 +17630,18 @@ def dashboard_page(request: Request):
         }
 
         async function loadStats() {
-          setStatus('Refreshing dashboard data...');
+          setStatus('Refreshing dashboard data...', false);
           try {
+            const controller = new AbortController();
+            const timeoutMs = 20000;
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
             const resp = await fetch('/api/dashboard/stats', {
               method: 'GET',
               credentials: 'same-origin',
-              headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' }
+              headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+              signal: controller.signal,
             });
+            clearTimeout(timeoutId);
             const payload = await resp.json();
             if (!resp.ok || !payload.ok) {
               throw new Error((payload && (payload.error || payload.detail)) || 'Dashboard stats request failed');
@@ -17633,10 +17659,12 @@ def dashboard_page(request: Request):
             if (warnings.length) {
               text += '\nWarnings:\n- ' + warnings.join('\n- ');
             }
-            setStatus(text);
+            setStatus(text, false);
             lastRefreshEl.textContent = 'Last refresh: ' + new Date().toLocaleTimeString();
           } catch (err) {
-            setStatus('Dashboard refresh failed: ' + ((err && err.message) || 'Unknown error'));
+            const msg = 'Dashboard refresh failed: ' + ((err && err.message) || 'Unknown error');
+            setStatus(msg, true);
+            renderErrorRows(msg);
           }
         }
 
