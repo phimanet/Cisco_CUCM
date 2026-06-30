@@ -5121,6 +5121,52 @@ def _perfmon_collect_registered_other_station_devices(cucm_host: str, cucm_user:
   return 0
 
 
+def _perfmon_collect_active_calls(cucm_host: str, cucm_user: str, cucm_pass: str, target_host: str) -> int | None:
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:soap=\"http://schemas.cisco.com/ast/soap\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <soap:perfmonCollectCounterData>
+      <soap:Host>{xml_escape(target_host)}</soap:Host>
+      <soap:Object>Cisco CallManager</soap:Object>
+    </soap:perfmonCollectCounterData>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/perfmonservice2/services/PerfmonService",
+    data=soap_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml; charset=utf-8"},
+    timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
+  )
+  if response.status_code != 200:
+    return None
+
+  root = _parse_xml_or_runtime_error(response.text, "PerfMon perfmonCollectCounterData")
+  current_name = ""
+  for elem in root.iter():
+    tag = _strip_xml_ns(elem.tag)
+    text = (elem.text or "").strip()
+    if tag == "Name":
+      current_name = text
+      continue
+    if tag != "Value" or not current_name:
+      continue
+
+    counter_name = current_name.split("\\")[-1].strip().lower()
+    if counter_name in {"activecalls", "callsactive", "numactivecalls", "numberofactivecalls"}:
+      try:
+        return int(float(text))
+      except Exception:
+        return None
+
+  return None
+
+
 def _perfmon_registered_fallback(cucm_host: str, cucm_user: str, cucm_pass: str) -> dict:
   hosts = _axl_list_process_nodes(cucm_host, cucm_user, cucm_pass) or [cucm_host]
   by_server = {}
@@ -5134,6 +5180,31 @@ def _perfmon_registered_fallback(cucm_host: str, cucm_user: str, cucm_pass: str)
   return {
     "by_server_registered": by_server,
     "registered_total": sum(by_server.values()),
+    "errors": errors,
+  }
+
+
+def _perfmon_active_calls_fallback(cucm_host: str, cucm_user: str, cucm_pass: str) -> dict:
+  hosts = _axl_list_process_nodes(cucm_host, cucm_user, cucm_pass) or [cucm_host]
+  by_server = {}
+  errors = []
+  total = 0
+  seen_value = False
+
+  for host in hosts:
+    try:
+      value = _perfmon_collect_active_calls(cucm_host, cucm_user, cucm_pass, host)
+      if value is None:
+        continue
+      by_server[host] = value
+      total += value
+      seen_value = True
+    except Exception as exc:
+      errors.append(f"{host}: {exc}")
+
+  return {
+    "active_calls_total": total if seen_value else None,
+    "by_server_active_calls": by_server,
     "errors": errors,
   }
 
@@ -17739,7 +17810,7 @@ def dashboard_page(request: Request):
     <main class="content">
       <section class="panel">
         <h2 style="margin:0;color:#002f6c;">Cisco Voice Environment Dashboard</h2>
-        <p style="margin:8px 0 0 0;color:#4e6a84;">Baseline dashboard with refreshable CUCM/Jabber metrics and Unity port probes.</p>
+        <p style="margin:8px 0 0 0;color:#4e6a84;">Baseline dashboard with refreshable CUCM and Jabber realtime metrics.</p>
         <div class="control-row">
           <span class="env-banner __ENV_CLASS__">__ENV_TEXT__</span>
           <label for="refreshInterval"><strong>Refresh Rate:</strong></label>
@@ -17770,12 +17841,6 @@ def dashboard_page(request: Request):
       <section class="panel">
         <h3>Jabber Prefix Summary</h3>
         <div style="overflow-x:auto;"><table><thead><tr><th>Prefix</th><th>Configured (AXL)</th><th>Registered (RIS)</th></tr></thead><tbody id="prefixRows"><tr><td colspan="3" class="muted">Waiting for data...</td></tr></tbody></table></div>
-      </section>
-
-      <section class="panel">
-        <h3>Unity Voicemail Port Probes</h3>
-        <p class="muted">Realtime TCP probes from this portal host to Unity endpoints/ports.</p>
-        <div style="overflow-x:auto;"><table><thead><tr><th>Unity Host</th><th>Port</th><th>Purpose</th><th>Status</th><th>Latency</th><th>Error</th></tr></thead><tbody id="unityRows"><tr><td colspan="6" class="muted">Waiting for data...</td></tr></tbody></table></div>
       </section>
 
       <section class="panel"><h3>Status</h3><pre id="statusBox" class="mono" style="white-space:pre-wrap;margin:0;">Ready.</pre></section>
@@ -17877,19 +17942,19 @@ def api_dashboard_stats(request: Request):
     except Exception as perf_exc:
       warnings.append(f"PerfMon fallback unavailable: {perf_exc}")
 
+  if active_calls is None:
+    try:
+      perf_calls = _perfmon_active_calls_fallback(resolved_cucm_host, resolved_cucm_user, resolved_cucm_pass)
+      if perf_calls.get("active_calls_total") is not None:
+        active_calls = int(perf_calls.get("active_calls_total") or 0)
+        warnings.append("Using PerfMon fallback for active-call total because RIS realtime active-call metric is unavailable.")
+      elif ris_available:
+        warnings.append("Active-call total unavailable from both RIS and PerfMon in this cluster context.")
+    except Exception as perf_call_exc:
+      warnings.append(f"Active-call fallback unavailable: {perf_call_exc}")
+
   if ris_available and active_calls is None:
     warnings.append("Realtime active-call counter not returned by this CUCM response; showing N/A.")
-
-  unity_host = PROD_UNITY_HOST
-  unity_port_probes = []
-  try:
-    unity_port_probes = _build_unity_port_probe(unity_host, mode="full")
-    unity_vmrest_probe = _probe_unity_vmrest_auth(unity_host, resolved_cucm_user, resolved_cucm_pass)
-    unity_port_probes.append(unity_vmrest_probe)
-    if unity_vmrest_probe.get("status") != "open":
-      warnings.append(f"Unity VMREST auth failed: {unity_vmrest_probe.get('error', 'unknown error')}")
-  except Exception as exc:
-    warnings.append(f"Unity probe unavailable: {exc}")
 
   return JSONResponse(
     {
@@ -17898,7 +17963,6 @@ def api_dashboard_stats(request: Request):
       "generated_at": datetime.datetime.now().strftime(AUDIT_TIMESTAMP_FORMAT),
       "environment": "LAB" if _is_lab_environment(resolved_cucm_host) else "PROD",
       "cucm_host": resolved_cucm_host,
-      "unity_host": unity_host,
       "stats": {
         "configured_by_prefix": configured_by_prefix,
         "registered_by_prefix": registered_by_prefix,
@@ -17906,7 +17970,6 @@ def api_dashboard_stats(request: Request):
         "jabber_registered_total": jabber_registered_total,
         "registered_by_server": by_server_registered,
         "active_calls": active_calls,
-        "unity_port_probes": unity_port_probes,
       },
       "warnings": warnings,
     }
@@ -17928,9 +17991,9 @@ def dashboard_script():
   const kpiRegistered = document.getElementById("kpiRegistered");
   const serverRows = document.getElementById("serverRows");
   const prefixRows = document.getElementById("prefixRows");
-  const unityRows = document.getElementById("unityRows");
+  
 
-  if (!refreshBtn || !intervalSelect || !autoRefreshCb || !statusBox || !serverRows || !prefixRows || !unityRows) {
+  if (!refreshBtn || !intervalSelect || !autoRefreshCb || !statusBox || !serverRows || !prefixRows) {
     return;
   }
 
@@ -17949,7 +18012,6 @@ def dashboard_script():
     const text = String(message || "Dashboard request failed");
     serverRows.innerHTML = '<tr><td colspan="2" class="bad">' + text + '</td></tr>';
     prefixRows.innerHTML = '<tr><td colspan="3" class="bad">' + text + '</td></tr>';
-    unityRows.innerHTML = '<tr><td colspan="6" class="bad">' + text + '</td></tr>';
     if (kpiActiveCalls) kpiActiveCalls.textContent = "N/A";
     if (kpiConfigured) kpiConfigured.textContent = "0";
     if (kpiRegistered) kpiRegistered.textContent = "0";
@@ -17969,20 +18031,6 @@ def dashboard_script():
     const prefixes = ["CSF", "TCT", "BOT", "TAB"];
     prefixRows.innerHTML = prefixes
       .map((p) => '<tr><td class="mono">' + p + '</td><td class="mono">' + String((configured && configured[p]) || 0) + '</td><td class="mono">' + String((registered && registered[p]) || 0) + '</td></tr>')
-      .join('');
-  }
-
-  function renderUnityRows(rows) {
-    if (!rows.length) {
-      unityRows.innerHTML = '<tr><td colspan="6" class="muted">No port probe rows returned.</td></tr>';
-      return;
-    }
-    unityRows.innerHTML = rows
-      .map((r) => {
-        const cls = r.status === "open" ? "ok" : "bad";
-        const latency = r.latency_ms == null ? "-" : String(r.latency_ms) + " ms";
-        return '<tr><td>' + (r.host || "") + '</td><td class="mono">' + String(r.port || "") + '</td><td>' + (r.label || "") + '</td><td class="' + cls + '">' + (r.status || "") + '</td><td class="mono">' + latency + '</td><td class="mono">' + (r.error || "") + '</td></tr>';
-      })
       .join('');
   }
 
@@ -18011,7 +18059,6 @@ def dashboard_script():
       if (kpiRegistered) kpiRegistered.textContent = String(stats.jabber_registered_total || 0);
       renderServerRows(stats.registered_by_server || []);
       renderPrefixRows(stats.configured_by_prefix || {}, stats.registered_by_prefix || {});
-      renderUnityRows(stats.unity_port_probes || []);
 
       const warnings = payload.warnings || [];
       let text = "Dashboard refreshed successfully. Mode: " + String(payload.mode || "full");
