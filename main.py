@@ -185,7 +185,7 @@ GENESYS_CLIENT_SECRET = (os.getenv("GENESYS_CLIENT_SECRET", "") or "").strip()
 GENESYS_USERS_PAGE_SIZE = int((os.getenv("GENESYS_USERS_PAGE_SIZE", "100") or "100").strip())
 GENESYS_PHONE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_PHONE_LOOKUP_MAX_PAGES", "50") or "50").strip())
 GENESYS_QUEUE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_LOOKUP_MAX_PAGES", "200") or "200").strip())
-GENESYS_QUEUE_MEMBER_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_MEMBER_MAX_PAGES", "20") or "20").strip())
+GENESYS_QUEUE_MEMBER_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_MEMBER_MAX_PAGES", "100") or "100").strip())
 GENESYS_QUEUE_ID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 GENESYS_PRIORITY_QUEUE_IDS = [
   (item or "").strip()
@@ -1036,6 +1036,54 @@ def _genesys_collect_paged_entities(
   return entities_all, pages_scanned, ""
 
 
+def _genesys_get_user_queues_paged(api_base: str, access_token: str, user_id: str) -> tuple[list[dict], str, int]:
+  clean_user_id = str(user_id or "").strip()
+  if not clean_user_id:
+    return [], "User id is required.", 0
+
+  entities_all = []
+  pages_scanned = 0
+  page_size = 100
+  max_pages = max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 500))
+
+  for page_number in range(1, max_pages + 1):
+    ok_page, payload, err_page = _genesys_get_json(
+      api_base,
+      access_token,
+      f"/api/v2/users/{clean_user_id}/queues",
+      {
+        "pageSize": page_size,
+        "pageNumber": page_number,
+      },
+    )
+    if not ok_page:
+      return entities_all, err_page, pages_scanned
+
+    entities = payload.get("entities", []) if isinstance(payload, dict) else []
+    if not isinstance(entities, list):
+      entities = []
+
+    entities_all.extend([item for item in entities if isinstance(item, dict)])
+    pages_scanned += 1
+
+    next_uri = str(payload.get("nextUri", "") or payload.get("next_uri", "")).strip()
+    page_count_raw = payload.get("pageCount", 0)
+    try:
+      page_count = int(page_count_raw or 0)
+    except Exception:
+      page_count = 0
+
+    if next_uri:
+      continue
+    if page_count and page_number < page_count:
+      continue
+    if len(entities) >= page_size:
+      continue
+    break
+
+  return entities_all, "", pages_scanned
+
+
 def _genesys_queue_member_matches_user(member: dict, user_id: str, user_email: str, user_name: str) -> bool:
   if not isinstance(member, dict):
     return False
@@ -1333,6 +1381,11 @@ def _genesys_get_queue_members_with_diagnostics(api_base: str, access_token: str
 
       page_count = int(members_payload.get("pageCount", 0) or 0) if isinstance(members_payload, dict) else 0
       diagnostics.append(f"{strategy} page {member_page}: {page_items} item(s)")
+      if page_count and member_page >= max_member_pages and member_page < page_count:
+        diagnostics.append(
+          f"{strategy}: truncated at page {member_page}/{page_count} due to GENESYS_QUEUE_MEMBER_MAX_PAGES={max_member_pages}"
+        )
+        break
       if not page_count or member_page >= page_count:
         break
 
@@ -1493,9 +1546,10 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
       elif err_skills:
         warnings.append(f"{row.get('name', user_id)} skills: {err_skills}")
 
-      ok_queues, queues_payload, err_queues = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}/queues")
-      if ok_queues:
-        entities = queues_payload.get("entities", []) or []
+      user_queue_pages = 0
+      user_queue_entities, err_queues, user_queue_pages = _genesys_get_user_queues_paged(api_base, access_token, user_id)
+      if not err_queues:
+        entities = user_queue_entities or []
         queue_names = []
         queue_ids = []
         for item in entities:
@@ -1534,6 +1588,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
             queues_text = "(none)"
             queue_resolution_source = "none"
             if isinstance(fallback_queue_diag, dict):
+              fallback_queue_diag["direct_user_queue_pages_scanned"] = int(user_queue_pages or 0)
               scanned_count = int(fallback_queue_diag.get("scanned_queue_count", 0) or 0)
               scanned_pages = int(fallback_queue_diag.get("scanned_queue_pages", 0) or 0)
               if scanned_count == 0:
@@ -1555,6 +1610,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
           queues_text = "(none)"
           queue_resolution_source = "none"
           if isinstance(fallback_queue_diag, dict):
+            fallback_queue_diag["direct_user_queue_pages_scanned"] = int(user_queue_pages or 0)
             scanned_count = int(fallback_queue_diag.get("scanned_queue_count", 0) or 0)
             scanned_pages = int(fallback_queue_diag.get("scanned_queue_pages", 0) or 0)
             if scanned_count == 0:
@@ -1575,7 +1631,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         "phone_management": phone_management_payload,
         "phone_template": phone_template,
         "routing_skills": skills_payload if ok_skills else {},
-        "queues": queues_payload if ok_queues else {},
+        "queues": {"entities": user_queue_entities, "pages_scanned": user_queue_pages} if not err_queues else {},
         "resolved_queues": queues_text,
         "queue_resolution_source": queue_resolution_source,
       })
@@ -8948,9 +9004,9 @@ def genesys_user_queues_by_id_route(
   elif err_user:
     warnings.append(f"user profile: {err_user}")
 
-  ok_queues, queues_payload, err_queues = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}/queues")
-  if ok_queues:
-    entities = queues_payload.get("entities", []) or []
+  user_queue_entities, err_queues, user_queue_pages = _genesys_get_user_queues_paged(api_base, access_token, clean_user_id)
+  if not err_queues:
+    entities = user_queue_entities or []
     queue_ids = []
     for item in entities:
       if not isinstance(item, dict):
@@ -8983,10 +9039,11 @@ def genesys_user_queues_by_id_route(
     )
     if fallback_queue_names:
       queue_names = list(fallback_queue_names)
-      queue_resolution_source = "membership-fallback" if ok_queues else "membership-fallback-after-direct-error"
+      queue_resolution_source = "membership-fallback" if not err_queues else "membership-fallback-after-direct-error"
     elif fallback_queue_err:
       warnings.append(f"queue membership fallback: {fallback_queue_err}")
     if isinstance(fallback_queue_diag, dict):
+      fallback_queue_diag["direct_user_queue_pages_scanned"] = int(user_queue_pages or 0)
       scanned_count = int(fallback_queue_diag.get("scanned_queue_count", 0) or 0)
       scanned_pages = int(fallback_queue_diag.get("scanned_queue_pages", 0) or 0)
       if scanned_count == 0:
