@@ -1139,9 +1139,17 @@ def _genesys_lookup_user_queues_by_ids(api_base: str, access_token: str, user_id
   return sorted(set(matched_queue_names), key=str.lower)
 
 
-def _genesys_lookup_user_queues_via_membership(api_base: str, access_token: str, user_id: str, user_email: str, user_name: str) -> tuple[list[str], str]:
+def _genesys_lookup_user_queues_via_membership(api_base: str, access_token: str, user_id: str, user_email: str, user_name: str) -> tuple[list[str], str, dict]:
+  diagnostics = {
+    "priority_queue_ids_checked": 0,
+    "priority_matches": 0,
+    "scanned_queue_count": 0,
+    "scanned_queue_pages": 0,
+  }
+
   # First, check known priority queue IDs when provided.
   if GENESYS_PRIORITY_QUEUE_IDS:
+    diagnostics["priority_queue_ids_checked"] = len(GENESYS_PRIORITY_QUEUE_IDS)
     priority_matches = _genesys_lookup_user_queues_by_ids(
       api_base,
       access_token,
@@ -1151,7 +1159,8 @@ def _genesys_lookup_user_queues_via_membership(api_base: str, access_token: str,
       GENESYS_PRIORITY_QUEUE_IDS,
     )
     if priority_matches:
-      return priority_matches, ""
+      diagnostics["priority_matches"] = len(priority_matches)
+      return priority_matches, "", diagnostics
 
   queue_entities = []
   max_queue_pages = max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 200))
@@ -1164,11 +1173,15 @@ def _genesys_lookup_user_queues_via_membership(api_base: str, access_token: str,
       params={"pageSize": 100, "pageNumber": page_number},
     )
     if not ok_queues:
-      return [], err_queues
+      diagnostics["scanned_queue_pages"] = page_number - 1
+      return [], err_queues, diagnostics
 
     entities = queues_payload.get("entities", []) if isinstance(queues_payload, dict) else []
     if isinstance(entities, list):
       queue_entities.extend(entities)
+      diagnostics["scanned_queue_count"] = len(queue_entities)
+
+    diagnostics["scanned_queue_pages"] = page_number
 
     page_count = int(queues_payload.get("pageCount", 0) or 0) if isinstance(queues_payload, dict) else 0
     if not page_count or page_number >= page_count:
@@ -1194,7 +1207,7 @@ def _genesys_lookup_user_queues_via_membership(api_base: str, access_token: str,
     if found_in_queue and queue_name:
       matched_queue_names.append(queue_name)
 
-  return sorted(set(matched_queue_names), key=str.lower), ""
+  return sorted(set(matched_queue_names), key=str.lower), "", diagnostics
 
 
 def _genesys_search_queues_by_name(api_base: str, access_token: str, queue_name: str) -> tuple[list[dict], str]:
@@ -1507,7 +1520,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
           queues_text = ", ".join(sorted(set(queue_names), key=str.lower))
           queue_resolution_source = "direct-user-queues"
         else:
-          fallback_queue_names, fallback_queue_err = _genesys_lookup_user_queues_via_membership(
+          fallback_queue_names, fallback_queue_err, fallback_queue_diag = _genesys_lookup_user_queues_via_membership(
             api_base,
             access_token,
             user_id,
@@ -1520,10 +1533,15 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
           else:
             queues_text = "(none)"
             queue_resolution_source = "none"
+            if isinstance(fallback_queue_diag, dict):
+              scanned_count = int(fallback_queue_diag.get("scanned_queue_count", 0) or 0)
+              scanned_pages = int(fallback_queue_diag.get("scanned_queue_pages", 0) or 0)
+              if scanned_count == 0:
+                warnings.append(f"{row.get('name', user_id)} queue visibility: 0 queues visible to API client (pages_scanned={scanned_pages})")
             if fallback_queue_err:
               warnings.append(f"{row.get('name', user_id)} queue membership fallback: {fallback_queue_err}")
       else:
-        fallback_queue_names, fallback_queue_err = _genesys_lookup_user_queues_via_membership(
+        fallback_queue_names, fallback_queue_err, fallback_queue_diag = _genesys_lookup_user_queues_via_membership(
           api_base,
           access_token,
           user_id,
@@ -1536,6 +1554,11 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         else:
           queues_text = "(none)"
           queue_resolution_source = "none"
+          if isinstance(fallback_queue_diag, dict):
+            scanned_count = int(fallback_queue_diag.get("scanned_queue_count", 0) or 0)
+            scanned_pages = int(fallback_queue_diag.get("scanned_queue_pages", 0) or 0)
+            if scanned_count == 0:
+              warnings.append(f"{row.get('name', user_id)} queue visibility: 0 queues visible to API client (pages_scanned={scanned_pages})")
 
         if err_queues:
           warnings.append(f"{row.get('name', user_id)} queues: {err_queues}")
@@ -8951,7 +8974,7 @@ def genesys_user_queues_by_id_route(
       queue_resolution_source = "direct-user-queues"
 
   if not queue_names:
-    fallback_queue_names, fallback_queue_err = _genesys_lookup_user_queues_via_membership(
+    fallback_queue_names, fallback_queue_err, fallback_queue_diag = _genesys_lookup_user_queues_via_membership(
       api_base,
       access_token,
       clean_user_id,
@@ -8963,6 +8986,11 @@ def genesys_user_queues_by_id_route(
       queue_resolution_source = "membership-fallback" if ok_queues else "membership-fallback-after-direct-error"
     elif fallback_queue_err:
       warnings.append(f"queue membership fallback: {fallback_queue_err}")
+    if isinstance(fallback_queue_diag, dict):
+      scanned_count = int(fallback_queue_diag.get("scanned_queue_count", 0) or 0)
+      scanned_pages = int(fallback_queue_diag.get("scanned_queue_pages", 0) or 0)
+      if scanned_count == 0:
+        warnings.append(f"queue visibility: 0 queues visible to API client (pages_scanned={scanned_pages})")
 
   if err_queues:
     warnings.append(f"direct user queues: {err_queues}")
@@ -8976,6 +9004,7 @@ def genesys_user_queues_by_id_route(
     "user_email": clean_user_email,
     "queues": queue_names,
     "queue_resolution_source": queue_resolution_source,
+    "queue_diagnostics": fallback_queue_diag if isinstance(locals().get("fallback_queue_diag"), dict) else {},
     "warnings": warnings,
   })
 
