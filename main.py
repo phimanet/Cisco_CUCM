@@ -17602,11 +17602,7 @@ def dashboard_page(request: Request):
             <option value="60">1 minute</option>
           </select>
           <label><input type="checkbox" id="autoRefresh" checked> Auto Refresh</label>
-          <label for="dataMode"><strong>Data Pull:</strong></label>
-          <select id="dataMode">
-            <option value="light" selected>Initial (Unity + quick checks)</option>
-            <option value="full">Full (CUCM + Unity)</option>
-          </select>
+          <span class="muted"><strong>Data Pull:</strong> Full (CUCM + Unity)</span>
           <button id="refreshNow" type="button">Refresh Now</button>
           <span id="lastRefresh" class="muted"></span>
         </div>
@@ -17638,7 +17634,7 @@ def dashboard_page(request: Request):
       <section class="panel"><h3>Status</h3><pre id="statusBox" class="mono" style="white-space:pre-wrap;margin:0;">Ready.</pre></section>
     </main>
 
-    <script src="/dashboard.js?v=20260630a"></script>
+    <script src="/dashboard.js?v=20260630b"></script>
   </body>
 </html>
 """.replace("__AUTH_USER__", auth_user).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class)
@@ -17654,11 +17650,9 @@ def dashboard_page(request: Request):
 
 
 @app.get("/api/dashboard/stats")
-def api_dashboard_stats(request: Request, mode: str = Query("light")):
+def api_dashboard_stats(request: Request):
   warnings = []
-  pull_mode = (mode or "light").strip().lower()
-  if pull_mode not in {"light", "full"}:
-    pull_mode = "light"
+  pull_mode = "full"
 
   # Dashboard must use the DN report service credentials (ucmappadmin),
   # not the interactive operator credentials.
@@ -17677,57 +17671,51 @@ def api_dashboard_stats(request: Request, mode: str = Query("light")):
   by_server_registered = []
   active_calls = None
 
-  if pull_mode == "full":
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
-      future_map = {
-        pool.submit(
-          _axl_count_phones_by_prefix,
-          resolved_cucm_host,
-          resolved_cucm_user,
-          resolved_cucm_pass,
-          prefix,
-        ): prefix
-        for prefix in list(configured_by_prefix.keys())
-      }
-      for future in concurrent.futures.as_completed(future_map):
-        prefix = future_map[future]
-        try:
-          configured_by_prefix[prefix] = int(future.result())
-        except Exception as exc:
-          warnings.append(str(exc))
-
-    try:
-      ris = _ris_fetch_jabber_registrations(
+  with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+    future_map = {
+      pool.submit(
+        _axl_count_phones_by_prefix,
         resolved_cucm_host,
         resolved_cucm_user,
         resolved_cucm_pass,
-      )
-      registered_by_prefix = ris.get("by_prefix_registered", registered_by_prefix)
-      active_calls = ris.get("active_calls")
-      by_server_map = ris.get("by_server_registered", {}) or {}
-      by_server_registered = [
-        {"server": server_name, "registered": count}
-        for server_name, count in sorted(by_server_map.items(), key=lambda item: item[0].lower())
-      ]
-    except Exception as exc:
-      warnings.append(str(exc))
+        prefix,
+      ): prefix
+      for prefix in list(configured_by_prefix.keys())
+    }
+    for future in concurrent.futures.as_completed(future_map):
+      prefix = future_map[future]
+      try:
+        configured_by_prefix[prefix] = int(future.result())
+      except Exception as exc:
+        warnings.append(str(exc))
 
-    if active_calls is None:
-      warnings.append("Realtime active-call counter not returned by this CUCM response; showing N/A.")
-  else:
-    warnings.append("CUCM heavy data pull is throttled in Initial mode. Switch Data Pull to Full when ready.")
+  try:
+    ris = _ris_fetch_jabber_registrations(
+      resolved_cucm_host,
+      resolved_cucm_user,
+      resolved_cucm_pass,
+    )
+    registered_by_prefix = ris.get("by_prefix_registered", registered_by_prefix)
+    active_calls = ris.get("active_calls")
+    by_server_map = ris.get("by_server_registered", {}) or {}
+    by_server_registered = [
+      {"server": server_name, "registered": count}
+      for server_name, count in sorted(by_server_map.items(), key=lambda item: item[0].lower())
+    ]
+  except Exception as exc:
+    warnings.append(str(exc))
+
+  if active_calls is None:
+    warnings.append("Realtime active-call counter not returned by this CUCM response; showing N/A.")
 
   unity_host = PROD_UNITY_HOST
   unity_port_probes = []
   try:
-    unity_port_probes = _build_unity_port_probe(unity_host, mode=pull_mode)
-    if pull_mode == "full":
-      unity_vmrest_probe = _probe_unity_vmrest_auth(unity_host, resolved_cucm_user, resolved_cucm_pass)
-      unity_port_probes.append(unity_vmrest_probe)
-      if unity_vmrest_probe.get("status") != "open":
-        warnings.append(f"Unity VMREST auth failed: {unity_vmrest_probe.get('error', 'unknown error')}")
-    else:
-      warnings.append("Unity authenticated VMREST check is skipped in Initial mode. Use Full mode when ready.")
+    unity_port_probes = _build_unity_port_probe(unity_host, mode="full")
+    unity_vmrest_probe = _probe_unity_vmrest_auth(unity_host, resolved_cucm_user, resolved_cucm_pass)
+    unity_port_probes.append(unity_vmrest_probe)
+    if unity_vmrest_probe.get("status") != "open":
+      warnings.append(f"Unity VMREST auth failed: {unity_vmrest_probe.get('error', 'unknown error')}")
   except Exception as exc:
     warnings.append(f"Unity probe unavailable: {exc}")
 
@@ -17760,7 +17748,6 @@ def dashboard_script():
   const intervalSelect = document.getElementById("refreshInterval");
   const autoRefreshCb = document.getElementById("autoRefresh");
   const refreshBtn = document.getElementById("refreshNow");
-  const dataModeSelect = document.getElementById("dataMode");
   const lastRefreshEl = document.getElementById("lastRefresh");
   const statusBox = document.getElementById("statusBox");
   const topStatus = document.getElementById("topStatus");
@@ -17831,10 +17818,9 @@ def dashboard_script():
     setStatus("Refreshing dashboard data...", false);
     try {
       const controller = new AbortController();
-      const selectedMode = dataModeSelect && dataModeSelect.value ? dataModeSelect.value : "light";
-      const timeoutMs = selectedMode === "full" ? 30000 : 12000;
+      const timeoutMs = 30000;
       const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      const resp = await fetch('/api/dashboard/stats?mode=' + encodeURIComponent(selectedMode), {
+      const resp = await fetch('/api/dashboard/stats', {
         method: "GET",
         credentials: "same-origin",
         headers: { Accept: "application/json", "X-Requested-With": "XMLHttpRequest" },
@@ -17856,7 +17842,7 @@ def dashboard_script():
       renderUnityRows(stats.unity_port_probes || []);
 
       const warnings = payload.warnings || [];
-      let text = "Dashboard refreshed successfully. Mode: " + String(payload.mode || selectedMode || "light");
+      let text = "Dashboard refreshed successfully. Mode: " + String(payload.mode || "full");
       if (warnings.length) {
         text += "\\nWarnings:\\n- " + warnings.join("\\n- ");
       }
@@ -17886,9 +17872,6 @@ def dashboard_script():
   refreshBtn.addEventListener("click", loadStats);
   intervalSelect.addEventListener("change", resetTimer);
   autoRefreshCb.addEventListener("change", resetTimer);
-  if (dataModeSelect) {
-    dataModeSelect.addEventListener("change", loadStats);
-  }
 
   loadStats();
   resetTimer();
