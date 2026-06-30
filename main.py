@@ -17983,6 +17983,7 @@ def dashboard_page(request: Request):
       <section class="panel">
         <h3>Call Activity</h3>
         <div style="overflow-x:auto;"><table><thead><tr><th>Path</th><th>Active Calls</th></tr></thead><tbody>
+          <tr><td>CUBE -> Ribbon Contact Center Flow (Est.)</td><td id="callCubeToRibbon" class="mono">-</td></tr>
           <tr><td>Ribbon SBC</td><td id="callRibbon" class="mono">-</td></tr>
           <tr><td>Cisco CUBE</td><td id="callCube" class="mono">-</td></tr>
           <tr><td>Cisco Jabber Endpoints</td><td id="callJabber" class="mono">-</td></tr>
@@ -18148,18 +18149,25 @@ def api_dashboard_stats(request: Request):
   ribbon_calls = int(trunk_activity.get("ribbon_active_calls", 0) or 0)
   cube_calls = int(trunk_activity.get("cube_active_calls", 0) or 0)
   other_trunk_calls = int(trunk_activity.get("other_active_calls", 0) or 0)
-  trunk_total_calls = ribbon_calls + cube_calls + other_trunk_calls
+  # CUBE and Ribbon can represent the same call path for contact-center calls;
+  # avoid summing them directly when estimating endpoint calls.
+  trunk_dominant_calls = max(ribbon_calls, cube_calls, other_trunk_calls)
+  cube_to_ribbon_flow_est = min(ribbon_calls, cube_calls)
 
   jabber_calls_source = "ris"
+  cluster_total_calls = int(active_calls or 0) if active_calls is not None else 0
   if jabber_active_calls is None:
-    jabber_calls_source = "estimate_total_minus_trunks"
-    cluster_total_calls = int(active_calls or 0) if active_calls is not None else 0
-    jabber_active_calls = max(0, cluster_total_calls - trunk_total_calls)
+    jabber_calls_source = "estimate_total_minus_dominant_trunk"
+    jabber_active_calls = max(0, cluster_total_calls - trunk_dominant_calls)
 
-  total_active_calls = int(jabber_active_calls or 0) + trunk_total_calls
+  if cluster_total_calls > 0:
+    total_active_calls = cluster_total_calls
+  else:
+    total_active_calls = int(jabber_active_calls or 0) + trunk_dominant_calls
   active_calls = total_active_calls
 
   call_activity = {
+    "cube_to_ribbon_flow_est": cube_to_ribbon_flow_est,
     "ribbon_active_calls": ribbon_calls,
     "cube_active_calls": cube_calls,
     "jabber_active_calls": int(jabber_active_calls or 0),
@@ -18203,6 +18211,7 @@ def dashboard_script():
   const kpiActiveCalls = document.getElementById("kpiActiveCalls");
   const kpiConfigured = document.getElementById("kpiConfigured");
   const kpiRegistered = document.getElementById("kpiRegistered");
+  const callCubeToRibbon = document.getElementById("callCubeToRibbon");
   const callRibbon = document.getElementById("callRibbon");
   const callCube = document.getElementById("callCube");
   const callJabber = document.getElementById("callJabber");
@@ -18223,6 +18232,7 @@ def dashboard_script():
     if (kpiActiveCalls) kpiActiveCalls.textContent = "N/A";
     if (kpiConfigured) kpiConfigured.textContent = "0";
     if (kpiRegistered) kpiRegistered.textContent = "0";
+    if (callCubeToRibbon) callCubeToRibbon.textContent = "-";
     if (callRibbon) callRibbon.textContent = "-";
     if (callCube) callCube.textContent = "-";
     if (callJabber) callJabber.textContent = "-";
@@ -18261,6 +18271,7 @@ def dashboard_script():
       if (kpiRegistered) kpiRegistered.textContent = String(stats.jabber_csf_registered_total || 0);
 
       const callActivity = stats.call_activity || {};
+      if (callCubeToRibbon) callCubeToRibbon.textContent = String(callActivity.cube_to_ribbon_flow_est || 0);
       if (callRibbon) callRibbon.textContent = String(callActivity.ribbon_active_calls || 0);
       if (callCube) callCube.textContent = String(callActivity.cube_active_calls || 0);
       if (callJabber) callJabber.textContent = String(callActivity.jabber_active_calls || 0);
