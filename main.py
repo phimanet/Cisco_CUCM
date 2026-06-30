@@ -182,6 +182,8 @@ TWILIO_HOSTED_NUMBERS_ACTIVE = (os.getenv("TWILIO_HOSTED_NUMBERS_ACTIVE", "false
 GENESYS_CLOUD_REGION = (os.getenv("GENESYS_CLOUD_REGION", "usw2") or "usw2").strip().lower()
 GENESYS_CLIENT_ID = (os.getenv("GENESYS_CLIENT_ID", "") or "").strip()
 GENESYS_CLIENT_SECRET = (os.getenv("GENESYS_CLIENT_SECRET", "") or "").strip()
+GENESYS_QUEUE_CLIENT_ID = (os.getenv("GENESYS_QUEUE_CLIENT_ID", "") or "").strip()
+GENESYS_QUEUE_CLIENT_SECRET = (os.getenv("GENESYS_QUEUE_CLIENT_SECRET", "") or "").strip()
 GENESYS_USERS_PAGE_SIZE = int((os.getenv("GENESYS_USERS_PAGE_SIZE", "100") or "100").strip())
 GENESYS_PHONE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_PHONE_LOOKUP_MAX_PAGES", "50") or "50").strip())
 GENESYS_QUEUE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_LOOKUP_MAX_PAGES", "200") or "200").strip())
@@ -585,6 +587,22 @@ def _genesys_get_access_token(region: str, client_id: str, client_secret: str) -
     "region": clean_region,
     "access_token": token,
   }
+
+
+def _genesys_get_queue_access_token(region: str) -> dict:
+  queue_client_id = (GENESYS_QUEUE_CLIENT_ID or "").strip()
+  queue_client_secret = (GENESYS_QUEUE_CLIENT_SECRET or "").strip()
+
+  if queue_client_id and queue_client_secret:
+    token_result = _genesys_get_access_token(region, queue_client_id, queue_client_secret)
+    if token_result.get("ok"):
+      token_result["token_source"] = "queue-client"
+      return token_result
+
+  token_result = _genesys_get_access_token(region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if token_result.get("ok"):
+    token_result["token_source"] = "default-client"
+  return token_result
 
 
 def _genesys_search_users_by_name(
@@ -1476,8 +1494,9 @@ def _build_phone_template_summary(phone_entity: dict, fallback_template: dict) -
   }
 
 
-def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) -> dict:
+def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict], queue_access_token: str = "") -> dict:
   clean_region, _, api_base = _genesys_region_to_urls(region)
+  queue_token = (queue_access_token or "").strip() or access_token
   fallback_template = _load_genesys_webrtc_template()
   enriched = []
   warnings = []
@@ -1561,7 +1580,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         warnings.append(f"{row.get('name', user_id)} skills: {err_skills}")
 
       user_queue_pages = 0
-      user_queue_entities, err_queues, user_queue_pages = _genesys_get_user_queues_paged(api_base, access_token, user_id)
+      user_queue_entities, err_queues, user_queue_pages = _genesys_get_user_queues_paged(api_base, queue_token, user_id)
       if not err_queues:
         entities = user_queue_entities or []
         queue_names = []
@@ -1580,7 +1599,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
 
         if not queue_names and queue_ids:
           for q_id in queue_ids:
-            resolved_name = _genesys_get_queue_name(api_base, access_token, q_id)
+            resolved_name = _genesys_get_queue_name(api_base, queue_token, q_id)
             if resolved_name:
               queue_names.append(resolved_name)
 
@@ -1590,7 +1609,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
         else:
           fallback_queue_names, fallback_queue_err, fallback_queue_diag = _genesys_lookup_user_queues_via_membership(
             api_base,
-            access_token,
+            queue_token,
             user_id,
             str(row.get("email", "") or ""),
             str(row.get("name", "") or ""),
@@ -1612,7 +1631,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict]) 
       else:
         fallback_queue_names, fallback_queue_err, fallback_queue_diag = _genesys_lookup_user_queues_via_membership(
           api_base,
-          access_token,
+          queue_token,
           user_id,
           str(row.get("email", "") or ""),
           str(row.get("name", "") or ""),
@@ -8805,11 +8824,22 @@ def genesys_extract_users_route(
       "rows": [],
     }, status_code=400)
 
+  queue_token_result = _genesys_get_queue_access_token(token_result.get("region", clean_region))
+  queue_access_token = ""
+  queue_token_warning = ""
+  if queue_token_result.get("ok"):
+    queue_access_token = queue_token_result.get("access_token", "")
+  else:
+    queue_token_warning = str(queue_token_result.get("error", "") or "").strip()
+
   enrich_result = _genesys_enrich_user_rows(
     token_result.get("region", clean_region),
     token_result.get("access_token", ""),
     search_result.get("rows", []),
+    queue_access_token,
   )
+  if queue_token_warning:
+    enrich_result.setdefault("warnings", []).append(f"Queue token unavailable; using default visibility: {queue_token_warning}")
 
   raw_payload = {
     "generated_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
@@ -8921,7 +8951,7 @@ def genesys_queue_lookup_route(queue_name: str = Form("")):
   if not clean_queue_name:
     return JSONResponse({"ok": False, "error": "Queue name is required."}, status_code=400)
 
-  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  token_result = _genesys_get_queue_access_token(clean_region)
   if not token_result.get("ok"):
     return JSONResponse({
       "ok": False,
@@ -9007,7 +9037,7 @@ def genesys_queue_lookup_route(queue_name: str = Form("")):
 def genesys_extract_all_queues_route():
   clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
 
-  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  token_result = _genesys_get_queue_access_token(clean_region)
   if not token_result.get("ok"):
     return JSONResponse({
       "ok": False,
@@ -9134,7 +9164,7 @@ def genesys_user_queues_by_id_route(
   if not clean_user_id:
     return JSONResponse({"ok": False, "error": "user_id is required."}, status_code=400)
 
-  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  token_result = _genesys_get_queue_access_token(clean_region)
   if not token_result.get("ok"):
     return JSONResponse({
       "ok": False,
