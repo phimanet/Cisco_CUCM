@@ -8134,6 +8134,7 @@ def genesys_admin_placeholder(request: Request):
         }
 
         if (form && statusEl && resultsEl && rawDownloadEl) {
+          form.dataset.jsBound = "1";
           form.addEventListener("submit", async function (event) {
             event.preventDefault();
             statusEl.textContent = "Running Genesys lookup...";
@@ -8314,6 +8315,87 @@ def genesys_admin_placeholder(request: Request):
             }
           });
         }
+      })();
+    </script>
+    <script>
+      (function () {
+        const form = document.getElementById("genesys-user-search-form");
+        const statusEl = document.getElementById("genesys-user-search-status");
+        const rawDownloadEl = document.getElementById("genesys-user-raw-download");
+        const resultsEl = document.getElementById("genesys-user-search-results");
+        const debugWrapEl = document.getElementById("genesys-user-debug-wrap");
+        const debugEl = document.getElementById("genesys-user-debug");
+
+        if (!form || !statusEl || !resultsEl || !rawDownloadEl) {
+          return;
+        }
+        if (String(form.dataset.jsBound || "") === "1") {
+          return;
+        }
+
+        function renderDebug(payload) {
+          if (!debugWrapEl || !debugEl) return;
+          try {
+            debugEl.textContent = JSON.stringify(payload || {}, null, 2);
+          } catch (_err) {
+            debugEl.textContent = String(payload || "");
+          }
+          debugWrapEl.style.display = "block";
+        }
+
+        form.dataset.jsBound = "1";
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          statusEl.textContent = "Running Genesys lookup...";
+          rawDownloadEl.innerHTML = "";
+          resultsEl.innerHTML = "";
+
+          try {
+            const response = await fetch("/genesys/users/extract", {
+              method: "POST",
+              body: new FormData(form),
+            });
+            let payload = {};
+            try {
+              payload = await response.json();
+            } catch (_jsonErr) {
+              payload = { ok: false, error: "Response was not valid JSON.", http_status: response.status };
+            }
+
+            renderDebug(payload);
+
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Genesys lookup failed.");
+            }
+
+            const rows = Array.isArray(payload.rows) ? payload.rows : [];
+            const pagesScanned = Number(payload.pages_scanned || 0);
+            const usersScanned = Number(payload.users_scanned || 0);
+            statusEl.textContent = "Region: " + (payload.region || "") + " | Pages: " + pagesScanned + " | Users: " + usersScanned + " | Matches: " + rows.length;
+
+            if (!rows.length) {
+              resultsEl.innerHTML = "<p style='color:#4e6a84;'>No matching users found.</p>";
+              return;
+            }
+
+            let html = "<table><thead><tr><th>Name</th><th>Email</th><th>Username</th><th>State</th><th>User ID</th></tr></thead><tbody>";
+            rows.forEach(function (row, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              html += "<tr style='background:" + bg + ";'>";
+              html += "<td>" + (row.name || "") + "</td>";
+              html += "<td>" + (row.email || "") + "</td>";
+              html += "<td>" + (row.username || "") + "</td>";
+              html += "<td>" + (row.state || "") + "</td>";
+              html += "<td style='font-family:Consolas,monospace;'>" + (row.id || "") + "</td>";
+              html += "</tr>";
+            });
+            html += "</tbody></table>";
+            resultsEl.innerHTML = html;
+          } catch (err) {
+            renderDebug({ ok: false, stage: "fallback-submit", error: ((err && err.message) || "Unknown error.") });
+            statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+          }
+        });
       })();
     </script>
   </body>
