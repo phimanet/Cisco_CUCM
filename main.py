@@ -17570,7 +17570,7 @@ def dashboard_page(request: Request):
     </header>
     <main class="content">
       <section class="panel">
-        <h2 style="margin:0;color:#002f6c;">Cisco CUCM Realtime Dashboard</h2>
+        <h2 style="margin:0;color:#002f6c;">Cisco Voice Environment Dashboard</h2>
         <p style="margin:8px 0 0 0;color:#4e6a84;">Baseline dashboard with refreshable CUCM/Jabber metrics and Unity port probes.</p>
         <div class="control-row">
           <span class="env-banner __ENV_CLASS__">__ENV_TEXT__</span>
