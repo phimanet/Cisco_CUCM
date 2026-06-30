@@ -9,6 +9,7 @@ import re
 import socket
 import subprocess
 import tempfile
+import concurrent.futures
 from collections import Counter
 import smtplib
 import ssl
@@ -89,6 +90,7 @@ SESSION_COOKIE_NAME = "cucm_web_session"
 SESSION_IDLE_TIMEOUT_SECONDS = 8 * 60 * 60
 CREDENTIAL_CACHE_TTL_SECONDS = 60 * 60
 APP_START_EPOCH = time.time()
+DASHBOARD_REQUEST_TIMEOUT_SECONDS = int((os.getenv("DASHBOARD_REQUEST_TIMEOUT_SECONDS", "12") or "12").strip())
 CREDENTIAL_ENCRYPTION_KEY = (os.getenv("CUCM_CREDENTIAL_ENCRYPTION_KEY", "") or "").strip()
 if _FERNET_AVAILABLE and not CREDENTIAL_ENCRYPTION_KEY:
   # Generate an in-memory key when env key is absent so caching is still encrypted.
@@ -4890,7 +4892,7 @@ def _axl_count_phones_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, 
     f"https://{cucm_host}:8443/axl/",
     data=soap_xml.encode("utf-8"),
     headers={"Content-Type": "text/xml"},
-    timeout=60,
+    timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
   )
   if response.status_code != 200:
     err = _extract_soap_error(response.text or "")
@@ -4919,8 +4921,7 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
   session.verify = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
-  for prefix in jabber_prefixes:
-    soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+  soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:ris=\"http://schemas.cisco.com/ast/soap\">
   <soapenv:Header/>
   <soapenv:Body>
@@ -4935,7 +4936,7 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
         <SelectBy>Name</SelectBy>
         <SelectItems>
           <item>
-            <Item>{xml_escape(prefix)}%</Item>
+            <Item>%</Item>
           </item>
         </SelectItems>
         <Protocol>Any</Protocol>
@@ -4945,40 +4946,49 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
   </soapenv:Body>
 </soapenv:Envelope>"""
 
-    response = session.post(
-      url,
-      data=soap_xml.encode("utf-8"),
-      headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 SelectCmDeviceExt"},
-      timeout=60,
-    )
-    if response.status_code != 200:
-      err = _extract_soap_error(response.text or "")
-      raise RuntimeError(f"RIS query failed for {prefix}: {err or ('HTTP ' + str(response.status_code))}")
+  response = session.post(
+    url,
+    data=soap_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 SelectCmDeviceExt"},
+    timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
+  )
+  if response.status_code != 200:
+    err = _extract_soap_error(response.text or "")
+    raise RuntimeError(f"RIS query failed: {err or ('HTTP ' + str(response.status_code))}")
 
-    root = _parse_xml_or_runtime_error(response.text, f"RIS SelectCmDeviceExt {prefix}")
+  root = _parse_xml_or_runtime_error(response.text, "RIS SelectCmDeviceExt")
 
-    for node in root.iter():
-      cm_devices = _find_xml_child(node, "CmDevices")
-      if cm_devices is None:
+  for node in root.iter():
+    cm_devices = _find_xml_child(node, "CmDevices")
+    if cm_devices is None:
+      continue
+
+    node_name = _find_xml_child_text(node, "Name") or "Unknown"
+    for dev in list(cm_devices):
+      dev_name = _find_xml_child_text(dev, "Name")
+      if not dev_name:
         continue
 
-      node_name = _find_xml_child_text(node, "Name") or "Unknown"
-      for dev in list(cm_devices):
-        dev_name = _find_xml_child_text(dev, "Name")
-        if not dev_name or not dev_name.upper().startswith(prefix):
-          continue
+      matching_prefix = ""
+      dev_name_upper = dev_name.upper()
+      for prefix in jabber_prefixes:
+        if dev_name_upper.startswith(prefix):
+          matching_prefix = prefix
+          break
+      if not matching_prefix:
+        continue
 
-        status_text = (_find_xml_child_text(dev, "Status") or "").strip().lower()
-        if status_text == "registered":
-          by_prefix_registered[prefix] += 1
-          by_server_registered[node_name] = by_server_registered.get(node_name, 0) + 1
+      status_text = (_find_xml_child_text(dev, "Status") or "").strip().lower()
+      if status_text == "registered":
+        by_prefix_registered[matching_prefix] += 1
+        by_server_registered[node_name] = by_server_registered.get(node_name, 0) + 1
 
-        for calls_tag in ["NumOfActiveCalls", "NumberOfActiveCalls", "ActiveCalls"]:
-          calls_text = _find_xml_child_text(dev, calls_tag)
-          if calls_text.isdigit():
-            active_calls_total += int(calls_text)
-            active_calls_seen = True
-            break
+      for calls_tag in ["NumOfActiveCalls", "NumberOfActiveCalls", "ActiveCalls"]:
+        calls_text = _find_xml_child_text(dev, calls_tag)
+        if calls_text.isdigit():
+          active_calls_total += int(calls_text)
+          active_calls_seen = True
+          break
 
   return {
     "by_prefix_registered": by_prefix_registered,
@@ -17685,16 +17695,23 @@ def api_dashboard_stats(request: Request):
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
   configured_by_prefix = {"CSF": 0, "TCT": 0, "BOT": 0, "TAB": 0}
-  for prefix in list(configured_by_prefix.keys()):
-    try:
-      configured_by_prefix[prefix] = _axl_count_phones_by_prefix(
+  with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+    future_map = {
+      pool.submit(
+        _axl_count_phones_by_prefix,
         resolved_cucm_host,
         resolved_cucm_user,
         resolved_cucm_pass,
         prefix,
-      )
-    except Exception as exc:
-      warnings.append(str(exc))
+      ): prefix
+      for prefix in list(configured_by_prefix.keys())
+    }
+    for future in concurrent.futures.as_completed(future_map):
+      prefix = future_map[future]
+      try:
+        configured_by_prefix[prefix] = int(future.result())
+      except Exception as exc:
+        warnings.append(str(exc))
 
   registered_by_prefix = {"CSF": 0, "TCT": 0, "BOT": 0, "TAB": 0}
   by_server_registered = []
