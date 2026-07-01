@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-06-25
+- Date: 2026-07-01
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -36,6 +36,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [ ] [P1][Planned] v1.01 enhancement: add VeraSMART (Calero on-prem) LAB-only automation module scaffold in portal (queue intake, run status, audit/log placeholders; no production rollout yet).
 - [ ] [P1][Planned] On Jabber build workflows (Page 1 and Page 2), detect Unity voicemail failure due to AD inactive account, prompt admin for start date, auto-schedule voicemail creation for that user at 10:00 AM PST on start date, then email the build operator on success (operator email derived from username with trailing `.ad`/`.adm` removed + `@amnhealthcare.com`).
 - [ ] [P1][In Progress] Twilio AMIEWeb SMS-only hosting workflow on Page 3: supports one or more numbers, updates SMS webhook fields only (no voice changes), LAB validated for panel visibility and awaiting operator-provided POST endpoint values for live update test.
+- [x] [P1][Done] Block Inbound Calls by Caller ID Number workflow delivered and validated in PROD: template-driven translation pattern create/lookup/list/delete, normalized 10-digit display (71 prefix removed), auto-date on create, delete confirmation, explicit "Block Not Found" messaging, and availability on both Page 2 and Page 1 (bottom menu).
 - [x] [P2][Done] After job submission, clear the "User ID for person..." input field to prevent accidental repeat Jabber creation.
 - [x] [P2][Done] Refresh the web portal theme to align with AMN Healthcare visual style (brand colors, typography, spacing, and overall look/feel).
 - [x] [P2][Done] Add per-option success/failure summary panel in the UI after CSV generation.
@@ -145,6 +146,11 @@ Priority keys:
 - Promoted parity retry fix to LAB and PROD; both environments aligned on latest `main`.
 - Added operator instruction convention: every operational step now starts by explicitly stating environment (LAB/PROD/BOTH).
 - Created new local rollback checkpoint tag on both servers: `websave-2026-06-25`.
+
+### 2026-07-01
+- Completed and deployed inbound caller ID block enhancement updates: template-based block creation (no live-pattern cloning), normalized 10-digit lookup/list display, remove by 10-digit or 71-prefixed value, conditional delete actions only when blocked entry exists, and finalized UI text labels.
+- Added the same **Block Inbound Calls by Caller ID Number** workflow to Page 1 (bottom of menu) to match Page 2 availability.
+- Production validation confirmed by operator: deployed and tested in PROD; functions working as expected.
 
 ### 2026-06-16
 - Added an in-app Action History page backed by the audit trail CSV, with recent activity summary cards and direct CSV download.
