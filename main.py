@@ -10610,7 +10610,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
           <button type="button" class="portal-nav-btn" data-panel="namechange">Employee Name Change-Update Jabber/VM</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
-          <button type="button" class="portal-nav-btn" data-panel="mobiledelete">Remove only Jabber Mobile</button>
+          <button type="button" class="portal-nav-btn" data-panel="mobiledelete">Remove Jabber Mobile only</button>
           <button type="button" class="portal-nav-btn" data-panel="ad">Update AD Telephone/ipPhone Field Only</button>
           <button type="button" class="portal-nav-btn" data-panel="tct">Add in Jabber iPhone</button>
           <button type="button" class="portal-nav-btn" data-panel="bot">Add in Jabber Android</button>
@@ -15348,7 +15348,7 @@ def menu_admin_page(request: Request):
           <div class="portal-nav">
             <button type="button" class="portal-nav-btn start-here-btn active" data-panel="personlookup">Start Here!<br>Employee Lookup By Name</button>
             <button type="button" class="portal-nav-btn" data-panel="strike">Strike Mode - Add iPhone and Android</button>
-            <button type="button" class="portal-nav-btn" data-panel="mobiledelete">Remove only Jabber Mobile</button>
+            <button type="button" class="portal-nav-btn" data-panel="mobiledelete">Remove Jabber Mobile only</button>
             <button type="button" class="portal-nav-btn" data-panel="rpo">Extract RPO Phones</button>
             <button type="button" class="portal-nav-btn" data-panel="adddn">Add Directory Numbers (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="exportdn">Export Directory Numbers</button>
