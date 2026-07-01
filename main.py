@@ -15218,11 +15218,11 @@ def menu_admin_page(request: Request):
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
             <button type="submit" data-block-action="block">Block Caller ID</button>
             <button type="button" data-block-action="status" style="background:linear-gradient(180deg,#385977,#29425a);">Lookup Number</button>
-            <button type="button" data-block-action="list" style="background:linear-gradient(180deg,#1d4f91,#12386a);">List All Blocked</button>
+            <button type="button" data-block-action="list" style="background:linear-gradient(180deg,#1d4f91,#12386a);">List All Currently Blocked Inbound Caller ID Number</button>
           </div>
         </form>
 
-        <p id="admin-block-inbound-callerid-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a caller ID number, then choose Block or Lookup Number. Use List All Blocked to manage existing entries.</p>
+        <p id="admin-block-inbound-callerid-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a caller ID number, then choose Block or Lookup Number. Use List All Currently Blocked Inbound Caller ID Number to review and delete only active blocked entries.</p>
         <p id="admin-block-inbound-callerid-summary" style="color:#355978; min-height:18px;"></p>
         <div id="admin-block-inbound-callerid-results" style="overflow-x:auto;"></div>
       </section>
@@ -16202,7 +16202,7 @@ def menu_admin_page(request: Request):
             } else if (action === "remove") {
               statusEl.textContent = "Removing blocked caller ID...";
             } else if (action === "list") {
-              statusEl.textContent = "Loading blocked caller ID list...";
+              statusEl.textContent = "Loading all currently blocked inbound caller ID numbers...";
             } else {
               statusEl.textContent = "Looking up caller ID...";
             }
@@ -16293,8 +16293,8 @@ def menu_admin_page(request: Request):
 
               if (payload.action === "list") {
                 const rows = payload.results || [];
-                statusEl.textContent = `Loaded ${rows.length} blocked caller ID entr${rows.length === 1 ? "y" : "ies"}.`;
-                summaryEl.textContent = "Includes normalized number column with 71 prefix removed.";
+                statusEl.textContent = `Loaded ${rows.length} currently blocked inbound caller ID entr${rows.length === 1 ? "y" : "ies"}.`;
+                summaryEl.textContent = "Includes normalized number column (71 prefix removed) and delete option for each actively blocked entry.";
                 renderRows(rows);
                 return;
               }
