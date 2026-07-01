@@ -15206,7 +15206,7 @@ def menu_admin_page(request: Request):
           <input type="hidden" name="cucm_pass" value="">
 
           <div class="compact-inline-row">
-            <span>Caller ID Number:</span>
+            <span>Inbound Caller ID Number to Block:</span>
             <input name="caller_id_number" placeholder="8585236648" required>
           </div><br>
 
