@@ -16299,8 +16299,16 @@ def menu_admin_page(request: Request):
                 return;
               }
 
-              const stateLabel = payload.blocked ? "Blocked" : "Not Blocked";
-              statusEl.textContent = `${stateLabel}: ${payload.pattern || ""}`;
+              if (payload.action === "remove") {
+                if (payload.changed) {
+                  statusEl.textContent = `Deleted blocked Caller ID: ${payload.pattern || ""}`;
+                } else {
+                  statusEl.textContent = `Caller ID not found in blocked list: ${payload.pattern || ""}`;
+                }
+              } else {
+                const stateLabel = payload.blocked ? "Blocked" : "Not Blocked";
+                statusEl.textContent = `${stateLabel}: ${payload.pattern || ""}`;
+              }
               summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Partition: ${payload.route_partition || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}`;
 
               if (payload.pattern) {
