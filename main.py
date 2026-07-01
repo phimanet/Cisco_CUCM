@@ -16305,6 +16305,8 @@ def menu_admin_page(request: Request):
                 } else {
                   statusEl.textContent = `Caller ID not found in blocked list: ${payload.pattern || ""}`;
                 }
+              } else if (payload.action === "status" && !payload.blocked) {
+                statusEl.textContent = "Block Not Found, Caller ID number is not Blocked for Inbound Calls.";
               } else {
                 const stateLabel = payload.blocked ? "Blocked" : "Not Blocked";
                 statusEl.textContent = `${stateLabel}: ${payload.pattern || ""}`;
