@@ -316,6 +316,25 @@ TWILIO_INBOUND_VERIFICATION_PROFILES = {
 TWILIO_INBOUND_AUTO_RESTORE_SECONDS = 5 * 60
 TWILIO_INBOUND_AUTO_RESTORE_LOCK = threading.Lock()
 TWILIO_INBOUND_AUTO_RESTORE_TIMERS: dict[str, dict] = {}
+BLOCKED_CALLERID_DESCRIPTION_PREFIX = (
+  os.getenv("BLOCKED_CALLERID_DESCRIPTION_PREFIX", "Blocked CallerID Num - ")
+  or "Blocked CallerID Num - "
+)
+BLOCKED_CALLERID_PATTERN_PREFIX = (os.getenv("BLOCKED_CALLERID_PATTERN_PREFIX", "71") or "71").strip() or "71"
+BLOCKED_CALLERID_TEMPLATE_PATTERN = (
+  os.getenv("BLOCKED_CALLERID_TEMPLATE_PATTERN", "717163309161")
+  or "717163309161"
+).strip()
+BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION_DEFAULT = (
+  os.getenv("BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION_DEFAULT", "ENT_Incoming_CallScreening_PT")
+  or "ENT_Incoming_CallScreening_PT"
+).strip()
+BLOCKED_CALLERID_TEMPLATE_PATH = os.path.join(
+  os.path.dirname(os.path.abspath(__file__)),
+  "toolkit",
+  "blocked_callerid_template.json",
+)
+BLOCKED_CALLERID_DESCRIPTION_MATCH_PREFIX = "Blocked CallerID Num"
 CSF_JABBER_EMAIL_FROM = (os.getenv("CSF_JABBER_EMAIL_FROM", MOBILE_JABBER_EMAIL_FROM) or MOBILE_JABBER_EMAIL_FROM).strip()
 CSF_JABBER_TRAINING_URL = (
   "https://amnhealthcare.sharepoint.com/teams/AMNITTrainingContent-tm/_layouts/15/stream.aspx?id=%2Fteams%2FAMNITTrainingContent%2Dtm%2FShared%20Documents%2FGeneral%2FWatch%20and%20Learn%20Cisco%20Jabber%20Softphone%2012%2E9%2Emp4&referrer=StreamWebApp%2EWeb&referrerScenario=AddressBarCopied%2Eview%2Ef9fafd5b%2D7aeb%2D4bfb%2Dbc57%2Dda61d14ef75f"
@@ -3225,6 +3244,7 @@ def _wants_json_response(request: Request) -> bool:
     "/lookup/extension",
     "/lookup/translation-pattern",
     "/translation-pattern/twilio-inbound-verification",
+    "/inbound-callerid/block",
     "/bulk/lookup/person",
     "/bulk/lookup/extension",
     "/verasmart/lab/queue/upload",
@@ -7161,6 +7181,412 @@ def _list_translation_patterns_by_description(cucm_host: str, cucm_user: str, cu
         matches.append(values)
 
     return matches
+
+
+def _normalize_caller_id_number(value: str) -> str:
+    digits = re.sub(r"\D", "", value or "")
+    if len(digits) == 11 and digits.startswith("1"):
+      digits = digits[1:]
+    return digits
+
+
+def _normalize_blocked_pattern_for_display(pattern_value: str) -> str:
+    pattern = re.sub(r"\D", "", pattern_value or "")
+    prefix = re.sub(r"\D", "", BLOCKED_CALLERID_PATTERN_PREFIX)
+    if prefix and pattern.startswith(prefix):
+      return pattern[len(prefix):]
+    return pattern
+
+
+def _build_blocked_pattern(caller_id_number: str) -> str:
+    clean = _normalize_caller_id_number(caller_id_number)
+    if len(clean) != 10:
+      raise RuntimeError("Caller ID number must be 10 digits, or 11 digits starting with 1.")
+    return f"{BLOCKED_CALLERID_PATTERN_PREFIX}{clean}"
+
+
+def _resolve_blocked_pattern_input(value: str) -> str:
+    digits = re.sub(r"\D", "", value or "")
+    prefix = re.sub(r"\D", "", BLOCKED_CALLERID_PATTERN_PREFIX)
+
+    if len(digits) == 10:
+      return f"{prefix}{digits}"
+    if len(digits) == 11 and digits.startswith("1"):
+      return f"{prefix}{digits[1:]}"
+    if prefix and len(digits) == len(prefix) + 10 and digits.startswith(prefix):
+      return digits
+
+    raise RuntimeError("Caller ID must be 10 digits, 11 digits starting with 1, or full 71XXXXXXXXXX pattern.")
+
+
+def _build_blocked_description(request_date: str, request_ticket: str) -> str:
+    clean_date = (request_date or "").strip()
+    clean_ticket = (request_ticket or "").strip().upper()
+    if not re.fullmatch(r"\d{2}-\d{2}-\d{4}", clean_date):
+      raise RuntimeError("Date must be MM-DD-YYYY.")
+    if not clean_ticket:
+      raise RuntimeError("TASK/INC number is required.")
+    return f"{BLOCKED_CALLERID_DESCRIPTION_PREFIX}{clean_date} {clean_ticket}"
+
+
+def _load_blocked_callerid_template_fields() -> dict[str, str]:
+    if not os.path.exists(BLOCKED_CALLERID_TEMPLATE_PATH):
+      raise RuntimeError(f"Blocked caller ID template file not found: {BLOCKED_CALLERID_TEMPLATE_PATH}")
+
+    with open(BLOCKED_CALLERID_TEMPLATE_PATH, "r", encoding="utf-8") as handle:
+      raw = json.load(handle)
+
+    if not isinstance(raw, dict):
+      raise RuntimeError("Blocked caller ID template must be a JSON object.")
+
+    fields: dict[str, str] = {}
+    for key, value in raw.items():
+      k = str(key or "").strip()
+      if not k.startswith("transPattern."):
+        continue
+      if k in {"transPattern.pattern", "transPattern.description"}:
+        continue
+      fields[k] = str(value or "").strip()
+
+    if not fields.get("transPattern.routePartitionName"):
+      raise RuntimeError("Blocked caller ID template missing transPattern.routePartitionName.")
+
+    return fields
+
+
+def _list_translation_patterns_by_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, pattern_text: str) -> list[dict]:
+    clean_pattern = (pattern_text or "").strip()
+    if not clean_pattern:
+      raise RuntimeError("Translation pattern is required.")
+
+    session = requests.Session()
+    session.verify = False
+    session.trust_env = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:listTransPattern sequence=\"1\">
+      <searchCriteria>
+        <pattern>{xml_escape(clean_pattern)}</pattern>
+      </searchCriteria>
+      <returnedTags>
+        <pattern/>
+        <routePartitionName/>
+        <description/>
+        <blockEnable/>
+      </returnedTags>
+    </axl:listTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = session.post(
+      f"https://{cucm_host}:8443/axl/",
+      data=soap_xml.encode("utf-8"),
+      headers={"Content-Type": "text/xml"},
+      verify=False,
+      timeout=60,
+    )
+    if response.status_code != 200:
+      raise RuntimeError(f"listTransPattern failed HTTP {response.status_code}: {response.text[:800]}")
+
+    root = ET.fromstring(response.text)
+    matches = []
+
+    for elem in root.iter():
+      if elem.tag.split("}")[-1] != "transPattern":
+        continue
+
+      values = {
+        "pattern": "",
+        "route_partition": "",
+        "description": "",
+        "block_enable": "",
+      }
+      for child in list(elem):
+        key = child.tag.split("}")[-1]
+        text = (child.text or "").strip()
+        if key == "pattern":
+          values["pattern"] = text
+        elif key == "routePartitionName":
+          values["route_partition"] = text
+        elif key == "description":
+          values["description"] = text
+        elif key == "blockEnable":
+          values["block_enable"] = text
+
+      if values["pattern"]:
+        matches.append(values)
+
+    return matches
+
+
+def _list_blocked_inbound_patterns(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[dict]:
+    session = requests.Session()
+    session.verify = False
+    session.trust_env = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    prefix = (BLOCKED_CALLERID_PATTERN_PREFIX or "").strip()
+    desc_prefix = (BLOCKED_CALLERID_DESCRIPTION_MATCH_PREFIX or "").strip()
+    pattern_search = f"{prefix}%" if prefix else "%"
+    description_search = f"{desc_prefix}%" if desc_prefix else "%"
+
+    soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:listTransPattern sequence=\"1\">
+      <searchCriteria>
+        <pattern>{xml_escape(pattern_search)}</pattern>
+        <description>{xml_escape(description_search)}</description>
+      </searchCriteria>
+      <returnedTags>
+        <pattern/>
+        <routePartitionName/>
+        <description/>
+        <blockEnable/>
+      </returnedTags>
+    </axl:listTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = session.post(
+      f"https://{cucm_host}:8443/axl/",
+      data=soap_xml.encode("utf-8"),
+      headers={"Content-Type": "text/xml"},
+      verify=False,
+      timeout=60,
+    )
+    if response.status_code != 200:
+      raise RuntimeError(f"listTransPattern failed HTTP {response.status_code}: {response.text[:800]}")
+
+    root = ET.fromstring(response.text)
+    rows: list[dict] = []
+    for elem in root.iter():
+      if elem.tag.split("}")[-1] != "transPattern":
+        continue
+
+      row = {
+        "pattern": "",
+        "normalized_number": "",
+        "route_partition": "",
+        "description": "",
+        "block_enable": "",
+      }
+      for child in list(elem):
+        key = child.tag.split("}")[-1]
+        text = (child.text or "").strip()
+        if key == "pattern":
+          row["pattern"] = text
+        elif key == "routePartitionName":
+          row["route_partition"] = text
+        elif key == "description":
+          row["description"] = text
+        elif key == "blockEnable":
+          row["block_enable"] = text
+
+      pattern = (row.get("pattern") or "").strip()
+      description = (row.get("description") or "").strip()
+      if not pattern:
+        continue
+      if not pattern.startswith(prefix):
+        continue
+      if not description.startswith(desc_prefix):
+        continue
+      row["normalized_number"] = _normalize_blocked_pattern_for_display(pattern)
+      rows.append(row)
+
+    rows.sort(key=lambda item: item.get("pattern", ""))
+    return rows
+
+
+def _find_blocked_inbound_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, caller_id_number: str) -> dict | None:
+    matches = _list_translation_patterns_by_pattern(cucm_host, cucm_user, cucm_pass, caller_id_number)
+    prefix = (BLOCKED_CALLERID_DESCRIPTION_MATCH_PREFIX or "").strip().casefold()
+
+    for item in matches:
+      description = (item.get("description", "") or "").strip().casefold()
+      if description.startswith(prefix):
+        return item
+    return None
+
+
+def _add_blocked_inbound_pattern(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  pattern_value: str,
+  description_text: str,
+) -> dict:
+    existing = _find_blocked_inbound_pattern(cucm_host, cucm_user, cucm_pass, pattern_value)
+    if existing:
+      return {
+        "changed": False,
+        "blocked": True,
+        "pattern": existing.get("pattern", pattern_value),
+        "normalized_number": _normalize_blocked_pattern_for_display(existing.get("pattern", pattern_value)),
+        "route_partition": existing.get("route_partition", ""),
+        "description": existing.get("description", ""),
+        "reason": "already_blocked",
+      }
+
+    session = requests.Session()
+    session.verify = False
+    session.trust_env = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    template_fields = _load_blocked_callerid_template_fields()
+    route_partition = (template_fields.get("transPattern.routePartitionName") or "").strip()
+
+    ordered_keys = [
+      "transPattern.usage",
+      "transPattern.routePartitionName",
+      "transPattern.blockEnable",
+      "transPattern.useCallingPartyPhoneMask",
+      "transPattern.patternUrgency",
+      "transPattern.callingLinePresentationBit",
+      "transPattern.callingNamePresentationBit",
+      "transPattern.connectedLinePresentationBit",
+      "transPattern.connectedNamePresentationBit",
+      "transPattern.patternPrecedence",
+      "transPattern.provideOutsideDialtone",
+      "transPattern.callingPartyNumberingPlan",
+      "transPattern.callingPartyNumberType",
+      "transPattern.calledPartyNumberingPlan",
+      "transPattern.calledPartyNumberType",
+      "transPattern.callingSearchSpaceName",
+      "transPattern.routeNextHopByCgpn",
+      "transPattern.routeClass",
+      "transPattern.releaseClause",
+      "transPattern.useOriginatorCss",
+      "transPattern.dontWaitForIDTOnSubsequentHops",
+      "transPattern.isEmergencyServiceNumber",
+    ]
+
+    xml_rows = []
+    for key in ordered_keys:
+      value = (template_fields.get(key) or "").strip()
+      if not value:
+        continue
+      field_name = key.replace("transPattern.", "")
+      xml_rows.append(f"        <{field_name}>{xml_escape(value)}</{field_name}>")
+
+    soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:addTransPattern sequence=\"1\">
+      <transPattern>
+        <pattern>{xml_escape(pattern_value)}</pattern>
+        <description>{xml_escape(description_text)}</description>
+{chr(10).join(xml_rows)}
+      </transPattern>
+    </axl:addTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = session.post(
+      f"https://{cucm_host}:8443/axl/",
+      data=soap_xml.encode("utf-8"),
+      headers={"Content-Type": "text/xml"},
+      verify=False,
+      timeout=60,
+    )
+    if response.status_code != 200:
+      raise RuntimeError(f"addTransPattern failed HTTP {response.status_code}: {response.text[:800]}")
+
+    created = _find_blocked_inbound_pattern(cucm_host, cucm_user, cucm_pass, pattern_value)
+    return {
+      "changed": True,
+      "blocked": True,
+      "pattern": (created or {}).get("pattern", pattern_value),
+      "normalized_number": _normalize_blocked_pattern_for_display((created or {}).get("pattern", pattern_value)),
+      "route_partition": (created or {}).get("route_partition", route_partition),
+      "description": (created or {}).get("description", description_text),
+      "reason": "created",
+    }
+
+
+def _remove_blocked_inbound_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, pattern_value: str) -> dict:
+    existing = _find_blocked_inbound_pattern(cucm_host, cucm_user, cucm_pass, pattern_value)
+    if not existing:
+      return {
+        "changed": False,
+        "blocked": False,
+        "pattern": pattern_value,
+        "normalized_number": _normalize_blocked_pattern_for_display(pattern_value),
+        "route_partition": "",
+        "description": "",
+        "reason": "not_found",
+      }
+
+    session = requests.Session()
+    session.verify = False
+    session.trust_env = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:removeTransPattern sequence=\"1\">
+      <pattern>{xml_escape(existing.get('pattern', pattern_value))}</pattern>
+      <routePartitionName>{xml_escape(existing.get('route_partition', ''))}</routePartitionName>
+    </axl:removeTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = session.post(
+      f"https://{cucm_host}:8443/axl/",
+      data=soap_xml.encode("utf-8"),
+      headers={"Content-Type": "text/xml"},
+      verify=False,
+      timeout=60,
+    )
+    if response.status_code != 200:
+      raise RuntimeError(f"removeTransPattern failed HTTP {response.status_code}: {response.text[:800]}")
+
+    return {
+      "changed": True,
+      "blocked": False,
+      "pattern": existing.get("pattern", pattern_value),
+      "normalized_number": _normalize_blocked_pattern_for_display(existing.get("pattern", pattern_value)),
+      "route_partition": existing.get("route_partition", ""),
+      "description": existing.get("description", ""),
+      "reason": "removed",
+    }
+
+
+def _get_blocked_inbound_pattern_status(cucm_host: str, cucm_user: str, cucm_pass: str, pattern_value: str) -> dict:
+    existing = _find_blocked_inbound_pattern(cucm_host, cucm_user, cucm_pass, pattern_value)
+    if not existing:
+      return {
+        "changed": False,
+        "blocked": False,
+        "pattern": pattern_value,
+        "normalized_number": _normalize_blocked_pattern_for_display(pattern_value),
+        "route_partition": "",
+        "description": "",
+        "reason": "not_found",
+      }
+
+    return {
+      "changed": False,
+      "blocked": True,
+      "pattern": existing.get("pattern", pattern_value),
+      "normalized_number": _normalize_blocked_pattern_for_display(existing.get("pattern", pattern_value)),
+      "route_partition": existing.get("route_partition", ""),
+      "description": existing.get("description", ""),
+      "reason": "found",
+    }
+
+
+def _get_blocked_callerid_template_route_partition() -> str:
+    fields = _load_blocked_callerid_template_fields()
+    return (fields.get("transPattern.routePartitionName") or BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION_DEFAULT).strip()
 
 
 def _get_twilio_inbound_verification_profile(profile_key: str) -> dict:
@@ -14575,6 +15001,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
             <button type="button" class="portal-nav-btn" data-panel="translookup">Translation Pattern Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="transtemplate">Translation Pattern Template</button>
+            <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
             <button type="button" class="portal-nav-btn" data-panel="strikemask-template">Add Translation for Strike Mask Use (CSV Template)</button>
             <button type="button" class="portal-nav-btn" data-panel="verasmart-lab">VeraSMART Automation (v1.01 LAB)</button>
             <button type="button" class="portal-nav-btn" data-panel="strikemask">Strike Mask - Masked Calling</button>
@@ -14770,6 +15197,41 @@ def menu_admin_page(request: Request):
         <p id="admin-trans-template-summary" style="color:#355978; min-height:18px;"></p>
         <p><a id="admin-trans-template-download" href="#" style="display:none; font-weight:700;">Download CSV Output</a></p>
         <textarea id="admin-trans-template-preview" rows="8" readonly style="width:100%;"></textarea>
+      </section>
+
+      <section class="panel tool-panel" data-panel="block-inbound-callerid">
+        <h3>Block Inbound Calls by Caller ID Number</h3>
+        <p>Creates/removes inbound call-block translation patterns using the local template (not a live copy pattern) in route partition <strong>__BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION__</strong>.</p>
+        <p style="color:#355978; margin-top:6px;">For new blocks: enter 10-digit caller ID, date (MM-DD-YYYY), and TASK/INC number. Pattern is auto-built as <strong>71 + caller ID</strong>.</p>
+        <form id="admin-block-inbound-callerid-form">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+
+          <div class="compact-inline-row">
+            <span>Caller ID Number:</span>
+            <input name="caller_id_number" placeholder="8585236648" required>
+          </div><br>
+
+          <div class="compact-inline-row">
+            <span>Date (MM-DD-YYYY):</span>
+            <input name="request_date" placeholder="01-23-2025">
+          </div><br>
+
+          <div class="compact-inline-row">
+            <span>TASK/INC Number:</span>
+            <input name="request_ticket" placeholder="TASK0613658">
+          </div><br>
+
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="submit" data-block-action="block">Block Caller ID</button>
+            <button type="button" data-block-action="status" style="background:linear-gradient(180deg,#385977,#29425a);">Lookup Number</button>
+            <button type="button" data-block-action="list" style="background:linear-gradient(180deg,#1d4f91,#12386a);">List All Blocked</button>
+          </div>
+        </form>
+
+        <p id="admin-block-inbound-callerid-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a caller ID number, then choose Block or Lookup Number. Use List All Blocked to manage existing entries.</p>
+        <p id="admin-block-inbound-callerid-summary" style="color:#355978; min-height:18px;"></p>
+        <div id="admin-block-inbound-callerid-results" style="overflow-x:auto;"></div>
       </section>
 
       <section class="panel tool-panel" data-panel="strikemask-template">
@@ -15726,6 +16188,157 @@ def menu_admin_page(request: Request):
             } catch (err) {
               statusEl.textContent = "Template build failed: " + ((err && err.message) || "Unknown error.");
             }
+          });
+        })();
+      </script>
+
+      <script>
+        (function () {
+          const form = document.getElementById("admin-block-inbound-callerid-form");
+          const statusEl = document.getElementById("admin-block-inbound-callerid-status");
+          const summaryEl = document.getElementById("admin-block-inbound-callerid-summary");
+          const resultsEl = document.getElementById("admin-block-inbound-callerid-results");
+
+          if (!form || !statusEl || !summaryEl || !resultsEl) {
+            return;
+          }
+
+          function setPending(action) {
+            if (action === "block") {
+              statusEl.textContent = "Blocking caller ID...";
+            } else if (action === "remove") {
+              statusEl.textContent = "Removing blocked caller ID...";
+            } else if (action === "list") {
+              statusEl.textContent = "Loading blocked caller ID list...";
+            } else {
+              statusEl.textContent = "Looking up caller ID...";
+            }
+          }
+
+          function renderRows(rows) {
+            if (!rows || !rows.length) {
+              resultsEl.innerHTML = "";
+              return;
+            }
+
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left;">Pattern (71)</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Normalized (10)</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Description</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Partition</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Action</th>';
+            html += '</tr></thead><tbody>';
+
+            rows.forEach(function (row, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const pattern = row.pattern || "";
+              const normalized = row.normalized_number || "";
+              const description = row.description || "";
+              const partition = row.route_partition || "";
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + pattern + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + normalized + '</td>';
+              html += '<td style="padding:7px 10px;">' + description + '</td>';
+              html += '<td style="padding:7px 10px;">' + partition + '</td>';
+              html += '<td style="padding:7px 10px;"><button type="button" data-delete-pattern="' + pattern + '" style="background:linear-gradient(180deg,#a63b00,#7d2b00);">Delete</button></td>';
+              html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            resultsEl.innerHTML = html;
+
+            resultsEl.querySelectorAll('button[data-delete-pattern]').forEach(function (btn) {
+              btn.addEventListener("click", async function () {
+                const patternValue = (btn.getAttribute("data-delete-pattern") || "").trim();
+                if (!patternValue) {
+                  return;
+                }
+                const confirmed = confirm("Delete blocked caller ID pattern " + patternValue + "?");
+                if (!confirmed) {
+                  return;
+                }
+
+                const callerField = form.querySelector('input[name="caller_id_number"]');
+                if (callerField) {
+                  callerField.value = patternValue;
+                }
+                await runAction("remove");
+              });
+            });
+          }
+
+          async function runAction(action) {
+            const callerField = form.querySelector('input[name="caller_id_number"]');
+            const callerValue = ((callerField && callerField.value) || "").trim();
+            if (!callerValue && action !== "list") {
+              statusEl.textContent = "Caller ID Number is required.";
+              return;
+            }
+
+            setPending(action);
+            summaryEl.textContent = "";
+            if (action !== "list") {
+              resultsEl.innerHTML = "";
+            }
+
+            const formData = new FormData(form);
+            formData.set("action", action);
+
+            try {
+              const response = await fetch("/inbound-callerid/block", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+              });
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                const msg = (payload.error && payload.error.message) || payload.detail || "Action failed.";
+                throw new Error(msg);
+              }
+
+              if (payload.action === "list") {
+                const rows = payload.results || [];
+                statusEl.textContent = `Loaded ${rows.length} blocked caller ID entr${rows.length === 1 ? "y" : "ies"}.`;
+                summaryEl.textContent = "Includes normalized number column with 71 prefix removed.";
+                renderRows(rows);
+                return;
+              }
+
+              const stateLabel = payload.blocked ? "Blocked" : "Not Blocked";
+              statusEl.textContent = `${stateLabel}: ${payload.pattern || ""}`;
+              summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Partition: ${payload.route_partition || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}`;
+
+              if (payload.pattern) {
+                renderRows([
+                  {
+                    pattern: payload.pattern,
+                    normalized_number: payload.normalized_number || "",
+                    description: payload.description || "",
+                    route_partition: payload.route_partition || "",
+                  },
+                ]);
+              }
+            } catch (err) {
+              statusEl.textContent = "Action failed: " + ((err && err.message) || "Unknown error.");
+              resultsEl.innerHTML = "";
+            }
+          }
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            await runAction("block");
+          });
+
+          form.querySelectorAll("button[data-block-action]").forEach(function (btn) {
+            btn.addEventListener("click", async function () {
+              const action = (btn.getAttribute("data-block-action") || "").trim();
+              if (!action || action === "block") {
+                return;
+              }
+              await runAction(action);
+            });
           });
         })();
       </script>
@@ -16788,7 +17401,7 @@ def menu_admin_page(request: Request):
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
+""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION__", escape(BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION_DEFAULT))
 
   return HTMLResponse(
     content=html,
@@ -20422,6 +21035,88 @@ def twilio_inbound_verification_route(
         "auto_restore_seconds": TWILIO_INBOUND_AUTO_RESTORE_SECONDS if auto_restore_enabled else 0,
       }
     )
+
+
+@app.post("/inbound-callerid/block")
+def block_inbound_callerid_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    caller_id_number: str = Form(""),
+    request_date: str = Form(""),
+    request_ticket: str = Form(""),
+    action: str = Form("status"),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+    clean_action = (action or "status").strip().lower()
+    if clean_action not in {"block", "remove", "delete", "status", "list"}:
+      raise RuntimeError("action must be one of: block, remove, delete, status, list")
+
+    clean_input = (caller_id_number or "").strip()
+    pattern_value = ""
+    normalized_number = ""
+
+    if clean_action == "list":
+      rows = _list_blocked_inbound_patterns(cucm_host, cucm_user, cucm_pass)
+      _append_audit_event(
+        action="block_inbound_calls_by_caller_id",
+        cucm_host=cucm_host,
+        operator=cucm_user,
+        target="action=list",
+        output_filename="inline_json_ok",
+        inline_mode=True,
+      )
+      return JSONResponse({
+        "ok": True,
+        "action": "list",
+        "count": len(rows),
+        "results": rows,
+      })
+
+    pattern_value = _resolve_blocked_pattern_input(clean_input)
+    normalized_number = _normalize_blocked_pattern_for_display(pattern_value)
+
+    if clean_action == "block":
+      description_text = _build_blocked_description(request_date, request_ticket)
+      result = _add_blocked_inbound_pattern(
+        cucm_host,
+        cucm_user,
+        cucm_pass,
+        pattern_value,
+        description_text,
+      )
+    elif clean_action in {"remove", "delete"}:
+      result = _remove_blocked_inbound_pattern(cucm_host, cucm_user, cucm_pass, pattern_value)
+      clean_action = "remove"
+    else:
+      result = _get_blocked_inbound_pattern_status(cucm_host, cucm_user, cucm_pass, pattern_value)
+
+    _append_audit_event(
+      action="block_inbound_calls_by_caller_id",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=(
+        f"caller_id={normalized_number};"
+        f"pattern={pattern_value};"
+        f"action={clean_action};"
+        f"blocked={result.get('blocked', False)};"
+        f"changed={result.get('changed', False)}"
+      ),
+      output_filename="inline_json_ok",
+      inline_mode=True,
+    )
+
+    return JSONResponse({
+      "ok": True,
+      "action": clean_action,
+      "caller_id_number": normalized_number,
+      "pattern": result.get("pattern", pattern_value),
+      "normalized_number": result.get("normalized_number", normalized_number),
+      **result,
+    })
 
 
 @app.post("/strike-mask/reverse")
