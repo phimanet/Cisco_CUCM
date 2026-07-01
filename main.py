@@ -14978,11 +14978,11 @@ def menu_admin_page(request: Request):
             <span>Review recent portal actions and download the audit CSV.</span>
           </a>
           <a class="hero-link-card" href="/page3?panel=sms-number-look">
-            <strong>ðŸ“ž SMS Item Menu</strong>
+            <strong>SMS Item Menu</strong>
             <span>Manage Twilio number verification and lookup operations.</span>
           </a>
           <a class="hero-link-card" href="/page4">
-            <strong>ðŸ” Server Certificate Manager</strong>
+            <strong>Server Certificate Manager</strong>
             <span>LAB-only read-only certificate inventory for CUCM, IM and Presence, and Unity.</span>
           </a>
         </div>
@@ -15012,13 +15012,13 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
-            <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">ðŸ“ž SMS Item Menu (Page 3)</button>
-            <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">âš™ï¸ DN Prefix Settings</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">SMS Item Menu (Page 3)</button>
+            <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unityldapsync">Trigger Unity LDAP Sync</button>
-            <button type="button" class="portal-nav-btn" data-panel="sep-sms-report">ðŸ“§ SMS Separation Email Process</button>
-            <button type="button" class="portal-nav-btn" data-panel="dn-avail-report">ðŸ“Š DN Number Pool Availability Report</button>
-            <button type="button" class="portal-nav-btn" onclick="window.location.href='/page4'">ðŸ” Server Certificate Manager (Page 4)</button>
+            <button type="button" class="portal-nav-btn" data-panel="sep-sms-report">SMS Separation Email Process</button>
+            <button type="button" class="portal-nav-btn" data-panel="dn-avail-report">DN Number Pool Availability Report</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/page4'">Server Certificate Manager (Page 4)</button>
           </div>
         </aside>
 
