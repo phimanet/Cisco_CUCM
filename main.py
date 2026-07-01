@@ -16313,7 +16313,12 @@ def menu_admin_page(request: Request):
               }
               summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Partition: ${payload.route_partition || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}`;
 
-              if (payload.pattern) {
+              const showDeleteResult = (
+                (payload.action === "status" && payload.blocked)
+                || (payload.action === "block" && payload.blocked)
+              );
+
+              if (payload.pattern && showDeleteResult) {
                 renderRows([
                   {
                     pattern: payload.pattern,
@@ -16322,6 +16327,8 @@ def menu_admin_page(request: Request):
                     route_partition: payload.route_partition || "",
                   },
                 ]);
+              } else {
+                resultsEl.innerHTML = "";
               }
             } catch (err) {
               statusEl.textContent = "Action failed: " + ((err && err.message) || "Unknown error.");
