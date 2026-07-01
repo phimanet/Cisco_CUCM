@@ -10610,6 +10610,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
           <button type="button" class="portal-nav-btn" data-panel="namechange">Employee Name Change-Update Jabber/VM</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
+          <button type="button" class="portal-nav-btn" data-panel="mobiledelete">Remove only Jabber Mobile</button>
           <button type="button" class="portal-nav-btn" data-panel="ad">Update AD Telephone/ipPhone Field Only</button>
           <button type="button" class="portal-nav-btn" data-panel="tct">Add in Jabber iPhone</button>
           <button type="button" class="portal-nav-btn" data-panel="bot">Add in Jabber Android</button>
@@ -11802,6 +11803,34 @@ __ADMIN_CARD__
         <textarea id="reset-pin-preview" readonly></textarea>
       </section>
     </div>
+    </section>
+
+    <section class="tool-panel" data-panel="mobiledelete">
+    <h3>Remove only Jabber Mobile - iPhone or Android</h3>
+    <p>Lookup by last name, then remove Jabber iPhone (TCT), Jabber Android (BOT), or both. This does not delete CSF or voicemail.</p>
+    <form id="menu-mobile-delete-lookup-form" class="jabber-check-form" style="max-width:700px;">
+      <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+      <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+      <input type="hidden" name="cucm_pass" value="">
+
+      <div class="compact-inline-row">
+        <span>Last Name:</span>
+        <input name="last_name" placeholder="Smith" required>
+      </div><br>
+
+      <div class="compact-inline-row">
+        <span>First Name (optional):</span>
+        <input name="first_name" placeholder="John">
+      </div><br>
+
+      <div class="action-row">
+        <button type="submit">Search Users for Mobile Delete</button>
+        <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+      </div>
+    </form>
+
+    <p id="menu-mobile-delete-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
+    <div id="menu-mobile-delete-results" style="overflow-x:auto;"></div>
     </section>
 
     <section class="tool-panel" data-panel="offboard">
@@ -13171,6 +13200,136 @@ __ADMIN_CARD__
         }
       })();
       // ---- End Mobile Jabber Notify panel -----------------------------------
+
+      (function () {
+        const form = document.getElementById("menu-mobile-delete-lookup-form");
+        const statusEl = document.getElementById("menu-mobile-delete-status");
+        const resultsEl = document.getElementById("menu-mobile-delete-results");
+
+        if (!form || !statusEl || !resultsEl) {
+          return;
+        }
+
+        function submitDeleteAction(uid, mode) {
+          const cucmHost = "__AUTH_CUCM_HOST__";
+          const cucmUser = "__AUTH_USER__";
+          const cucmPass = "";
+
+          const removeTct = mode === "tct" || mode === "both";
+          const removeBot = mode === "bot" || mode === "both";
+          const label = mode === "tct" ? "TCT only" : (mode === "bot" ? "BOT only" : "TCT and BOT");
+
+          const confirmed = confirm(
+            `Delete mobile Jabber devices for ${uid}?\n\nSelection: ${label}\n\nThis action will not delete CSF or voicemail.`
+          );
+          if (!confirmed) {
+            return;
+          }
+
+          const actionForm = document.createElement("form");
+          actionForm.method = "post";
+          actionForm.action = "/delete/secondary-mobile-devices";
+
+          const fields = {
+            cucm_host: cucmHost,
+            cucm_user: cucmUser,
+            cucm_pass: cucmPass,
+            target_user: uid,
+            remove_tct: removeTct ? "1" : "0",
+            remove_bot: removeBot ? "1" : "0",
+          };
+
+          Object.entries(fields).forEach(([name, value]) => {
+            const input = document.createElement("input");
+            input.type = "hidden";
+            input.name = name;
+            input.value = value;
+            actionForm.appendChild(input);
+          });
+
+          document.body.appendChild(actionForm);
+          actionForm.submit();
+        }
+
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          statusEl.textContent = "Searching...";
+          resultsEl.innerHTML = "";
+
+          try {
+            const formData = new FormData(form);
+            const response = await fetch("/lookup/person", {
+              method: "POST",
+              body: formData,
+              credentials: "same-origin",
+            });
+
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              const msg = (payload.error && payload.error.message) || "Search failed.";
+              throw new Error(msg);
+            }
+
+            const results = payload.results || [];
+            if (!results.length) {
+              statusEl.textContent = "No users found matching that name.";
+              return;
+            }
+
+            statusEl.textContent = `Found ${results.length} user(s). Choose delete action.`;
+
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Delete Actions</th>';
+            html += '</tr></thead><tbody>';
+
+            results.forEach(function (r, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+              const email = r.email || "\u2014";
+              const telephone = r.telephone || "\u2014";
+              const uid = r.userid || "";
+              const devList = (r.devices || []).map(function (d) {
+                const exts = (d.extensions || []).join(", ") || "\u2014";
+                return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
+              }).join("<br>") || "\u2014";
+
+              const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;color:#fff;";
+              const tctBtn = `<button type="button" style="${btnStyle}background:#0e7490;" data-delete-mode="tct" data-delete-user="${uid}">Delete iPhone (TCT)</button>`;
+              const botBtn = `<button type="button" style="${btnStyle}background:#7c3aed;" data-delete-mode="bot" data-delete-user="${uid}">Delete Android (BOT)</button>`;
+              const bothBtn = `<button type="button" style="${btnStyle}background:#b00020;" data-delete-mode="both" data-delete-user="${uid}">Delete Both</button>`;
+
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px;">' + name + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+              html += '<td style="padding:7px 10px;">' + email + '</td>';
+              html += '<td style="padding:7px 10px;">' + telephone + '</td>';
+              html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
+              html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(2,max-content);gap:4px;align-items:start;">' + tctBtn + botBtn + bothBtn + '</div></td>';
+              html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            resultsEl.innerHTML = html;
+
+            resultsEl.querySelectorAll("button[data-delete-mode]").forEach(function (btn) {
+              btn.addEventListener("click", function () {
+                const uid = btn.getAttribute("data-delete-user") || "";
+                const mode = btn.getAttribute("data-delete-mode") || "";
+                submitDeleteAction(uid, mode);
+              });
+            });
+
+          } catch (err) {
+            statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+          }
+        });
+      })();
 
       (function () {
         const form = document.getElementById("admin-block-inbound-callerid-form");
