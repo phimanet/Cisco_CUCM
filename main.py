@@ -7219,11 +7219,9 @@ def _resolve_blocked_pattern_input(value: str) -> str:
     raise RuntimeError("Caller ID must be 10 digits, 11 digits starting with 1, or full 71XXXXXXXXXX pattern.")
 
 
-def _build_blocked_description(request_date: str, request_ticket: str) -> str:
-    clean_date = (request_date or "").strip()
+def _build_blocked_description(request_ticket: str) -> str:
+    clean_date = _audit_now().strftime("%m-%d-%Y")
     clean_ticket = (request_ticket or "").strip().upper()
-    if not re.fullmatch(r"\d{2}-\d{2}-\d{4}", clean_date):
-      raise RuntimeError("Date must be MM-DD-YYYY.")
     if not clean_ticket:
       raise RuntimeError("TASK/INC number is required.")
     return f"{BLOCKED_CALLERID_DESCRIPTION_PREFIX}{clean_date} {clean_ticket}"
@@ -15202,7 +15200,7 @@ def menu_admin_page(request: Request):
       <section class="panel tool-panel" data-panel="block-inbound-callerid">
         <h3>Block Inbound Calls by Caller ID Number</h3>
         <p>Creates/removes inbound call-block translation patterns using the local template (not a live copy pattern) in route partition <strong>__BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION__</strong>.</p>
-        <p style="color:#355978; margin-top:6px;">For new blocks: enter 10-digit caller ID, date (MM-DD-YYYY), and TASK/INC number. Pattern is auto-built as <strong>71 + caller ID</strong>.</p>
+        <p style="color:#355978; margin-top:6px;">For new blocks: enter 10-digit caller ID and TASK/INC number. The date is auto-set to today when the block is created. Pattern is auto-built as <strong>71 + caller ID</strong>.</p>
         <form id="admin-block-inbound-callerid-form">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
@@ -15210,11 +15208,6 @@ def menu_admin_page(request: Request):
           <div class="compact-inline-row">
             <span>Caller ID Number:</span>
             <input name="caller_id_number" placeholder="8585236648" required>
-          </div><br>
-
-          <div class="compact-inline-row">
-            <span>Date (MM-DD-YYYY):</span>
-            <input name="request_date" placeholder="01-23-2025">
           </div><br>
 
           <div class="compact-inline-row">
@@ -21044,7 +21037,6 @@ def block_inbound_callerid_route(
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
     caller_id_number: str = Form(""),
-    request_date: str = Form(""),
     request_ticket: str = Form(""),
     action: str = Form("status"),
 ):
@@ -21080,7 +21072,7 @@ def block_inbound_callerid_route(
     normalized_number = _normalize_blocked_pattern_for_display(pattern_value)
 
     if clean_action == "block":
-      description_text = _build_blocked_description(request_date, request_ticket)
+      description_text = _build_blocked_description(request_ticket)
       result = _add_blocked_inbound_pattern(
         cucm_host,
         cucm_user,
