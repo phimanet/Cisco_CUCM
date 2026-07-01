@@ -10616,6 +10616,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
           <button type="button" class="portal-nav-btn" data-panel="mobilejabbernotify">Re-send Jabber Mobile Email Instructions</button>
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
+          <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
         </div>
       </aside>
 
@@ -12215,6 +12216,36 @@ __ADMIN_CARD__
     </div>
     </section>
 
+    <section class="tool-panel" data-panel="block-inbound-callerid">
+    <h3>Block Inbound Calls by Caller ID Number</h3>
+    <p>Creates/removes inbound call-block translation patterns using the local template (not a live copy pattern).</p>
+    <p style="color:#355978; margin-top:6px;">For new blocks: enter 10-digit caller ID and TASK/INC number. The date is auto-set to today when the block is created. Pattern is auto-built as <strong>71 + caller ID</strong>.</p>
+    <form id="admin-block-inbound-callerid-form" class="jabber-check-form" style="max-width:720px;">
+      <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+      <input type="hidden" name="cucm_pass" value="">
+
+      <div class="compact-inline-row">
+        <span>Inbound Caller ID Number to Block:</span>
+        <input name="caller_id_number" placeholder="8585236648" required>
+      </div><br>
+
+      <div class="compact-inline-row">
+        <span>TASK/INC Number:</span>
+        <input name="request_ticket" placeholder="TASK0613658">
+      </div><br>
+
+      <div style="display:flex; gap:8px; flex-wrap:wrap;">
+        <button type="submit" data-block-action="block">Block Caller ID</button>
+        <button type="button" data-block-action="status" style="background:linear-gradient(180deg,#385977,#29425a);">Lookup Number</button>
+        <button type="button" data-block-action="list" style="background:linear-gradient(180deg,#1d4f91,#12386a);">List All Currently Blocked Inbound Caller ID Number</button>
+      </div>
+    </form>
+
+    <p id="admin-block-inbound-callerid-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a caller ID number, then choose Block or Lookup Number. Use List All Currently Blocked Inbound Caller ID Number to review and delete only active blocked entries.</p>
+    <p id="admin-block-inbound-callerid-summary" style="color:#355978; min-height:18px;"></p>
+    <div id="admin-block-inbound-callerid-results" style="overflow-x:auto;"></div>
+    </section>
+
     <script>
       const hasCachedCucmPassword = __HAS_CACHED_CUCM_PASS__;
       const hasCachedUnityPassword = __HAS_CACHED_UNITY_PASS__;
@@ -13140,6 +13171,172 @@ __ADMIN_CARD__
         }
       })();
       // ---- End Mobile Jabber Notify panel -----------------------------------
+
+      (function () {
+        const form = document.getElementById("admin-block-inbound-callerid-form");
+        const statusEl = document.getElementById("admin-block-inbound-callerid-status");
+        const summaryEl = document.getElementById("admin-block-inbound-callerid-summary");
+        const resultsEl = document.getElementById("admin-block-inbound-callerid-results");
+
+        if (!form || !statusEl || !summaryEl || !resultsEl) {
+          return;
+        }
+
+        function setPending(action) {
+          if (action === "block") {
+            statusEl.textContent = "Blocking caller ID...";
+          } else if (action === "remove") {
+            statusEl.textContent = "Removing blocked caller ID...";
+          } else if (action === "list") {
+            statusEl.textContent = "Loading all currently blocked inbound caller ID numbers...";
+          } else {
+            statusEl.textContent = "Looking up caller ID...";
+          }
+        }
+
+        function renderRows(rows) {
+          if (!rows || !rows.length) {
+            resultsEl.innerHTML = "";
+            return;
+          }
+
+          let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+          html += '<thead><tr style="background:#005eb8; color:#fff;">';
+          html += '<th style="padding:8px 10px; text-align:left;">Pattern (71)</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Normalized (10)</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Description</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Partition</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Action</th>';
+          html += '</tr></thead><tbody>';
+
+          rows.forEach(function (row, i) {
+            const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+            const pattern = row.pattern || "";
+            const normalized = row.normalized_number || "";
+            const description = row.description || "";
+            const partition = row.route_partition || "";
+            html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+            html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + pattern + '</td>';
+            html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + normalized + '</td>';
+            html += '<td style="padding:7px 10px;">' + description + '</td>';
+            html += '<td style="padding:7px 10px;">' + partition + '</td>';
+            html += '<td style="padding:7px 10px;"><button type="button" data-delete-pattern="' + pattern + '" style="background:linear-gradient(180deg,#a63b00,#7d2b00);">Delete</button></td>';
+            html += '</tr>';
+          });
+
+          html += '</tbody></table>';
+          resultsEl.innerHTML = html;
+
+          resultsEl.querySelectorAll('button[data-delete-pattern]').forEach(function (btn) {
+            btn.addEventListener("click", async function () {
+              const patternValue = (btn.getAttribute("data-delete-pattern") || "").trim();
+              if (!patternValue) {
+                return;
+              }
+              const confirmed = confirm("Delete blocked caller ID pattern " + patternValue + "?");
+              if (!confirmed) {
+                return;
+              }
+
+              const callerField = form.querySelector('input[name="caller_id_number"]');
+              if (callerField) {
+                callerField.value = patternValue;
+              }
+              await runAction("remove");
+            });
+          });
+        }
+
+        async function runAction(action) {
+          const callerField = form.querySelector('input[name="caller_id_number"]');
+          const callerValue = ((callerField && callerField.value) || "").trim();
+          if (!callerValue && action !== "list") {
+            statusEl.textContent = "Caller ID Number is required.";
+            return;
+          }
+
+          setPending(action);
+          summaryEl.textContent = "";
+          if (action !== "list") {
+            resultsEl.innerHTML = "";
+          }
+
+          const formData = new FormData(form);
+          formData.set("action", action);
+
+          try {
+            const response = await fetch("/inbound-callerid/block", {
+              method: "POST",
+              body: formData,
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              const msg = (payload.error && payload.error.message) || payload.detail || "Action failed.";
+              throw new Error(msg);
+            }
+
+            if (payload.action === "list") {
+              const rows = payload.results || [];
+              statusEl.textContent = `Loaded ${rows.length} currently blocked inbound caller ID entr${rows.length === 1 ? "y" : "ies"}.`;
+              summaryEl.textContent = "Includes normalized number column (71 prefix removed) and delete option for each actively blocked entry.";
+              renderRows(rows);
+              return;
+            }
+
+            if (payload.action === "remove") {
+              if (payload.changed) {
+                statusEl.textContent = `Deleted blocked Caller ID: ${payload.pattern || ""}`;
+              } else {
+                statusEl.textContent = `Caller ID not found in blocked list: ${payload.pattern || ""}`;
+              }
+            } else if (payload.action === "status" && !payload.blocked) {
+              statusEl.textContent = "Block Not Found, Caller ID number is not Blocked for Inbound Calls.";
+            } else {
+              const stateLabel = payload.blocked ? "Blocked" : "Not Blocked";
+              statusEl.textContent = `${stateLabel}: ${payload.pattern || ""}`;
+            }
+            summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Partition: ${payload.route_partition || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}`;
+
+            const showDeleteResult = (
+              (payload.action === "status" && payload.blocked)
+              || (payload.action === "block" && payload.blocked)
+            );
+
+            if (payload.pattern && showDeleteResult) {
+              renderRows([
+                {
+                  pattern: payload.pattern,
+                  normalized_number: payload.normalized_number || "",
+                  description: payload.description || "",
+                  route_partition: payload.route_partition || "",
+                },
+              ]);
+            } else {
+              resultsEl.innerHTML = "";
+            }
+          } catch (err) {
+            statusEl.textContent = "Action failed: " + ((err && err.message) || "Unknown error.");
+            resultsEl.innerHTML = "";
+          }
+        }
+
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          await runAction("block");
+        });
+
+        form.querySelectorAll("button[data-block-action]").forEach(function (btn) {
+          btn.addEventListener("click", async function () {
+            const action = (btn.getAttribute("data-block-action") || "").trim();
+            if (!action || action === "block") {
+              return;
+            }
+            await runAction(action);
+          });
+        });
+      })();
 
       const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
       const panels = Array.from(document.querySelectorAll(".tool-panel"));
