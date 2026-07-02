@@ -183,6 +183,7 @@ Priority keys:
 - Proximity-window line counting refined to use physical lines (blank lines included) around SIP method/status so offset-based matching aligns with operator-visible Show output.
 - Expanded direction/search fallback window to up to 10 lines above and 10 lines below SIP method/status, and increased Show/Raw preamble baseline to 10 lines above SIP start for broader edge-case visibility.
 - Fixed MSGID reconstruction window to include up to 10 physical lines *before* MSGID from source logs, so Show now displays true pre-INVITE context and Direction fallback can see upstream Ribbon metadata.
+- Added fast raw-line prefilters (ANI/digits, method, response code, source key, quick received_at guard) before JSON decode in SIP search loop to reduce CPU load and mitigate 504 timeouts on large day indexes.
 - Validation checkpoint (pause state): current objective is end-to-end traceability confirmation for inbound call flow **through Cisco CUBE -> Ribbon SBC -> outbound carrier leg** using SIP Call Search Direction + Raw preamble context.
 - Current validated parser findings from real LV/Reno Ribbon samples:
   - Receive marker: `tlDataReceived:Received message on [...] from [...]` (and `Incoming message on [...] from [...]`).

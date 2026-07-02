@@ -2512,6 +2512,37 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
           raw = (line or "").strip()
           if not raw:
             continue
+          # Fast prefilter path to avoid expensive JSON decode on clearly non-matching rows.
+          if from_digits and from_digits not in raw:
+            continue
+          if to_digits and to_digits not in raw:
+            continue
+          if method:
+            method_token = f'"method":"{method.upper()}"'
+            if method_token not in raw:
+              continue
+          if response_code:
+            response_token = f'"response_code":"{response_code}"'
+            if response_token not in raw:
+              continue
+          if source_key and source_key not in {"las-ribbon-sbc", "rno-ribbon-sbc"}:
+            source_token = f'"source_key":"{source_key}"'
+            if source_token not in raw:
+              continue
+
+          if start_dt or end_dt:
+            ts_match = re.search(r'"received_at":"([^"]+)"', raw)
+            if ts_match:
+              ts_text = (ts_match.group(1) or "").strip()
+              try:
+                quick_ts = datetime.datetime.fromisoformat(ts_text)
+                if start_dt and quick_ts < start_dt:
+                  continue
+                if end_dt and quick_ts > end_dt:
+                  continue
+              except ValueError:
+                pass
+
           try:
             record = json.loads(raw)
           except json.JSONDecodeError:
