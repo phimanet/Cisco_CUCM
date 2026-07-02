@@ -2417,7 +2417,7 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
 
           # Legacy line-based records can be expensive to reconstruct.
           # Only resolve after quick filters, and cap total reconstructions per request.
-          if not (record.get("raw_message") or "").strip() and legacy_resolved_count < max_legacy_resolve:
+          if _sip_record_needs_legacy_reconstruction(record) and legacy_resolved_count < max_legacy_resolve:
             legacy = _sip_resolve_legacy_message(record, source_day_cache, content_cache, line_cache)
             legacy_resolved_count += 1
             if legacy.get("raw_file_rel"):
@@ -2687,6 +2687,27 @@ def _sip_resolve_legacy_message(
     return {"raw_file_rel": rel_path, "raw_message": message, "block_id": block_id}
 
   return {"raw_file_rel": "", "raw_message": "", "block_id": ""}
+
+
+def _sip_record_needs_legacy_reconstruction(record: dict) -> bool:
+  message = (record.get("raw_message") or "").strip()
+  if not message:
+    return True
+
+  lines = [line.strip() for line in message.splitlines() if (line or "").strip()]
+  if len(lines) <= 1:
+    raw_line = (record.get("raw_line") or "").strip()
+    if raw_line.startswith("<"):
+      return True
+    if re.match(r"^<\d+>\d+:\s+[^:]+:", message):
+      return True
+    if "/SIP/Msg/ccsipDisplayMsg" in message:
+      return True
+
+  start_line = _sip_message_start_line(lines)
+  if not start_line:
+    return True
+  return False
 
 
 def _sip_find_legacy_raw_file(record: dict, source_day_cache: dict[str, list[str]], content_cache: dict[str, str]) -> str:
