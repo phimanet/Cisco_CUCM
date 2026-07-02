@@ -2107,8 +2107,14 @@ def _sip_infer_direction_from_text(raw_message: str) -> tuple[str, str]:
     return "", ""
 
   # Ribbon fallback: inspect a proximity window around SIP method/status line.
-  # Operator-guided target window: up to 7 lines above and below SIP start.
-  lines = _sip_message_lines(text)
+  # Operator-guided target window: up to 7 physical lines above and below SIP start,
+  # where blank lines count toward distance.
+  lines = []
+  for raw in text.splitlines():
+    normalized = _sip_strip_debug_prefix(raw).rstrip("\r\n")
+    if normalized.endswith("ccsipDisplayMsg:"):
+      continue
+    lines.append(normalized)
   sip_idx = -1
   for idx, line in enumerate(lines):
     candidate = (line or "").strip()

@@ -180,6 +180,7 @@ Priority keys:
 - Fixed direction gap observed in live Reno results: search now forces legacy enrichment for Ribbon rows when Direction is blank and applies metadata-text fallback (`sending from ... to ...` / `Received message ... from ...`) before returning records.
 - Increased SIP Show/Raw reconstructed preamble window from 3 to 7 lines above SIP method to improve operator-assisted direction validation in live traces.
 - Direction inference now uses a proximity search window of up to 7 lines above and 7 lines below SIP method/status line, selecting the nearest Ribbon send/receive metadata marker when available.
+- Proximity-window line counting refined to use physical lines (blank lines included) around SIP method/status so offset-based matching aligns with operator-visible Show output.
 - Validation checkpoint (pause state): current objective is end-to-end traceability confirmation for inbound call flow **through Cisco CUBE -> Ribbon SBC -> outbound carrier leg** using SIP Call Search Direction + Raw preamble context.
 - Current validated parser findings from real LV/Reno Ribbon samples:
   - Receive marker: `tlDataReceived:Received message on [...] from [...]` (and `Incoming message on [...] from [...]`).
