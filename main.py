@@ -2536,6 +2536,14 @@ def _sip_strip_debug_prefix(line: str) -> str:
   return text.rstrip()
 
 
+def _sip_debug_prefix_parts(line: str) -> tuple[str, str, str]:
+  text = (line or "").rstrip("\r\n")
+  match = re.match(r"^<\d+>(\d+):\s+([^:]+):\s?(.*)$", text)
+  if not match:
+    return "", "", text.rstrip()
+  return (match.group(1) or "").strip(), (match.group(2) or "").strip(), (match.group(3) or "").rstrip()
+
+
 def _sip_resolve_legacy_message(
   record: dict,
   source_day_cache: dict[str, list[str]],
@@ -2579,6 +2587,8 @@ def _sip_resolve_legacy_message(
     if match_index < 0:
       continue
 
+    match_msg_id, match_host, _ = _sip_debug_prefix_parts(lines[match_index])
+
     start = match_index
     while start > 0:
       payload = _sip_strip_debug_prefix(lines[start]).strip()
@@ -2587,15 +2597,41 @@ def _sip_resolve_legacy_message(
       start -= 1
 
     start_payload = _sip_strip_debug_prefix(lines[start]).strip() if 0 <= start < len(lines) else ""
+    use_msgid_grouping = False
     if start_payload not in {"Received:", "Sent:"}:
       start = match_index
+      end = start + 1
+      while end < len(lines):
+        payload = _sip_strip_debug_prefix(lines[end]).strip()
+        if payload in {"Received:", "Sent:"}:
+          break
+        end += 1
+      if match_msg_id:
+        use_msgid_grouping = True
+        start = match_index
+        while start > 0:
+          prev_msg_id, prev_host, _ = _sip_debug_prefix_parts(lines[start - 1])
+          if prev_msg_id != match_msg_id:
+            break
+          if match_host and prev_host and prev_host != match_host:
+            break
+          start -= 1
 
-    end = start + 1
-    while end < len(lines):
-      payload = _sip_strip_debug_prefix(lines[end]).strip()
-      if payload in {"Received:", "Sent:"}:
-        break
-      end += 1
+        end = match_index + 1
+        while end < len(lines):
+          next_msg_id, next_host, _ = _sip_debug_prefix_parts(lines[end])
+          if next_msg_id != match_msg_id:
+            break
+          if match_host and next_host and next_host != match_host:
+            break
+          end += 1
+    else:
+      end = start + 1
+      while end < len(lines):
+        payload = _sip_strip_debug_prefix(lines[end]).strip()
+        if payload in {"Received:", "Sent:"}:
+          break
+        end += 1
 
     payload_lines = []
     for idx in range(start, min(end, len(lines))):
@@ -2609,7 +2645,10 @@ def _sip_resolve_legacy_message(
 
     message = "\n".join(payload_lines).strip()
     rel_path = _sip_rel_path(file_path)
-    block_id = f"{rel_path}:{start}"
+    if use_msgid_grouping and match_msg_id:
+      block_id = f"{rel_path}:msg:{match_msg_id}:{start}"
+    else:
+      block_id = f"{rel_path}:{start}"
     return {"raw_file_rel": rel_path, "raw_message": message, "block_id": block_id}
 
   return {"raw_file_rel": "", "raw_message": "", "block_id": ""}
