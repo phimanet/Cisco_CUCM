@@ -166,6 +166,7 @@ Priority keys:
 - Fixed post-reboot login 500 (`NameError: _CREDENTIAL_CIPHER`) by restoring safe credential-cipher initialization with plaintext fallback when `CUCM_WEB_CREDENTIAL_FERNET_KEY` is unset/invalid.
 - Updated SIP Call Search and ladder workflow to support dual correlation keys: Cisco-GUID (recommended primary) plus optional Call-ID search/filter compatibility.
 - Improved Cisco-GUID search robustness: pasted wrapped values are now canonicalized to 4x10-digit GUID format, and legacy indexed SIP rows now derive missing Cisco-GUID/Call-ID from raw message content before filters are applied.
+- Updated SIP capture file browser defaults to show only the latest 5 files, and added optional modified-time Start/End datetime range filters plus adjustable file-list limit for targeted download windows.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.

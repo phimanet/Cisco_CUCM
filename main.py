@@ -2517,9 +2517,28 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   return matches
 
 
-def _sip_list_capture_files(limit: int = 200) -> list[dict]:
+def _sip_list_capture_files(limit: int = 5, start_ts: str = "", end_ts: str = "") -> list[dict]:
   files = []
-  max_items = max(1, min(int(limit or 200), 1000))
+  max_items = max(1, min(int(limit or 5), 1000))
+  start_epoch = None
+  end_epoch = None
+  local_tz = datetime.datetime.now().astimezone().tzinfo
+
+  for value, name in ((start_ts, "start"), (end_ts, "end")):
+    text = (value or "").strip()
+    if not text:
+      continue
+    try:
+      parsed = datetime.datetime.fromisoformat(text)
+      if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=local_tz)
+      if name == "start":
+        start_epoch = parsed.timestamp()
+      else:
+        end_epoch = parsed.timestamp()
+    except ValueError:
+      continue
+
   if not os.path.isdir(SIP_CALL_SEARCH_ROOT):
     return files
 
@@ -2533,6 +2552,11 @@ def _sip_list_capture_files(limit: int = 200) -> list[dict]:
         stat = os.stat(full_path)
       except OSError:
         continue
+      modified_epoch = float(stat.st_mtime)
+      if start_epoch is not None and modified_epoch < start_epoch:
+        continue
+      if end_epoch is not None and modified_epoch > end_epoch:
+        continue
       rel_path = _sip_rel_path(full_path)
       kind = "raw" if rel_path.startswith("raw/") else ("index" if rel_path.startswith("index/") else "other")
       files.append(
@@ -2541,7 +2565,7 @@ def _sip_list_capture_files(limit: int = 200) -> list[dict]:
           "filename": file_name,
           "kind": kind,
           "size_bytes": int(stat.st_size),
-          "modified_epoch": float(stat.st_mtime),
+          "modified_epoch": modified_epoch,
           "modified_at": datetime.datetime.fromtimestamp(stat.st_mtime, tz=datetime.timezone.utc).isoformat(),
         }
       )
@@ -20973,10 +20997,15 @@ def sip_call_search_page(request: Request):
 
       <section class="panel">
         <h2 style="margin:0 0 10px 0;color:var(--amn-navy);">Download Captured Files</h2>
+        <div class="search-grid" style="margin-bottom:10px;">
+          <input id="sip-files-start-ts" type="datetime-local" placeholder="Start">
+          <input id="sip-files-end-ts" type="datetime-local" placeholder="End">
+          <input id="sip-files-limit" type="number" min="1" max="300" value="5" placeholder="Limit">
+        </div>
         <div class="actions">
           <button type="button" id="sip-refresh-files-btn" style="background:linear-gradient(180deg,#516d8d,#355978);">Refresh File List</button>
         </div>
-        <p class="muted" id="sip-files-status" style="min-height:18px;">Loading capture files...</p>
+        <p class="muted" id="sip-files-status" style="min-height:18px;">Loading recent capture files (last 5 by default)...</p>
         <div id="sip-files-list" style="overflow-x:auto;"></div>
       </section>
     </main>
@@ -20997,6 +21026,9 @@ def sip_call_search_page(request: Request):
         const filesEl = document.getElementById("sip-stat-files");
         const filesStatusEl = document.getElementById("sip-files-status");
         const filesListEl = document.getElementById("sip-files-list");
+        const filesStartTsEl = document.getElementById("sip-files-start-ts");
+        const filesEndTsEl = document.getElementById("sip-files-end-ts");
+        const filesLimitEl = document.getElementById("sip-files-limit");
 
         function escapeHtml(value) {{
           return String(value || "")
@@ -21305,7 +21337,15 @@ def sip_call_search_page(request: Request):
           if (!filesStatusEl) return;
           filesStatusEl.textContent = 'Loading capture files...';
           try {{
-            const response = await fetch('/sip-call-search/files?limit=300', {{ credentials: 'same-origin' }});
+            const params = new URLSearchParams();
+            const limitValue = String((filesLimitEl && filesLimitEl.value) || '5').trim();
+            const startValue = String((filesStartTsEl && filesStartTsEl.value) || '').trim();
+            const endValue = String((filesEndTsEl && filesEndTsEl.value) || '').trim();
+            params.set('limit', limitValue || '5');
+            if (startValue) params.set('start_ts', startValue);
+            if (endValue) params.set('end_ts', endValue);
+
+            const response = await fetch('/sip-call-search/files?' + params.toString(), {{ credentials: 'same-origin' }});
             const payload = await parseJsonResponse(response, 'File list lookup failed');
             const rows = payload.files || [];
             filesStatusEl.textContent = 'Showing ' + rows.length + ' capture file(s).';
@@ -21429,7 +21469,12 @@ async def sip_call_search_ladder(request: Request):
 
 
 @app.get("/sip-call-search/files")
-def sip_call_search_files(request: Request, limit: int = Query(300)):
+def sip_call_search_files(
+  request: Request,
+  limit: int = Query(5),
+  start_ts: str = Query(""),
+  end_ts: str = Query(""),
+):
   session = _get_auth_session(request)
   if not session:
     return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
@@ -21438,7 +21483,7 @@ def sip_call_search_files(request: Request, limit: int = Query(300)):
   if not _sip_call_search_available(auth_cucm_host):
     return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
 
-  files = _sip_list_capture_files(limit=limit)
+  files = _sip_list_capture_files(limit=limit, start_ts=start_ts, end_ts=end_ts)
   return JSONResponse({"ok": True, "files": files})
 
 
