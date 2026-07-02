@@ -2460,10 +2460,17 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
     except ValueError:
       pass
 
+  start_day = start_dt.astimezone().strftime("%Y-%m-%d") if start_dt else ""
+  end_day = end_dt.astimezone().strftime("%Y-%m-%d") if end_dt else ""
+
   index_days = []
   if os.path.isdir(SIP_CALL_SEARCH_INDEX_ROOT):
     for day_key in os.listdir(SIP_CALL_SEARCH_INDEX_ROOT):
       if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day_key):
+        if start_day and day_key < start_day:
+          continue
+        if end_day and day_key > end_day:
+          continue
         index_days.append(day_key)
   for day_key in sorted(index_days, reverse=True):
     index_path = _sip_index_path(day_key)
