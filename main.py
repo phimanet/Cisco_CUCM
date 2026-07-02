@@ -20583,6 +20583,14 @@ def sip_call_search_page(request: Request):
           }}
         }}
 
+        function formatReceivedTimestamp(value) {{
+          const text = String(value || '').trim();
+          if (!text) return '';
+          const m = text.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d+)?)/);
+          if (m) return m[1] + ' ' + m[2];
+          return text;
+        }}
+
         async function parseJsonResponse(response, fallbackMessage) {{
           const rawText = await response.text();
           let payload;
@@ -20625,7 +20633,7 @@ def sip_call_search_page(request: Request):
               ? ('<a href="' + captureLink + '" title="' + escapeHtml(captureFile) + '" style="font-weight:700;color:#005eb8;">' + escapeHtml(captureName) + '</a>')
               : '<span class="muted">(legacy record - file not resolved)</span>';
             html += '<tr style="background:' + bg + ';">'
-              + '<td>' + escapeHtml(row.received_at || '') + '</td>'
+              + '<td>' + escapeHtml(formatReceivedTimestamp(row.received_at || '')) + '</td>'
               + '<td><strong>' + escapeHtml(row.source_label || row.source_key || '') + '</strong><br><span class="muted">' + escapeHtml(row.source_ip || '') + '</span></td>'
               + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.call_id || '') + '</td>'
               + '<td>' + escapeHtml(row.method || '') + '</td>'
