@@ -2287,6 +2287,8 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   content_cache: dict[str, str] = {}
   line_cache: dict[str, list[str]] = {}
   seen_block_ids: set[str] = set()
+  legacy_resolved_count = 0
+  max_legacy_resolve = 250
   query = (criteria.get("query") or "").strip().lower()
   call_id = (criteria.get("call_id") or "").strip().lower()
   source_key = (criteria.get("source_key") or "").strip().lower()
@@ -2344,37 +2346,6 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
           except ValueError:
             record_ts = None
 
-          if not (record.get("raw_message") or "").strip():
-            legacy = _sip_resolve_legacy_message(record, source_day_cache, content_cache, line_cache)
-            if legacy.get("raw_file_rel"):
-              record["raw_file_rel"] = legacy.get("raw_file_rel", "")
-            if legacy.get("raw_message"):
-              record["raw_message"] = legacy.get("raw_message", "")
-
-            block_id = (legacy.get("block_id") or "").strip()
-            if block_id:
-              if block_id in seen_block_ids:
-                continue
-              seen_block_ids.add(block_id)
-
-            if (record.get("raw_message") or "").strip():
-              parse_ts = record_ts if record_ts else datetime.datetime.now(datetime.timezone.utc)
-              source_meta = {
-                "source_ip": record.get("source_ip", ""),
-                "source_key": record.get("source_key", ""),
-                "source_label": record.get("source_label", ""),
-                "source_name": record.get("source_name", ""),
-                "origin_id": record.get("origin_id", ""),
-              }
-              enriched = _sip_parse_record(record.get("raw_message", ""), parse_ts, source_meta)
-              record["call_id"] = enriched.get("call_id", record.get("call_id", ""))
-              record["method"] = enriched.get("method", record.get("method", ""))
-              record["response_code"] = enriched.get("response_code", record.get("response_code", ""))
-              record["from_value"] = enriched.get("from_value", record.get("from_value", ""))
-              record["to_value"] = enriched.get("to_value", record.get("to_value", ""))
-              record["from_digits"] = enriched.get("from_digits", record.get("from_digits", ""))
-              record["to_digits"] = enriched.get("to_digits", record.get("to_digits", ""))
-
           if start_dt and record_ts and record_ts < start_dt:
             continue
           if end_dt and record_ts and record_ts > end_dt:
@@ -2405,6 +2376,40 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
             ]).lower()
             if query not in haystack:
               continue
+
+          # Legacy line-based records can be expensive to reconstruct.
+          # Only resolve after quick filters, and cap total reconstructions per request.
+          if not (record.get("raw_message") or "").strip() and legacy_resolved_count < max_legacy_resolve:
+            legacy = _sip_resolve_legacy_message(record, source_day_cache, content_cache, line_cache)
+            legacy_resolved_count += 1
+            if legacy.get("raw_file_rel"):
+              record["raw_file_rel"] = legacy.get("raw_file_rel", "")
+            if legacy.get("raw_message"):
+              record["raw_message"] = legacy.get("raw_message", "")
+
+            block_id = (legacy.get("block_id") or "").strip()
+            if block_id:
+              if block_id in seen_block_ids:
+                continue
+              seen_block_ids.add(block_id)
+
+            if (record.get("raw_message") or "").strip():
+              parse_ts = record_ts if record_ts else datetime.datetime.now(datetime.timezone.utc)
+              source_meta = {
+                "source_ip": record.get("source_ip", ""),
+                "source_key": record.get("source_key", ""),
+                "source_label": record.get("source_label", ""),
+                "source_name": record.get("source_name", ""),
+                "origin_id": record.get("origin_id", ""),
+              }
+              enriched = _sip_parse_record(record.get("raw_message", ""), parse_ts, source_meta)
+              record["call_id"] = enriched.get("call_id", record.get("call_id", ""))
+              record["method"] = enriched.get("method", record.get("method", ""))
+              record["response_code"] = enriched.get("response_code", record.get("response_code", ""))
+              record["from_value"] = enriched.get("from_value", record.get("from_value", ""))
+              record["to_value"] = enriched.get("to_value", record.get("to_value", ""))
+              record["from_digits"] = enriched.get("from_digits", record.get("from_digits", ""))
+              record["to_digits"] = enriched.get("to_digits", record.get("to_digits", ""))
 
           matches.append(record)
           if len(matches) >= limit:
