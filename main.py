@@ -103,31 +103,13 @@ PERFMON_INCLUDED_HOSTS = [
   (host or "").strip().lower()
   for host in (os.getenv("PERFMON_INCLUDED_HOSTS", "") or "").split(",")
   if (host or "").strip()
-def _sip_build_ladder_mermaid(criteria: dict) -> tuple[str, int, list[dict], list[dict]]:
-  participants, events = _sip_build_ladder_data(criteria)
+]
+PERFMON_EXCLUDED_HOSTS = {
+  (host or "").strip().lower()
+  for host in (os.getenv("PERFMON_EXCLUDED_HOSTS", "") or "").split(",")
+  if (host or "").strip()
+}
 
-  participants_order = [item.get("label", "Peer") for item in participants]
-  participant_ids: dict[str, str] = {}
-  used_ids: set[str] = set()
-
-  for label in participants_order:
-    participant_ids[label] = _sip_mermaid_id(label, used_ids)
-
-  mermaid_lines = ["sequenceDiagram", "    autonumber"]
-  for label in participants_order:
-    pid = participant_ids[label]
-    display = label.replace('"', "'")
-    mermaid_lines.append(f'    participant {pid} as "{display}"')
-  for event in events:
-    from_label = event.get("from_label") or "Peer"
-    to_label = event.get("to_label") or "Peer"
-    label = event.get("label") or "SIP"
-    time_text = (event.get("time") or "").strip()
-    if time_text:
-      label = f"{time_text} {label}".strip()
-    mermaid_lines.append(f"    {participant_ids[from_label]}->>{participant_ids[to_label]}: {label}")
-
-  return "\n".join(mermaid_lines), len(events), participants, events
 def _startup_background_services():
   if _is_lab_runtime_host() and SIP_CALL_SEARCH_ENABLED and SIP_CALL_SEARCH_LAB_ONLY:
     _start_sip_call_search_listener()
@@ -3246,29 +3228,14 @@ def _git_commit_short() -> str:
         text=True,
         stderr=subprocess.DEVNULL,
       ).strip()
-            local_index = ensure_participant(local_label)
-            remote_index = ensure_participant(remote_label)
+      if commit:
+        return commit
     except Exception:
-            from_index, to_index = (local_index, remote_index)
-            from_label, to_label = (local_label, remote_label)
-
-              from_index, to_index = remote_index, local_index
-              from_label, to_label = remote_label, local_label
+      continue
   try:
     head_path = os.path.join(repo_dir, ".git", "HEAD")
     with open(head_path, "r", encoding="utf-8") as handle:
       head_value = (handle.read() or "").strip()
-              response_reason = {
-                "100": "Trying",
-                "180": "Ringing",
-                "181": "Call Is Being Forwarded",
-                "182": "Queued",
-                "183": "Session Progress",
-                "200": "OK",
-                "486": "Busy Here",
-                "487": "Request Terminated",
-              }.get(response, "")
-              event_label = f"{response} {response_reason}".strip()
     if head_value.startswith("ref:"):
       ref_rel = head_value.split(" ", 1)[-1].strip()
       ref_path = os.path.join(repo_dir, ".git", ref_rel.replace("/", os.sep))
@@ -3276,44 +3243,9 @@ def _git_commit_short() -> str:
         full_hash = (ref_handle.read() or "").strip()
       if full_hash:
         return full_hash[:7]
-            events.append(
-              {
-                "from_index": from_index,
-                "to_index": to_index,
-                "from_label": from_label,
-                "to_label": to_label,
-                "label": event_label.replace('"', "'"),
-                "time": time_text,
-                "direction": direction,
-              }
-            )
-
-          participants = [{"label": label, "index": idx} for idx, label in enumerate(participants_order)]
-          return participants, events
-
-
-        def _sip_build_ladder_mermaid(criteria: dict) -> tuple[str, int, list[dict], list[dict]]:
-          participants, events = _sip_build_ladder_data(criteria)
-
-          participants_order = [item.get("label", "Peer") for item in participants]
-          participant_ids: dict[str, str] = {}
-          used_ids: set[str] = set()
-
-          for label in participants_order:
-            participant_ids[label] = _sip_mermaid_id(label, used_ids)
+  except Exception:
     pass
-
-          for label in participants_order:
-            lines.append(f"    participant {participant_ids[label]} as {label.replace(chr(34), chr(39))}")
-          for event in events:
-            from_label = event.get("from_label") or "Peer"
-            to_label = event.get("to_label") or "Peer"
-            event_label = event.get("label") or "SIP"
-            time_text = (event.get("time") or "").strip()
-            if time_text:
-              event_label = f"{time_text} {event_label}".strip()
-            lines.append(f"    {participant_ids[from_label]}->>{participant_ids[to_label]}: {event_label}")
-          return "\n".join(lines), len(events), participants, events
+  return ""
 
 def _parse_certificate_not_after(value: str):
   text = (value or "").strip()
