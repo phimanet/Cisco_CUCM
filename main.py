@@ -10725,7 +10725,9 @@ __ADMIN_CARD__
               const teamsColor = teamsIsUser ? "#0f6d35" : (teamsState === "Unknown" ? "#7a1020" : "#6b7280");
               const devList = (r.devices || []).map(function (d) {
                 const exts = (d.extensions || []).join(", ") || "\u2014";
-                return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
+                const regStatus = (d.registration_status || "Unknown");
+                const lastRegistered = (d.last_registered || "\u2014");
+                return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + " | Reg: " + regStatus + " | Last: " + lastRegistered + "</span>";
               }).join("<br>") || "\u2014";
 
               const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;";
@@ -16117,7 +16119,9 @@ def menu_admin_page(request: Request):
                 const teamsColor = teamsIsUser ? "#0f6d35" : (teamsState === "Unknown" ? "#7a1020" : "#6b7280");
                 const devList = (r.devices || []).map(function (d) {
                   const exts = (d.extensions || []).join(", ") || "\u2014";
-                  return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
+                  const regStatus = (d.registration_status || "Unknown");
+                  const lastRegistered = (d.last_registered || "\u2014");
+                  return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + " | Reg: " + regStatus + " | Last: " + lastRegistered + "</span>";
                 }).join("<br>") || "\u2014";
 
                 const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;color:#fff;";
