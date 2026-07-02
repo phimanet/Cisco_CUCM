@@ -20956,9 +20956,9 @@ def sip_call_search_page(request: Request):
           const text = String(value || '').trim();
           if (!text) return '';
           const cleaned = text.replace(/([+-]\d{2}:\d{2}|Z)$/i, '');
-          const m = cleaned.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d+)?)/);
+          const m = cleaned.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2}:\d{2}(?:\.\d+)?)/);
           if (m) return m[1] + ' ' + m[2];
-          return text;
+          return cleaned.replace('T', ' ');
         }}
 
         function formatCallId(value) {{

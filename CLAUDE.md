@@ -157,6 +157,7 @@ Priority keys:
 - SIP results table column widths compacted (Received/Source/Method/Response/From/To/Capture narrowed) and Raw preview width increased to maximize horizontal space for message inspection.
 - SIP search date/time inputs now default to today (`00:00` start, `23:59` end) on initial page load when blank, while remaining fully editable for custom ranges.
 - Fixed SIP page bad-gateway regression: corrected JavaScript function brace escaping inside Python f-string template so app startup no longer fails.
+- Hardened Received timestamp display normalization so timezone suffixes like `-07:00`/`Z` are trimmed reliably across parse/fallback paths.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.
