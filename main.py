@@ -20949,7 +20949,8 @@ def sip_call_search_page(request: Request):
         function formatReceivedTimestamp(value) {{
           const text = String(value || '').trim();
           if (!text) return '';
-          const m = text.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d+)?)/);
+          const cleaned = text.replace(/([+-]\d{2}:\d{2}|Z)$/i, '');
+          const m = cleaned.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2}(?:\.\d+)?)/);
           if (m) return m[1] + ' ' + m[2];
           return text;
         }}
