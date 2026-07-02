@@ -2553,7 +2553,14 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
 
           # Legacy line-based records can be expensive to reconstruct.
           # Only resolve after quick filters, and cap total reconstructions per request.
-          if _sip_record_needs_legacy_reconstruction(record) and legacy_resolved_count < max_legacy_resolve:
+          # Also force enrichment for Ribbon rows when Direction is blank so
+          # metadata preamble markers (sending/received) can be recovered.
+          record_source_key = (record.get("source_key") or "").strip().lower()
+          needs_direction_enrichment = (
+            not (record.get("direction") or "").strip()
+            and record_source_key in {"las-ribbon-sbc", "rno-ribbon-sbc"}
+          )
+          if (_sip_record_needs_legacy_reconstruction(record) or needs_direction_enrichment) and legacy_resolved_count < max_legacy_resolve:
             legacy = _sip_resolve_legacy_message(record, source_day_cache, content_cache, line_cache)
             legacy_resolved_count += 1
             if legacy.get("raw_file_rel"):
@@ -2589,9 +2596,16 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
               record["to_digits"] = enriched.get("to_digits", record.get("to_digits", ""))
 
           if not (record.get("direction") or "").strip():
-            inline_direction = _sip_message_direction(_sip_message_lines(record.get("raw_message") or record.get("raw_line") or ""))
+            raw_for_direction = record.get("raw_message") or record.get("raw_line") or ""
+            inline_direction = _sip_message_direction(_sip_message_lines(raw_for_direction))
             if inline_direction:
               record["direction"] = inline_direction
+            else:
+              inferred_direction, inferred_endpoint = _sip_infer_direction_from_text(raw_for_direction)
+              if inferred_direction:
+                record["direction"] = inferred_direction
+                if not (record.get("direction_detail") or "").strip():
+                  record["direction_detail"] = _sip_direction_label(inferred_direction, inferred_endpoint)
           if not (record.get("direction_detail") or "").strip():
             inline_lines = _sip_message_lines(record.get("raw_message") or record.get("raw_line") or "")
             inline_direction = (record.get("direction") or _sip_message_direction(inline_lines) or "").strip()

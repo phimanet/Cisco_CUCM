@@ -177,6 +177,7 @@ Priority keys:
 - Refined Ribbon direction parsing to preserve metadata preamble lines during MSGID reconstruction and apply a deterministic fallback from the line three rows above SIP Method (for example `tlDataReceived:Received message ... from [IP]`) so Direction reliably renders `Received from IP` / `Sent to IP`.
 - Updated SIP Show/Raw reconstruction for MSGID blocks to always include at least the three lines above the SIP start line (plus earlier detected Ribbon metadata lines), so operators can see preamble context directly in the results window.
 - Mitigated SIP search 504 risk by pruning index-day scans to the requested Start/End date window before reading JSONL records, reducing backend work for narrow time-range queries.
+- Fixed direction gap observed in live Reno results: search now forces legacy enrichment for Ribbon rows when Direction is blank and applies metadata-text fallback (`sending from ... to ...` / `Received message ... from ...`) before returning records.
 - Validation checkpoint (pause state): current objective is end-to-end traceability confirmation for inbound call flow **through Cisco CUBE -> Ribbon SBC -> outbound carrier leg** using SIP Call Search Direction + Raw preamble context.
 - Current validated parser findings from real LV/Reno Ribbon samples:
   - Receive marker: `tlDataReceived:Received message on [...] from [...]` (and `Incoming message on [...] from [...]`).
