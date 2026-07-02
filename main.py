@@ -21013,7 +21013,7 @@ def sip_call_search_page(request: Request):
             resultsEl.innerHTML = '<div class="panel"><p class="muted" style="margin:0;">No SIP records matched the current filters.</p></div>';
             return;
           }}
-          let html = '<table><thead><tr><th>Received</th><th>Source</th><th>Call-ID</th><th>Direction</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Capture File</th><th>Raw</th></tr></thead><tbody>';
+          let html = '<table><thead><tr><th>Received</th><th>Source</th><th>Call-ID</th><th>Direction</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Raw</th><th>Capture File</th></tr></thead><tbody>';
           rows.forEach(function (row, idx) {{
             const bg = idx % 2 === 0 ? '#f7fbff' : '#ffffff';
             const captureFile = (row.raw_file_rel || row.index_file_rel || '').toString();
@@ -21031,8 +21031,8 @@ def sip_call_search_page(request: Request):
               + '<td>' + escapeHtml(row.response_code || '') + '</td>'
               + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.from_digits || row.from_value || '') + '</td>'
               + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.to_digits || row.to_value || '') + '</td>'
-              + '<td style="font-family:Consolas,monospace;max-width:340px;word-break:break-word;">' + captureCell + '</td>'
               + '<td><details><summary>Show</summary><div style="margin-top:6px;font-family:Consolas,monospace;white-space:pre-wrap;max-width:720px;">' + escapeHtml(row.raw_message || row.raw_line || '') + '</div></details></td>'
+              + '<td style="font-family:Consolas,monospace;max-width:340px;word-break:break-word;">' + captureCell + '</td>'
               + '</tr>';
           }});
           html += '</tbody></table>';

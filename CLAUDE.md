@@ -153,6 +153,7 @@ Priority keys:
 - Direction column now uses two-line formatting: line 1 shows `Sent to` or `Received from`, line 2 shows the Via endpoint IP for improved table compactness.
 - Updated SIP search Received column formatting to show concise date+time (`YYYY-MM-DD HH:MM:SS.ffffff`) without timezone suffix for easier scanning.
 - SIP Call-ID search now normalizes pasted values by converting whitespace to hyphens (for wrapped two-line IDs), so copied table values still match search results.
+- SIP search results table now places the Capture File column at the far right (last position) to match operator preference.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.
