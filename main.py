@@ -68,6 +68,17 @@ from toolkit.remove_teams_telephony_user import (
 
 logger = logging.getLogger(__name__)
 
+# Optional in-memory credential encryption for cached session secrets.
+# If key setup is missing/invalid, code falls back to plaintext in-memory cache.
+_CREDENTIAL_CIPHER = None
+if _FERNET_AVAILABLE:
+  _credential_fernet_key = (os.getenv("CUCM_WEB_CREDENTIAL_FERNET_KEY", "") or "").strip()
+  if _credential_fernet_key:
+    try:
+      _CREDENTIAL_CIPHER = Fernet(_credential_fernet_key.encode("utf-8"))
+    except Exception as exc:
+      logger.warning("Invalid CUCM_WEB_CREDENTIAL_FERNET_KEY; using plaintext session cache fallback (%s)", exc)
+
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 JOB_OUTPUTS = {}
 VERASMART_QUEUE_RUNS = {}
