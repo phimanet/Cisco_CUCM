@@ -2285,6 +2285,8 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   matches = []
   source_day_cache: dict[str, list[str]] = {}
   content_cache: dict[str, str] = {}
+  line_cache: dict[str, list[str]] = {}
+  seen_block_ids: set[str] = set()
   query = (criteria.get("query") or "").strip().lower()
   call_id = (criteria.get("call_id") or "").strip().lower()
   source_key = (criteria.get("source_key") or "").strip().lower()
@@ -2342,6 +2344,37 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
           except ValueError:
             record_ts = None
 
+          if not (record.get("raw_message") or "").strip():
+            legacy = _sip_resolve_legacy_message(record, source_day_cache, content_cache, line_cache)
+            if legacy.get("raw_file_rel"):
+              record["raw_file_rel"] = legacy.get("raw_file_rel", "")
+            if legacy.get("raw_message"):
+              record["raw_message"] = legacy.get("raw_message", "")
+
+            block_id = (legacy.get("block_id") or "").strip()
+            if block_id:
+              if block_id in seen_block_ids:
+                continue
+              seen_block_ids.add(block_id)
+
+            if (record.get("raw_message") or "").strip():
+              parse_ts = record_ts if record_ts else datetime.datetime.now(datetime.timezone.utc)
+              source_meta = {
+                "source_ip": record.get("source_ip", ""),
+                "source_key": record.get("source_key", ""),
+                "source_label": record.get("source_label", ""),
+                "source_name": record.get("source_name", ""),
+                "origin_id": record.get("origin_id", ""),
+              }
+              enriched = _sip_parse_record(record.get("raw_message", ""), parse_ts, source_meta)
+              record["call_id"] = enriched.get("call_id", record.get("call_id", ""))
+              record["method"] = enriched.get("method", record.get("method", ""))
+              record["response_code"] = enriched.get("response_code", record.get("response_code", ""))
+              record["from_value"] = enriched.get("from_value", record.get("from_value", ""))
+              record["to_value"] = enriched.get("to_value", record.get("to_value", ""))
+              record["from_digits"] = enriched.get("from_digits", record.get("from_digits", ""))
+              record["to_digits"] = enriched.get("to_digits", record.get("to_digits", ""))
+
           if start_dt and record_ts and record_ts < start_dt:
             continue
           if end_dt and record_ts and record_ts > end_dt:
@@ -2372,11 +2405,6 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
             ]).lower()
             if query not in haystack:
               continue
-
-          if not (record.get("raw_file_rel") or "").strip():
-            resolved = _sip_find_legacy_raw_file(record, source_day_cache, content_cache)
-            if resolved:
-              record["raw_file_rel"] = resolved
 
           matches.append(record)
           if len(matches) >= limit:
@@ -2455,6 +2483,93 @@ def _sip_raw_files_for_source_day(source_key: str, day_key: str) -> list[str]:
       files.append(full_path)
   files.sort()
   return files
+
+
+def _sip_strip_debug_prefix(line: str) -> str:
+  text = (line or "").rstrip("\r\n")
+  match = re.match(r"^<\d+>\d+:\s+[^:]+:\s?(.*)$", text)
+  if match:
+    return (match.group(1) or "").rstrip()
+  return text.rstrip()
+
+
+def _sip_resolve_legacy_message(
+  record: dict,
+  source_day_cache: dict[str, list[str]],
+  content_cache: dict[str, str],
+  line_cache: dict[str, list[str]],
+) -> dict:
+  source_key = (record.get("source_key") or "").strip()
+  day_key = (record.get("day_key") or "").strip()
+  raw_line = (record.get("raw_line") or "").strip()
+  if not source_key or not day_key or not raw_line:
+    return {"raw_file_rel": "", "raw_message": "", "block_id": ""}
+
+  cache_key = f"{source_key}|{day_key}"
+  candidates = source_day_cache.get(cache_key)
+  if candidates is None:
+    candidates = _sip_raw_files_for_source_day(source_key, day_key)
+    source_day_cache[cache_key] = candidates
+
+  for file_path in candidates:
+    text = content_cache.get(file_path)
+    if text is None:
+      try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as handle:
+          text = handle.read()
+      except OSError:
+        text = ""
+      content_cache[file_path] = text
+    if not text or raw_line not in text:
+      continue
+
+    lines = line_cache.get(file_path)
+    if lines is None:
+      lines = text.splitlines()
+      line_cache[file_path] = lines
+
+    match_index = -1
+    for idx, line_text in enumerate(lines):
+      if raw_line in line_text:
+        match_index = idx
+        break
+    if match_index < 0:
+      continue
+
+    start = match_index
+    while start > 0:
+      payload = _sip_strip_debug_prefix(lines[start]).strip()
+      if payload in {"Received:", "Sent:"}:
+        break
+      start -= 1
+
+    start_payload = _sip_strip_debug_prefix(lines[start]).strip() if 0 <= start < len(lines) else ""
+    if start_payload not in {"Received:", "Sent:"}:
+      start = match_index
+
+    end = start + 1
+    while end < len(lines):
+      payload = _sip_strip_debug_prefix(lines[end]).strip()
+      if payload in {"Received:", "Sent:"}:
+        break
+      end += 1
+
+    payload_lines = []
+    for idx in range(start, min(end, len(lines))):
+      payload = _sip_strip_debug_prefix(lines[idx])
+      if not payload:
+        payload_lines.append("")
+        continue
+      if payload.endswith("ccsipDisplayMsg:"):
+        continue
+      payload_lines.append(payload)
+
+    message = "\n".join(payload_lines).strip()
+    rel_path = _sip_rel_path(file_path)
+    block_id = f"{rel_path}:{start}"
+    return {"raw_file_rel": rel_path, "raw_message": message, "block_id": block_id}
+
+  return {"raw_file_rel": "", "raw_message": "", "block_id": ""}
 
 
 def _sip_find_legacy_raw_file(record: dict, source_day_cache: dict[str, list[str]], content_cache: dict[str, str]) -> str:
