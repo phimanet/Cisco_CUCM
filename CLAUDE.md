@@ -148,6 +148,7 @@ Priority keys:
 - Added `Direction` field extraction (`Received`/`Sent`) from SIP message content and surfaced a new Direction column in SIP search results (positioned before Method).
 - Direction column now includes Via endpoint context, rendering labels like `Received from 10.141.18.11:5060` / `Sent from 206.147.150.91:5060` to identify call flow origin quickly.
 - Direction wording refined so Sent entries read `Sent to <via-endpoint>` while Received remains `Received from <via-endpoint>`.
+- Direction endpoint display now trims default SIP port suffix `:5060` for cleaner labels (for example, `Sent to 10.141.18.11`).
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.

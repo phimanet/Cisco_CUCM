@@ -2812,6 +2812,8 @@ def _sip_extract_via_endpoint(lines: list[str]) -> str:
 def _sip_direction_label(direction: str, via_endpoint: str) -> str:
   text = (direction or "").strip()
   endpoint = (via_endpoint or "").strip()
+  if endpoint.lower().endswith(":5060"):
+    endpoint = endpoint[:-5]
   if not text:
     return ""
   if not endpoint:
