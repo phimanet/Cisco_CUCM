@@ -20990,6 +20990,31 @@ def sip_call_search_page(request: Request):
           return escapeHtml(text);
         }}
 
+        function toDatetimeLocalValue(dateObj) {{
+          const yyyy = String(dateObj.getFullYear());
+          const mm = String(dateObj.getMonth() + 1).padStart(2, '0');
+          const dd = String(dateObj.getDate()).padStart(2, '0');
+          const hh = String(dateObj.getHours()).padStart(2, '0');
+          const mi = String(dateObj.getMinutes()).padStart(2, '0');
+          return yyyy + '-' + mm + '-' + dd + 'T' + hh + ':' + mi;
+        }
+
+        function setDefaultDateRange() {{
+          if (!form) return;
+          const startInput = form.querySelector('input[name="start_ts"]');
+          const endInput = form.querySelector('input[name="end_ts"]');
+          const now = new Date();
+          const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+          const dayEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 0, 0);
+
+          if (startInput && !String(startInput.value || '').trim()) {{
+            startInput.value = toDatetimeLocalValue(dayStart);
+          }}
+          if (endInput && !String(endInput.value || '').trim()) {{
+            endInput.value = toDatetimeLocalValue(dayEnd);
+          }}
+        }
+
         async function parseJsonResponse(response, fallbackMessage) {{
           const rawText = await response.text();
           let payload;
@@ -21165,6 +21190,7 @@ def sip_call_search_page(request: Request):
         if (refreshBtn) refreshBtn.addEventListener('click', refreshStatus);
         if (refreshFilesBtn) refreshFilesBtn.addEventListener('click', refreshFiles);
         if (ladderBtn) ladderBtn.addEventListener('click', buildLadder);
+        setDefaultDateRange();
         renderStats({{ stats: stats }});
         refreshStatus();
         refreshFiles();
