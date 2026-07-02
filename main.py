@@ -2368,6 +2368,56 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   return matches
 
 
+def _sip_list_capture_files(limit: int = 200) -> list[dict]:
+  files = []
+  max_items = max(1, min(int(limit or 200), 1000))
+  if not os.path.isdir(SIP_CALL_SEARCH_ROOT):
+    return files
+
+  for root, _, file_names in os.walk(SIP_CALL_SEARCH_ROOT):
+    for file_name in file_names:
+      lower_name = file_name.lower()
+      if not (lower_name.endswith(".log") or lower_name.endswith(".jsonl")):
+        continue
+      full_path = os.path.join(root, file_name)
+      try:
+        stat = os.stat(full_path)
+      except OSError:
+        continue
+      rel_path = os.path.relpath(full_path, SIP_CALL_SEARCH_ROOT).replace("\\", "/")
+      kind = "raw" if rel_path.startswith("raw/") else ("index" if rel_path.startswith("index/") else "other")
+      files.append(
+        {
+          "rel_path": rel_path,
+          "filename": file_name,
+          "kind": kind,
+          "size_bytes": int(stat.st_size),
+          "modified_epoch": float(stat.st_mtime),
+          "modified_at": datetime.datetime.fromtimestamp(stat.st_mtime, tz=datetime.timezone.utc).isoformat(),
+        }
+      )
+
+  files.sort(key=lambda item: item.get("modified_epoch", 0), reverse=True)
+  return files[:max_items]
+
+
+def _sip_resolve_download_path(rel_path: str) -> str:
+  requested = (rel_path or "").strip().replace("\\", "/")
+  if not requested:
+    return ""
+  normalized = os.path.normpath(requested).replace("\\", "/")
+  if normalized.startswith("../") or normalized == ".." or normalized.startswith("/"):
+    return ""
+
+  root = os.path.abspath(SIP_CALL_SEARCH_ROOT)
+  candidate = os.path.abspath(os.path.join(root, normalized))
+  if not (candidate == root or candidate.startswith(root + os.sep)):
+    return ""
+  if not os.path.isfile(candidate):
+    return ""
+  return candidate
+
+
 def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, cucm_pass: str):
   session = _get_auth_session(request)
   if not session:
@@ -20253,6 +20303,15 @@ def sip_call_search_page(request: Request):
         <p class="muted" id="sip-search-status" style="min-height:18px;">Ready. Search is case-insensitive and scans the stored index for the selected source and time range.</p>
         <div id="sip-search-results" style="overflow-x:auto;"></div>
       </section>
+
+      <section class="panel">
+        <h2 style="margin:0 0 10px 0;color:var(--amn-navy);">Download Captured Files</h2>
+        <div class="actions">
+          <button type="button" id="sip-refresh-files-btn" style="background:linear-gradient(180deg,#516d8d,#355978);">Refresh File List</button>
+        </div>
+        <p class="muted" id="sip-files-status" style="min-height:18px;">Loading capture files...</p>
+        <div id="sip-files-list" style="overflow-x:auto;"></div>
+      </section>
     </main>
 
     <script>
@@ -20262,10 +20321,13 @@ def sip_call_search_page(request: Request):
         const resultsEl = document.getElementById("sip-search-results");
         const statusEl = document.getElementById("sip-search-status");
         const refreshBtn = document.getElementById("sip-refresh-status-btn");
+        const refreshFilesBtn = document.getElementById("sip-refresh-files-btn");
         const enabledEl = document.getElementById("sip-stat-enabled");
         const totalEl = document.getElementById("sip-stat-total");
         const filesEl = document.getElementById("sip-stat-files");
         const lastEl = document.getElementById("sip-stat-last");
+        const filesStatusEl = document.getElementById("sip-files-status");
+        const filesListEl = document.getElementById("sip-files-list");
 
         function escapeHtml(value) {{
           return String(value || "")
@@ -20282,6 +20344,15 @@ def sip_call_search_page(request: Request):
           if (value >= 1024 * 1024) return (value / (1024 * 1024)).toFixed(2) + " MB";
           if (value >= 1024) return (value / 1024).toFixed(1) + " KB";
           return value + " B";
+        }}
+
+        function formatWhen(isoText) {{
+          if (!isoText) return '';
+          try {{
+            return new Date(isoText).toLocaleString();
+          }} catch (_err) {{
+            return String(isoText || '');
+          }}
         }}
 
         function renderStats(payload) {{
@@ -20317,6 +20388,29 @@ def sip_call_search_page(request: Request):
           }});
           html += '</tbody></table>';
           resultsEl.innerHTML = html;
+        }}
+
+        function renderFiles(rows) {{
+          if (!filesListEl) return;
+          if (!rows || !rows.length) {{
+            filesListEl.innerHTML = '<div class="panel"><p class="muted" style="margin:0;">No capture files found yet.</p></div>';
+            return;
+          }}
+          let html = '<table><thead><tr><th>Type</th><th>File</th><th>Size</th><th>Modified</th><th>Download</th></tr></thead><tbody>';
+          rows.forEach(function (row, idx) {{
+            const bg = idx % 2 === 0 ? '#f7fbff' : '#ffffff';
+            const relPath = String((row && row.rel_path) || '');
+            const href = '/sip-call-search/download?rel_path=' + encodeURIComponent(relPath);
+            html += '<tr style="background:' + bg + ';">'
+              + '<td>' + escapeHtml(row.kind || '') + '</td>'
+              + '<td style="font-family:Consolas,monospace;">' + escapeHtml(relPath) + '</td>'
+              + '<td>' + escapeHtml(humanBytes(row.size_bytes || 0)) + '</td>'
+              + '<td>' + escapeHtml(formatWhen(row.modified_at || '')) + '</td>'
+              + '<td><a href="' + href + '" style="font-weight:700;color:#005eb8;">Download</a></td>'
+              + '</tr>';
+          }});
+          html += '</tbody></table>';
+          filesListEl.innerHTML = html;
         }}
 
         async function refreshStatus() {{
@@ -20355,10 +20449,27 @@ def sip_call_search_page(request: Request):
           }}
         }}
 
+        async function refreshFiles() {{
+          if (!filesStatusEl) return;
+          filesStatusEl.textContent = 'Loading capture files...';
+          try {{
+            const response = await fetch('/sip-call-search/files?limit=300', {{ credentials: 'same-origin' }});
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {{ throw new Error((payload && payload.error) || 'File list lookup failed.'); }}
+            const rows = payload.files || [];
+            filesStatusEl.textContent = 'Showing ' + rows.length + ' capture file(s).';
+            renderFiles(rows);
+          }} catch (err) {{
+            filesStatusEl.textContent = 'File list failed: ' + ((err && err.message) || 'Unknown error.');
+          }}
+        }}
+
         if (form) form.addEventListener('submit', runSearch);
         if (refreshBtn) refreshBtn.addEventListener('click', refreshStatus);
+        if (refreshFilesBtn) refreshFilesBtn.addEventListener('click', refreshFiles);
         renderStats({{ stats: stats }});
         refreshStatus();
+        refreshFiles();
       }})();
     </script>
   </body>
@@ -20401,6 +20512,55 @@ async def sip_call_search_search(request: Request):
 
   records = _sip_capture_records_for_search(body)
   return JSONResponse({"ok": True, "count": len(records), "results": records, "stats": _sip_capture_stats()})
+
+
+@app.get("/sip-call-search/files")
+def sip_call_search_files(request: Request, limit: int = Query(300)):
+  session = _get_auth_session(request)
+  if not session:
+    return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+
+  auth_cucm_host = str(session.get("cucm_host", "") or "")
+  if not _sip_call_search_available(auth_cucm_host):
+    return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
+
+  files = _sip_list_capture_files(limit=limit)
+  return JSONResponse({"ok": True, "files": files})
+
+
+@app.get("/sip-call-search/download")
+def sip_call_search_download(request: Request, rel_path: str = Query("")):
+  session = _get_auth_session(request)
+  if not session:
+    return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+
+  auth_cucm_host = str(session.get("cucm_host", "") or "")
+  if not _sip_call_search_available(auth_cucm_host):
+    return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
+
+  file_path = _sip_resolve_download_path(rel_path)
+  if not file_path:
+    return JSONResponse({"ok": False, "error": "File not found"}, status_code=404)
+
+  try:
+    with open(file_path, "rb") as handle:
+      data = handle.read()
+  except OSError:
+    return JSONResponse({"ok": False, "error": "File read failed"}, status_code=500)
+
+  filename = os.path.basename(file_path)
+  media_type = "application/octet-stream"
+  lower_name = filename.lower()
+  if lower_name.endswith(".log"):
+    media_type = "text/plain"
+  elif lower_name.endswith(".jsonl"):
+    media_type = "application/x-ndjson"
+
+  return Response(
+    data,
+    media_type=media_type,
+    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+  )
 
 
 @app.get("/settings", response_class=HTMLResponse)
