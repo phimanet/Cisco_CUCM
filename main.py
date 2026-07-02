@@ -20536,6 +20536,21 @@ def sip_call_search_page(request: Request):
           }}
         }}
 
+        async function parseJsonResponse(response, fallbackMessage) {{
+          const rawText = await response.text();
+          let payload;
+          try {{
+            payload = JSON.parse(rawText || '{}');
+          }} catch (_err) {{
+            const snippet = String(rawText || '').slice(0, 220);
+            throw new Error((fallbackMessage || 'Unexpected response format') + ': ' + (snippet || 'empty response'));
+          }}
+          if (!response.ok || !payload.ok) {{
+            throw new Error((payload && payload.error) || fallbackMessage || 'Request failed');
+          }}
+          return payload;
+        }}
+
         function renderStats(payload) {{
           const s = (payload && payload.stats) || stats || {{}};
           enabledEl.textContent = s.enabled ? ("Listening on UDP " + s.udp_port) : "Disabled";
@@ -20603,8 +20618,7 @@ def sip_call_search_page(request: Request):
         async function refreshStatus() {{
           try {{
             const response = await fetch('/sip-call-search/status', {{ credentials: 'same-origin' }});
-            const payload = await response.json();
-            if (!response.ok || !payload.ok) {{ throw new Error((payload && payload.error) || 'Status lookup failed.'); }}
+            const payload = await parseJsonResponse(response, 'Status lookup failed');
             renderStats(payload);
           }} catch (err) {{
             enabledEl.textContent = 'Status unavailable';
@@ -20626,8 +20640,7 @@ def sip_call_search_page(request: Request):
               body: JSON.stringify(body),
               credentials: 'same-origin',
             }});
-            const payload = await response.json();
-            if (!response.ok || !payload.ok) {{ throw new Error((payload && payload.error) || 'Search failed.'); }}
+            const payload = await parseJsonResponse(response, 'Search failed');
             statusEl.textContent = 'Matched ' + (payload.count || 0) + ' record(s).';
             renderResults(payload.results || []);
             renderStats(payload);
@@ -20641,8 +20654,7 @@ def sip_call_search_page(request: Request):
           filesStatusEl.textContent = 'Loading capture files...';
           try {{
             const response = await fetch('/sip-call-search/files?limit=300', {{ credentials: 'same-origin' }});
-            const payload = await response.json();
-            if (!response.ok || !payload.ok) {{ throw new Error((payload && payload.error) || 'File list lookup failed.'); }}
+            const payload = await parseJsonResponse(response, 'File list lookup failed');
             const rows = payload.files || [];
             filesStatusEl.textContent = 'Showing ' + rows.length + ' capture file(s).';
             renderFiles(rows);
@@ -20697,8 +20709,12 @@ async def sip_call_search_search(request: Request):
   if not isinstance(body, dict):
     body = {}
 
-  records = _sip_capture_records_for_search(body)
-  return JSONResponse({"ok": True, "count": len(records), "results": records, "stats": _sip_capture_stats()})
+  try:
+    records = _sip_capture_records_for_search(body)
+    return JSONResponse({"ok": True, "count": len(records), "results": records, "stats": _sip_capture_stats()})
+  except Exception as exc:
+    logger.error("SIP call-search query failed: %s", exc, exc_info=True)
+    return JSONResponse({"ok": False, "error": f"Search backend error: {exc}"}, status_code=500)
 
 
 @app.get("/sip-call-search/files")
