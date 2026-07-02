@@ -2528,6 +2528,33 @@ def _sip_raw_files_for_source_day(source_key: str, day_key: str) -> list[str]:
   return files
 
 
+def _sip_raw_files_for_day(day_key: str) -> list[str]:
+  day = (day_key or "").strip()
+  if not day:
+    return []
+
+  files = []
+  if not os.path.isdir(SIP_CALL_SEARCH_RAW_ROOT):
+    return files
+
+  for source_name in os.listdir(SIP_CALL_SEARCH_RAW_ROOT):
+    source_root = os.path.join(SIP_CALL_SEARCH_RAW_ROOT, source_name)
+    if not os.path.isdir(source_root):
+      continue
+    day_root = os.path.join(source_root, day)
+    if not os.path.isdir(day_root):
+      continue
+    for name in os.listdir(day_root):
+      if not name.lower().endswith(".log"):
+        continue
+      full_path = os.path.join(day_root, name)
+      if os.path.isfile(full_path):
+        files.append(full_path)
+
+  files.sort()
+  return files
+
+
 def _sip_strip_debug_prefix(line: str) -> str:
   text = (line or "").rstrip("\r\n")
   match = re.match(r"^<\d+>\d+:\s+[^:]+:\s?(.*)$", text)
@@ -2557,9 +2584,17 @@ def _sip_resolve_legacy_message(
     return {"raw_file_rel": "", "raw_message": "", "block_id": ""}
 
   cache_key = f"{source_key}|{day_key}"
+  day_cache_key = f"*|{day_key}"
   candidates = source_day_cache.get(cache_key)
   if candidates is None:
     candidates = _sip_raw_files_for_source_day(source_key, day_key)
+    # Fallback to all source folders for the day so search fixes apply globally.
+    if not candidates:
+      day_candidates = source_day_cache.get(day_cache_key)
+      if day_candidates is None:
+        day_candidates = _sip_raw_files_for_day(day_key)
+        source_day_cache[day_cache_key] = day_candidates
+      candidates = list(day_candidates)
     source_day_cache[cache_key] = candidates
 
   for file_path in candidates:
@@ -2662,9 +2697,16 @@ def _sip_find_legacy_raw_file(record: dict, source_day_cache: dict[str, list[str
     return ""
 
   cache_key = f"{source_key}|{day_key}"
+  day_cache_key = f"*|{day_key}"
   candidates = source_day_cache.get(cache_key)
   if candidates is None:
     candidates = _sip_raw_files_for_source_day(source_key, day_key)
+    if not candidates:
+      day_candidates = source_day_cache.get(day_cache_key)
+      if day_candidates is None:
+        day_candidates = _sip_raw_files_for_day(day_key)
+        source_day_cache[day_cache_key] = day_candidates
+      candidates = list(day_candidates)
     source_day_cache[cache_key] = candidates
 
   for file_path in candidates:
