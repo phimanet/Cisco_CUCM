@@ -2017,6 +2017,8 @@ def _sip_normalize_call_id(value: str) -> str:
   # Keep the left side of Call-ID before host suffix to improve readability.
   if "@" in text:
     text = text.split("@", 1)[0].strip()
+  # Support pasted two-line table values where a visual wrap introduces spaces.
+  text = re.sub(r"\s+", "-", text)
   return text
 
 
@@ -2333,7 +2335,7 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   # - Broad/no-filter searches: skip reconstruction to stay fast.
   max_legacy_resolve = 250 if legacy_expand else (25 if has_filter else 0)
   query = (criteria.get("query") or "").strip().lower()
-  call_id = (criteria.get("call_id") or "").strip().lower()
+  call_id = _sip_normalize_call_id(criteria.get("call_id") or "").lower()
   source_key = (criteria.get("source_key") or "").strip().lower()
   method = (criteria.get("method") or "").strip().lower()
   response_code = (criteria.get("response_code") or "").strip().lower()
@@ -2395,7 +2397,7 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
             continue
           if source_key and (record.get("source_key") or "").strip().lower() != source_key:
             continue
-          if call_id and call_id not in (record.get("call_id") or "").strip().lower():
+          if call_id and call_id not in _sip_normalize_call_id(record.get("call_id") or "").lower():
             continue
           if method and method not in (record.get("method") or "").strip().lower():
             continue
