@@ -20823,6 +20823,10 @@ def sip_call_search_page(request: Request):
       th, td {{ padding: 8px 10px; border-bottom: 1px solid var(--amn-border); vertical-align: top; }}
       thead tr {{ background: var(--amn-blue); color: #fff; }}
       tbody tr:nth-child(even) {{ background: var(--amn-ice); }}
+      .sip-results-table {{ table-layout: auto; }}
+      .sip-results-table th, .sip-results-table td {{ padding: 6px 6px; }}
+      .sip-results-table th {{ white-space: nowrap; }}
+      .sip-results-table .nowrap {{ white-space: nowrap; }}
       details summary {{ cursor: pointer; color: var(--amn-blue); font-weight: 700; }}
       code {{ font-family: Consolas, monospace; }}
       @media (max-width: 1450px) {{
@@ -21013,7 +21017,18 @@ def sip_call_search_page(request: Request):
             resultsEl.innerHTML = '<div class="panel"><p class="muted" style="margin:0;">No SIP records matched the current filters.</p></div>';
             return;
           }}
-          let html = '<table><thead><tr><th>Received</th><th>Source</th><th>Call-ID</th><th>Direction</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Raw</th><th>Capture File</th></tr></thead><tbody>';
+          let html = '<table class="sip-results-table"><colgroup>'
+            + '<col style="width:180px">'
+            + '<col style="width:110px">'
+            + '<col style="width:150px">'
+            + '<col style="width:140px">'
+            + '<col style="width:65px">'
+            + '<col style="width:70px">'
+            + '<col style="width:88px">'
+            + '<col style="width:88px">'
+            + '<col>'
+            + '<col style="width:150px">'
+            + '</colgroup><thead><tr><th>Received</th><th>Source</th><th>Call-ID</th><th>Direction</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Raw</th><th>Capture File</th></tr></thead><tbody>';
           rows.forEach(function (row, idx) {{
             const bg = idx % 2 === 0 ? '#f7fbff' : '#ffffff';
             const captureFile = (row.raw_file_rel || row.index_file_rel || '').toString();
@@ -21023,15 +21038,15 @@ def sip_call_search_page(request: Request):
               ? ('<a href="' + captureLink + '" title="' + escapeHtml(captureFile) + '" style="font-weight:700;color:#005eb8;">' + escapeHtml(captureName) + '</a>')
               : '<span class="muted">(legacy record - file not resolved)</span>';
             html += '<tr style="background:' + bg + ';">'
-              + '<td>' + escapeHtml(formatReceivedTimestamp(row.received_at || '')) + '</td>'
+              + '<td class="nowrap">' + escapeHtml(formatReceivedTimestamp(row.received_at || '')) + '</td>'
               + '<td><strong>' + escapeHtml(row.source_label || row.source_key || '') + '</strong><br><span class="muted">' + escapeHtml(row.source_ip || '') + '</span></td>'
               + '<td style="font-family:Consolas,monospace;white-space:normal;line-height:1.25;">' + formatCallId(row.call_id || '') + '</td>'
               + '<td style="white-space:normal;line-height:1.2;">' + formatDirection(row.direction_detail || row.direction || '') + '</td>'
-              + '<td>' + escapeHtml(row.method || '') + '</td>'
-              + '<td>' + escapeHtml(row.response_code || '') + '</td>'
-              + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.from_digits || row.from_value || '') + '</td>'
-              + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.to_digits || row.to_value || '') + '</td>'
-              + '<td><details><summary>Show</summary><div style="margin-top:6px;font-family:Consolas,monospace;white-space:pre-wrap;max-width:720px;">' + escapeHtml(row.raw_message || row.raw_line || '') + '</div></details></td>'
+              + '<td class="nowrap">' + escapeHtml(row.method || '') + '</td>'
+              + '<td class="nowrap">' + escapeHtml(row.response_code || '') + '</td>'
+              + '<td class="nowrap" style="font-family:Consolas,monospace;">' + escapeHtml(row.from_digits || row.from_value || '') + '</td>'
+              + '<td class="nowrap" style="font-family:Consolas,monospace;">' + escapeHtml(row.to_digits || row.to_value || '') + '</td>'
+              + '<td><details><summary>Show</summary><div style="margin-top:6px;font-family:Consolas,monospace;white-space:pre-wrap;max-width:1000px;">' + escapeHtml(row.raw_message || row.raw_line || '') + '</div></details></td>'
               + '<td style="font-family:Consolas,monospace;max-width:340px;word-break:break-word;">' + captureCell + '</td>'
               + '</tr>';
           }});
