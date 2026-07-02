@@ -20608,16 +20608,18 @@ def sip_call_search_page(request: Request):
         --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
       }}
       body {{ margin: 0; font-family: "Segoe UI", Tahoma, Arial, sans-serif; background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%); color: var(--amn-text); }}
-      .topbar {{ display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px 8px 12px; background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)); color: #fff; }}
-      .topbar a {{ color: #fff; text-decoration: none; font-weight: 700; margin-left: 12px; }}
+      .topbar {{ display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)); color: #fff; }}
+      .topbar-right {{ display: flex; align-items: center; gap: 10px; min-width: 0; }}
+      .topbar-nav {{ display: flex; align-items: center; gap: 10px; white-space: nowrap; }}
+      .topbar a {{ color: #fff; text-decoration: none; font-weight: 700; margin-left: 0; }}
       .env-banner {{ display: inline-block; padding: 6px 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.35); font-size: 11px; font-weight: 700; }}
       .content {{ max-width: 1400px; margin: 0 auto; padding: 14px; }}
       .panel {{ background: rgba(255,255,255,0.96); border: 1px solid var(--amn-border); border-radius: 14px; box-shadow: var(--amn-shadow); }}
       .page-meta-label, .section-label {{ display: block; color: var(--amn-text-soft); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }}
-      .topbar-stats {{ width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 0; }}
-      .topbar-stat {{ background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.26); border-radius: 10px; padding: 6px 8px; }}
+      .topbar-stats {{ display: flex; align-items: center; gap: 6px; margin-top: 0; }}
+      .topbar-stat {{ background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.26); border-radius: 10px; padding: 5px 8px; min-width: 170px; }}
       .topbar-stat .section-label {{ color: rgba(255,255,255,0.84); font-size: 10px; }}
-      .topbar-stat strong {{ display: block; color: #ffffff; font-size: 16px; margin-top: 2px; font-weight: 700; line-height: 1.2; }}
+      .topbar-stat strong {{ display: block; color: #ffffff; font-size: 15px; margin-top: 2px; font-weight: 700; line-height: 1.2; }}
       .panel {{ padding: 14px; margin-bottom: 14px; }}
       .search-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }}
       .search-grid input, .search-grid select {{ width: 100%; box-sizing: border-box; border: 1px solid var(--amn-border); border-radius: 8px; padding: 9px 10px; min-height: 38px; }}
@@ -20633,24 +20635,36 @@ def sip_call_search_page(request: Request):
       tbody tr:nth-child(even) {{ background: var(--amn-ice); }}
       details summary {{ cursor: pointer; color: var(--amn-blue); font-weight: 700; }}
       code {{ font-family: Consolas, monospace; }}
-      @media (max-width: 1100px) {{ .topbar-stats {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} .search-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+      @media (max-width: 1450px) {{
+        .topbar {{ flex-wrap: wrap; }}
+        .topbar-right {{ width: 100%; justify-content: space-between; }}
+      }}
+      @media (max-width: 1100px) {{
+        .topbar-right {{ flex-direction: column; align-items: stretch; gap: 8px; }}
+        .topbar-nav {{ flex-wrap: wrap; }}
+        .topbar-stats {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+        .topbar-stat {{ min-width: 0; }}
+        .search-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+      }}
       @media (max-width: 760px) {{ .topbar-stats, .search-grid {{ grid-template-columns: 1fr; }} }}
     </style>
   </head>
   <body>
     <header class="topbar">
       <div><strong>Voice Operations Portal</strong></div>
-      <div>
-        <span class="env-banner {env_css_class}">{escape(env_text)}</span>
-        <a href="/menu">Main Operations</a>
-        <a href="/menu-admin">Administrative Items</a>
-        <a href="/logout">Log Out</a>
+      <div class="topbar-right">
+        <div class="topbar-nav">
+          <span class="env-banner {env_css_class}">{escape(env_text)}</span>
+          <a href="/menu">Main Operations</a>
+          <a href="/menu-admin">Administrative Items</a>
+          <a href="/logout">Log Out</a>
+        </div>
+        <section class="topbar-stats" id="sip-stats-grid">
+          <div class="topbar-stat"><span class="section-label">Listener Status</span><strong id="sip-stat-enabled">Loading...</strong></div>
+          <div class="topbar-stat"><span class="section-label">Total Stored</span><strong id="sip-stat-total">Loading...</strong></div>
+          <div class="topbar-stat"><span class="section-label">Files</span><strong id="sip-stat-files">Loading...</strong></div>
+        </section>
       </div>
-      <section class="topbar-stats" id="sip-stats-grid">
-        <div class="topbar-stat"><span class="section-label">Listener Status</span><strong id="sip-stat-enabled">Loading...</strong></div>
-        <div class="topbar-stat"><span class="section-label">Total Stored</span><strong id="sip-stat-total">Loading...</strong></div>
-        <div class="topbar-stat"><span class="section-label">Files</span><strong id="sip-stat-files">Loading...</strong></div>
-      </section>
     </header>
     <main class="content">
       <section class="panel">

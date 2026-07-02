@@ -137,6 +137,7 @@ Priority keys:
 - Added on-demand SIP ladder generation by Call-ID in LAB search page, returning Mermaid sequence diagram text from matched flow events.
 - Updated SIP Call Search layout to move listener/status summary cards into the top header and removed the Authenticated Operator card to conserve vertical space.
 - Further compressed SIP header layout: removed Last Record tile, slimmed remaining status tiles, removed SIP intro panel, and renamed filter panel title to "SIP Call Search - Search Filters".
+- Updated SIP top header layout so Listener Status / Total Stored / Files render on the same top row as the environment banner/navigation when screen width allows, with responsive wrap fallback on smaller screens.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.
