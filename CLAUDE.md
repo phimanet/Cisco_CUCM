@@ -190,6 +190,12 @@ Priority keys:
   - Send marker: `sending from [...] to [...]`.
   - Typical offsets from SIP start observed in uploaded logs: receive near `-6` lines, send near `-4` lines, with rare outliers.
 - Next resume step: run live validation searches by call sample and confirm both `Received from <ip>` and `Sent to <ip>` appear consistently across CUBE/Ribbon transition legs.
+- User-approved next feature (queued for next session): add deterministic **Call Group ID** to correlate one real call across multiple SIP legs (CUBE internal/external + Ribbon internal/external) and make troubleshooting timeline easier to follow.
+- Approved behavior for upcoming implementation:
+  - Generate stable Call Group ID from ANI + start-time bucket + strongest available identifiers (Cisco-GUID, GCID, Call-ID family) + peer handoff signature.
+  - Display Call Group ID in search results and enable quick filter to isolate one full call group.
+  - Keep individual SIP legs visible while sharing the same group ID for parent-call tracing.
+- Session handoff note: user paused work for today and requested immediate coding continuation on next open, starting with Call Group ID implementation.
 - Fixed SIP listener auto-start on app boot by wiring startup background services into FastAPI startup event so UDP 1024 binding survives service restarts.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
