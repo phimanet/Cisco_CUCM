@@ -2082,6 +2082,31 @@ def _sip_infer_direction_from_text(raw_message: str) -> tuple[str, str]:
   if not text:
     return "", ""
 
+  # Ribbon fallback: use the line three rows above the SIP start line when available.
+  # Sample pattern:
+  # tlDataReceived:Received message on [10.241.18.217]:5060 from [10.241.18.12]:40007
+  lines = _sip_message_lines(text)
+  sip_idx = -1
+  for idx, line in enumerate(lines):
+    candidate = (line or "").strip()
+    if re.search(r"(?i)^SIP/2\.0\s+\d{3}\b", candidate) or re.search(r"(?i)^(INVITE|REGISTER|BYE|ACK|CANCEL|OPTIONS|INFO|UPDATE|SUBSCRIBE|NOTIFY|REFER|PRACK|MESSAGE|PUBLISH)\s+sips?:", candidate):
+      sip_idx = idx
+      break
+  if sip_idx >= 3:
+    anchor_line = (lines[sip_idx - 3] or "").strip()
+    anchor_match = re.search(r"(?i)(?:tlDataReceived:)?Received message on\s+\[[^\]]+\](?::\d+)?\s+from\s+\[([^\]]+)\](?::(\d+))?", anchor_line)
+    if anchor_match:
+      host = (anchor_match.group(1) or "").strip()
+      port = (anchor_match.group(2) or "").strip()
+      endpoint = f"{host}:{port}" if host and port else host
+      return "Received", endpoint
+    anchor_match = re.search(r"(?i)sending\s+from\s+\[[^\]]+\](?::\d+)?\s+to\s+\[([^\]]+)\](?::(\d+))?", anchor_line)
+    if anchor_match:
+      host = (anchor_match.group(1) or "").strip()
+      port = (anchor_match.group(2) or "").strip()
+      endpoint = f"{host}:{port}" if host and port else host
+      return "Sent", endpoint
+
   received_patterns = [
     r"(?i)tlDataReceived:Received message on\s+\[[^\]]+\](?::\d+)?\s+from\s+\[([^\]]+)\](?::(\d+))?",
     r"(?i)Incoming message on\s+\[[^\]]+\](?::\d+)?\s+from\s+\[([^\]]+)\](?::(\d+))?",
@@ -2805,7 +2830,15 @@ def _sip_resolve_legacy_message(
           break
 
       if sip_start >= 0:
-        message = "\n".join(payload_lines[sip_start:]).strip()
+        # Keep Ribbon metadata preamble so direction inference can read
+        # the line three rows above the SIP method when present.
+        preamble_start = sip_start
+        for pre_idx in range(max(0, sip_start - 8), sip_start):
+          pre_line = (payload_lines[pre_idx] or "").strip()
+          if re.search(r"(?i)(tlDataReceived:Received message on|Incoming message on|sending\s+from)", pre_line):
+            preamble_start = pre_idx
+            break
+        message = "\n".join(payload_lines[preamble_start:]).strip()
         rel_path = _sip_rel_path(file_path)
         block_id = f"{rel_path}:msgid:{start}"
         return {"raw_file_rel": rel_path, "raw_message": message, "block_id": block_id}
