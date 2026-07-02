@@ -2010,6 +2010,34 @@ def _sip_extract_digits(text: str) -> str:
   return digits
 
 
+def _sip_normalize_call_id(value: str) -> str:
+  text = (value or "").strip()
+  if not text:
+    return ""
+  # Keep the left side of Call-ID before host suffix to improve readability.
+  if "@" in text:
+    text = text.split("@", 1)[0].strip()
+  return text
+
+
+def _sip_extract_sip_user_digits(value: str) -> str:
+  text = (value or "").strip()
+  if not text:
+    return ""
+
+  # Prefer SIP URI user part, e.g. sip:8585236648@10.141.18.11 -> 8585236648.
+  match = re.search(r"(?i)sips?:\s*\+?([0-9]+)(?=@)", text)
+  if match:
+    return _sip_extract_digits(match.group(1))
+
+  # Fallback to bracketed URI user if format is non-standard.
+  match = re.search(r"<\s*(?:sips?:)?\s*\+?([0-9]+)(?=@)", text, flags=re.IGNORECASE)
+  if match:
+    return _sip_extract_digits(match.group(1))
+
+  return _sip_extract_digits(text)
+
+
 def _sip_extract_first_match(patterns: list[str], text: str) -> str:
   for pattern in patterns:
     match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
@@ -2028,6 +2056,7 @@ def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_m
       first_line = segment
       break
   call_id = _sip_extract_first_match([r"(?im)^Call-ID:\s*(.+)$", r"(?im)Call-ID\s*[:=]\s*(.+)$"], message)
+  call_id = _sip_normalize_call_id(call_id)
   from_value = _sip_extract_first_match([r"(?im)^From:\s*(.+)$", r"(?im)From\s*[:=]\s*(.+)$"], message)
   to_value = _sip_extract_first_match([r"(?im)^To:\s*(.+)$", r"(?im)To\s*[:=]\s*(.+)$"], message)
   cseq_value = _sip_extract_first_match([r"(?im)^CSeq:\s*\d+\s+([A-Z]+)$", r"(?im)CSeq\s*[:=]\s*\d+\s+([A-Z]+)$"], message)
@@ -2052,8 +2081,8 @@ def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_m
     "response_code": response_code,
     "from_value": from_value,
     "to_value": to_value,
-    "from_digits": _sip_extract_digits(from_value),
-    "to_digits": _sip_extract_digits(to_value),
+    "from_digits": _sip_extract_sip_user_digits(from_value),
+    "to_digits": _sip_extract_sip_user_digits(to_value),
     "cseq_method": cseq_value,
     "raw_line": first_line,
     "raw_message": message,
@@ -20583,8 +20612,9 @@ def sip_call_search_page(request: Request):
             const bg = idx % 2 === 0 ? '#f7fbff' : '#ffffff';
             const captureFile = (row.raw_file_rel || row.index_file_rel || '').toString();
             const captureLink = captureFile ? ('/sip-call-search/download?rel_path=' + encodeURIComponent(captureFile)) : '';
+            const captureName = captureFile ? captureFile.split('/').pop() : '';
             const captureCell = captureLink
-              ? ('<a href="' + captureLink + '" style="font-weight:700;color:#005eb8;">' + escapeHtml(captureFile) + '</a>')
+              ? ('<a href="' + captureLink + '" title="' + escapeHtml(captureFile) + '" style="font-weight:700;color:#005eb8;">' + escapeHtml(captureName) + '</a>')
               : '<span class="muted">(legacy record - file not resolved)</span>';
             html += '<tr style="background:' + bg + ';">'
               + '<td>' + escapeHtml(row.received_at || '') + '</td>'
