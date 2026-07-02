@@ -129,6 +129,7 @@ Priority keys:
 - Search results now include a Capture File column/header showing the originating file path per record for faster file pinpoint and download.
 - Added legacy-record fallback matching so older line-based records attempt to resolve and display a downloadable raw file path when possible.
 - Added legacy SIP block reconstruction using `Received:` / `Sent:` boundaries so older line-based rows can be grouped into whole-message output and de-duplicated by message block.
+- Adjusted SIP search performance mode: deep legacy reconstruction is now opt-in from UI (default fast mode) to avoid gateway timeouts on normal searches.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.

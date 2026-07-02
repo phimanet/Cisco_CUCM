@@ -2288,7 +2288,8 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   line_cache: dict[str, list[str]] = {}
   seen_block_ids: set[str] = set()
   legacy_resolved_count = 0
-  max_legacy_resolve = 250
+  legacy_expand = str(criteria.get("legacy_expand") or "").strip().lower() in {"1", "true", "yes", "on"}
+  max_legacy_resolve = 250 if legacy_expand else 0
   query = (criteria.get("query") or "").strip().lower()
   call_id = (criteria.get("call_id") or "").strip().lower()
   source_key = (criteria.get("source_key") or "").strip().lower()
@@ -20480,13 +20481,17 @@ def sip_call_search_page(request: Request):
             <input name="start_ts" type="datetime-local" placeholder="Start">
             <input name="end_ts" type="datetime-local" placeholder="End">
             <input name="limit" type="number" min="1" max="1000" value="200" placeholder="Limit">
+            <label class="full muted" style="display:flex;align-items:center;gap:8px;">
+              <input name="legacy_expand" type="checkbox" value="1" style="width:auto;min-height:auto;">
+              Deep Legacy Parse (slower): reconstruct older line-based records into full SIP message blocks.
+            </label>
           </div>
           <div class="actions">
             <button type="submit">Search SIP Records</button>
             <button type="button" id="sip-refresh-status-btn" style="background:linear-gradient(180deg,#516d8d,#355978);">Refresh Status</button>
           </div>
         </form>
-        <p class="muted" id="sip-search-status" style="min-height:18px;">Ready. Search is case-insensitive and scans the stored index for the selected source and time range.</p>
+        <p class="muted" id="sip-search-status" style="min-height:18px;">Ready. Fast mode is default. Enable Deep Legacy Parse only when you need reconstruction of older line-based records.</p>
         <div id="sip-search-results" style="overflow-x:auto;"></div>
       </section>
 
