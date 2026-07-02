@@ -20608,12 +20608,41 @@ def sip_call_search_page(request: Request):
         --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
       }}
       body {{ margin: 0; font-family: "Segoe UI", Tahoma, Arial, sans-serif; background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%); color: var(--amn-text); }}
-      .topbar {{ display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 12px; background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)); color: #fff; }}
+      .topbar {{
+        display: flex;
+        flex-wrap: nowrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 8px 12px;
+        background:
+          linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)),
+          linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
+        color: #fff;
+        box-shadow: 0 12px 28px rgba(0, 47, 108, 0.22);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+      }}
+      .topbar-brand {{ display: flex; align-items: center; gap: 10px; }}
+      .brand-fallback {{ font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; font-size: 11px; opacity: 0.86; }}
       .topbar-right {{ display: flex; align-items: center; gap: 10px; min-width: 0; }}
       .topbar-mid {{ flex: 1 1 auto; display: flex; justify-content: center; min-width: 0; }}
       .topbar-nav {{ display: flex; align-items: center; gap: 10px; white-space: nowrap; }}
       .topbar a {{ color: #fff; text-decoration: none; font-weight: 700; margin-left: 0; }}
       .env-banner {{ display: inline-block; padding: 6px 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.35); font-size: 11px; font-weight: 700; }}
+      .topbar .env-banner {{ background: rgba(255, 255, 255, 0.12); color: #fff; border-color: rgba(255, 255, 255, 0.35); }}
+      .topbar-btn {{
+        display: inline-block;
+        padding: 7px 12px;
+        border-radius: 10px;
+        font-size: 12px;
+        font-weight: 700;
+        text-decoration: none;
+        border: 1px solid rgba(255, 255, 255, 0.65);
+        transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+      }}
+      .topbar-btn-login {{ color: #fff; background: rgba(255, 255, 255, 0.1); backdrop-filter: blur(8px); }}
+      .topbar-btn-logout {{ color: #fff; background: linear-gradient(180deg, #cb3b2f, #9f2018); border-color: #f0a79c; }}
+      .topbar-btn:hover {{ transform: translateY(-1px); box-shadow: 0 8px 18px rgba(0, 0, 0, 0.16); }}
       .content {{ max-width: 1400px; margin: 0 auto; padding: 14px; }}
       .panel {{ background: rgba(255,255,255,0.96); border: 1px solid var(--amn-border); border-radius: 14px; box-shadow: var(--amn-shadow); }}
       .page-meta-label, .section-label {{ display: block; color: var(--amn-text-soft); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }}
@@ -20654,7 +20683,10 @@ def sip_call_search_page(request: Request):
   </head>
   <body>
     <header class="topbar">
-      <div><strong>Voice Operations Portal</strong></div>
+      <div class="topbar-brand">
+        <span class="brand-fallback">AMN Healthcare</span>
+        <strong>Voice Operations Portal</strong>
+      </div>
       <div class="topbar-mid">
         <section class="topbar-stats" id="sip-stats-grid">
           <div class="topbar-stat"><span class="section-label">Listener Status</span><strong id="sip-stat-enabled">Loading...</strong></div>
@@ -20665,9 +20697,9 @@ def sip_call_search_page(request: Request):
       <div class="topbar-right">
         <div class="topbar-nav">
           <span class="env-banner {env_css_class}">{escape(env_text)}</span>
-          <a href="/menu">Main Operations</a>
-          <a href="/menu-admin">Administrative Items</a>
-          <a href="/logout">Log Out</a>
+          <a class="topbar-btn topbar-btn-login" href="/menu">Main Operations</a>
+          <a class="topbar-btn topbar-btn-login" href="/menu-admin">Administrative Items</a>
+          <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
         </div>
       </div>
     </header>
