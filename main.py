@@ -2022,6 +2022,18 @@ def _sip_normalize_call_id(value: str) -> str:
   return text
 
 
+def _sip_format_received_display(value: str) -> str:
+  text = (value or "").strip()
+  if not text:
+    return ""
+  try:
+    parsed = datetime.datetime.fromisoformat(text)
+    return parsed.strftime("%Y-%m-%d %H:%M:%S.%f")
+  except ValueError:
+    cleaned = re.sub(r"([+-]\d{2}:\d{2}|Z)$", "", text, flags=re.IGNORECASE)
+    return cleaned.replace("T", " ")
+
+
 def _sip_extract_sip_user_digits(value: str) -> str:
   text = (value or "").strip()
   if not text:
@@ -2390,6 +2402,7 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
             record_ts = datetime.datetime.fromisoformat(record_ts_text)
           except ValueError:
             record_ts = None
+          record["received_at_display"] = _sip_format_received_display(record_ts_text)
 
           if start_dt and record_ts and record_ts < start_dt:
             continue
@@ -21063,7 +21076,7 @@ def sip_call_search_page(request: Request):
               ? ('<a href="' + captureLink + '" title="' + escapeHtml(captureFile) + '" style="font-weight:700;color:#005eb8;">' + escapeHtml(captureName) + '</a>')
               : '<span class="muted">(legacy record - file not resolved)</span>';
             html += '<tr style="background:' + bg + ';">'
-              + '<td class="nowrap">' + escapeHtml(formatReceivedTimestamp(row.received_at || '')) + '</td>'
+              + '<td class="nowrap">' + escapeHtml(row.received_at_display || formatReceivedTimestamp(row.received_at || '')) + '</td>'
               + '<td><strong>' + escapeHtml(row.source_label || row.source_key || '') + '</strong><br><span class="muted">' + escapeHtml(row.source_ip || '') + '</span></td>'
               + '<td style="font-family:Consolas,monospace;white-space:normal;line-height:1.25;">' + formatCallId(row.call_id || '') + '</td>'
               + '<td style="white-space:normal;line-height:1.2;">' + formatDirection(row.direction_detail || row.direction || '') + '</td>'
