@@ -20590,7 +20590,6 @@ def sip_call_search_page(request: Request):
     )
 
   stats = _sip_capture_stats()
-  auth_user = escape(session_username)
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
 
   html = f"""
@@ -20609,22 +20608,20 @@ def sip_call_search_page(request: Request):
         --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
       }}
       body {{ margin: 0; font-family: "Segoe UI", Tahoma, Arial, sans-serif; background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%); color: var(--amn-text); }}
-      .topbar {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)); color: #fff; }}
+      .topbar {{ display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px 12px 16px; background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)); color: #fff; }}
       .topbar a {{ color: #fff; text-decoration: none; font-weight: 700; margin-left: 12px; }}
       .env-banner {{ display: inline-block; padding: 6px 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.35); font-size: 11px; font-weight: 700; }}
       .content {{ max-width: 1400px; margin: 0 auto; padding: 14px; }}
-      .page-hero, .panel, .stat-card {{ background: rgba(255,255,255,0.96); border: 1px solid var(--amn-border); border-radius: 14px; box-shadow: var(--amn-shadow); }}
+      .page-hero, .panel {{ background: rgba(255,255,255,0.96); border: 1px solid var(--amn-border); border-radius: 14px; box-shadow: var(--amn-shadow); }}
       .page-hero {{ padding: 16px; margin-bottom: 14px; }}
-      .page-title-row {{ display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }}
+      .page-title-row {{ display: block; }}
       .page-title {{ margin: 0; color: var(--amn-navy); font-size: 28px; }}
       .page-subtitle {{ margin: 8px 0 0 0; color: var(--amn-text-soft); line-height: 1.5; max-width: 960px; }}
-      .page-meta-card {{ min-width: 250px; padding: 12px 14px; border-radius: 12px; background: linear-gradient(180deg, #f9fcff 0%, #eef6ff 100%); border: 1px solid #d5e6f7; }}
       .page-meta-label, .section-label {{ display: block; color: var(--amn-text-soft); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }}
-      .page-meta-value {{ display: block; margin-top: 4px; color: var(--amn-navy); font-size: 18px; font-weight: 700; }}
-      .page-meta-note {{ margin: 6px 0 0 0; color: var(--amn-text-soft); font-size: 12px; line-height: 1.45; }}
-      .stats-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }}
-      .stat-card {{ padding: 12px 14px; }}
-      .stat-card strong {{ display: block; color: var(--amn-navy); font-size: 20px; margin-top: 4px; }}
+      .topbar-stats {{ width: 100%; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 2px; }}
+      .topbar-stat {{ background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,0.28); border-radius: 12px; padding: 10px 12px; }}
+      .topbar-stat .section-label {{ color: rgba(255,255,255,0.86); font-size: 11px; }}
+      .topbar-stat strong {{ display: block; color: #ffffff; font-size: 20px; margin-top: 4px; font-weight: 700; line-height: 1.35; }}
       .panel {{ padding: 14px; margin-bottom: 14px; }}
       .search-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }}
       .search-grid input, .search-grid select {{ width: 100%; box-sizing: border-box; border: 1px solid var(--amn-border); border-radius: 8px; padding: 9px 10px; min-height: 38px; }}
@@ -20640,8 +20637,8 @@ def sip_call_search_page(request: Request):
       tbody tr:nth-child(even) {{ background: var(--amn-ice); }}
       details summary {{ cursor: pointer; color: var(--amn-blue); font-weight: 700; }}
       code {{ font-family: Consolas, monospace; }}
-      @media (max-width: 1100px) {{ .stats-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} .search-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
-      @media (max-width: 760px) {{ .stats-grid, .search-grid {{ grid-template-columns: 1fr; }} }}
+      @media (max-width: 1100px) {{ .topbar-stats {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} .search-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+      @media (max-width: 760px) {{ .topbar-stats, .search-grid {{ grid-template-columns: 1fr; }} }}
     </style>
   </head>
   <body>
@@ -20653,6 +20650,12 @@ def sip_call_search_page(request: Request):
         <a href="/menu-admin">Administrative Items</a>
         <a href="/logout">Log Out</a>
       </div>
+      <section class="topbar-stats" id="sip-stats-grid">
+        <div class="topbar-stat"><span class="section-label">Listener Status</span><strong id="sip-stat-enabled">Loading...</strong></div>
+        <div class="topbar-stat"><span class="section-label">Total Stored</span><strong id="sip-stat-total">Loading...</strong></div>
+        <div class="topbar-stat"><span class="section-label">Files</span><strong id="sip-stat-files">Loading...</strong></div>
+        <div class="topbar-stat"><span class="section-label">Last Record</span><strong id="sip-stat-last">Loading...</strong></div>
+      </section>
     </header>
     <main class="content">
       <section class="page-hero">
@@ -20661,19 +20664,7 @@ def sip_call_search_page(request: Request):
             <h1 class="page-title">SIP Call Search</h1>
             <p class="page-subtitle">LAB-only listener and search workspace for Cisco CUBE <code>debug ccsip messages</code> logs. The Ubuntu server listens on UDP port <strong>{stats['udp_port']}</strong>, tags records from Las Vegas and Reno CUBEs, and keeps raw plus parsed files under a size and retention cap you can tune in Settings.</p>
           </div>
-          <div class="page-meta-card">
-            <span class="page-meta-label">Authenticated Operator</span>
-            <span class="page-meta-value">{auth_user}</span>
-            <p class="page-meta-note">Source labels: Las Vegas CUBE <code>las-voip-rtr</code> / <code>10.241.255.3</code> and Reno CUBE <code>RNOVOIPRT01</code> / <code>10.141.255.13</code>.</p>
-          </div>
         </div>
-      </section>
-
-      <section class="stats-grid" id="sip-stats-grid">
-        <div class="stat-card"><span class="section-label">Listener Status</span><strong id="sip-stat-enabled">Loading...</strong></div>
-        <div class="stat-card"><span class="section-label">Total Stored</span><strong id="sip-stat-total">Loading...</strong></div>
-        <div class="stat-card"><span class="section-label">Files</span><strong id="sip-stat-files">Loading...</strong></div>
-        <div class="stat-card"><span class="section-label">Last Record</span><strong id="sip-stat-last">Loading...</strong></div>
       </section>
 
       <section class="panel">
