@@ -21164,16 +21164,16 @@ def sip_call_search_page(request: Request):
           let html = '<table class="sip-results-table"><colgroup>'
             + '<col style="width:180px">'
             + '<col style="width:110px">'
-            + '<col style="width:170px">'
-            + '<col style="width:150px">'
             + '<col style="width:140px">'
             + '<col style="width:65px">'
             + '<col style="width:70px">'
             + '<col style="width:88px">'
             + '<col style="width:88px">'
             + '<col>'
+            + '<col style="width:170px">'
             + '<col style="width:150px">'
-            + '</colgroup><thead><tr><th>Received</th><th>Source</th><th>Cisco-GUID</th><th>Call-ID</th><th>Direction</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Raw</th><th>Capture File</th></tr></thead><tbody>';
+            + '<col style="width:150px">'
+            + '</colgroup><thead><tr><th>Received</th><th>Source</th><th>Direction</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Raw</th><th>Cisco-GUID</th><th>Call-ID</th><th>Capture File</th></tr></thead><tbody>';
           rows.forEach(function (row, idx) {{
             const bg = idx % 2 === 0 ? '#f7fbff' : '#ffffff';
             const captureFile = (row.raw_file_rel || row.index_file_rel || '').toString();
@@ -21185,14 +21185,14 @@ def sip_call_search_page(request: Request):
             html += '<tr style="background:' + bg + ';">'
               + '<td class="nowrap">' + escapeHtml(row.received_at_display || formatReceivedTimestamp(row.received_at || '')) + '</td>'
               + '<td><strong>' + escapeHtml(row.source_label || row.source_key || '') + '</strong><br><span class="muted">' + escapeHtml(row.source_ip || '') + '</span></td>'
-              + '<td style="font-family:Consolas,monospace;white-space:normal;line-height:1.25;">' + formatCiscoGuid(row.cisco_guid || '') + '</td>'
-              + '<td style="font-family:Consolas,monospace;white-space:normal;line-height:1.25;">' + formatCallId(row.call_id || '') + '</td>'
               + '<td style="white-space:normal;line-height:1.2;">' + formatDirection(row.direction_detail || row.direction || '') + '</td>'
               + '<td class="nowrap">' + escapeHtml(row.method || '') + '</td>'
               + '<td class="nowrap">' + escapeHtml(row.response_code || '') + '</td>'
               + '<td class="nowrap" style="font-family:Consolas,monospace;">' + escapeHtml(row.from_digits || row.from_value || '') + '</td>'
               + '<td class="nowrap" style="font-family:Consolas,monospace;">' + escapeHtml(row.to_digits || row.to_value || '') + '</td>'
               + '<td><details><summary>Show</summary><div style="margin-top:6px;font-family:Consolas,monospace;white-space:pre-wrap;max-width:1000px;">' + escapeHtml(row.raw_message || row.raw_line || '') + '</div></details></td>'
+              + '<td style="font-family:Consolas,monospace;white-space:normal;line-height:1.25;">' + formatCiscoGuid(row.cisco_guid || '') + '</td>'
+              + '<td style="font-family:Consolas,monospace;white-space:normal;line-height:1.25;">' + formatCallId(row.call_id || '') + '</td>'
               + '<td style="font-family:Consolas,monospace;max-width:340px;word-break:break-word;">' + captureCell + '</td>'
               + '</tr>';
           }});
