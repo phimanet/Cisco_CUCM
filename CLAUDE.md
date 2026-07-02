@@ -131,6 +131,7 @@ Priority keys:
 - Added legacy-record fallback matching so older line-based records attempt to resolve and display a downloadable raw file path when possible.
 - Added legacy SIP block reconstruction using `Received:` / `Sent:` boundaries so older line-based rows can be grouped into whole-message output and de-duplicated by message block.
 - Adjusted SIP search performance mode: deep legacy reconstruction is now opt-in from UI (default fast mode) to avoid gateway timeouts on normal searches.
+- Refined SIP search mode to hybrid behavior: filtered searches auto-reconstruct a small number of legacy rows for better Raw output, while Deep Legacy Parse remains opt-in for broad reconstruction.
 - Normalized SIP search fields: Call-ID now displays token before `@`, and From/To columns now extract SIP user digits (avoiding extra digits from IP/tag metadata).
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.

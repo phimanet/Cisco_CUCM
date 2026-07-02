@@ -2318,7 +2318,15 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   seen_block_ids: set[str] = set()
   legacy_resolved_count = 0
   legacy_expand = str(criteria.get("legacy_expand") or "").strip().lower() in {"1", "true", "yes", "on"}
-  max_legacy_resolve = 250 if legacy_expand else 0
+  has_filter = any(
+    str(criteria.get(key) or "").strip()
+    for key in ("query", "call_id", "source_key", "method", "response_code", "from_digits", "to_digits", "start_ts", "end_ts")
+  )
+  # Hybrid mode:
+  # - Deep mode (checkbox on): reconstruct many legacy rows.
+  # - Normal filtered searches: reconstruct a small set so Raw shows full SIP blocks.
+  # - Broad/no-filter searches: skip reconstruction to stay fast.
+  max_legacy_resolve = 250 if legacy_expand else (25 if has_filter else 0)
   query = (criteria.get("query") or "").strip().lower()
   call_id = (criteria.get("call_id") or "").strip().lower()
   source_key = (criteria.get("source_key") or "").strip().lower()
@@ -20520,7 +20528,7 @@ def sip_call_search_page(request: Request):
             <button type="button" id="sip-refresh-status-btn" style="background:linear-gradient(180deg,#516d8d,#355978);">Refresh Status</button>
           </div>
         </form>
-        <p class="muted" id="sip-search-status" style="min-height:18px;">Ready. Fast mode is default. Enable Deep Legacy Parse only when you need reconstruction of older line-based records.</p>
+        <p class="muted" id="sip-search-status" style="min-height:18px;">Ready. Normal filtered searches auto-reconstruct a small set of legacy rows; enable Deep Legacy Parse for broader legacy reconstruction.</p>
         <div id="sip-search-results" style="overflow-x:auto;"></div>
       </section>
 
