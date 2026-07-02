@@ -2642,6 +2642,178 @@ def _sip_find_legacy_raw_file(record: dict, source_day_cache: dict[str, list[str
   return ""
 
 
+def _sip_peer_label(host: str) -> str:
+  peer = (host or "").strip()
+  if not peer:
+    return "Peer"
+  source = SIP_CALL_SEARCH_SOURCE_MAP.get(peer, {})
+  return (source.get("source_label") or peer).strip()
+
+
+def _sip_extract_request_uri_host(line: str) -> str:
+  text = (line or "").strip()
+  if not text:
+    return ""
+  match = re.search(r"(?i)^[A-Z]+\s+sips?:[^\s@>]+@([^:;>\s]+)", text)
+  if match:
+    return (match.group(1) or "").strip()
+  match = re.search(r"(?i)^[A-Z]+\s+sips?:([^:;>\s]+)", text)
+  if match:
+    return (match.group(1) or "").strip()
+  return ""
+
+
+def _sip_extract_via_host(lines: list[str]) -> str:
+  for line in lines:
+    text = (line or "").strip()
+    if not text.lower().startswith("via:"):
+      continue
+    match = re.search(r"(?i)\b([0-9]{1,3}(?:\.[0-9]{1,3}){3})\b", text)
+    if match:
+      return (match.group(1) or "").strip()
+    match = re.search(r"(?i)\s([^:;\s>]+):\d+", text)
+    if match:
+      return (match.group(1) or "").strip()
+  return ""
+
+
+def _sip_message_lines(raw_message: str) -> list[str]:
+  rows = []
+  for raw in (raw_message or "").splitlines():
+    line = _sip_strip_debug_prefix(raw).strip()
+    if line and not line.endswith("ccsipDisplayMsg:"):
+      rows.append(line)
+  return rows
+
+
+def _sip_message_direction(lines: list[str]) -> str:
+  for line in lines:
+    text = (line or "").strip()
+    if text == "Received:":
+      return "Received"
+    if text == "Sent:":
+      return "Sent"
+  return ""
+
+
+def _sip_message_start_line(lines: list[str]) -> str:
+  for line in lines:
+    text = (line or "").strip()
+    if text in {"Received:", "Sent:"}:
+      continue
+    if re.search(r"(?i)^SIP/2\.0\s+\d{3}\b", text):
+      return text
+    if re.search(r"(?i)^(INVITE|REGISTER|BYE|ACK|CANCEL|OPTIONS|INFO|UPDATE|SUBSCRIBE|NOTIFY|REFER|PRACK|MESSAGE|PUBLISH)\s+sips?:", text):
+      return text
+  return ""
+
+
+def _sip_mermaid_id(name: str, used: set[str]) -> str:
+  base = re.sub(r"[^A-Za-z0-9_]", "_", (name or "Peer").strip()) or "Peer"
+  candidate = base
+  idx = 2
+  while candidate in used:
+    candidate = f"{base}_{idx}"
+    idx += 1
+  used.add(candidate)
+  return candidate
+
+
+def _sip_timestamp_time_only(received_at: str) -> str:
+  text = (received_at or "").strip()
+  match = re.match(r"^\d{4}-\d{2}-\d{2}T(\d{2}:\d{2}:\d{2}(?:\.\d+)?)", text)
+  if match:
+    return (match.group(1) or "").strip()
+  return text
+
+
+def _sip_build_ladder_mermaid(criteria: dict) -> tuple[str, int]:
+  raw_call_id = (criteria.get("call_id") or "").strip()
+  if not raw_call_id:
+    raise ValueError("Call-ID is required to build SIP ladder")
+
+  normalized_call_id = _sip_normalize_call_id(raw_call_id).lower()
+  ladder_criteria = dict(criteria or {})
+  ladder_criteria["limit"] = 500
+  # For ladder generation, prefer richer legacy reconstruction for selected call-id traces.
+  ladder_criteria["legacy_expand"] = "1"
+  records = _sip_capture_records_for_search(ladder_criteria)
+  filtered = []
+  for record in records:
+    record_call_id = _sip_normalize_call_id(record.get("call_id") or "").lower()
+    if normalized_call_id and normalized_call_id not in record_call_id:
+      continue
+    filtered.append(record)
+
+  filtered.sort(key=lambda item: (item.get("received_at") or ""))
+  if not filtered:
+    raise ValueError("No records found for that Call-ID")
+
+  participants_order: list[str] = []
+  participant_ids: dict[str, str] = {}
+  used_ids: set[str] = set()
+  events = []
+
+  def ensure_participant(name: str) -> str:
+    label = (name or "Peer").strip() or "Peer"
+    if label not in participant_ids:
+      participant_ids[label] = _sip_mermaid_id(label, used_ids)
+      participants_order.append(label)
+    return participant_ids[label]
+
+  for record in filtered:
+    local_label = (record.get("source_label") or record.get("source_key") or "Source").strip()
+    raw_message = (record.get("raw_message") or record.get("raw_line") or "").strip()
+    lines = _sip_message_lines(raw_message)
+    direction = _sip_message_direction(lines)
+    start_line = _sip_message_start_line(lines)
+    via_host = _sip_extract_via_host(lines)
+    req_host = _sip_extract_request_uri_host(start_line)
+
+    remote_host = ""
+    if direction == "Sent":
+      remote_host = req_host or via_host
+    elif direction == "Received":
+      remote_host = via_host or req_host
+    else:
+      remote_host = req_host or via_host
+
+    remote_label = _sip_peer_label(remote_host)
+
+    local_id = ensure_participant(local_label)
+    remote_id = ensure_participant(remote_label)
+
+    from_id, to_id = (local_id, remote_id)
+    if direction == "Received":
+      from_id, to_id = remote_id, local_id
+
+    method = (record.get("method") or "").strip().upper()
+    response = (record.get("response_code") or "").strip()
+    if response:
+      event_label = f"SIP {response}"
+    elif method:
+      event_label = method
+    else:
+      event_label = (start_line or "SIP message").strip()
+      event_label = event_label[:80]
+
+    time_text = _sip_timestamp_time_only(record.get("received_at") or "")
+    if time_text:
+      event_label = f"{time_text} {event_label}".strip()
+
+    events.append((from_id, to_id, event_label.replace('"', "'")))
+
+  mermaid_lines = ["sequenceDiagram", "    autonumber"]
+  for label in participants_order:
+    pid = participant_ids[label]
+    display = label.replace('"', "'")
+    mermaid_lines.append(f'    participant {pid} as "{display}"')
+  for from_id, to_id, label in events:
+    mermaid_lines.append(f"    {from_id}->>{to_id}: {label}")
+
+  return "\n".join(mermaid_lines), len(events)
+
+
 def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, cucm_pass: str):
   session = _get_auth_session(request)
   if not session:
@@ -20525,11 +20697,14 @@ def sip_call_search_page(request: Request):
           </div>
           <div class="actions">
             <button type="submit">Search SIP Records</button>
+            <button type="button" id="sip-build-ladder-btn" style="background:linear-gradient(180deg,#2f6c48,#1f5336);">Build SIP Ladder (Call-ID)</button>
             <button type="button" id="sip-refresh-status-btn" style="background:linear-gradient(180deg,#516d8d,#355978);">Refresh Status</button>
           </div>
         </form>
         <p class="muted" id="sip-search-status" style="min-height:18px;">Ready. Normal filtered searches auto-reconstruct a small set of legacy rows; enable Deep Legacy Parse for broader legacy reconstruction.</p>
         <div id="sip-search-results" style="overflow-x:auto;"></div>
+        <p class="muted" id="sip-ladder-status" style="min-height:18px;margin-top:10px;">Call-ID ladder diagram is generated on demand.</p>
+        <div id="sip-ladder-output" style="overflow-x:auto;"></div>
       </section>
 
       <section class="panel">
@@ -20548,8 +20723,11 @@ def sip_call_search_page(request: Request):
         const form = document.getElementById("sip-search-form");
         const resultsEl = document.getElementById("sip-search-results");
         const statusEl = document.getElementById("sip-search-status");
+        const ladderStatusEl = document.getElementById("sip-ladder-status");
+        const ladderOutputEl = document.getElementById("sip-ladder-output");
         const refreshBtn = document.getElementById("sip-refresh-status-btn");
         const refreshFilesBtn = document.getElementById("sip-refresh-files-btn");
+        const ladderBtn = document.getElementById("sip-build-ladder-btn");
         const enabledEl = document.getElementById("sip-stat-enabled");
         const totalEl = document.getElementById("sip-stat-total");
         const filesEl = document.getElementById("sip-stat-files");
@@ -20671,6 +20849,16 @@ def sip_call_search_page(request: Request):
           filesListEl.innerHTML = html;
         }}
 
+        function renderLadder(mermaidText) {{
+          if (!ladderOutputEl) return;
+          const text = String(mermaidText || '').trim();
+          if (!text) {{
+            ladderOutputEl.innerHTML = '';
+            return;
+          }}
+          ladderOutputEl.innerHTML = '<div class="panel" style="margin-top:10px;"><h3 style="margin:0 0 8px 0;color:#002f6c;">SIP Ladder (Mermaid)</h3><pre style="margin:0;font-family:Consolas,monospace;white-space:pre;overflow:auto;max-height:520px;">' + escapeHtml(text) + '</pre></div>';
+        }}
+
         async function refreshStatus() {{
           try {{
             const response = await fetch('/sip-call-search/status', {{ credentials: 'same-origin' }});
@@ -20719,9 +20907,37 @@ def sip_call_search_page(request: Request):
           }}
         }}
 
+        async function buildLadder() {{
+          if (!form || !ladderStatusEl) return;
+          const fd = new FormData(form);
+          const body = {{}};
+          fd.forEach(function (value, key) {{ body[key] = String(value || '').trim(); }});
+          if (!String(body.call_id || '').trim()) {{
+            ladderStatusEl.textContent = 'Build SIP Ladder requires Call-ID.';
+            renderLadder('');
+            return;
+          }}
+          ladderStatusEl.textContent = 'Building SIP ladder...';
+          renderLadder('');
+          try {{
+            const response = await fetch('/sip-call-search/ladder', {{
+              method: 'POST',
+              headers: {{ 'Content-Type': 'application/json' }},
+              body: JSON.stringify(body),
+              credentials: 'same-origin',
+            }});
+            const payload = await parseJsonResponse(response, 'Ladder build failed');
+            ladderStatusEl.textContent = 'Built ladder with ' + (payload.event_count || 0) + ' event(s).';
+            renderLadder(payload.mermaid || '');
+          }} catch (err) {{
+            ladderStatusEl.textContent = 'Ladder build failed: ' + ((err && err.message) || 'Unknown error.');
+          }}
+        }}
+
         if (form) form.addEventListener('submit', runSearch);
         if (refreshBtn) refreshBtn.addEventListener('click', refreshStatus);
         if (refreshFilesBtn) refreshFilesBtn.addEventListener('click', refreshFiles);
+        if (ladderBtn) ladderBtn.addEventListener('click', buildLadder);
         renderStats({{ stats: stats }});
         refreshStatus();
         refreshFiles();
@@ -20771,6 +20987,34 @@ async def sip_call_search_search(request: Request):
   except Exception as exc:
     logger.error("SIP call-search query failed: %s", exc, exc_info=True)
     return JSONResponse({"ok": False, "error": f"Search backend error: {exc}"}, status_code=500)
+
+
+@app.post("/sip-call-search/ladder")
+async def sip_call_search_ladder(request: Request):
+  session = _get_auth_session(request)
+  if not session:
+    return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+
+  auth_cucm_host = str(session.get("cucm_host", "") or "")
+  if not _sip_call_search_available(auth_cucm_host):
+    return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
+
+  try:
+    body = await request.json()
+  except Exception:
+    body = {}
+
+  if not isinstance(body, dict):
+    body = {}
+
+  try:
+    mermaid, event_count = _sip_build_ladder_mermaid(body)
+    return JSONResponse({"ok": True, "event_count": event_count, "mermaid": mermaid})
+  except ValueError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+  except Exception as exc:
+    logger.error("SIP ladder build failed: %s", exc, exc_info=True)
+    return JSONResponse({"ok": False, "error": f"Ladder backend error: {exc}"}, status_code=500)
 
 
 @app.get("/sip-call-search/files")

@@ -134,6 +134,7 @@ Priority keys:
 - Refined SIP search mode to hybrid behavior: filtered searches auto-reconstruct a small number of legacy rows for better Raw output, while Deep Legacy Parse remains opt-in for broad reconstruction.
 - Normalized SIP search fields: Call-ID now displays token before `@`, and From/To columns now extract SIP user digits (avoiding extra digits from IP/tag metadata).
 - Updated SIP search Received column formatting to show concise date+time (`YYYY-MM-DD HH:MM:SS.ffffff`) without timezone suffix for easier scanning.
+- Added on-demand SIP ladder generation by Call-ID in LAB search page, returning Mermaid sequence diagram text from matched flow events.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.
