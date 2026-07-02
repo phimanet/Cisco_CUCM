@@ -2015,8 +2015,17 @@ def _sip_normalize_cisco_guid(value: str) -> str:
   text = (value or "").strip()
   if not text:
     return ""
-  # Support pasted wrapped values from table cells.
+  # Support pasted wrapped values from table cells by canonicalizing to 4x10 digits.
+  digits = re.sub(r"\D", "", text)
+  if len(digits) == 40:
+    return "-".join([
+      digits[0:10],
+      digits[10:20],
+      digits[20:30],
+      digits[30:40],
+    ])
   text = re.sub(r"\s+", "-", text)
+  text = re.sub(r"-+", "-", text).strip("-")
   return text
 
 
@@ -2398,6 +2407,17 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
             record = json.loads(raw)
           except json.JSONDecodeError:
             continue
+
+          # Legacy indexed rows may not contain cisco_guid/call_id fields yet.
+          # Derive them from SIP payload before applying filters.
+          if not (record.get("cisco_guid") or "").strip():
+            raw_for_guid = (record.get("raw_message") or record.get("raw_line") or "")
+            parsed_guid = _sip_extract_first_match([r"(?im)^Cisco-Guid:\s*(.+)$", r"(?im)Cisco-Guid\s*[:=]\s*(.+)$"], raw_for_guid)
+            record["cisco_guid"] = _sip_normalize_cisco_guid(parsed_guid)
+          if not (record.get("call_id") or "").strip():
+            raw_for_call_id = (record.get("raw_message") or record.get("raw_line") or "")
+            parsed_call_id = _sip_extract_first_match([r"(?im)^Call-ID:\s*(.+)$", r"(?im)Call-ID\s*[:=]\s*(.+)$"], raw_for_call_id)
+            record["call_id"] = _sip_normalize_call_id(parsed_call_id)
 
           record_ts_text = (record.get("received_at") or "").strip()
           try:
