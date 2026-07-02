@@ -2012,17 +2012,23 @@ def _sip_extract_first_match(patterns: list[str], text: str) -> str:
   return ""
 
 
-def _sip_parse_record(raw_line: str, received_at: datetime.datetime, source_meta: dict) -> dict:
-  line = (raw_line or "").strip()
-  call_id = _sip_extract_first_match([r"(?im)^Call-ID:\s*(.+)$", r"(?im)Call-ID\s*[:=]\s*(.+)$"], line)
-  from_value = _sip_extract_first_match([r"(?im)^From:\s*(.+)$", r"(?im)From\s*[:=]\s*(.+)$"], line)
-  to_value = _sip_extract_first_match([r"(?im)^To:\s*(.+)$", r"(?im)To\s*[:=]\s*(.+)$"], line)
-  cseq_value = _sip_extract_first_match([r"(?im)^CSeq:\s*\d+\s+([A-Z]+)$", r"(?im)CSeq\s*[:=]\s*\d+\s+([A-Z]+)$"], line)
+def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_meta: dict) -> dict:
+  message = (raw_message or "").strip()
+  first_line = ""
+  for segment in message.splitlines():
+    segment = (segment or "").strip()
+    if segment:
+      first_line = segment
+      break
+  call_id = _sip_extract_first_match([r"(?im)^Call-ID:\s*(.+)$", r"(?im)Call-ID\s*[:=]\s*(.+)$"], message)
+  from_value = _sip_extract_first_match([r"(?im)^From:\s*(.+)$", r"(?im)From\s*[:=]\s*(.+)$"], message)
+  to_value = _sip_extract_first_match([r"(?im)^To:\s*(.+)$", r"(?im)To\s*[:=]\s*(.+)$"], message)
+  cseq_value = _sip_extract_first_match([r"(?im)^CSeq:\s*\d+\s+([A-Z]+)$", r"(?im)CSeq\s*[:=]\s*\d+\s+([A-Z]+)$"], message)
   method = _sip_extract_first_match([
     r"(?i)^(INVITE|REGISTER|BYE|ACK|CANCEL|OPTIONS|INFO|UPDATE|SUBSCRIBE|NOTIFY|REFER|PRACK|MESSAGE|PUBLISH)\s+sip:",
     r"(?i)\b(INVITE|REGISTER|BYE|ACK|CANCEL|OPTIONS|INFO|UPDATE|SUBSCRIBE|NOTIFY|REFER|PRACK|MESSAGE|PUBLISH)\b",
-  ], line)
-  response_code = _sip_extract_first_match([r"(?i)^SIP/2\.0\s+(\d{3})\b", r"(?i)\bSIP/2\.0\s+(\d{3})\b"], line)
+  ], message)
+  response_code = _sip_extract_first_match([r"(?i)^SIP/2\.0\s+(\d{3})\b", r"(?i)\bSIP/2\.0\s+(\d{3})\b"], message)
   if not method and cseq_value:
     method = cseq_value
 
@@ -2042,7 +2048,8 @@ def _sip_parse_record(raw_line: str, received_at: datetime.datetime, source_meta
     "from_digits": _sip_extract_digits(from_value),
     "to_digits": _sip_extract_digits(to_value),
     "cseq_method": cseq_value,
-    "raw_line": line,
+    "raw_line": first_line,
+    "raw_message": message,
   }
 
 
@@ -2083,18 +2090,19 @@ def _sip_index_path(day_key: str) -> str:
   return os.path.join(SIP_CALL_SEARCH_INDEX_ROOT, day_key, f"records-{day_key.replace('-', '')}.jsonl")
 
 
-def _sip_store_record(raw_line: str, received_at: datetime.datetime, source_ip: str, origin_id: str = ""):
+def _sip_store_record(raw_message: str, received_at: datetime.datetime, source_ip: str, origin_id: str = ""):
   settings = _get_sip_call_search_settings()
   if not settings.get("enabled", False):
     return
   source_meta = _sip_capture_source_meta(source_ip, origin_id)
-  parsed = _sip_parse_record(raw_line, received_at, source_meta)
+  parsed = _sip_parse_record(raw_message, received_at, source_meta)
   parsed_json = json.dumps(parsed, ensure_ascii=False)
   parsed_size = len(parsed_json.encode("utf-8")) + 1
   day_key = parsed["day_key"]
   raw_path = _sip_current_raw_path_locked(source_meta["source_key"], day_key, parsed_size, settings["per_file_mb"] * 1024 * 1024)
   index_path = _sip_index_path(day_key)
-  _sip_append_text(raw_path, raw_line)
+  _sip_append_text(raw_path, raw_message)
+  _sip_append_text(raw_path, "")
   _sip_append_text(index_path, parsed_json)
   with SIP_CALL_SEARCH_LOCK:
     SIP_CALL_SEARCH_LAST_EVENT.clear()
@@ -2214,8 +2222,7 @@ def _sip_capture_listener_loop():
       packet_text = data.decode("utf-8", errors="replace").strip()
       if not packet_text:
         continue
-      for raw_line in [line.strip() for line in packet_text.splitlines() if line.strip()]:
-        _sip_store_record(raw_line, received_at, source_ip)
+      _sip_store_record(packet_text, received_at, source_ip)
     except Exception as exc:
       logger.error("SIP call-search listener error: %s", exc, exc_info=True)
 
@@ -2342,6 +2349,7 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
           if query:
             haystack = " ".join([
               record.get("raw_line", ""),
+              record.get("raw_message", ""),
               record.get("call_id", ""),
               record.get("method", ""),
               record.get("response_code", ""),
@@ -20304,7 +20312,7 @@ def sip_call_search_page(request: Request):
               + '<td>' + escapeHtml(row.response_code || '') + '</td>'
               + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.from_digits || row.from_value || '') + '</td>'
               + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.to_digits || row.to_value || '') + '</td>'
-              + '<td><details><summary>Show</summary><div style="margin-top:6px;font-family:Consolas,monospace;white-space:pre-wrap;max-width:720px;">' + escapeHtml(row.raw_line || '') + '</div></details></td>'
+              + '<td><details><summary>Show</summary><div style="margin-top:6px;font-family:Consolas,monospace;white-space:pre-wrap;max-width:720px;">' + escapeHtml(row.raw_message || row.raw_line || '') + '</div></details></td>'
               + '</tr>';
           }});
           html += '</tbody></table>';

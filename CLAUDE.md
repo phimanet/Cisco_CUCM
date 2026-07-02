@@ -124,6 +124,7 @@ Priority keys:
 ### 2026-07-02
 - Added new LAB-only SIP Call Search page as a separate post-login route (`/sip-call-search`) with settings-controlled UDP listener on port 1024, raw file rotation, retention cleanup, and search filters for Call-ID, source cube, numbers, method, and response code.
 - Updated SIP Call Search exposure so PROD hides the link and endpoint returns not found, while LAB continues to show the page.
+- Updated SIP capture/search to store each UDP payload as a full SIP message (instead of per-line fragments) so result details display complete message content for new records.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.
