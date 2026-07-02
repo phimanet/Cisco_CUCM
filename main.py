@@ -410,6 +410,7 @@ SIP_CALL_SEARCH_SOURCE_MAP = {
   "10.241.18.217": {"source_key": "las-ribbon-sbc", "source_label": "Las Vegas Ribbon SBC", "source_name": "las-ribbon-sbc"},
   "10.141.255.13": {"source_key": "RNOVOIPRT01", "source_label": "Reno CUBE", "source_name": "RNOVOIPRT01"},
   "10.141.16.40": {"source_key": "rno-ribbon-sbc", "source_label": "Reno Ribbon SBC", "source_name": "rno-ribbon-sbc"},
+  "10.141.18.40": {"source_key": "rno-ribbon-sbc", "source_label": "Reno Ribbon SBC", "source_name": "rno-ribbon-sbc"},
 }
 SIP_CALL_SEARCH_LOCK = threading.Lock()
 SIP_CALL_SEARCH_LISTENER_STARTED = False
