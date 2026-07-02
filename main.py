@@ -401,9 +401,9 @@ SIP_CALL_SEARCH_DEFAULT_TOTAL_MB = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_TOTAL
 SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB", "15") or "15").strip())
 SIP_CALL_SEARCH_SOURCE_MAP = {
   "10.241.255.3": {"source_key": "las-voip-rtr", "source_label": "Las Vegas CUBE", "source_name": "las-voip-rtr"},
-  "10.241.16.217": {"source_key": "las-voip-rtr", "source_label": "Las Vegas CUBE", "source_name": "las-voip-rtr"},
+  "10.241.16.217": {"source_key": "las-ribbon-sbc", "source_label": "Las Vegas Ribbon SBC", "source_name": "las-ribbon-sbc"},
   "10.141.255.13": {"source_key": "RNOVOIPRT01", "source_label": "Reno CUBE", "source_name": "RNOVOIPRT01"},
-  "10.141.16.40": {"source_key": "RNOVOIPRT01", "source_label": "Reno CUBE", "source_name": "RNOVOIPRT01"},
+  "10.141.16.40": {"source_key": "rno-ribbon-sbc", "source_label": "Reno Ribbon SBC", "source_name": "rno-ribbon-sbc"},
 }
 SIP_CALL_SEARCH_LOCK = threading.Lock()
 SIP_CALL_SEARCH_LISTENER_STARTED = False
@@ -2434,8 +2434,18 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
             continue
           if end_dt and record_ts and record_ts > end_dt:
             continue
-          if source_key and (record.get("source_key") or "").strip().lower() != source_key:
-            continue
+          if source_key:
+            record_key = (record.get("source_key") or "").strip().lower()
+            record_ip = (record.get("source_ip") or "").strip()
+            if source_key == "las-ribbon-sbc":
+              if record_ip != "10.241.16.217":
+                continue
+            elif source_key == "rno-ribbon-sbc":
+              if record_ip != "10.141.16.40":
+                continue
+            else:
+              if record_key != source_key:
+                continue
           if cisco_guid and cisco_guid not in _sip_normalize_cisco_guid(record.get("cisco_guid") or "").lower():
             continue
           if call_id and call_id not in _sip_normalize_call_id(record.get("call_id") or "").lower():
@@ -20971,7 +20981,7 @@ def sip_call_search_page(request: Request):
         <h2 style="margin:0 0 10px 0;color:var(--amn-navy);">SIP Call Search - Search Filters</h2>
         <form id="sip-search-form">
           <div class="search-grid">
-            <select name="source_key"><option value="">All Sources</option><option value="las-voip-rtr">Las Vegas CUBE</option><option value="RNOVOIPRT01">Reno CUBE</option></select>
+            <select name="source_key"><option value="">All Sources</option><option value="las-voip-rtr">Las Vegas CUBE</option><option value="las-ribbon-sbc">Las Vegas Ribbon SBC</option><option value="RNOVOIPRT01">Reno CUBE</option><option value="rno-ribbon-sbc">Reno Ribbon SBC</option></select>
             <input name="cisco_guid" placeholder="Cisco-GUID (recommended)">
             <input name="call_id" placeholder="Call-ID (optional)">
             <input name="method" placeholder="Method (INVITE, BYE, etc.)">
