@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-07-01
+- Date: 2026-07-02
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -41,6 +41,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [x] [P2][Done] Refresh the web portal theme to align with AMN Healthcare visual style (brand colors, typography, spacing, and overall look/feel).
 - [x] [P2][Done] Add per-option success/failure summary panel in the UI after CSV generation.
 - [ ] [P2][Idea] Add a lightweight audit trail (who ran what option and when) for internal operations.
+- [ ] [P2][In Progress] SIP Call Search LAB page and UDP listener for CUBE `debug ccsip messages` ingestion, with source tagging for Las Vegas `las-voip-rtr` and Reno `RNOVOIPRT01`, 15 MB per-file rotation, and total-size cap setting.
 - [ ] [P2][Idea] Add call-record explorer page with filters for extension/calling/called number, datetime range, call length, username/device name, and SIP message/call trace retrieval in the same workflow.
 - [ ] [P3][Idea] Add optional dry-run mode for high-impact actions before execution.
 
@@ -60,6 +61,7 @@ Priority keys:
 - Drafted Ubuntu 24.04 HTTPS migration runbook for this project.
 - HTTPS migration target host confirmed: `lascrtmp01.ahs.int` (DNS already working).
 - Ubuntu server IP confirmed: `10.241.18.15`.
+- SIP Call Search LAB listener/page added in `main.py`; next step is LAB restart and CUBE syslog validation.
 
 ## Completed Tasks
 - [x] Created central project tracking structure in `CLAUDE.md`.
@@ -118,6 +120,10 @@ Priority keys:
 - Standardized hosted-number failure messaging to concise entitlement/auth guidance instead of verbose endpoint dump.
 - Added Twilio SMS hosting audit retention control with automatic prune to **90 days** (`TWILIO_SMS_HOSTING_AUDIT_RETENTION_DAYS`, default 90) on append/read/download paths.
 - Baseline freeze decision: keep current implementation in LAB/PROD as prepared-but-disabled foundation until Twilio enables preview access.
+
+### 2026-07-02
+- Added new LAB-only SIP Call Search page as a separate post-login route (`/sip-call-search`) with settings-controlled UDP listener on port 1024, raw file rotation, retention cleanup, and search filters for Call-ID, source cube, numbers, method, and response code.
+- Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.
 - Genesys WebRTC Phone mapping now adds explicit `/api/v2/users/{id}/stationassociations` fallback so assigned stations are captured even when routing status/profile payloads omit station fields.

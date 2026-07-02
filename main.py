@@ -8,6 +8,7 @@ import os
 import re
 import socket
 import subprocess
+import shutil
 import tempfile
 import concurrent.futures
 from collections import Counter
@@ -128,6 +129,12 @@ if _FERNET_AVAILABLE and CREDENTIAL_ENCRYPTION_KEY:
     _CREDENTIAL_CIPHER = Fernet(CREDENTIAL_ENCRYPTION_KEY.encode("utf-8"))
   except Exception:
     _CREDENTIAL_CIPHER = None
+
+
+@app.on_event("startup")
+def _startup_background_services():
+  if _is_lab_runtime_host() and SIP_CALL_SEARCH_ENABLED and SIP_CALL_SEARCH_LAB_ONLY:
+    _start_sip_call_search_listener()
 PROD_CUCM_HOST = "lascucmpp01.ahs.int"
 LAB_CUCM_HOST = "lascucmpl01.ahs.int"
 PROD_UNITY_HOST = "SANCUTYP01.ahs.int"
@@ -393,6 +400,27 @@ TWILIO_SMS_HOSTING_AUDIT_PATH = os.path.join(
 TWILIO_SMS_HOSTING_AUDIT_RETENTION_DAYS = int(
   (os.getenv("TWILIO_SMS_HOSTING_AUDIT_RETENTION_DAYS", "90") or "90").strip()
 )
+SIP_CALL_SEARCH_ENABLED = (os.getenv("SIP_CALL_SEARCH_ENABLED", "true") or "true").strip().lower() in {
+  "1", "true", "yes", "on",
+}
+SIP_CALL_SEARCH_LAB_ONLY = (os.getenv("SIP_CALL_SEARCH_LAB_ONLY", "true") or "true").strip().lower() in {
+  "1", "true", "yes", "on",
+}
+SIP_CALL_SEARCH_DEFAULT_UDP_PORT = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_UDP_PORT", "1024") or "1024").strip())
+SIP_CALL_SEARCH_DEFAULT_RETENTION_DAYS = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_RETENTION_DAYS", "14") or "14").strip())
+SIP_CALL_SEARCH_DEFAULT_TOTAL_MB = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_TOTAL_MB", "6144") or "6144").strip())
+SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB", "15") or "15").strip())
+SIP_CALL_SEARCH_SOURCE_MAP = {
+  "10.241.255.3": {"source_key": "las-voip-rtr", "source_label": "Las Vegas CUBE", "source_name": "las-voip-rtr"},
+  "10.141.255.13": {"source_key": "RNOVOIPRT01", "source_label": "Reno CUBE", "source_name": "RNOVOIPRT01"},
+}
+SIP_CALL_SEARCH_LOCK = threading.Lock()
+SIP_CALL_SEARCH_LISTENER_STARTED = False
+SIP_CALL_SEARCH_CURRENT_FILE_STATE = {}
+SIP_CALL_SEARCH_LAST_EVENT = {}
+SIP_CALL_SEARCH_ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "sip-call-search")
+SIP_CALL_SEARCH_RAW_ROOT = os.path.join(SIP_CALL_SEARCH_ROOT, "raw")
+SIP_CALL_SEARCH_INDEX_ROOT = os.path.join(SIP_CALL_SEARCH_ROOT, "index")
 GENESYS_WEBRTC_TEMPLATE_PATH = os.path.join(
   os.path.dirname(os.path.abspath(__file__)),
   "toolkit",
@@ -450,6 +478,11 @@ DEFAULT_SETTINGS = {
   "dn_report_cucm_user": "ucmappadmin",
   "dn_report_cucm_pass": "abi3rto!",
   "dn_report_low_threshold": "10",
+  "sip_call_search_enabled": "true",
+  "sip_call_search_udp_port": "1024",
+  "sip_call_search_retention_days": "14",
+  "sip_call_search_total_mb": "6144",
+  "sip_call_search_per_file_mb": "15",
 }
 SETTINGS_LOCK = threading.Lock()
 
@@ -1904,6 +1937,427 @@ def _get_dn_report_settings() -> dict:
     "cucm_pass": _str("dn_report_cucm_pass", "abi3rto!"),
     "low_threshold": _int("dn_report_low_threshold", 10),
   }
+
+
+def _get_sip_call_search_settings() -> dict:
+  """Return live SIP call-search settings from settings.json with env fallbacks."""
+  s = _load_settings()
+
+  def _str(key, fallback=""):
+    v = (s.get(key) or "").strip()
+    return v if v else fallback
+
+  def _int(key, fallback):
+    v = (s.get(key) or "").strip()
+    try:
+      return int(v) if v else fallback
+    except ValueError:
+      return fallback
+
+  enabled_raw = (s.get("sip_call_search_enabled") or "").strip().lower()
+  enabled = SIP_CALL_SEARCH_ENABLED if not enabled_raw else enabled_raw in {"1", "true", "yes", "on"}
+
+  return {
+    "enabled": enabled,
+    "udp_port": _int("sip_call_search_udp_port", SIP_CALL_SEARCH_DEFAULT_UDP_PORT),
+    "retention_days": _int("sip_call_search_retention_days", SIP_CALL_SEARCH_DEFAULT_RETENTION_DAYS),
+    "total_mb": _int("sip_call_search_total_mb", SIP_CALL_SEARCH_DEFAULT_TOTAL_MB),
+    "per_file_mb": _int("sip_call_search_per_file_mb", SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB),
+  }
+
+
+def _sip_capture_day_key(dt: datetime.datetime) -> str:
+  return dt.astimezone().strftime("%Y-%m-%d")
+
+
+def _sip_capture_source_meta(source_ip: str, origin_id: str = "") -> dict:
+  source_ip = (source_ip or "").strip()
+  source_info = SIP_CALL_SEARCH_SOURCE_MAP.get(source_ip, {})
+  source_key = (source_info.get("source_key") or f"unknown-{source_ip or 'sender'}").strip()
+  return {
+    "source_ip": source_ip,
+    "source_key": source_key,
+    "source_label": (source_info.get("source_label") or source_key).strip(),
+    "source_name": (source_info.get("source_name") or source_key).strip(),
+    "origin_id": (origin_id or source_info.get("source_name") or source_key).strip(),
+  }
+
+
+def _sip_capture_root_for_day(day_key: str, section: str) -> str:
+  return os.path.join(SIP_CALL_SEARCH_ROOT, section, day_key)
+
+
+def _sip_capture_raw_root_for_source_day(source_key: str, day_key: str) -> str:
+  return os.path.join(SIP_CALL_SEARCH_RAW_ROOT, source_key, day_key)
+
+
+def _ensure_sip_capture_dirs():
+  os.makedirs(SIP_CALL_SEARCH_RAW_ROOT, exist_ok=True)
+  os.makedirs(SIP_CALL_SEARCH_INDEX_ROOT, exist_ok=True)
+
+
+def _sip_extract_digits(text: str) -> str:
+  digits = re.sub(r"\D", "", (text or "").strip())
+  if len(digits) == 11 and digits.startswith("1"):
+    digits = digits[1:]
+  return digits
+
+
+def _sip_extract_first_match(patterns: list[str], text: str) -> str:
+  for pattern in patterns:
+    match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
+    if match:
+      value = match.group(1).strip()
+      return value
+  return ""
+
+
+def _sip_parse_record(raw_line: str, received_at: datetime.datetime, source_meta: dict) -> dict:
+  line = (raw_line or "").strip()
+  call_id = _sip_extract_first_match([r"(?im)^Call-ID:\s*(.+)$", r"(?im)Call-ID\s*[:=]\s*(.+)$"], line)
+  from_value = _sip_extract_first_match([r"(?im)^From:\s*(.+)$", r"(?im)From\s*[:=]\s*(.+)$"], line)
+  to_value = _sip_extract_first_match([r"(?im)^To:\s*(.+)$", r"(?im)To\s*[:=]\s*(.+)$"], line)
+  cseq_value = _sip_extract_first_match([r"(?im)^CSeq:\s*\d+\s+([A-Z]+)$", r"(?im)CSeq\s*[:=]\s*\d+\s+([A-Z]+)$"], line)
+  method = _sip_extract_first_match([
+    r"(?i)^(INVITE|REGISTER|BYE|ACK|CANCEL|OPTIONS|INFO|UPDATE|SUBSCRIBE|NOTIFY|REFER|PRACK|MESSAGE|PUBLISH)\s+sip:",
+    r"(?i)\b(INVITE|REGISTER|BYE|ACK|CANCEL|OPTIONS|INFO|UPDATE|SUBSCRIBE|NOTIFY|REFER|PRACK|MESSAGE|PUBLISH)\b",
+  ], line)
+  response_code = _sip_extract_first_match([r"(?i)^SIP/2\.0\s+(\d{3})\b", r"(?i)\bSIP/2\.0\s+(\d{3})\b"], line)
+  if not method and cseq_value:
+    method = cseq_value
+
+  return {
+    "received_at": received_at.astimezone().isoformat(),
+    "day_key": _sip_capture_day_key(received_at),
+    "source_ip": source_meta.get("source_ip", ""),
+    "source_key": source_meta.get("source_key", ""),
+    "source_label": source_meta.get("source_label", ""),
+    "source_name": source_meta.get("source_name", ""),
+    "origin_id": source_meta.get("origin_id", ""),
+    "call_id": call_id,
+    "method": method,
+    "response_code": response_code,
+    "from_value": from_value,
+    "to_value": to_value,
+    "from_digits": _sip_extract_digits(from_value),
+    "to_digits": _sip_extract_digits(to_value),
+    "cseq_method": cseq_value,
+    "raw_line": line,
+  }
+
+
+def _sip_append_text(path: str, text: str):
+  os.makedirs(os.path.dirname(path), exist_ok=True)
+  with open(path, "a", encoding="utf-8") as handle:
+    handle.write(text)
+    if not text.endswith("\n"):
+      handle.write("\n")
+
+
+def _sip_current_raw_path_locked(source_key: str, day_key: str, byte_count: int, max_file_bytes: int) -> str:
+  state = SIP_CALL_SEARCH_CURRENT_FILE_STATE.get(source_key)
+  if state and state.get("day_key") == day_key:
+    current_path = state.get("path", "")
+    if current_path and os.path.exists(current_path):
+      try:
+        if os.path.getsize(current_path) + byte_count <= max_file_bytes:
+          return current_path
+      except OSError:
+        pass
+    part_number = int(state.get("part_number", 1)) + 1
+  else:
+    part_number = 1
+
+  raw_dir = _sip_capture_raw_root_for_source_day(source_key, day_key)
+  os.makedirs(raw_dir, exist_ok=True)
+  raw_path = os.path.join(raw_dir, f"sip-{day_key.replace('-', '')}-part{part_number:03d}.log")
+  SIP_CALL_SEARCH_CURRENT_FILE_STATE[source_key] = {
+    "day_key": day_key,
+    "part_number": part_number,
+    "path": raw_path,
+  }
+  return raw_path
+
+
+def _sip_index_path(day_key: str) -> str:
+  return os.path.join(SIP_CALL_SEARCH_INDEX_ROOT, day_key, f"records-{day_key.replace('-', '')}.jsonl")
+
+
+def _sip_store_record(raw_line: str, received_at: datetime.datetime, source_ip: str, origin_id: str = ""):
+  settings = _get_sip_call_search_settings()
+  if not settings.get("enabled", False):
+    return
+  source_meta = _sip_capture_source_meta(source_ip, origin_id)
+  parsed = _sip_parse_record(raw_line, received_at, source_meta)
+  parsed_json = json.dumps(parsed, ensure_ascii=False)
+  parsed_size = len(parsed_json.encode("utf-8")) + 1
+  day_key = parsed["day_key"]
+  raw_path = _sip_current_raw_path_locked(source_meta["source_key"], day_key, parsed_size, settings["per_file_mb"] * 1024 * 1024)
+  index_path = _sip_index_path(day_key)
+  _sip_append_text(raw_path, raw_line)
+  _sip_append_text(index_path, parsed_json)
+  with SIP_CALL_SEARCH_LOCK:
+    SIP_CALL_SEARCH_LAST_EVENT.clear()
+    SIP_CALL_SEARCH_LAST_EVENT.update(parsed)
+    _sip_prune_locked(settings)
+
+
+def _sip_day_keys() -> list[str]:
+  day_keys = set()
+  if os.path.isdir(SIP_CALL_SEARCH_RAW_ROOT):
+    for source_name in os.listdir(SIP_CALL_SEARCH_RAW_ROOT):
+      source_root = os.path.join(SIP_CALL_SEARCH_RAW_ROOT, source_name)
+      if not os.path.isdir(source_root):
+        continue
+      for day_key in os.listdir(source_root):
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day_key):
+          day_keys.add(day_key)
+  if os.path.isdir(SIP_CALL_SEARCH_INDEX_ROOT):
+    for day_key in os.listdir(SIP_CALL_SEARCH_INDEX_ROOT):
+      if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day_key):
+        day_keys.add(day_key)
+  return sorted(day_keys)
+
+
+def _sip_day_total_bytes(day_key: str) -> int:
+  total = 0
+  raw_day_root = os.path.join(SIP_CALL_SEARCH_RAW_ROOT)
+  if os.path.isdir(raw_day_root):
+    for source_name in os.listdir(raw_day_root):
+      source_day_root = os.path.join(raw_day_root, source_name, day_key)
+      if os.path.isdir(source_day_root):
+        for root, _, files in os.walk(source_day_root):
+          for file_name in files:
+            file_path = os.path.join(root, file_name)
+            try:
+              total += os.path.getsize(file_path)
+            except OSError:
+              pass
+  index_day_root = os.path.join(SIP_CALL_SEARCH_INDEX_ROOT, day_key)
+  if os.path.isdir(index_day_root):
+    for root, _, files in os.walk(index_day_root):
+      for file_name in files:
+        file_path = os.path.join(root, file_name)
+        try:
+          total += os.path.getsize(file_path)
+        except OSError:
+          pass
+  return total
+
+
+def _sip_prune_locked(settings: dict | None = None):
+  settings = settings or _get_sip_call_search_settings()
+  retention_days = max(int(settings.get("retention_days", SIP_CALL_SEARCH_DEFAULT_RETENTION_DAYS) or SIP_CALL_SEARCH_DEFAULT_RETENTION_DAYS), 1)
+  total_cap_bytes = max(int(settings.get("total_mb", SIP_CALL_SEARCH_DEFAULT_TOTAL_MB) or SIP_CALL_SEARCH_DEFAULT_TOTAL_MB), 1) * 1024 * 1024
+  cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=retention_days)
+
+  day_keys = _sip_day_keys()
+  for day_key in day_keys:
+    try:
+      day_dt = datetime.datetime.strptime(day_key, "%Y-%m-%d").replace(tzinfo=datetime.timezone.utc)
+    except ValueError:
+      continue
+    if day_dt < cutoff:
+      for source_name in os.listdir(SIP_CALL_SEARCH_RAW_ROOT) if os.path.isdir(SIP_CALL_SEARCH_RAW_ROOT) else []:
+        source_day_root = os.path.join(SIP_CALL_SEARCH_RAW_ROOT, source_name, day_key)
+        if os.path.isdir(source_day_root):
+          shutil.rmtree(source_day_root, ignore_errors=True)
+      index_day_root = os.path.join(SIP_CALL_SEARCH_INDEX_ROOT, day_key)
+      if os.path.isdir(index_day_root):
+        shutil.rmtree(index_day_root, ignore_errors=True)
+
+  current_total = 0
+  day_sizes = []
+  for day_key in _sip_day_keys():
+    day_size = _sip_day_total_bytes(day_key)
+    day_sizes.append((day_key, day_size))
+    current_total += day_size
+
+  for day_key, day_size in day_sizes:
+    if current_total <= total_cap_bytes:
+      break
+    for source_name in os.listdir(SIP_CALL_SEARCH_RAW_ROOT) if os.path.isdir(SIP_CALL_SEARCH_RAW_ROOT) else []:
+      source_day_root = os.path.join(SIP_CALL_SEARCH_RAW_ROOT, source_name, day_key)
+      if os.path.isdir(source_day_root):
+        shutil.rmtree(source_day_root, ignore_errors=True)
+    index_day_root = os.path.join(SIP_CALL_SEARCH_INDEX_ROOT, day_key)
+    if os.path.isdir(index_day_root):
+      shutil.rmtree(index_day_root, ignore_errors=True)
+    current_total -= day_size
+
+
+def _sip_capture_listener_loop():
+  settings = _get_sip_call_search_settings()
+  if not settings.get("enabled", False):
+    return
+  if not _is_lab_runtime_host():
+    return
+
+  port = int(settings.get("udp_port", SIP_CALL_SEARCH_DEFAULT_UDP_PORT) or SIP_CALL_SEARCH_DEFAULT_UDP_PORT)
+  sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+  sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+  try:
+    sock.bind(("0.0.0.0", port))
+  except OSError as exc:
+    logger.error("SIP call-search listener failed to bind UDP %s: %s", port, exc)
+    sock.close()
+    return
+
+  logger.info("SIP call-search listener active on UDP %s", port)
+  while True:
+    try:
+      data, addr = sock.recvfrom(65535)
+      if not data:
+        continue
+      source_ip = addr[0] if addr else ""
+      received_at = datetime.datetime.now(datetime.timezone.utc)
+      packet_text = data.decode("utf-8", errors="replace").strip()
+      if not packet_text:
+        continue
+      for raw_line in [line.strip() for line in packet_text.splitlines() if line.strip()]:
+        _sip_store_record(raw_line, received_at, source_ip)
+    except Exception as exc:
+      logger.error("SIP call-search listener error: %s", exc, exc_info=True)
+
+
+def _start_sip_call_search_listener():
+  global SIP_CALL_SEARCH_LISTENER_STARTED
+  with SIP_CALL_SEARCH_LOCK:
+    if SIP_CALL_SEARCH_LISTENER_STARTED:
+      return
+    SIP_CALL_SEARCH_LISTENER_STARTED = True
+  listener_thread = threading.Thread(target=_sip_capture_listener_loop, name="sip-call-search-listener", daemon=True)
+  listener_thread.start()
+
+
+def _sip_capture_stats() -> dict:
+  settings = _get_sip_call_search_settings()
+  total_bytes = 0
+  file_count = 0
+  last_modified = ""
+  last_event = {}
+  if os.path.isdir(SIP_CALL_SEARCH_ROOT):
+    for root, _, files in os.walk(SIP_CALL_SEARCH_ROOT):
+      for file_name in files:
+        file_path = os.path.join(root, file_name)
+        try:
+          total_bytes += os.path.getsize(file_path)
+          file_count += 1
+          mtime = os.path.getmtime(file_path)
+          if not last_modified or mtime > float(last_modified):
+            last_modified = str(mtime)
+        except OSError:
+          pass
+  if SIP_CALL_SEARCH_LAST_EVENT:
+    last_event = dict(SIP_CALL_SEARCH_LAST_EVENT)
+  return {
+    "enabled": settings.get("enabled", False),
+    "udp_port": settings.get("udp_port", SIP_CALL_SEARCH_DEFAULT_UDP_PORT),
+    "retention_days": settings.get("retention_days", SIP_CALL_SEARCH_DEFAULT_RETENTION_DAYS),
+    "total_mb": settings.get("total_mb", SIP_CALL_SEARCH_DEFAULT_TOTAL_MB),
+    "per_file_mb": settings.get("per_file_mb", SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB),
+    "total_bytes": total_bytes,
+    "file_count": file_count,
+    "last_modified_epoch": float(last_modified) if last_modified else 0,
+    "last_event": last_event,
+    "source_map": list(SIP_CALL_SEARCH_SOURCE_MAP.values()),
+  }
+
+
+def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
+  matches = []
+  query = (criteria.get("query") or "").strip().lower()
+  call_id = (criteria.get("call_id") or "").strip().lower()
+  source_key = (criteria.get("source_key") or "").strip().lower()
+  method = (criteria.get("method") or "").strip().lower()
+  response_code = (criteria.get("response_code") or "").strip().lower()
+  from_digits = _sip_extract_digits(criteria.get("from_digits") or "")
+  to_digits = _sip_extract_digits(criteria.get("to_digits") or "")
+  start_ts = (criteria.get("start_ts") or "").strip()
+  end_ts = (criteria.get("end_ts") or "").strip()
+  try:
+    limit = int(criteria.get("limit") or 200)
+  except (TypeError, ValueError):
+    limit = 200
+  limit = max(1, min(limit, 1000))
+
+  start_dt = None
+  end_dt = None
+  for value, name in ((start_ts, "start"), (end_ts, "end")):
+    if not value:
+      continue
+    try:
+      parsed = datetime.datetime.fromisoformat(value)
+      if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=datetime.datetime.now().astimezone().tzinfo)
+      if name == "start":
+        start_dt = parsed
+      else:
+        end_dt = parsed
+    except ValueError:
+      pass
+
+  index_days = []
+  if os.path.isdir(SIP_CALL_SEARCH_INDEX_ROOT):
+    for day_key in os.listdir(SIP_CALL_SEARCH_INDEX_ROOT):
+      if re.fullmatch(r"\d{4}-\d{2}-\d{2}", day_key):
+        index_days.append(day_key)
+  for day_key in sorted(index_days, reverse=True):
+    index_path = _sip_index_path(day_key)
+    if not os.path.exists(index_path):
+      continue
+    try:
+      with open(index_path, "r", encoding="utf-8") as handle:
+        for line in handle:
+          raw = (line or "").strip()
+          if not raw:
+            continue
+          try:
+            record = json.loads(raw)
+          except json.JSONDecodeError:
+            continue
+
+          record_ts_text = (record.get("received_at") or "").strip()
+          try:
+            record_ts = datetime.datetime.fromisoformat(record_ts_text)
+          except ValueError:
+            record_ts = None
+
+          if start_dt and record_ts and record_ts < start_dt:
+            continue
+          if end_dt and record_ts and record_ts > end_dt:
+            continue
+          if source_key and (record.get("source_key") or "").strip().lower() != source_key:
+            continue
+          if call_id and call_id not in (record.get("call_id") or "").strip().lower():
+            continue
+          if method and method not in (record.get("method") or "").strip().lower():
+            continue
+          if response_code and response_code not in (record.get("response_code") or "").strip().lower():
+            continue
+          if from_digits and from_digits not in (record.get("from_digits") or ""):
+            continue
+          if to_digits and to_digits not in (record.get("to_digits") or ""):
+            continue
+          if query:
+            haystack = " ".join([
+              record.get("raw_line", ""),
+              record.get("call_id", ""),
+              record.get("method", ""),
+              record.get("response_code", ""),
+              record.get("from_value", ""),
+              record.get("to_value", ""),
+              record.get("source_key", ""),
+              record.get("source_label", ""),
+            ]).lower()
+            if query not in haystack:
+              continue
+          matches.append(record)
+          if len(matches) >= limit:
+            return matches
+    except OSError:
+      continue
+  return matches
 
 
 def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, cucm_pass: str):
@@ -10587,6 +11041,10 @@ def menu_page(request: Request):
         <a class="hero-link-card" href="/dashboard">
           <strong>Voice Dashboard</strong>
           <span>Live CUCM, Jabber registration, and Unity port telemetry.</span>
+        </a>
+        <a class="hero-link-card" href="/sip-call-search">
+          <strong>SIP Call Search</strong>
+          <span>LAB-only listener and search page for Cisco CUBE debug ccsip messages.</span>
         </a>
 __ADMIN_CARD__
         <a class="hero-link-card" href="/audit-trail">
@@ -19652,6 +20110,295 @@ def page3_twilio_items(request: Request):
   )
 
 
+@app.get("/sip-call-search", response_class=HTMLResponse)
+def sip_call_search_page(request: Request):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", ""))
+  auth_cucm_host = str(session.get("cucm_host", "") or "")
+  if not session_username:
+    return HTMLResponse(content="<h3>401 Unauthorized</h3><p>Please log in first.</p>", status_code=401)
+
+  sip_enabled = _feature_enabled(
+    SIP_CALL_SEARCH_ENABLED,
+    lab_only=(SIP_CALL_SEARCH_LAB_ONLY and PREVIEW_FEATURES_LAB_ONLY_DEFAULT),
+    cucm_host=auth_cucm_host,
+  )
+  if not sip_enabled or not _is_lab_environment(auth_cucm_host):
+    return HTMLResponse(
+      content="<h3>403 Forbidden</h3><p>SIP Call Search is LAB-only and disabled in this environment.</p>",
+      status_code=403,
+    )
+
+  stats = _sip_capture_stats()
+  auth_user = escape(session_username)
+  env_text, env_css_class = _get_environment_label(auth_cucm_host)
+
+  html = f"""
+<html>
+  <head>
+    <title>SIP Call Search - Voice Operations Portal</title>
+    <style>
+      :root {{
+        --amn-blue: #005eb8;
+        --amn-navy: #002f6c;
+        --amn-sky: #eaf4ff;
+        --amn-ice: #f7fbff;
+        --amn-text: #12304a;
+        --amn-text-soft: #4e6a84;
+        --amn-border: #c8dbee;
+        --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
+      }}
+      body {{ margin: 0; font-family: "Segoe UI", Tahoma, Arial, sans-serif; background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%); color: var(--amn-text); }}
+      .topbar {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)); color: #fff; }}
+      .topbar a {{ color: #fff; text-decoration: none; font-weight: 700; margin-left: 12px; }}
+      .env-banner {{ display: inline-block; padding: 6px 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.35); font-size: 11px; font-weight: 700; }}
+      .content {{ max-width: 1400px; margin: 0 auto; padding: 14px; }}
+      .page-hero, .panel, .stat-card {{ background: rgba(255,255,255,0.96); border: 1px solid var(--amn-border); border-radius: 14px; box-shadow: var(--amn-shadow); }}
+      .page-hero {{ padding: 16px; margin-bottom: 14px; }}
+      .page-title-row {{ display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }}
+      .page-title {{ margin: 0; color: var(--amn-navy); font-size: 28px; }}
+      .page-subtitle {{ margin: 8px 0 0 0; color: var(--amn-text-soft); line-height: 1.5; max-width: 960px; }}
+      .page-meta-card {{ min-width: 250px; padding: 12px 14px; border-radius: 12px; background: linear-gradient(180deg, #f9fcff 0%, #eef6ff 100%); border: 1px solid #d5e6f7; }}
+      .page-meta-label, .section-label {{ display: block; color: var(--amn-text-soft); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }}
+      .page-meta-value {{ display: block; margin-top: 4px; color: var(--amn-navy); font-size: 18px; font-weight: 700; }}
+      .page-meta-note {{ margin: 6px 0 0 0; color: var(--amn-text-soft); font-size: 12px; line-height: 1.45; }}
+      .stats-grid {{ display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }}
+      .stat-card {{ padding: 12px 14px; }}
+      .stat-card strong {{ display: block; color: var(--amn-navy); font-size: 20px; margin-top: 4px; }}
+      .panel {{ padding: 14px; margin-bottom: 14px; }}
+      .search-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }}
+      .search-grid input, .search-grid select {{ width: 100%; box-sizing: border-box; border: 1px solid var(--amn-border); border-radius: 8px; padding: 9px 10px; min-height: 38px; }}
+      .search-grid input:focus, .search-grid select:focus {{ outline: none; border-color: var(--amn-blue); box-shadow: 0 0 0 4px rgba(0, 94, 184, 0.12); }}
+      .search-grid .full {{ grid-column: 1 / -1; }}
+      .actions {{ display: flex; gap: 10px; flex-wrap: wrap; margin-top: 12px; }}
+      button {{ background: linear-gradient(180deg, #0c77d8, #005eb8); color: #fff; border: none; padding: 9px 14px; border-radius: 8px; font-weight: 700; cursor: pointer; box-shadow: 0 8px 18px rgba(0, 94, 184, 0.16); }}
+      button:hover {{ filter: brightness(1.04); }}
+      .muted {{ color: var(--amn-text-soft); font-size: 13px; line-height: 1.5; }}
+      table {{ width: 100%; border-collapse: collapse; font-size: 13px; }}
+      th, td {{ padding: 8px 10px; border-bottom: 1px solid var(--amn-border); vertical-align: top; }}
+      thead tr {{ background: var(--amn-blue); color: #fff; }}
+      tbody tr:nth-child(even) {{ background: var(--amn-ice); }}
+      details summary {{ cursor: pointer; color: var(--amn-blue); font-weight: 700; }}
+      code {{ font-family: Consolas, monospace; }}
+      @media (max-width: 1100px) {{ .stats-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} .search-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+      @media (max-width: 760px) {{ .stats-grid, .search-grid {{ grid-template-columns: 1fr; }} }}
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div><strong>Voice Operations Portal</strong></div>
+      <div>
+        <span class="env-banner {env_css_class}">{escape(env_text)}</span>
+        <a href="/menu">Main Operations</a>
+        <a href="/menu-admin">Administrative Items</a>
+        <a href="/logout">Log Out</a>
+      </div>
+    </header>
+    <main class="content">
+      <section class="page-hero">
+        <div class="page-title-row">
+          <div>
+            <h1 class="page-title">SIP Call Search</h1>
+            <p class="page-subtitle">LAB-only listener and search workspace for Cisco CUBE <code>debug ccsip messages</code> logs. The Ubuntu server listens on UDP port <strong>{stats['udp_port']}</strong>, tags records from Las Vegas and Reno CUBEs, and keeps raw plus parsed files under a size and retention cap you can tune in Settings.</p>
+          </div>
+          <div class="page-meta-card">
+            <span class="page-meta-label">Authenticated Operator</span>
+            <span class="page-meta-value">{auth_user}</span>
+            <p class="page-meta-note">Source labels: Las Vegas CUBE <code>las-voip-rtr</code> / <code>10.241.255.3</code> and Reno CUBE <code>RNOVOIPRT01</code> / <code>10.141.255.13</code>.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="stats-grid" id="sip-stats-grid">
+        <div class="stat-card"><span class="section-label">Listener Status</span><strong id="sip-stat-enabled">Loading...</strong></div>
+        <div class="stat-card"><span class="section-label">Total Stored</span><strong id="sip-stat-total">Loading...</strong></div>
+        <div class="stat-card"><span class="section-label">Files</span><strong id="sip-stat-files">Loading...</strong></div>
+        <div class="stat-card"><span class="section-label">Last Record</span><strong id="sip-stat-last">Loading...</strong></div>
+      </section>
+
+      <section class="panel">
+        <h2 style="margin:0 0 10px 0;color:var(--amn-navy);">Search Filters</h2>
+        <form id="sip-search-form">
+          <div class="search-grid">
+            <select name="source_key"><option value="">All Sources</option><option value="las-voip-rtr">Las Vegas CUBE</option><option value="RNOVOIPRT01">Reno CUBE</option></select>
+            <input name="call_id" placeholder="Call-ID">
+            <input name="method" placeholder="Method (INVITE, BYE, etc.)">
+            <input name="response_code" placeholder="Response Code (200, 404, etc.)">
+            <input name="from_digits" placeholder="From Digits">
+            <input name="to_digits" placeholder="To Digits">
+            <input name="query" class="full" placeholder="Search text across raw SIP debug lines and parsed fields">
+            <input name="start_ts" type="datetime-local" placeholder="Start">
+            <input name="end_ts" type="datetime-local" placeholder="End">
+            <input name="limit" type="number" min="1" max="1000" value="200" placeholder="Limit">
+          </div>
+          <div class="actions">
+            <button type="submit">Search SIP Records</button>
+            <button type="button" id="sip-refresh-status-btn" style="background:linear-gradient(180deg,#516d8d,#355978);">Refresh Status</button>
+          </div>
+        </form>
+        <p class="muted" id="sip-search-status" style="min-height:18px;">Ready. Search is case-insensitive and scans the stored index for the selected source and time range.</p>
+        <div id="sip-search-results" style="overflow-x:auto;"></div>
+      </section>
+    </main>
+
+    <script>
+      (function () {{
+        const stats = {json.dumps(stats, ensure_ascii=False)};
+        const form = document.getElementById("sip-search-form");
+        const resultsEl = document.getElementById("sip-search-results");
+        const statusEl = document.getElementById("sip-search-status");
+        const refreshBtn = document.getElementById("sip-refresh-status-btn");
+        const enabledEl = document.getElementById("sip-stat-enabled");
+        const totalEl = document.getElementById("sip-stat-total");
+        const filesEl = document.getElementById("sip-stat-files");
+        const lastEl = document.getElementById("sip-stat-last");
+
+        function escapeHtml(value) {{
+          return String(value || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }}
+
+        function humanBytes(bytes) {{
+          const value = Number(bytes || 0);
+          if (value >= 1024 * 1024 * 1024) return (value / (1024 * 1024 * 1024)).toFixed(2) + " GB";
+          if (value >= 1024 * 1024) return (value / (1024 * 1024)).toFixed(2) + " MB";
+          if (value >= 1024) return (value / 1024).toFixed(1) + " KB";
+          return value + " B";
+        }}
+
+        function renderStats(payload) {{
+          const s = (payload && payload.stats) || stats || {{}};
+          enabledEl.textContent = s.enabled ? ("Listening on UDP " + s.udp_port) : "Disabled";
+          totalEl.textContent = humanBytes(s.total_bytes || 0) + " / " + (s.total_mb || 0) + " MB cap";
+          filesEl.textContent = String(s.file_count || 0);
+          if (s.last_event && s.last_event.received_at) {{
+            lastEl.textContent = (s.last_event.source_label || s.last_event.source_key || "") + " @ " + s.last_event.received_at;
+          }} else {{
+            lastEl.textContent = "No records yet";
+          }}
+        }}
+
+        function renderResults(rows) {{
+          if (!rows || !rows.length) {{
+            resultsEl.innerHTML = '<div class="panel"><p class="muted" style="margin:0;">No SIP records matched the current filters.</p></div>';
+            return;
+          }}
+          let html = '<table><thead><tr><th>Received</th><th>Source</th><th>Call-ID</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Raw</th></tr></thead><tbody>';
+          rows.forEach(function (row, idx) {{
+            const bg = idx % 2 === 0 ? '#f7fbff' : '#ffffff';
+            html += '<tr style="background:' + bg + ';">'
+              + '<td>' + escapeHtml(row.received_at || '') + '</td>'
+              + '<td><strong>' + escapeHtml(row.source_label || row.source_key || '') + '</strong><br><span class="muted">' + escapeHtml(row.source_ip || '') + '</span></td>'
+              + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.call_id || '') + '</td>'
+              + '<td>' + escapeHtml(row.method || '') + '</td>'
+              + '<td>' + escapeHtml(row.response_code || '') + '</td>'
+              + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.from_digits || row.from_value || '') + '</td>'
+              + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.to_digits || row.to_value || '') + '</td>'
+              + '<td><details><summary>Show</summary><div style="margin-top:6px;font-family:Consolas,monospace;white-space:pre-wrap;max-width:720px;">' + escapeHtml(row.raw_line || '') + '</div></details></td>'
+              + '</tr>';
+          }});
+          html += '</tbody></table>';
+          resultsEl.innerHTML = html;
+        }}
+
+        async function refreshStatus() {{
+          try {{
+            const response = await fetch('/sip-call-search/status', {{ credentials: 'same-origin' }});
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {{ throw new Error((payload && payload.error) || 'Status lookup failed.'); }}
+            renderStats(payload);
+          }} catch (err) {{
+            enabledEl.textContent = 'Status unavailable';
+            lastEl.textContent = (err && err.message) || 'Unknown error';
+          }}
+        }}
+
+        async function runSearch(event) {{
+          if (event) event.preventDefault();
+          statusEl.textContent = 'Searching SIP records...';
+          resultsEl.innerHTML = '';
+          try {{
+            const fd = new FormData(form);
+            const body = {{}};
+            fd.forEach(function (value, key) {{ body[key] = String(value || '').trim(); }});
+            const response = await fetch('/sip-call-search/search', {{
+              method: 'POST',
+              headers: {{ 'Content-Type': 'application/json' }},
+              body: JSON.stringify(body),
+              credentials: 'same-origin',
+            }});
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {{ throw new Error((payload && payload.error) || 'Search failed.'); }}
+            statusEl.textContent = 'Matched ' + (payload.count || 0) + ' record(s).';
+            renderResults(payload.results || []);
+            renderStats(payload);
+          }} catch (err) {{
+            statusEl.textContent = 'Search failed: ' + ((err && err.message) || 'Unknown error.');
+          }}
+        }}
+
+        if (form) form.addEventListener('submit', runSearch);
+        if (refreshBtn) refreshBtn.addEventListener('click', refreshStatus);
+        renderStats({{ stats: stats }});
+        refreshStatus();
+      }})();
+    </script>
+  </body>
+</html>
+"""
+
+  return HTMLResponse(content=html)
+
+
+@app.get("/sip-call-search/status")
+def sip_call_search_status(request: Request):
+  session = _get_auth_session(request)
+  if not session:
+    return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+
+  auth_cucm_host = str(session.get("cucm_host", "") or "")
+  sip_enabled = _feature_enabled(
+    SIP_CALL_SEARCH_ENABLED,
+    lab_only=(SIP_CALL_SEARCH_LAB_ONLY and PREVIEW_FEATURES_LAB_ONLY_DEFAULT),
+    cucm_host=auth_cucm_host,
+  )
+  if not sip_enabled or not _is_lab_environment(auth_cucm_host):
+    return JSONResponse({"ok": False, "error": "SIP Call Search is LAB-only and disabled in this environment."}, status_code=403)
+
+  return JSONResponse({"ok": True, "stats": _sip_capture_stats()})
+
+
+@app.post("/sip-call-search/search")
+async def sip_call_search_search(request: Request):
+  session = _get_auth_session(request)
+  if not session:
+    return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+
+  auth_cucm_host = str(session.get("cucm_host", "") or "")
+  sip_enabled = _feature_enabled(
+    SIP_CALL_SEARCH_ENABLED,
+    lab_only=(SIP_CALL_SEARCH_LAB_ONLY and PREVIEW_FEATURES_LAB_ONLY_DEFAULT),
+    cucm_host=auth_cucm_host,
+  )
+  if not sip_enabled or not _is_lab_environment(auth_cucm_host):
+    return JSONResponse({"ok": False, "error": "SIP Call Search is LAB-only and disabled in this environment."}, status_code=403)
+
+  try:
+    body = await request.json()
+  except Exception:
+    body = {}
+
+  if not isinstance(body, dict):
+    body = {}
+
+  records = _sip_capture_records_for_search(body)
+  return JSONResponse({"ok": True, "count": len(records), "results": records, "stats": _sip_capture_stats()})
+
+
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request):
   """Admin settings page for configuring phone prefixes and Twilio LOA defaults."""
@@ -19847,6 +20594,36 @@ def settings_page(request: Request):
             <input type="text" id="twilio_loa_recipient_phone" name="twilio_loa_recipient_phone" value="{escape(settings.get('twilio_loa_recipient_phone', '+18583503289'))}" maxlength="32">
             <div class="help-text">Default LOA phone for operator reference</div>
           </div>
+
+          <div class="form-group">
+            <label for="sip_call_search_enabled">SIP Call Search Enabled</label>
+            <input type="text" id="sip_call_search_enabled" name="sip_call_search_enabled" value="{escape(settings.get('sip_call_search_enabled', 'true'))}" maxlength="8">
+            <div class="help-text">Set to true to allow the LAB-only SIP listener and search page to run</div>
+          </div>
+
+          <div class="form-group">
+            <label for="sip_call_search_udp_port">SIP Call Search UDP Port</label>
+            <input type="text" id="sip_call_search_udp_port" name="sip_call_search_udp_port" value="{escape(settings.get('sip_call_search_udp_port', '1024'))}" maxlength="8">
+            <div class="help-text">Cisco CUBE syslog target port on the Ubuntu server</div>
+          </div>
+
+          <div class="form-group">
+            <label for="sip_call_search_retention_days">SIP Call Search Retention Days</label>
+            <input type="text" id="sip_call_search_retention_days" name="sip_call_search_retention_days" value="{escape(settings.get('sip_call_search_retention_days', '14'))}" maxlength="8">
+            <div class="help-text">How long raw and parsed SIP logs are kept before cleanup</div>
+          </div>
+
+          <div class="form-group">
+            <label for="sip_call_search_per_file_mb">SIP Call Search Max File Size MB</label>
+            <input type="text" id="sip_call_search_per_file_mb" name="sip_call_search_per_file_mb" value="{escape(settings.get('sip_call_search_per_file_mb', '15'))}" maxlength="8">
+            <div class="help-text">Rotate raw capture files when they reach this size</div>
+          </div>
+
+          <div class="form-group">
+            <label for="sip_call_search_total_mb">SIP Call Search Total Size MB</label>
+            <input type="text" id="sip_call_search_total_mb" name="sip_call_search_total_mb" value="{escape(settings.get('sip_call_search_total_mb', '6144'))}" maxlength="8">
+            <div class="help-text">Hard cap across all SIP capture files before oldest days are pruned</div>
+          </div>
           
           <div class="button-group">
             <button type="submit" class="btn-save">Save Changes</button>
@@ -19873,6 +20650,11 @@ def settings_page(request: Request):
           twilio_loa_recipient_name: document.getElementById('twilio_loa_recipient_name').value.trim(),
           twilio_loa_recipient_email: document.getElementById('twilio_loa_recipient_email').value.trim(),
           twilio_loa_recipient_phone: document.getElementById('twilio_loa_recipient_phone').value.trim(),
+          sip_call_search_enabled: document.getElementById('sip_call_search_enabled').value.trim(),
+          sip_call_search_udp_port: document.getElementById('sip_call_search_udp_port').value.trim(),
+          sip_call_search_retention_days: document.getElementById('sip_call_search_retention_days').value.trim(),
+          sip_call_search_per_file_mb: document.getElementById('sip_call_search_per_file_mb').value.trim(),
+          sip_call_search_total_mb: document.getElementById('sip_call_search_total_mb').value.trim(),
         }};
         
         if (!formData.general_fte_prefix || !formData.strike_prefix || !formData.recruiter_prefix) {{
@@ -19954,6 +20736,11 @@ def update_settings_api(request: Request, body: dict = None):
     twilio_loa_recipient_name = (body.get("twilio_loa_recipient_name", "") or "").strip()
     twilio_loa_recipient_email = (body.get("twilio_loa_recipient_email", "") or "").strip()
     twilio_loa_recipient_phone = (body.get("twilio_loa_recipient_phone", "") or "").strip()
+    sip_call_search_enabled = (body.get("sip_call_search_enabled", "") or "").strip().lower()
+    sip_call_search_udp_port = (body.get("sip_call_search_udp_port", "") or "").strip()
+    sip_call_search_retention_days = (body.get("sip_call_search_retention_days", "") or "").strip()
+    sip_call_search_per_file_mb = (body.get("sip_call_search_per_file_mb", "") or "").strip()
+    sip_call_search_total_mb = (body.get("sip_call_search_total_mb", "") or "").strip()
     
     if not general_fte_prefix or not strike_prefix or not recruiter_prefix:
       return JSONResponse({"ok": False, "error": "All fields are required"}, status_code=400)
@@ -19961,6 +20748,19 @@ def update_settings_api(request: Request, body: dict = None):
     # Validate that all are numeric
     if not (general_fte_prefix.isdigit() and strike_prefix.isdigit() and recruiter_prefix.isdigit()):
       return JSONResponse({"ok": False, "error": "All prefixes must be numeric"}, status_code=400)
+
+    if sip_call_search_enabled and sip_call_search_enabled not in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
+      return JSONResponse({"ok": False, "error": "SIP Call Search Enabled must be true or false"}, status_code=400)
+
+    sip_numeric_fields = {
+      "SIP Call Search UDP Port": sip_call_search_udp_port,
+      "SIP Call Search Retention Days": sip_call_search_retention_days,
+      "SIP Call Search Max File Size MB": sip_call_search_per_file_mb,
+      "SIP Call Search Total Size MB": sip_call_search_total_mb,
+    }
+    for label, value in sip_numeric_fields.items():
+      if value and not value.isdigit():
+        return JSONResponse({"ok": False, "error": f"{label} must be numeric"}, status_code=400)
     
     new_settings = {
       "general_fte_prefix": general_fte_prefix,
@@ -19969,6 +20769,11 @@ def update_settings_api(request: Request, body: dict = None):
       "twilio_loa_recipient_name": twilio_loa_recipient_name,
       "twilio_loa_recipient_email": twilio_loa_recipient_email,
       "twilio_loa_recipient_phone": twilio_loa_recipient_phone,
+      "sip_call_search_enabled": sip_call_search_enabled or "true",
+      "sip_call_search_udp_port": sip_call_search_udp_port or str(SIP_CALL_SEARCH_DEFAULT_UDP_PORT),
+      "sip_call_search_retention_days": sip_call_search_retention_days or str(SIP_CALL_SEARCH_DEFAULT_RETENTION_DAYS),
+      "sip_call_search_per_file_mb": sip_call_search_per_file_mb or str(SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB),
+      "sip_call_search_total_mb": sip_call_search_total_mb or str(SIP_CALL_SEARCH_DEFAULT_TOTAL_MB),
     }
     
     if _save_settings(new_settings):
