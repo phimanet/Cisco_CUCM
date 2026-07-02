@@ -2816,6 +2816,8 @@ def _sip_direction_label(direction: str, via_endpoint: str) -> str:
     return ""
   if not endpoint:
     return text
+  if text.lower() == "sent":
+    return f"Sent to {endpoint}"
   return f"{text} from {endpoint}"
 
 
