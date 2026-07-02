@@ -20540,7 +20540,7 @@ def sip_call_search_page(request: Request):
           const rawText = await response.text();
           let payload;
           try {{
-            payload = JSON.parse(rawText || '{}');
+            payload = JSON.parse(rawText || '{{}}');
           }} catch (_err) {{
             const snippet = String(rawText || '').slice(0, 220);
             throw new Error((fallbackMessage || 'Unexpected response format') + ': ' + (snippet || 'empty response'));
