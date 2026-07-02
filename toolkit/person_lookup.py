@@ -114,34 +114,6 @@ def _soap_get_phone(phone_name):
 </soapenv:Envelope>"""
 
 
-def _soap_select_cm_devices(device_names):
-        select_items = "".join(
-                f"<item><Item>{xml_escape(name)}</Item></item>"
-                for name in (device_names or [])
-                if (name or "").strip()
-        )
-        return f"""<?xml version="1.0" encoding="UTF-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:ris="http://schemas.cisco.com/ast/soap">
-    <soapenv:Header/>
-    <soapenv:Body>
-        <ris:selectCmDevice>
-            <StateInfo></StateInfo>
-            <CmSelectionCriteria>
-                <MaxReturnedDevices>2000</MaxReturnedDevices>
-                <DeviceClass>Phone</DeviceClass>
-                <Model>255</Model>
-                <Status>Any</Status>
-                <NodeName></NodeName>
-                <SelectBy>Name</SelectBy>
-                <SelectItems>{select_items}</SelectItems>
-                <Protocol>Any</Protocol>
-                <DownloadStatus>Any</DownloadStatus>
-            </CmSelectionCriteria>
-        </ris:selectCmDevice>
-    </soapenv:Body>
-</soapenv:Envelope>"""
-
-
 def _parse_phone_lines(xml_text):
     if not xml_text:
         return []
@@ -177,90 +149,6 @@ def _device_type(name):
     if upper.startswith("TAB"):
         return "TAB (Jabber Tablet)"
     return "Phone"
-
-
-def _ris_fetch_device_statuses(session, cucm_host, device_names):
-    clean_names = [name.strip() for name in (device_names or []) if (name or "").strip()]
-    if not clean_names:
-        return {}
-
-    soap_xml = _soap_select_cm_devices(sorted(set(clean_names)))
-    ris_urls = [
-        f"https://{cucm_host}:8443/realtimeservice2/services/RISService70",
-        f"https://{cucm_host}:8443/realtimeservice/services/RISService70",
-    ]
-
-    response_text = ""
-    for ris_url in ris_urls:
-        try:
-            response = session.post(
-                ris_url,
-                data=soap_xml.encode("utf-8"),
-                headers={
-                    "Content-Type": "text/xml; charset=utf-8",
-                    "SOAPAction": "CUCM:DB ver=7.0 selectCmDevice",
-                },
-                timeout=60,
-                verify=False,
-            )
-            if response.status_code != 200:
-                continue
-            response_text = response.text or ""
-            break
-        except Exception:
-            continue
-
-    if not response_text:
-        return {}
-
-    try:
-        root = ET.fromstring(response_text)
-    except Exception:
-        return {}
-
-    statuses = {}
-    timestamp_candidates = {
-        "TimeStamp",
-        "LastStatusChange",
-        "LastStatusChangeTime",
-        "LastRegisteredTime",
-        "LastRegistrationTime",
-    }
-
-    for elem in root.iter():
-        if _strip_ns(elem.tag) != "CmDevice":
-            continue
-
-        device_name = _find_first_text(elem, [["Name"]])
-        if not device_name:
-            continue
-
-        status_text = _find_first_text(elem, [["Status"]]) or "Unknown"
-        last_registered = ""
-
-        for child in list(elem):
-            tag_name = _strip_ns(child.tag)
-            text = (child.text or "").strip()
-            if not text:
-                continue
-            if tag_name in timestamp_candidates:
-                last_registered = text
-                break
-
-        if not last_registered:
-            for child in list(elem):
-                tag_name = _strip_ns(child.tag)
-                text = (child.text or "").strip()
-                if text and "time" in tag_name.lower():
-                    last_registered = text
-                    break
-
-        statuses[device_name] = {
-            "registration_status": status_text,
-            "last_registered": last_registered,
-        }
-
-    return statuses
 
 
 def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_name=""):
@@ -315,8 +203,7 @@ def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_nam
     if not userids:
         return []
 
-    user_records = []
-    all_device_names = set()
+    results = []
     for uid in userids:
         try:
             user_xml = _axl_post(session, cucm_host, _soap_get_user(uid))
@@ -339,55 +226,31 @@ def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_nam
             for child in list(assoc_parent):
                 if _strip_ns(child.tag) == "device" and child.text and child.text.strip():
                     associated.append(child.text.strip())
-                    all_device_names.add(child.text.strip())
 
-        user_records.append({
+        # Look up each device for its lines
+        devices = []
+        primary_ext = ""
+        for dev_name in associated:
+            try:
+                phone_xml = _axl_post(session, cucm_host, _soap_get_phone(dev_name))
+                lines = _parse_phone_lines(phone_xml)
+            except Exception:
+                lines = []
+            devices.append({
+                "name": dev_name,
+                "type": _device_type(dev_name),
+                "extensions": lines,
+            })
+            if not primary_ext and lines:
+                primary_ext = lines[0]
+
+        results.append({
             "userid": _find_first_text(user_node, [["userid"]]) or uid,
             "first_name": _find_first_text(user_node, [["firstName"]]),
             "last_name": _find_first_text(user_node, [["lastName"]]),
             "display_name": _find_first_text(user_node, [["displayName"]]),
             "email": _find_first_text(user_node, [["mailid"]]),
             "telephone": _find_first_text(user_node, [["telephoneNumber"], ["telephone"]]),
-            "associated": associated,
-        })
-
-    device_status_map = _ris_fetch_device_statuses(session, cucm_host, sorted(all_device_names))
-
-    results = []
-    phone_lines_cache = {}
-    for user in user_records:
-        associated = user.get("associated", [])
-        devices = []
-        primary_ext = ""
-        for dev_name in associated:
-            if dev_name in phone_lines_cache:
-                lines = phone_lines_cache[dev_name]
-            else:
-                try:
-                    phone_xml = _axl_post(session, cucm_host, _soap_get_phone(dev_name))
-                    lines = _parse_phone_lines(phone_xml)
-                except Exception:
-                    lines = []
-                phone_lines_cache[dev_name] = lines
-
-            device_status = device_status_map.get(dev_name, {})
-            devices.append({
-                "name": dev_name,
-                "type": _device_type(dev_name),
-                "extensions": lines,
-                "registration_status": device_status.get("registration_status", "Unknown"),
-                "last_registered": device_status.get("last_registered", ""),
-            })
-            if not primary_ext and lines:
-                primary_ext = lines[0]
-
-        results.append({
-            "userid": user.get("userid", ""),
-            "first_name": user.get("first_name", ""),
-            "last_name": user.get("last_name", ""),
-            "display_name": user.get("display_name", ""),
-            "email": user.get("email", ""),
-            "telephone": user.get("telephone", ""),
             "primary_extension": primary_ext,
             "devices": devices,
         })
