@@ -127,6 +127,7 @@ Priority keys:
 - Updated SIP capture/search to store each UDP payload as a full SIP message (instead of per-line fragments) so result details display complete message content for new records.
 - Added SIP capture file download support in LAB page (list + direct download for raw `.log` and parsed `.jsonl` files) to aid deeper troubleshooting.
 - Search results now include a Capture File column/header showing the originating file path per record for faster file pinpoint and download.
+- Added legacy-record fallback matching so older line-based records attempt to resolve and display a downloadable raw file path when possible.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.

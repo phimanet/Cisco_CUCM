@@ -2283,6 +2283,8 @@ def _sip_capture_stats() -> dict:
 
 def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   matches = []
+  source_day_cache: dict[str, list[str]] = {}
+  content_cache: dict[str, str] = {}
   query = (criteria.get("query") or "").strip().lower()
   call_id = (criteria.get("call_id") or "").strip().lower()
   source_key = (criteria.get("source_key") or "").strip().lower()
@@ -2370,6 +2372,12 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
             ]).lower()
             if query not in haystack:
               continue
+
+          if not (record.get("raw_file_rel") or "").strip():
+            resolved = _sip_find_legacy_raw_file(record, source_day_cache, content_cache)
+            if resolved:
+              record["raw_file_rel"] = resolved
+
           matches.append(record)
           if len(matches) >= limit:
             return matches
@@ -2426,6 +2434,54 @@ def _sip_resolve_download_path(rel_path: str) -> str:
   if not os.path.isfile(candidate):
     return ""
   return candidate
+
+
+def _sip_raw_files_for_source_day(source_key: str, day_key: str) -> list[str]:
+  source = (source_key or "").strip()
+  day = (day_key or "").strip()
+  if not source or not day:
+    return []
+
+  source_day_root = os.path.join(SIP_CALL_SEARCH_RAW_ROOT, source, day)
+  if not os.path.isdir(source_day_root):
+    return []
+
+  files = []
+  for name in os.listdir(source_day_root):
+    if not name.lower().endswith(".log"):
+      continue
+    full_path = os.path.join(source_day_root, name)
+    if os.path.isfile(full_path):
+      files.append(full_path)
+  files.sort()
+  return files
+
+
+def _sip_find_legacy_raw_file(record: dict, source_day_cache: dict[str, list[str]], content_cache: dict[str, str]) -> str:
+  source_key = (record.get("source_key") or "").strip()
+  day_key = (record.get("day_key") or "").strip()
+  raw_line = (record.get("raw_line") or "").strip()
+  if not source_key or not day_key or not raw_line:
+    return ""
+
+  cache_key = f"{source_key}|{day_key}"
+  candidates = source_day_cache.get(cache_key)
+  if candidates is None:
+    candidates = _sip_raw_files_for_source_day(source_key, day_key)
+    source_day_cache[cache_key] = candidates
+
+  for file_path in candidates:
+    text = content_cache.get(file_path)
+    if text is None:
+      try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as handle:
+          text = handle.read()
+      except OSError:
+        text = ""
+      content_cache[file_path] = text
+    if raw_line in text:
+      return _sip_rel_path(file_path)
+  return ""
 
 
 def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, cucm_pass: str):
@@ -20385,7 +20441,11 @@ def sip_call_search_page(request: Request):
           let html = '<table><thead><tr><th>Received</th><th>Source</th><th>Call-ID</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Capture File</th><th>Raw</th></tr></thead><tbody>';
           rows.forEach(function (row, idx) {{
             const bg = idx % 2 === 0 ? '#f7fbff' : '#ffffff';
-            const captureFile = (row.raw_file_rel || row.index_file_rel || '(legacy record)').toString();
+            const captureFile = (row.raw_file_rel || row.index_file_rel || '').toString();
+            const captureLink = captureFile ? ('/sip-call-search/download?rel_path=' + encodeURIComponent(captureFile)) : '';
+            const captureCell = captureLink
+              ? ('<a href="' + captureLink + '" style="font-weight:700;color:#005eb8;">' + escapeHtml(captureFile) + '</a>')
+              : '<span class="muted">(legacy record - file not resolved)</span>';
             html += '<tr style="background:' + bg + ';">'
               + '<td>' + escapeHtml(row.received_at || '') + '</td>'
               + '<td><strong>' + escapeHtml(row.source_label || row.source_key || '') + '</strong><br><span class="muted">' + escapeHtml(row.source_ip || '') + '</span></td>'
@@ -20394,7 +20454,7 @@ def sip_call_search_page(request: Request):
               + '<td>' + escapeHtml(row.response_code || '') + '</td>'
               + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.from_digits || row.from_value || '') + '</td>'
               + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.to_digits || row.to_value || '') + '</td>'
-              + '<td style="font-family:Consolas,monospace;max-width:340px;word-break:break-word;">' + escapeHtml(captureFile) + '</td>'
+              + '<td style="font-family:Consolas,monospace;max-width:340px;word-break:break-word;">' + captureCell + '</td>'
               + '<td><details><summary>Show</summary><div style="margin-top:6px;font-family:Consolas,monospace;white-space:pre-wrap;max-width:720px;">' + escapeHtml(row.raw_message || row.raw_line || '') + '</div></details></td>'
               + '</tr>';
           }});
