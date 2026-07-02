@@ -103,35 +103,31 @@ PERFMON_INCLUDED_HOSTS = [
   (host or "").strip().lower()
   for host in (os.getenv("PERFMON_INCLUDED_HOSTS", "") or "").split(",")
   if (host or "").strip()
-]
-PERFMON_EXCLUDED_HOSTS = [
-  (host or "").strip().lower()
-  for host in (os.getenv("PERFMON_EXCLUDED_HOSTS", "") or "").split(",")
-  if (host or "").strip()
-]
-PERFMON_MRA_SIGNALING_HOSTS = [
-  (host or "").strip().lower()
-  for host in (os.getenv("PERFMON_MRA_SIGNALING_HOSTS", "") or "").split(",")
-  if (host or "").strip()
-]
-PERFMON_CALL_COUNTER_OBJECTS = [
-  (name or "").strip()
-  for name in (os.getenv("PERFMON_CALL_COUNTER_OBJECTS", "Cisco SIP Trunk,Cisco CallManager,Cisco Voice Mail Port") or "Cisco SIP Trunk,Cisco CallManager,Cisco Voice Mail Port").split(",")
-  if (name or "").strip()
-]
-CREDENTIAL_ENCRYPTION_KEY = (os.getenv("CUCM_CREDENTIAL_ENCRYPTION_KEY", "") or "").strip()
-if _FERNET_AVAILABLE and not CREDENTIAL_ENCRYPTION_KEY:
-  # Generate an in-memory key when env key is absent so caching is still encrypted.
-  CREDENTIAL_ENCRYPTION_KEY = Fernet.generate_key().decode("utf-8")
-_CREDENTIAL_CIPHER = None
-if _FERNET_AVAILABLE and CREDENTIAL_ENCRYPTION_KEY:
-  try:
-    _CREDENTIAL_CIPHER = Fernet(CREDENTIAL_ENCRYPTION_KEY.encode("utf-8"))
-  except Exception:
-    _CREDENTIAL_CIPHER = None
+def _sip_build_ladder_mermaid(criteria: dict) -> tuple[str, int, list[dict], list[dict]]:
+  participants, events = _sip_build_ladder_data(criteria)
 
+  participants_order = [item.get("label", "Peer") for item in participants]
+  participant_ids: dict[str, str] = {}
+  used_ids: set[str] = set()
 
-@app.on_event("startup")
+  for label in participants_order:
+    participant_ids[label] = _sip_mermaid_id(label, used_ids)
+
+  mermaid_lines = ["sequenceDiagram", "    autonumber"]
+  for label in participants_order:
+    pid = participant_ids[label]
+    display = label.replace('"', "'")
+    mermaid_lines.append(f'    participant {pid} as "{display}"')
+  for event in events:
+    from_label = event.get("from_label") or "Peer"
+    to_label = event.get("to_label") or "Peer"
+    label = event.get("label") or "SIP"
+    time_text = (event.get("time") or "").strip()
+    if time_text:
+      label = f"{time_text} {label}".strip()
+    mermaid_lines.append(f"    {participant_ids[from_label]}->>{participant_ids[to_label]}: {label}")
+
+  return "\n".join(mermaid_lines), len(events), participants, events
 def _startup_background_services():
   if _is_lab_runtime_host() and SIP_CALL_SEARCH_ENABLED and SIP_CALL_SEARCH_LAB_ONLY:
     _start_sip_call_search_listener()
