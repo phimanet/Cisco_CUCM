@@ -2609,6 +2609,14 @@ def _feature_enabled(flag_enabled: bool, lab_only: bool = False, cucm_host: str 
   return _is_lab_environment(cucm_host)
 
 
+def _sip_call_search_available(cucm_host: str = "") -> bool:
+  return _feature_enabled(
+    SIP_CALL_SEARCH_ENABLED,
+    lab_only=(SIP_CALL_SEARCH_LAB_ONLY and PREVIEW_FEATURES_LAB_ONLY_DEFAULT),
+    cucm_host=cucm_host,
+  ) and _is_lab_environment(cucm_host)
+
+
 def _build_lookup_error(service_name: str, reason: str, hint: str = "") -> str:
   safe_service = (service_name or "Lookup service").strip()
   safe_reason = (reason or "Lookup failed").strip()
@@ -10211,6 +10219,12 @@ def menu_page(request: Request):
           <span>Open bulk tools, strike workflows, exports, and translation lookups.</span>
         </a>
 """
+  sip_card_html = "" if not _sip_call_search_available(auth_cucm_host) else """
+        <a class=\"hero-link-card\" href=\"/sip-call-search\">
+          <strong>SIP Call Search</strong>
+          <span>LAB-only listener and search page for Cisco CUBE debug ccsip messages.</span>
+        </a>
+"""
   html = """
 <html>
   <head>
@@ -11042,10 +11056,7 @@ def menu_page(request: Request):
           <strong>Voice Dashboard</strong>
           <span>Live CUCM, Jabber registration, and Unity port telemetry.</span>
         </a>
-        <a class="hero-link-card" href="/sip-call-search">
-          <strong>SIP Call Search</strong>
-          <span>LAB-only listener and search page for Cisco CUBE debug ccsip messages.</span>
-        </a>
+__SIP_CALL_SEARCH_CARD__
 __ADMIN_CARD__
         <a class="hero-link-card" href="/audit-trail">
           <strong>Action History</strong>
@@ -14085,7 +14096,7 @@ __ADMIN_CARD__
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
+""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__SIP_CALL_SEARCH_CARD__", sip_card_html).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
 
   return HTMLResponse(
     content=html,
@@ -20118,15 +20129,10 @@ def sip_call_search_page(request: Request):
   if not session_username:
     return HTMLResponse(content="<h3>401 Unauthorized</h3><p>Please log in first.</p>", status_code=401)
 
-  sip_enabled = _feature_enabled(
-    SIP_CALL_SEARCH_ENABLED,
-    lab_only=(SIP_CALL_SEARCH_LAB_ONLY and PREVIEW_FEATURES_LAB_ONLY_DEFAULT),
-    cucm_host=auth_cucm_host,
-  )
-  if not sip_enabled or not _is_lab_environment(auth_cucm_host):
+  if not _sip_call_search_available(auth_cucm_host):
     return HTMLResponse(
-      content="<h3>403 Forbidden</h3><p>SIP Call Search is LAB-only and disabled in this environment.</p>",
-      status_code=403,
+      content="<h3>404 Not Found</h3><p>The requested page is not available in this environment.</p>",
+      status_code=404,
     )
 
   stats = _sip_capture_stats()
@@ -20361,13 +20367,8 @@ def sip_call_search_status(request: Request):
     return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
 
   auth_cucm_host = str(session.get("cucm_host", "") or "")
-  sip_enabled = _feature_enabled(
-    SIP_CALL_SEARCH_ENABLED,
-    lab_only=(SIP_CALL_SEARCH_LAB_ONLY and PREVIEW_FEATURES_LAB_ONLY_DEFAULT),
-    cucm_host=auth_cucm_host,
-  )
-  if not sip_enabled or not _is_lab_environment(auth_cucm_host):
-    return JSONResponse({"ok": False, "error": "SIP Call Search is LAB-only and disabled in this environment."}, status_code=403)
+  if not _sip_call_search_available(auth_cucm_host):
+    return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
 
   return JSONResponse({"ok": True, "stats": _sip_capture_stats()})
 
@@ -20379,13 +20380,8 @@ async def sip_call_search_search(request: Request):
     return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
 
   auth_cucm_host = str(session.get("cucm_host", "") or "")
-  sip_enabled = _feature_enabled(
-    SIP_CALL_SEARCH_ENABLED,
-    lab_only=(SIP_CALL_SEARCH_LAB_ONLY and PREVIEW_FEATURES_LAB_ONLY_DEFAULT),
-    cucm_host=auth_cucm_host,
-  )
-  if not sip_enabled or not _is_lab_environment(auth_cucm_host):
-    return JSONResponse({"ok": False, "error": "SIP Call Search is LAB-only and disabled in this environment."}, status_code=403)
+  if not _sip_call_search_available(auth_cucm_host):
+    return JSONResponse({"ok": False, "error": "Not found"}, status_code=404)
 
   try:
     body = await request.json()

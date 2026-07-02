@@ -61,7 +61,7 @@ Priority keys:
 - Drafted Ubuntu 24.04 HTTPS migration runbook for this project.
 - HTTPS migration target host confirmed: `lascrtmp01.ahs.int` (DNS already working).
 - Ubuntu server IP confirmed: `10.241.18.15`.
-- SIP Call Search LAB listener/page added in `main.py`; next step is LAB restart and CUBE syslog validation.
+- SIP Call Search is now LAB-only and hidden from PROD navigation; next step is LAB restart and CUBE syslog validation.
 
 ## Completed Tasks
 - [x] Created central project tracking structure in `CLAUDE.md`.
@@ -123,6 +123,7 @@ Priority keys:
 
 ### 2026-07-02
 - Added new LAB-only SIP Call Search page as a separate post-login route (`/sip-call-search`) with settings-controlled UDP listener on port 1024, raw file rotation, retention cleanup, and search filters for Call-ID, source cube, numbers, method, and response code.
+- Updated SIP Call Search exposure so PROD hides the link and endpoint returns not found, while LAB continues to show the page.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.
