@@ -20954,6 +20954,19 @@ def sip_call_search_page(request: Request):
           return text;
         }}
 
+        function formatCallId(value) {{
+          const text = String(value || '').trim();
+          if (!text) return '';
+          const parts = text.split('-');
+          if (parts.length >= 4) {{
+            return escapeHtml(parts.slice(0, 2).join('-')) + '<br>' + escapeHtml(parts.slice(2).join('-'));
+          }}
+          if (parts.length === 3) {{
+            return escapeHtml(parts.slice(0, 2).join('-')) + '<br>' + escapeHtml(parts[2]);
+          }}
+          return escapeHtml(text);
+        }}
+
         async function parseJsonResponse(response, fallbackMessage) {{
           const rawText = await response.text();
           let payload;
@@ -20993,7 +21006,7 @@ def sip_call_search_page(request: Request):
             html += '<tr style="background:' + bg + ';">'
               + '<td>' + escapeHtml(formatReceivedTimestamp(row.received_at || '')) + '</td>'
               + '<td><strong>' + escapeHtml(row.source_label || row.source_key || '') + '</strong><br><span class="muted">' + escapeHtml(row.source_ip || '') + '</span></td>'
-              + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.call_id || '') + '</td>'
+              + '<td style="font-family:Consolas,monospace;white-space:normal;line-height:1.25;">' + formatCallId(row.call_id || '') + '</td>'
               + '<td>' + escapeHtml(row.direction_detail || row.direction || '') + '</td>'
               + '<td>' + escapeHtml(row.method || '') + '</td>'
               + '<td>' + escapeHtml(row.response_code || '') + '</td>'
