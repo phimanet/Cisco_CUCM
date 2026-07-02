@@ -2082,9 +2082,32 @@ def _sip_infer_direction_from_text(raw_message: str) -> tuple[str, str]:
   if not text:
     return "", ""
 
-  # Ribbon fallback: use the line three rows above the SIP start line when available.
-  # Sample pattern:
-  # tlDataReceived:Received message on [10.241.18.217]:5060 from [10.241.18.12]:40007
+  recv_line_pattern = r"(?i)(?:tlDataReceived:)?Received message on\s+\[[^\]]+\](?::\d+)?\s+from\s+\[([^\]]+)\](?::(\d+))?"
+  incoming_line_pattern = r"(?i)Incoming message on\s+\[[^\]]+\](?::\d+)?\s+from\s+\[([^\]]+)\](?::(\d+))?"
+  send_line_pattern = r"(?i)sending\s+from\s+\[[^\]]+\](?::\d+)?\s+to\s+\[([^\]]+)\](?::(\d+))?"
+
+  def _endpoint(host: str, port: str) -> str:
+    host = (host or "").strip()
+    port = (port or "").strip()
+    return f"{host}:{port}" if host and port else host
+
+  def _match_direction_line(line_text: str) -> tuple[str, str]:
+    line = (line_text or "").strip()
+    if not line:
+      return "", ""
+    m = re.search(recv_line_pattern, line)
+    if m:
+      return "Received", _endpoint(m.group(1), m.group(2))
+    m = re.search(incoming_line_pattern, line)
+    if m:
+      return "Received", _endpoint(m.group(1), m.group(2))
+    m = re.search(send_line_pattern, line)
+    if m:
+      return "Sent", _endpoint(m.group(1), m.group(2))
+    return "", ""
+
+  # Ribbon fallback: inspect a proximity window around SIP method/status line.
+  # Operator-guided target window: up to 7 lines above and below SIP start.
   lines = _sip_message_lines(text)
   sip_idx = -1
   for idx, line in enumerate(lines):
@@ -2092,44 +2115,45 @@ def _sip_infer_direction_from_text(raw_message: str) -> tuple[str, str]:
     if re.search(r"(?i)^SIP/2\.0\s+\d{3}\b", candidate) or re.search(r"(?i)^(INVITE|REGISTER|BYE|ACK|CANCEL|OPTIONS|INFO|UPDATE|SUBSCRIBE|NOTIFY|REFER|PRACK|MESSAGE|PUBLISH)\s+sips?:", candidate):
       sip_idx = idx
       break
-  if sip_idx >= 3:
-    anchor_line = (lines[sip_idx - 3] or "").strip()
-    anchor_match = re.search(r"(?i)(?:tlDataReceived:)?Received message on\s+\[[^\]]+\](?::\d+)?\s+from\s+\[([^\]]+)\](?::(\d+))?", anchor_line)
-    if anchor_match:
-      host = (anchor_match.group(1) or "").strip()
-      port = (anchor_match.group(2) or "").strip()
-      endpoint = f"{host}:{port}" if host and port else host
-      return "Received", endpoint
-    anchor_match = re.search(r"(?i)sending\s+from\s+\[[^\]]+\](?::\d+)?\s+to\s+\[([^\]]+)\](?::(\d+))?", anchor_line)
-    if anchor_match:
-      host = (anchor_match.group(1) or "").strip()
-      port = (anchor_match.group(2) or "").strip()
-      endpoint = f"{host}:{port}" if host and port else host
-      return "Sent", endpoint
+  if sip_idx >= 0:
+    closest_direction = ""
+    closest_endpoint = ""
+    closest_distance = 99
+    for distance in range(1, 8):
+      above_idx = sip_idx - distance
+      if above_idx >= 0:
+        direction, endpoint = _match_direction_line(lines[above_idx])
+        if direction and distance < closest_distance:
+          closest_direction = direction
+          closest_endpoint = endpoint
+          closest_distance = distance
+      below_idx = sip_idx + distance
+      if below_idx < len(lines):
+        direction, endpoint = _match_direction_line(lines[below_idx])
+        if direction and distance < closest_distance:
+          closest_direction = direction
+          closest_endpoint = endpoint
+          closest_distance = distance
+    if closest_direction:
+      return closest_direction, closest_endpoint
 
   received_patterns = [
-    r"(?i)tlDataReceived:Received message on\s+\[[^\]]+\](?::\d+)?\s+from\s+\[([^\]]+)\](?::(\d+))?",
-    r"(?i)Incoming message on\s+\[[^\]]+\](?::\d+)?\s+from\s+\[([^\]]+)\](?::(\d+))?",
+    recv_line_pattern,
+    incoming_line_pattern,
   ]
   for pattern in received_patterns:
     m = re.search(pattern, text)
     if m:
-      host = (m.group(1) or "").strip()
-      port = (m.group(2) or "").strip()
-      endpoint = f"{host}:{port}" if host and port else host
-      return "Received", endpoint
+      return "Received", _endpoint(m.group(1), m.group(2))
 
   sent_patterns = [
-    r"(?i)sending\s+from\s+\[[^\]]+\](?::\d+)?\s+to\s+\[([^\]]+)\](?::(\d+))?",
+    send_line_pattern,
     r"(?i)TX\s+.*?\s+to\s+\[([^\]]+)\](?::(\d+))?",
   ]
   for pattern in sent_patterns:
     m = re.search(pattern, text)
     if m:
-      host = (m.group(1) or "").strip()
-      port = (m.group(2) or "").strip()
-      endpoint = f"{host}:{port}" if host and port else host
-      return "Sent", endpoint
+      return "Sent", _endpoint(m.group(1), m.group(2))
 
   return "", ""
 
