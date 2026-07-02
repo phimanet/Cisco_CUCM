@@ -164,6 +164,7 @@ Priority keys:
 - Cleared remaining bad-gateway startup corruption by removing stray ladder helper fragments accidentally pasted into the top constants section and `_git_commit_short()`, restoring successful Python compilation.
 - Removed an additional stray menu-template artifact (`+` line in Page 1 HTML) and restored the canonical structured ladder helper definitions to eliminate remaining runtime corruption.
 - Fixed post-reboot login 500 (`NameError: _CREDENTIAL_CIPHER`) by restoring safe credential-cipher initialization with plaintext fallback when `CUCM_WEB_CREDENTIAL_FERNET_KEY` is unset/invalid.
+- Updated SIP Call Search and ladder workflow to support dual correlation keys: Cisco-GUID (recommended primary) plus optional Call-ID search/filter compatibility.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.

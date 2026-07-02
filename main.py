@@ -2011,6 +2011,15 @@ def _sip_normalize_call_id(value: str) -> str:
   return text
 
 
+def _sip_normalize_cisco_guid(value: str) -> str:
+  text = (value or "").strip()
+  if not text:
+    return ""
+  # Support pasted wrapped values from table cells.
+  text = re.sub(r"\s+", "-", text)
+  return text
+
+
 def _sip_format_received_display(value: str) -> str:
   text = (value or "").strip()
   if not text:
@@ -2061,6 +2070,8 @@ def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_m
       break
   call_id = _sip_extract_first_match([r"(?im)^Call-ID:\s*(.+)$", r"(?im)Call-ID\s*[:=]\s*(.+)$"], message)
   call_id = _sip_normalize_call_id(call_id)
+  cisco_guid = _sip_extract_first_match([r"(?im)^Cisco-Guid:\s*(.+)$", r"(?im)Cisco-Guid\s*[:=]\s*(.+)$"], message)
+  cisco_guid = _sip_normalize_cisco_guid(cisco_guid)
   from_value = _sip_extract_first_match([r"(?im)^From:\s*(.+)$", r"(?im)From\s*[:=]\s*(.+)$"], message)
   to_value = _sip_extract_first_match([r"(?im)^To:\s*(.+)$", r"(?im)To\s*[:=]\s*(.+)$"], message)
   cseq_value = _sip_extract_first_match([r"(?im)^CSeq:\s*\d+\s+([A-Z]+)$", r"(?im)CSeq\s*[:=]\s*\d+\s+([A-Z]+)$"], message)
@@ -2083,6 +2094,7 @@ def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_m
     "source_name": source_meta.get("source_name", ""),
     "origin_id": source_meta.get("origin_id", ""),
     "call_id": call_id,
+    "cisco_guid": cisco_guid,
     "direction": direction,
     "direction_detail": direction_detail,
     "method": method,
@@ -2328,7 +2340,7 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   legacy_expand = str(criteria.get("legacy_expand") or "").strip().lower() in {"1", "true", "yes", "on"}
   has_filter = any(
     str(criteria.get(key) or "").strip()
-    for key in ("query", "call_id", "source_key", "method", "response_code", "from_digits", "to_digits", "start_ts", "end_ts")
+    for key in ("query", "cisco_guid", "call_id", "source_key", "method", "response_code", "from_digits", "to_digits", "start_ts", "end_ts")
   )
   # Hybrid mode:
   # - Deep mode (checkbox on): reconstruct many legacy rows.
@@ -2336,6 +2348,7 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   # - Broad/no-filter searches: skip reconstruction to stay fast.
   max_legacy_resolve = 250 if legacy_expand else (25 if has_filter else 0)
   query = (criteria.get("query") or "").strip().lower()
+  cisco_guid = _sip_normalize_cisco_guid(criteria.get("cisco_guid") or "").lower()
   call_id = _sip_normalize_call_id(criteria.get("call_id") or "").lower()
   source_key = (criteria.get("source_key") or "").strip().lower()
   method = (criteria.get("method") or "").strip().lower()
@@ -2399,6 +2412,8 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
             continue
           if source_key and (record.get("source_key") or "").strip().lower() != source_key:
             continue
+          if cisco_guid and cisco_guid not in _sip_normalize_cisco_guid(record.get("cisco_guid") or "").lower():
+            continue
           if call_id and call_id not in _sip_normalize_call_id(record.get("call_id") or "").lower():
             continue
           if method and method not in (record.get("method") or "").strip().lower():
@@ -2413,6 +2428,7 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
             haystack = " ".join([
               record.get("raw_line", ""),
               record.get("raw_message", ""),
+              record.get("cisco_guid", ""),
               record.get("call_id", ""),
               record.get("direction", ""),
               record.get("direction_detail", ""),
@@ -2452,6 +2468,7 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
                 "origin_id": record.get("origin_id", ""),
               }
               enriched = _sip_parse_record(record.get("raw_message", ""), parse_ts, source_meta)
+              record["cisco_guid"] = enriched.get("cisco_guid", record.get("cisco_guid", ""))
               record["call_id"] = enriched.get("call_id", record.get("call_id", ""))
               record["direction"] = enriched.get("direction", record.get("direction", ""))
               record["direction_detail"] = enriched.get("direction_detail", record.get("direction_detail", ""))
@@ -2878,18 +2895,23 @@ def _sip_timestamp_time_only(received_at: str) -> str:
 
 
 def _sip_build_ladder_data(criteria: dict) -> tuple[list[dict], list[dict]]:
+  raw_cisco_guid = (criteria.get("cisco_guid") or "").strip()
   raw_call_id = (criteria.get("call_id") or "").strip()
-  if not raw_call_id:
-    raise ValueError("Call-ID is required to build SIP ladder")
+  if not raw_cisco_guid and not raw_call_id:
+    raise ValueError("Cisco-GUID or Call-ID is required to build SIP ladder")
 
+  normalized_cisco_guid = _sip_normalize_cisco_guid(raw_cisco_guid).lower()
   normalized_call_id = _sip_normalize_call_id(raw_call_id).lower()
   ladder_criteria = dict(criteria or {})
   ladder_criteria["limit"] = 500
-  # For ladder generation, prefer richer legacy reconstruction for selected Call-ID traces.
+  # For ladder generation, prefer richer legacy reconstruction for selected trace keys.
   ladder_criteria["legacy_expand"] = "1"
   records = _sip_capture_records_for_search(ladder_criteria)
   filtered = []
   for record in records:
+    record_cisco_guid = _sip_normalize_cisco_guid(record.get("cisco_guid") or "").lower()
+    if normalized_cisco_guid and normalized_cisco_guid not in record_cisco_guid:
+      continue
     record_call_id = _sip_normalize_call_id(record.get("call_id") or "").lower()
     if normalized_call_id and normalized_call_id not in record_call_id:
       continue
@@ -2897,6 +2919,10 @@ def _sip_build_ladder_data(criteria: dict) -> tuple[list[dict], list[dict]]:
 
   filtered.sort(key=lambda item: (item.get("received_at") or ""))
   if not filtered:
+    if normalized_cisco_guid and normalized_call_id:
+      raise ValueError("No records found for that Cisco-GUID and Call-ID")
+    if normalized_cisco_guid:
+      raise ValueError("No records found for that Cisco-GUID")
     raise ValueError("No records found for that Call-ID")
 
   participants_order: list[str] = []
@@ -20898,7 +20924,8 @@ def sip_call_search_page(request: Request):
         <form id="sip-search-form">
           <div class="search-grid">
             <select name="source_key"><option value="">All Sources</option><option value="las-voip-rtr">Las Vegas CUBE</option><option value="RNOVOIPRT01">Reno CUBE</option></select>
-            <input name="call_id" placeholder="Call-ID">
+            <input name="cisco_guid" placeholder="Cisco-GUID (recommended)">
+            <input name="call_id" placeholder="Call-ID (optional)">
             <input name="method" placeholder="Method (INVITE, BYE, etc.)">
             <input name="response_code" placeholder="Response Code (200, 404, etc.)">
             <input name="from_digits" placeholder="From Digits">
@@ -20914,13 +20941,13 @@ def sip_call_search_page(request: Request):
           </div>
           <div class="actions">
             <button type="submit">Search SIP Records</button>
-            <button type="button" id="sip-build-ladder-btn" style="background:linear-gradient(180deg,#2f6c48,#1f5336);">Build SIP Ladder (Call-ID)</button>
+            <button type="button" id="sip-build-ladder-btn" style="background:linear-gradient(180deg,#2f6c48,#1f5336);">Build SIP Ladder (Cisco-GUID / Call-ID)</button>
             <button type="button" id="sip-refresh-status-btn" style="background:linear-gradient(180deg,#516d8d,#355978);">Refresh Status</button>
           </div>
         </form>
         <p class="muted" id="sip-search-status" style="min-height:18px;">Ready. Normal filtered searches auto-reconstruct a small set of legacy rows; enable Deep Legacy Parse for broader legacy reconstruction.</p>
         <div id="sip-search-results" style="overflow-x:auto;"></div>
-        <p class="muted" id="sip-ladder-status" style="min-height:18px;margin-top:10px;">Call-ID ladder diagram is generated on demand.</p>
+        <p class="muted" id="sip-ladder-status" style="min-height:18px;margin-top:10px;">Cisco-GUID ladder diagram is generated on demand (Call-ID supported for compatibility).</p>
         <div id="sip-ladder-output" style="overflow-x:auto;"></div>
       </section>
 
@@ -20984,6 +21011,19 @@ def sip_call_search_page(request: Request):
           const m = cleaned.match(/^(\d{4}-\d{2}-\d{2})[T\s](\d{2}:\d{2}:\d{2}(?:\.\d+)?)/);
           if (m) return m[1] + ' ' + m[2];
           return cleaned.replace('T', ' ');
+        }}
+
+        function formatCiscoGuid(value) {{
+          const text = String(value || '').trim();
+          if (!text) return '';
+          const parts = text.split('-');
+          if (parts.length >= 4) {{
+            return escapeHtml(parts.slice(0, 2).join('-')) + '<br>' + escapeHtml(parts.slice(2).join('-'));
+          }}
+          if (parts.length === 3) {{
+            return escapeHtml(parts.slice(0, 2).join('-')) + '<br>' + escapeHtml(parts[2]);
+          }}
+          return escapeHtml(text);
         }}
 
         function formatCallId(value) {{
@@ -21070,6 +21110,7 @@ def sip_call_search_page(request: Request):
           let html = '<table class="sip-results-table"><colgroup>'
             + '<col style="width:180px">'
             + '<col style="width:110px">'
+            + '<col style="width:170px">'
             + '<col style="width:150px">'
             + '<col style="width:140px">'
             + '<col style="width:65px">'
@@ -21078,7 +21119,7 @@ def sip_call_search_page(request: Request):
             + '<col style="width:88px">'
             + '<col>'
             + '<col style="width:150px">'
-            + '</colgroup><thead><tr><th>Received</th><th>Source</th><th>Call-ID</th><th>Direction</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Raw</th><th>Capture File</th></tr></thead><tbody>';
+            + '</colgroup><thead><tr><th>Received</th><th>Source</th><th>Cisco-GUID</th><th>Call-ID</th><th>Direction</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Raw</th><th>Capture File</th></tr></thead><tbody>';
           rows.forEach(function (row, idx) {{
             const bg = idx % 2 === 0 ? '#f7fbff' : '#ffffff';
             const captureFile = (row.raw_file_rel || row.index_file_rel || '').toString();
@@ -21090,6 +21131,7 @@ def sip_call_search_page(request: Request):
             html += '<tr style="background:' + bg + ';">'
               + '<td class="nowrap">' + escapeHtml(row.received_at_display || formatReceivedTimestamp(row.received_at || '')) + '</td>'
               + '<td><strong>' + escapeHtml(row.source_label || row.source_key || '') + '</strong><br><span class="muted">' + escapeHtml(row.source_ip || '') + '</span></td>'
+              + '<td style="font-family:Consolas,monospace;white-space:normal;line-height:1.25;">' + formatCiscoGuid(row.cisco_guid || '') + '</td>'
               + '<td style="font-family:Consolas,monospace;white-space:normal;line-height:1.25;">' + formatCallId(row.call_id || '') + '</td>'
               + '<td style="white-space:normal;line-height:1.2;">' + formatDirection(row.direction_detail || row.direction || '') + '</td>'
               + '<td class="nowrap">' + escapeHtml(row.method || '') + '</td>'
@@ -21258,8 +21300,10 @@ def sip_call_search_page(request: Request):
           const fd = new FormData(form);
           const body = {{}};
           fd.forEach(function (value, key) {{ body[key] = String(value || '').trim(); }});
-          if (!String(body.call_id || '').trim()) {{
-            ladderStatusEl.textContent = 'Build SIP Ladder requires Call-ID.';
+          const hasCiscoGuid = String(body.cisco_guid || '').trim().length > 0;
+          const hasCallId = String(body.call_id || '').trim().length > 0;
+          if (!hasCiscoGuid && !hasCallId) {{
+            ladderStatusEl.textContent = 'Build SIP Ladder requires Cisco-GUID or Call-ID.';
             renderLadder(null);
             return;
           }}
