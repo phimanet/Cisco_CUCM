@@ -2665,6 +2665,10 @@ def _sip_strip_debug_prefix(line: str) -> str:
   match = re.match(r"^<\d+>\d+:\s+[^:]+:\s?(.*)$", text)
   if match:
     return (match.group(1) or "").rstrip()
+  # Ribbon SWe format: <134>[timestamp] 3358 0001 MSGID:... / or component log line.
+  match = re.match(r"^<\d+>\[[^\]]+\]\s+\d+\s+[0-9a-fA-F]{4}\s+(.*)$", text)
+  if match:
+    return (match.group(1) or "").rstrip()
   return text.rstrip()
 
 
@@ -2672,6 +2676,10 @@ def _sip_debug_prefix_parts(line: str) -> tuple[str, str, str]:
   text = (line or "").rstrip("\r\n")
   match = re.match(r"^<\d+>(\d+):\s+([^:]+):\s?(.*)$", text)
   if not match:
+    # Ribbon SWe format: <134>[timestamp] 3358 0001 <payload>
+    ribbon = re.match(r"^<\d+>\[[^\]]+\]\s+(\d+)\s+([0-9a-fA-F]{4})\s+(.*)$", text)
+    if ribbon:
+      return (ribbon.group(1) or "").strip(), "ribbon", (ribbon.group(3) or "").rstrip()
     return "", "", text.rstrip()
   return (match.group(1) or "").strip(), (match.group(2) or "").strip(), (match.group(3) or "").rstrip()
 
@@ -2726,6 +2734,45 @@ def _sip_resolve_legacy_message(
         break
     if match_index < 0:
       continue
+
+    # Ribbon SWe logs wrap SIP payloads as MSGID blocks where SIP lines follow
+    # until the next prefixed syslog entry.
+    msgid_anchor = -1
+    if re.search(r"\bMSGID:\d+\b", lines[match_index]):
+      msgid_anchor = match_index
+    else:
+      back = match_index
+      while back >= 0 and (match_index - back) <= 30:
+        probe = lines[back]
+        if re.search(r"\bMSGID:\d+\b", probe):
+          msgid_anchor = back
+          break
+        if re.match(r"^<\d+>\[[^\]]+\]", probe) and back != match_index:
+          break
+        back -= 1
+
+    if msgid_anchor >= 0:
+      start = msgid_anchor
+      end = start + 1
+      while end < len(lines):
+        next_line = (lines[end] or "").strip()
+        if re.match(r"^<\d+>\[[^\]]+\]", next_line):
+          break
+        end += 1
+
+      payload_lines = [_sip_strip_debug_prefix(lines[idx]) for idx in range(start, min(end, len(lines)))]
+      sip_start = -1
+      for idx, payload in enumerate(payload_lines):
+        text = (payload or "").strip()
+        if re.search(r"(?i)^SIP/2\.0\s+\d{3}\b", text) or re.search(r"(?i)^(INVITE|REGISTER|BYE|ACK|CANCEL|OPTIONS|INFO|UPDATE|SUBSCRIBE|NOTIFY|REFER|PRACK|MESSAGE|PUBLISH)\s+sips?:", text):
+          sip_start = idx
+          break
+
+      if sip_start >= 0:
+        message = "\n".join(payload_lines[sip_start:]).strip()
+        rel_path = _sip_rel_path(file_path)
+        block_id = f"{rel_path}:msgid:{start}"
+        return {"raw_file_rel": rel_path, "raw_message": message, "block_id": block_id}
 
     match_msg_id, match_host, _ = _sip_debug_prefix_parts(lines[match_index])
 
