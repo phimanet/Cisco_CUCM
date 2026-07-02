@@ -2077,6 +2077,38 @@ def _sip_extract_first_match(patterns: list[str], text: str) -> str:
   return ""
 
 
+def _sip_infer_direction_from_text(raw_message: str) -> tuple[str, str]:
+  text = (raw_message or "")
+  if not text:
+    return "", ""
+
+  received_patterns = [
+    r"(?i)tlDataReceived:Received message on\s+\[[^\]]+\](?::\d+)?\s+from\s+\[([^\]]+)\](?::(\d+))?",
+    r"(?i)Incoming message on\s+\[[^\]]+\](?::\d+)?\s+from\s+\[([^\]]+)\](?::(\d+))?",
+  ]
+  for pattern in received_patterns:
+    m = re.search(pattern, text)
+    if m:
+      host = (m.group(1) or "").strip()
+      port = (m.group(2) or "").strip()
+      endpoint = f"{host}:{port}" if host and port else host
+      return "Received", endpoint
+
+  sent_patterns = [
+    r"(?i)sending\s+from\s+\[[^\]]+\](?::\d+)?\s+to\s+\[([^\]]+)\](?::(\d+))?",
+    r"(?i)TX\s+.*?\s+to\s+\[([^\]]+)\](?::(\d+))?",
+  ]
+  for pattern in sent_patterns:
+    m = re.search(pattern, text)
+    if m:
+      host = (m.group(1) or "").strip()
+      port = (m.group(2) or "").strip()
+      endpoint = f"{host}:{port}" if host and port else host
+      return "Sent", endpoint
+
+  return "", ""
+
+
 def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_meta: dict) -> dict:
   message = (raw_message or "").strip()
   message_lines = _sip_message_lines(message)
@@ -2101,7 +2133,11 @@ def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_m
   if not method and cseq_value:
     method = cseq_value
   direction = _sip_message_direction(message_lines)
-  direction_detail = _sip_direction_label(direction, _sip_extract_via_endpoint(message_lines))
+  inferred_endpoint = ""
+  if not direction:
+    direction, inferred_endpoint = _sip_infer_direction_from_text(message)
+  via_endpoint = _sip_extract_via_endpoint(message_lines)
+  direction_detail = _sip_direction_label(direction, inferred_endpoint or via_endpoint)
 
   return {
     "received_at": received_at.astimezone().isoformat(),
