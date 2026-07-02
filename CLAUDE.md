@@ -159,6 +159,7 @@ Priority keys:
 - Fixed SIP page bad-gateway regression: corrected JavaScript function brace escaping inside Python f-string template so app startup no longer fails.
 - Hardened Received timestamp display normalization so timezone suffixes like `-07:00`/`Z` are trimmed reliably across parse/fallback paths.
 - Added server-side `received_at_display` formatting (timezone removed) and wired SIP results table to use it first, eliminating client-side timezone suffix drift.
+- Added structured SIP ladder payload (participants + events) and replaced the Mermaid-only preview with an inline SVG ladder diagram while retaining Mermaid source as an expandable fallback.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.

@@ -2888,7 +2888,7 @@ def _sip_timestamp_time_only(received_at: str) -> str:
   return text
 
 
-def _sip_build_ladder_mermaid(criteria: dict) -> tuple[str, int]:
+def _sip_build_ladder_data(criteria: dict) -> tuple[list[dict], list[dict]]:
   raw_call_id = (criteria.get("call_id") or "").strip()
   if not raw_call_id:
     raise ValueError("Call-ID is required to build SIP ladder")
@@ -2911,16 +2911,15 @@ def _sip_build_ladder_mermaid(criteria: dict) -> tuple[str, int]:
     raise ValueError("No records found for that Call-ID")
 
   participants_order: list[str] = []
-  participant_ids: dict[str, str] = {}
-  used_ids: set[str] = set()
-  events = []
+  participant_indexes: dict[str, int] = {}
+  events: list[dict] = []
 
-  def ensure_participant(name: str) -> str:
+  def ensure_participant(name: str) -> int:
     label = (name or "Peer").strip() or "Peer"
-    if label not in participant_ids:
-      participant_ids[label] = _sip_mermaid_id(label, used_ids)
+    if label not in participant_indexes:
+      participant_indexes[label] = len(participants_order)
       participants_order.append(label)
-    return participant_ids[label]
+    return participant_indexes[label]
 
   for record in filtered:
     local_label = (record.get("source_label") or record.get("source_key") or "Source").strip()
@@ -3251,17 +3250,29 @@ def _git_commit_short() -> str:
         text=True,
         stderr=subprocess.DEVNULL,
       ).strip()
-      if commit:
-        return commit
+            local_index = ensure_participant(local_label)
+            remote_index = ensure_participant(remote_label)
     except Exception:
-      continue
+            from_index, to_index = (local_index, remote_index)
+            from_label, to_label = (local_label, remote_label)
 
-  # Fallback when git is unavailable in PATH for service context.
+              from_index, to_index = remote_index, local_index
+              from_label, to_label = remote_label, local_label
   try:
     head_path = os.path.join(repo_dir, ".git", "HEAD")
     with open(head_path, "r", encoding="utf-8") as handle:
       head_value = (handle.read() or "").strip()
-
+              response_reason = {
+                "100": "Trying",
+                "180": "Ringing",
+                "181": "Call Is Being Forwarded",
+                "182": "Queued",
+                "183": "Session Progress",
+                "200": "OK",
+                "486": "Busy Here",
+                "487": "Request Terminated",
+              }.get(response, "")
+              event_label = f"{response} {response_reason}".strip()
     if head_value.startswith("ref:"):
       ref_rel = head_value.split(" ", 1)[-1].strip()
       ref_path = os.path.join(repo_dir, ".git", ref_rel.replace("/", os.sep))
@@ -3269,17 +3280,44 @@ def _git_commit_short() -> str:
         full_hash = (ref_handle.read() or "").strip()
       if full_hash:
         return full_hash[:7]
+            events.append(
+              {
+                "from_index": from_index,
+                "to_index": to_index,
+                "from_label": from_label,
+                "to_label": to_label,
+                "label": event_label.replace('"', "'"),
+                "time": time_text,
+                "direction": direction,
+              }
+            )
 
-    if head_value:
-      return head_value[:7]
-  except Exception:
+          participants = [{"label": label, "index": idx} for idx, label in enumerate(participants_order)]
+          return participants, events
+
+
+        def _sip_build_ladder_mermaid(criteria: dict) -> tuple[str, int, list[dict], list[dict]]:
+          participants, events = _sip_build_ladder_data(criteria)
+
+          participants_order = [item.get("label", "Peer") for item in participants]
+          participant_ids: dict[str, str] = {}
+          used_ids: set[str] = set()
+
+          for label in participants_order:
+            participant_ids[label] = _sip_mermaid_id(label, used_ids)
     pass
 
-  try:
-    return subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=repo_dir, text=True).strip()
-  except Exception:
-    return "unknown"
-
+          for label in participants_order:
+            lines.append(f"    participant {participant_ids[label]} as {label.replace(chr(34), chr(39))}")
+          for event in events:
+            from_label = event.get("from_label") or "Peer"
+            to_label = event.get("to_label") or "Peer"
+            event_label = event.get("label") or "SIP"
+            time_text = (event.get("time") or "").strip()
+            if time_text:
+              event_label = f"{time_text} {event_label}".strip()
+            lines.append(f"    {participant_ids[from_label]}->>{participant_ids[to_label]}: {event_label}")
+          return "\n".join(lines), len(events), participants, events
 
 def _parse_certificate_not_after(value: str):
   text = (value or "").strip()
@@ -21115,14 +21153,83 @@ def sip_call_search_page(request: Request):
           filesListEl.innerHTML = html;
         }}
 
-        function renderLadder(mermaidText) {{
+        function renderLadder(payload) {{
           if (!ladderOutputEl) return;
-          const text = String(mermaidText || '').trim();
-          if (!text) {{
-            ladderOutputEl.innerHTML = '';
+          const participants = (payload && payload.participants) || [];
+          const events = (payload && payload.events) || [];
+          const mermaidText = String((payload && payload.mermaid) || '').trim();
+          if (!participants.length || !events.length) {{
+            if (!mermaidText) {{
+              ladderOutputEl.innerHTML = '';
+              return;
+            }}
+          }}
+          if (!participants.length || !events.length) {{
+            ladderOutputEl.innerHTML = '<div class="panel" style="margin-top:10px;"><h3 style="margin:0 0 8px 0;color:#002f6c;">SIP Ladder (Mermaid)</h3><pre style="margin:0;font-family:Consolas,monospace;white-space:pre;overflow:auto;max-height:520px;">' + escapeHtml(mermaidText) + '</pre></div>';
             return;
           }}
-          ladderOutputEl.innerHTML = '<div class="panel" style="margin-top:10px;"><h3 style="margin:0 0 8px 0;color:#002f6c;">SIP Ladder (Mermaid)</h3><pre style="margin:0;font-family:Consolas,monospace;white-space:pre;overflow:auto;max-height:520px;">' + escapeHtml(text) + '</pre></div>';
+
+          const topPad = 64;
+          const bottomPad = 36;
+          const leftPad = 56;
+          const rightPad = 56;
+          const rowHeight = 46;
+          const width = Math.max(760, leftPad + rightPad + ((participants.length - 1) * 220) + 60);
+          const height = topPad + bottomPad + (events.length * rowHeight);
+          const availableWidth = width - leftPad - rightPad;
+          const xStep = participants.length > 1 ? (availableWidth / (participants.length - 1)) : 0;
+          const lifelineBottom = height - bottomPad;
+          const markerId = 'sip-arrowhead';
+
+          function svgEscape(value) {{
+            return String(value || '')
+              .replace(/&/g, '&amp;')
+              .replace(/</g, '&lt;')
+              .replace(/>/g, '&gt;')
+              .replace(/"/g, '&quot;')
+              .replace(/'/g, '&apos;');
+          }}
+
+          const participantX = participants.map(function (_item, idx) {{
+            return leftPad + (idx * xStep);
+          }});
+
+          let svg = '';
+          svg += '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '" viewBox="0 0 ' + width + ' ' + height + '" role="img" aria-label="SIP ladder diagram">';
+          svg += '<defs><marker id="' + markerId + '" markerWidth="10" markerHeight="8" refX="9" refY="4" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,4 L0,8 z" fill="#0b4f9c"></path></marker></defs>';
+          svg += '<rect x="0" y="0" width="' + width + '" height="' + height + '" rx="14" ry="14" fill="#ffffff" stroke="#c8dbee"/>';
+
+          participants.forEach(function (participant, idx) {{
+            const x = participantX[idx];
+            svg += '<text x="' + x + '" y="26" text-anchor="middle" font-family="Segoe UI, Tahoma, Arial, sans-serif" font-size="16" font-weight="700" fill="#002f6c">' + svgEscape(participant.label || ('Peer ' + (idx + 1))) + '</text>';
+            svg += '<line x1="' + x + '" y1="42" x2="' + x + '" y2="' + lifelineBottom + '" stroke="#8aa7c4" stroke-width="1.5" stroke-dasharray="6 6"/>';
+          }});
+
+          events.forEach(function (event, idx) {{
+            const fromIndex = Number(event.from_index || 0);
+            const toIndex = Number(event.to_index || 0);
+            const x1 = participantX[fromIndex] || leftPad;
+            const x2 = participantX[toIndex] || leftPad;
+            const y = topPad + (idx * rowHeight);
+            const label = String(event.label || 'SIP');
+            const timeText = String(event.time || '').trim();
+            const midX = (x1 + x2) / 2;
+            svg += '<line x1="' + x1 + '" y1="' + y + '" x2="' + x2 + '" y2="' + y + '" stroke="#0b4f9c" stroke-width="2" marker-end="url(#' + markerId + ')"/>';
+            svg += '<text x="' + midX + '" y="' + (y - 10) + '" text-anchor="middle" font-family="Segoe UI, Tahoma, Arial, sans-serif" font-size="15" font-weight="700" fill="#143a63">' + svgEscape(label) + '</text>';
+            if (timeText) {{
+              svg += '<text x="' + midX + '" y="' + (y + 15) + '" text-anchor="middle" font-family="Segoe UI, Tahoma, Arial, sans-serif" font-size="11" fill="#5b7894">' + svgEscape(timeText) + '</text>';
+            }}
+          }});
+
+          svg += '</svg>';
+          let html = '<div class="panel" style="margin-top:10px;">';
+          html += '<h3 style="margin:0 0 10px 0;color:#002f6c;">SIP Ladder</h3>';
+          html += '<div style="overflow:auto;">' + svg + '</div>';
+          if (mermaidText) {{
+            html += '<details style="margin-top:10px;"><summary style="font-weight:700;color:#005eb8;cursor:pointer;">Show Mermaid source</summary><pre style="margin:8px 0 0 0;font-family:Consolas,monospace;white-space:pre;overflow:auto;max-height:320px;">' + escapeHtml(mermaidText) + '</pre></details>';
+          }}
+          html += '</div>';
+          ladderOutputEl.innerHTML = html;
         }}
 
         async function refreshStatus() {{
@@ -21179,11 +21286,11 @@ def sip_call_search_page(request: Request):
           fd.forEach(function (value, key) {{ body[key] = String(value || '').trim(); }});
           if (!String(body.call_id || '').trim()) {{
             ladderStatusEl.textContent = 'Build SIP Ladder requires Call-ID.';
-            renderLadder('');
+            renderLadder(null);
             return;
           }}
           ladderStatusEl.textContent = 'Building SIP ladder...';
-          renderLadder('');
+          renderLadder(null);
           try {{
             const response = await fetch('/sip-call-search/ladder', {{
               method: 'POST',
@@ -21193,7 +21300,7 @@ def sip_call_search_page(request: Request):
             }});
             const payload = await parseJsonResponse(response, 'Ladder build failed');
             ladderStatusEl.textContent = 'Built ladder with ' + (payload.event_count || 0) + ' event(s).';
-            renderLadder(payload.mermaid || '');
+            renderLadder(payload);
           }} catch (err) {{
             ladderStatusEl.textContent = 'Ladder build failed: ' + ((err && err.message) || 'Unknown error.');
           }}
@@ -21274,8 +21381,8 @@ async def sip_call_search_ladder(request: Request):
     body = {}
 
   try:
-    mermaid, event_count = _sip_build_ladder_mermaid(body)
-    return JSONResponse({"ok": True, "event_count": event_count, "mermaid": mermaid})
+    mermaid, event_count, participants, events = _sip_build_ladder_mermaid(body)
+    return JSONResponse({"ok": True, "event_count": event_count, "mermaid": mermaid, "participants": participants, "events": events})
   except ValueError as exc:
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
   except Exception as exc:
