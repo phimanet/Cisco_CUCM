@@ -2851,9 +2851,9 @@ def _sip_resolve_legacy_message(
           break
 
       if sip_start >= 0:
-        # Include at least 3 lines above SIP start in Show/Raw output,
+        # Include at least 7 lines above SIP start in Show/Raw output,
         # then extend farther up when a Ribbon direction metadata line exists.
-        preamble_start = max(0, sip_start - 3)
+        preamble_start = max(0, sip_start - 7)
         for pre_idx in range(max(0, sip_start - 8), sip_start):
           pre_line = (payload_lines[pre_idx] or "").strip()
           if re.search(r"(?i)(tlDataReceived:Received message on|Incoming message on|sending\s+from)", pre_line):
