@@ -175,6 +175,7 @@ Priority keys:
 - Improved legacy SIP reconstruction for Reno-style syslog lines: when `Received:`/`Sent:` markers are absent, parser now groups MSGID-anchored Ribbon blocks and extracts SIP payload lines until next prefixed syslog entry.
 - Direction parsing now uses pattern-based Ribbon metadata rules (for example `Received message ... from [...]` and `sending from ... to [...]`) so Sent/Received extraction does not depend on fixed line offsets.
 - Refined Ribbon direction parsing to preserve metadata preamble lines during MSGID reconstruction and apply a deterministic fallback from the line three rows above SIP Method (for example `tlDataReceived:Received message ... from [IP]`) so Direction reliably renders `Received from IP` / `Sent to IP`.
+- Updated SIP Show/Raw reconstruction for MSGID blocks to always include at least the three lines above the SIP start line (plus earlier detected Ribbon metadata lines), so operators can see preamble context directly in the results window.
 - Fixed SIP listener auto-start on app boot by wiring startup background services into FastAPI startup event so UDP 1024 binding survives service restarts.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
