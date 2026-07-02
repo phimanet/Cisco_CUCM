@@ -2359,6 +2359,8 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   query = (criteria.get("query") or "").strip().lower()
   cisco_guid = _sip_normalize_cisco_guid(criteria.get("cisco_guid") or "").lower()
   call_id = _sip_normalize_call_id(criteria.get("call_id") or "").lower()
+  need_cisco_guid = bool(cisco_guid)
+  need_call_id = bool(call_id)
   source_key = (criteria.get("source_key") or "").strip().lower()
   method = (criteria.get("method") or "").strip().lower()
   response_code = (criteria.get("response_code") or "").strip().lower()
@@ -2409,12 +2411,12 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
             continue
 
           # Legacy indexed rows may not contain cisco_guid/call_id fields yet.
-          # Derive them from SIP payload before applying filters.
-          if not (record.get("cisco_guid") or "").strip():
+          # Derive only when a corresponding filter is actually in use.
+          if need_cisco_guid and not (record.get("cisco_guid") or "").strip():
             raw_for_guid = (record.get("raw_message") or record.get("raw_line") or "")
             parsed_guid = _sip_extract_first_match([r"(?im)^Cisco-Guid:\s*(.+)$", r"(?im)Cisco-Guid\s*[:=]\s*(.+)$"], raw_for_guid)
             record["cisco_guid"] = _sip_normalize_cisco_guid(parsed_guid)
-          if not (record.get("call_id") or "").strip():
+          if need_call_id and not (record.get("call_id") or "").strip():
             raw_for_call_id = (record.get("raw_message") or record.get("raw_line") or "")
             parsed_call_id = _sip_extract_first_match([r"(?im)^Call-ID:\s*(.+)$", r"(?im)Call-ID\s*[:=]\s*(.+)$"], raw_for_call_id)
             record["call_id"] = _sip_normalize_call_id(parsed_call_id)
