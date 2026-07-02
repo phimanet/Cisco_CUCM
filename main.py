@@ -2874,7 +2874,7 @@ def _sip_build_ladder_data(criteria: dict) -> tuple[list[dict], list[dict]]:
   normalized_call_id = _sip_normalize_call_id(raw_call_id).lower()
   ladder_criteria = dict(criteria or {})
   ladder_criteria["limit"] = 500
-  # For ladder generation, prefer richer legacy reconstruction for selected call-id traces.
+  # For ladder generation, prefer richer legacy reconstruction for selected Call-ID traces.
   ladder_criteria["legacy_expand"] = "1"
   records = _sip_capture_records_for_search(ladder_criteria)
   filtered = []
@@ -2908,7 +2908,6 @@ def _sip_build_ladder_data(criteria: dict) -> tuple[list[dict], list[dict]]:
     via_host = _sip_extract_via_host(lines)
     req_host = _sip_extract_request_uri_host(start_line)
 
-    remote_host = ""
     if direction == "Sent":
       remote_host = req_host or via_host
     elif direction == "Received":
@@ -2918,38 +2917,75 @@ def _sip_build_ladder_data(criteria: dict) -> tuple[list[dict], list[dict]]:
 
     remote_label = _sip_peer_label(remote_host)
 
-    local_id = ensure_participant(local_label)
-    remote_id = ensure_participant(remote_label)
+    local_index = ensure_participant(local_label)
+    remote_index = ensure_participant(remote_label)
 
-    from_id, to_id = (local_id, remote_id)
+    from_index, to_index = (local_index, remote_index)
+    from_label, to_label = (local_label, remote_label)
     if direction == "Received":
-      from_id, to_id = remote_id, local_id
+      from_index, to_index = remote_index, local_index
+      from_label, to_label = remote_label, local_label
 
     method = (record.get("method") or "").strip().upper()
     response = (record.get("response_code") or "").strip()
     if response:
-      event_label = f"SIP {response}"
+      response_reason = {
+        "100": "Trying",
+        "180": "Ringing",
+        "181": "Call Is Being Forwarded",
+        "182": "Queued",
+        "183": "Session Progress",
+        "200": "OK",
+        "486": "Busy Here",
+        "487": "Request Terminated",
+      }.get(response, "")
+      event_label = f"{response} {response_reason}".strip()
     elif method:
       event_label = method
     else:
       event_label = (start_line or "SIP message").strip()
       event_label = event_label[:80]
 
-    time_text = _sip_timestamp_time_only(record.get("received_at") or "")
-    if time_text:
-      event_label = f"{time_text} {event_label}".strip()
+    events.append(
+      {
+        "from_index": from_index,
+        "to_index": to_index,
+        "from_label": from_label,
+        "to_label": to_label,
+        "label": event_label.replace('"', "'"),
+        "time": _sip_timestamp_time_only(record.get("received_at") or ""),
+        "direction": direction,
+      }
+    )
 
-    events.append((from_id, to_id, event_label.replace('"', "'")))
+  participants = [{"label": label, "index": idx} for idx, label in enumerate(participants_order)]
+  return participants, events
+
+
+def _sip_build_ladder_mermaid(criteria: dict) -> tuple[str, int, list[dict], list[dict]]:
+  participants, events = _sip_build_ladder_data(criteria)
+
+  participants_order = [item.get("label", "Peer") for item in participants]
+  participant_ids: dict[str, str] = {}
+  used_ids: set[str] = set()
+  for label in participants_order:
+    participant_ids[label] = _sip_mermaid_id(label, used_ids)
 
   mermaid_lines = ["sequenceDiagram", "    autonumber"]
   for label in participants_order:
     pid = participant_ids[label]
     display = label.replace('"', "'")
     mermaid_lines.append(f'    participant {pid} as "{display}"')
-  for from_id, to_id, label in events:
-    mermaid_lines.append(f"    {from_id}->>{to_id}: {label}")
+  for event in events:
+    from_label = event.get("from_label") or "Peer"
+    to_label = event.get("to_label") or "Peer"
+    label = event.get("label") or "SIP"
+    time_text = (event.get("time") or "").strip()
+    if time_text:
+      label = f"{time_text} {label}".strip()
+    mermaid_lines.append(f"    {participant_ids[from_label]}->>{participant_ids[to_label]}: {label}")
 
-  return "\n".join(mermaid_lines), len(events)
+  return "\n".join(mermaid_lines), len(events), participants, events
 
 
 def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, cucm_pass: str):
@@ -13197,7 +13233,6 @@ __ADMIN_CARD__
       </div><br>
       <div class="action-row">
         <button type="submit">Search</button>
-        +            <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
       </div>
     </form>
