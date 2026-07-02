@@ -2107,7 +2107,7 @@ def _sip_infer_direction_from_text(raw_message: str) -> tuple[str, str]:
     return "", ""
 
   # Ribbon fallback: inspect a proximity window around SIP method/status line.
-  # Operator-guided target window: up to 7 physical lines above and below SIP start,
+  # Operator-guided target window: up to 10 physical lines above and below SIP start,
   # where blank lines count toward distance.
   lines = []
   for raw in text.splitlines():
@@ -2125,7 +2125,7 @@ def _sip_infer_direction_from_text(raw_message: str) -> tuple[str, str]:
     closest_direction = ""
     closest_endpoint = ""
     closest_distance = 99
-    for distance in range(1, 8):
+    for distance in range(1, 11):
       above_idx = sip_idx - distance
       if above_idx >= 0:
         direction, endpoint = _match_direction_line(lines[above_idx])
@@ -2881,9 +2881,9 @@ def _sip_resolve_legacy_message(
           break
 
       if sip_start >= 0:
-        # Include at least 7 lines above SIP start in Show/Raw output,
+        # Include at least 10 lines above SIP start in Show/Raw output,
         # then extend farther up when a Ribbon direction metadata line exists.
-        preamble_start = max(0, sip_start - 7)
+        preamble_start = max(0, sip_start - 10)
         for pre_idx in range(max(0, sip_start - 8), sip_start):
           pre_line = (payload_lines[pre_idx] or "").strip()
           if re.search(r"(?i)(tlDataReceived:Received message on|Incoming message on|sending\s+from)", pre_line):
