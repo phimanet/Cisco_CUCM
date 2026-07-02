@@ -20647,9 +20647,21 @@ def sip_call_search_page(request: Request):
       .panel {{ background: rgba(255,255,255,0.96); border: 1px solid var(--amn-border); border-radius: 14px; box-shadow: var(--amn-shadow); }}
       .page-meta-label, .section-label {{ display: block; color: var(--amn-text-soft); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }}
       .topbar-stats {{ display: flex; align-items: center; justify-content: center; gap: 6px; margin-top: 0; }}
-      .topbar-stat {{ background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.26); border-radius: 10px; padding: 5px 8px; min-width: 170px; }}
-      .topbar-stat .section-label {{ color: rgba(255,255,255,0.84); font-size: 10px; }}
-      .topbar-stat strong {{ display: block; color: #ffffff; font-size: 15px; margin-top: 2px; font-weight: 700; line-height: 1.2; }}
+      .topbar-stat {{
+        background: rgba(255,255,255,0.14);
+        border: 1px solid rgba(255,255,255,0.26);
+        border-radius: 10px;
+        padding: 6px 10px;
+        min-width: 170px;
+        min-height: 32px;
+        box-sizing: border-box;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        line-height: 1.1;
+      }}
+      .topbar-stat .section-label {{ color: rgba(255,255,255,0.84); font-size: 10px; display: inline; margin: 0; }}
+      .topbar-stat strong {{ display: inline; color: #ffffff; font-size: 13px; margin: 0; font-weight: 700; line-height: 1.1; white-space: nowrap; }}
       .panel {{ padding: 14px; margin-bottom: 14px; }}
       .search-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }}
       .search-grid input, .search-grid select {{ width: 100%; box-sizing: border-box; border: 1px solid var(--amn-border); border-radius: 8px; padding: 9px 10px; min-height: 38px; }}
