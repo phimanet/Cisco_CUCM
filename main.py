@@ -2872,7 +2872,16 @@ def _sip_resolve_legacy_message(
           break
         end += 1
 
-      payload_lines = [_sip_strip_debug_prefix(lines[idx]) for idx in range(start, min(end, len(lines)))]
+      # Build reconstruction window with physical preamble lines before MSGID so
+      # operator-visible context (+N above INVITE) and direction inference work.
+      block_start = max(0, start - 10)
+      payload_lines = []
+      for idx in range(block_start, min(end, len(lines))):
+        payload = _sip_strip_debug_prefix(lines[idx])
+        if payload.endswith("ccsipDisplayMsg:"):
+          continue
+        payload_lines.append(payload)
+
       sip_start = -1
       for idx, payload in enumerate(payload_lines):
         text = (payload or "").strip()
@@ -2881,10 +2890,10 @@ def _sip_resolve_legacy_message(
           break
 
       if sip_start >= 0:
-        # Include at least 10 lines above SIP start in Show/Raw output,
+        # Include at least 10 physical lines above SIP start in Show/Raw output,
         # then extend farther up when a Ribbon direction metadata line exists.
         preamble_start = max(0, sip_start - 10)
-        for pre_idx in range(max(0, sip_start - 8), sip_start):
+        for pre_idx in range(max(0, sip_start - 12), sip_start):
           pre_line = (payload_lines[pre_idx] or "").strip()
           if re.search(r"(?i)(tlDataReceived:Received message on|Incoming message on|sending\s+from)", pre_line):
             preamble_start = min(preamble_start, pre_idx)
