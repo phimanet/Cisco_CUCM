@@ -1991,6 +1991,13 @@ def _sip_capture_raw_root_for_source_day(source_key: str, day_key: str) -> str:
   return os.path.join(SIP_CALL_SEARCH_RAW_ROOT, source_key, day_key)
 
 
+def _sip_rel_path(path: str) -> str:
+  try:
+    return os.path.relpath(path, SIP_CALL_SEARCH_ROOT).replace("\\", "/")
+  except Exception:
+    return ""
+
+
 def _ensure_sip_capture_dirs():
   os.makedirs(SIP_CALL_SEARCH_RAW_ROOT, exist_ok=True)
   os.makedirs(SIP_CALL_SEARCH_INDEX_ROOT, exist_ok=True)
@@ -2101,6 +2108,9 @@ def _sip_store_record(raw_message: str, received_at: datetime.datetime, source_i
   day_key = parsed["day_key"]
   raw_path = _sip_current_raw_path_locked(source_meta["source_key"], day_key, parsed_size, settings["per_file_mb"] * 1024 * 1024)
   index_path = _sip_index_path(day_key)
+  parsed["raw_file_rel"] = _sip_rel_path(raw_path)
+  parsed["index_file_rel"] = _sip_rel_path(index_path)
+  parsed_json = json.dumps(parsed, ensure_ascii=False)
   _sip_append_text(raw_path, raw_message)
   _sip_append_text(raw_path, "")
   _sip_append_text(index_path, parsed_json)
@@ -2384,7 +2394,7 @@ def _sip_list_capture_files(limit: int = 200) -> list[dict]:
         stat = os.stat(full_path)
       except OSError:
         continue
-      rel_path = os.path.relpath(full_path, SIP_CALL_SEARCH_ROOT).replace("\\", "/")
+      rel_path = _sip_rel_path(full_path)
       kind = "raw" if rel_path.startswith("raw/") else ("index" if rel_path.startswith("index/") else "other")
       files.append(
         {
@@ -20372,9 +20382,10 @@ def sip_call_search_page(request: Request):
             resultsEl.innerHTML = '<div class="panel"><p class="muted" style="margin:0;">No SIP records matched the current filters.</p></div>';
             return;
           }}
-          let html = '<table><thead><tr><th>Received</th><th>Source</th><th>Call-ID</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Raw</th></tr></thead><tbody>';
+          let html = '<table><thead><tr><th>Received</th><th>Source</th><th>Call-ID</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Capture File</th><th>Raw</th></tr></thead><tbody>';
           rows.forEach(function (row, idx) {{
             const bg = idx % 2 === 0 ? '#f7fbff' : '#ffffff';
+            const captureFile = (row.raw_file_rel || row.index_file_rel || '(legacy record)').toString();
             html += '<tr style="background:' + bg + ';">'
               + '<td>' + escapeHtml(row.received_at || '') + '</td>'
               + '<td><strong>' + escapeHtml(row.source_label || row.source_key || '') + '</strong><br><span class="muted">' + escapeHtml(row.source_ip || '') + '</span></td>'
@@ -20383,6 +20394,7 @@ def sip_call_search_page(request: Request):
               + '<td>' + escapeHtml(row.response_code || '') + '</td>'
               + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.from_digits || row.from_value || '') + '</td>'
               + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.to_digits || row.to_value || '') + '</td>'
+              + '<td style="font-family:Consolas,monospace;max-width:340px;word-break:break-word;">' + escapeHtml(captureFile) + '</td>'
               + '<td><details><summary>Show</summary><div style="margin-top:6px;font-family:Consolas,monospace;white-space:pre-wrap;max-width:720px;">' + escapeHtml(row.raw_message || row.raw_line || '') + '</div></details></td>'
               + '</tr>';
           }});
