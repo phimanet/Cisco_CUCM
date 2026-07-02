@@ -20997,7 +20997,7 @@ def sip_call_search_page(request: Request):
           const hh = String(dateObj.getHours()).padStart(2, '0');
           const mi = String(dateObj.getMinutes()).padStart(2, '0');
           return yyyy + '-' + mm + '-' + dd + 'T' + hh + ':' + mi;
-        }
+        }}
 
         function setDefaultDateRange() {{
           if (!form) return;
@@ -21013,7 +21013,7 @@ def sip_call_search_page(request: Request):
           if (endInput && !String(endInput.value || '').trim()) {{
             endInput.value = toDatetimeLocalValue(dayEnd);
           }}
-        }
+        }}
 
         async function parseJsonResponse(response, fallbackMessage) {{
           const rawText = await response.text();
