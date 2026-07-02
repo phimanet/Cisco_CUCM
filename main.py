@@ -20608,20 +20608,16 @@ def sip_call_search_page(request: Request):
         --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
       }}
       body {{ margin: 0; font-family: "Segoe UI", Tahoma, Arial, sans-serif; background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%); color: var(--amn-text); }}
-      .topbar {{ display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px 12px 16px; background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)); color: #fff; }}
+      .topbar {{ display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px 8px 12px; background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)); color: #fff; }}
       .topbar a {{ color: #fff; text-decoration: none; font-weight: 700; margin-left: 12px; }}
       .env-banner {{ display: inline-block; padding: 6px 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.35); font-size: 11px; font-weight: 700; }}
       .content {{ max-width: 1400px; margin: 0 auto; padding: 14px; }}
-      .page-hero, .panel {{ background: rgba(255,255,255,0.96); border: 1px solid var(--amn-border); border-radius: 14px; box-shadow: var(--amn-shadow); }}
-      .page-hero {{ padding: 16px; margin-bottom: 14px; }}
-      .page-title-row {{ display: block; }}
-      .page-title {{ margin: 0; color: var(--amn-navy); font-size: 28px; }}
-      .page-subtitle {{ margin: 8px 0 0 0; color: var(--amn-text-soft); line-height: 1.5; max-width: 960px; }}
+      .panel {{ background: rgba(255,255,255,0.96); border: 1px solid var(--amn-border); border-radius: 14px; box-shadow: var(--amn-shadow); }}
       .page-meta-label, .section-label {{ display: block; color: var(--amn-text-soft); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }}
-      .topbar-stats {{ width: 100%; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 2px; }}
-      .topbar-stat {{ background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,0.28); border-radius: 12px; padding: 10px 12px; }}
-      .topbar-stat .section-label {{ color: rgba(255,255,255,0.86); font-size: 11px; }}
-      .topbar-stat strong {{ display: block; color: #ffffff; font-size: 20px; margin-top: 4px; font-weight: 700; line-height: 1.35; }}
+      .topbar-stats {{ width: 100%; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 0; }}
+      .topbar-stat {{ background: rgba(255,255,255,0.14); border: 1px solid rgba(255,255,255,0.26); border-radius: 10px; padding: 6px 8px; }}
+      .topbar-stat .section-label {{ color: rgba(255,255,255,0.84); font-size: 10px; }}
+      .topbar-stat strong {{ display: block; color: #ffffff; font-size: 16px; margin-top: 2px; font-weight: 700; line-height: 1.2; }}
       .panel {{ padding: 14px; margin-bottom: 14px; }}
       .search-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }}
       .search-grid input, .search-grid select {{ width: 100%; box-sizing: border-box; border: 1px solid var(--amn-border); border-radius: 8px; padding: 9px 10px; min-height: 38px; }}
@@ -20654,21 +20650,11 @@ def sip_call_search_page(request: Request):
         <div class="topbar-stat"><span class="section-label">Listener Status</span><strong id="sip-stat-enabled">Loading...</strong></div>
         <div class="topbar-stat"><span class="section-label">Total Stored</span><strong id="sip-stat-total">Loading...</strong></div>
         <div class="topbar-stat"><span class="section-label">Files</span><strong id="sip-stat-files">Loading...</strong></div>
-        <div class="topbar-stat"><span class="section-label">Last Record</span><strong id="sip-stat-last">Loading...</strong></div>
       </section>
     </header>
     <main class="content">
-      <section class="page-hero">
-        <div class="page-title-row">
-          <div>
-            <h1 class="page-title">SIP Call Search</h1>
-            <p class="page-subtitle">LAB-only listener and search workspace for Cisco CUBE <code>debug ccsip messages</code> logs. The Ubuntu server listens on UDP port <strong>{stats['udp_port']}</strong>, tags records from Las Vegas and Reno CUBEs, and keeps raw plus parsed files under a size and retention cap you can tune in Settings.</p>
-          </div>
-        </div>
-      </section>
-
       <section class="panel">
-        <h2 style="margin:0 0 10px 0;color:var(--amn-navy);">Search Filters</h2>
+        <h2 style="margin:0 0 10px 0;color:var(--amn-navy);">SIP Call Search - Search Filters</h2>
         <form id="sip-search-form">
           <div class="search-grid">
             <select name="source_key"><option value="">All Sources</option><option value="las-voip-rtr">Las Vegas CUBE</option><option value="RNOVOIPRT01">Reno CUBE</option></select>
@@ -20722,7 +20708,6 @@ def sip_call_search_page(request: Request):
         const enabledEl = document.getElementById("sip-stat-enabled");
         const totalEl = document.getElementById("sip-stat-total");
         const filesEl = document.getElementById("sip-stat-files");
-        const lastEl = document.getElementById("sip-stat-last");
         const filesStatusEl = document.getElementById("sip-files-status");
         const filesListEl = document.getElementById("sip-files-list");
 
@@ -20780,11 +20765,6 @@ def sip_call_search_page(request: Request):
           enabledEl.textContent = s.enabled ? ("Listening on UDP " + s.udp_port) : "Disabled";
           totalEl.textContent = humanBytes(s.total_bytes || 0) + " / " + (s.total_mb || 0) + " MB cap";
           filesEl.textContent = String(s.file_count || 0);
-          if (s.last_event && s.last_event.received_at) {{
-            lastEl.textContent = (s.last_event.source_label || s.last_event.source_key || "") + " @ " + s.last_event.received_at;
-          }} else {{
-            lastEl.textContent = "No records yet";
-          }}
         }}
 
         function renderResults(rows) {{
@@ -20857,7 +20837,6 @@ def sip_call_search_page(request: Request):
             renderStats(payload);
           }} catch (err) {{
             enabledEl.textContent = 'Status unavailable';
-            lastEl.textContent = (err && err.message) || 'Unknown error';
           }}
         }}
 
