@@ -121,6 +121,11 @@ PERFMON_EXCLUDED_HOSTS = {
   if (host or "").strip()
 }
 
+
+@app.on_event("startup")
+def _app_startup_tasks():
+  _startup_background_services()
+
 def _startup_background_services():
   if _is_lab_runtime_host() and SIP_CALL_SEARCH_ENABLED and SIP_CALL_SEARCH_LAB_ONLY:
     _start_sip_call_search_listener()
