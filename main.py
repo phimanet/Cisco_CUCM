@@ -2067,6 +2067,7 @@ def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_m
   response_code = _sip_extract_first_match([r"(?i)^SIP/2\.0\s+(\d{3})\b", r"(?i)\bSIP/2\.0\s+(\d{3})\b"], message)
   if not method and cseq_value:
     method = cseq_value
+  direction = _sip_message_direction(_sip_message_lines(message))
 
   return {
     "received_at": received_at.astimezone().isoformat(),
@@ -2077,6 +2078,7 @@ def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_m
     "source_name": source_meta.get("source_name", ""),
     "origin_id": source_meta.get("origin_id", ""),
     "call_id": call_id,
+    "direction": direction,
     "method": method,
     "response_code": response_code,
     "from_value": from_value,
@@ -2405,6 +2407,7 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
               record.get("raw_line", ""),
               record.get("raw_message", ""),
               record.get("call_id", ""),
+              record.get("direction", ""),
               record.get("method", ""),
               record.get("response_code", ""),
               record.get("from_value", ""),
@@ -2442,12 +2445,18 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
               }
               enriched = _sip_parse_record(record.get("raw_message", ""), parse_ts, source_meta)
               record["call_id"] = enriched.get("call_id", record.get("call_id", ""))
+              record["direction"] = enriched.get("direction", record.get("direction", ""))
               record["method"] = enriched.get("method", record.get("method", ""))
               record["response_code"] = enriched.get("response_code", record.get("response_code", ""))
               record["from_value"] = enriched.get("from_value", record.get("from_value", ""))
               record["to_value"] = enriched.get("to_value", record.get("to_value", ""))
               record["from_digits"] = enriched.get("from_digits", record.get("from_digits", ""))
               record["to_digits"] = enriched.get("to_digits", record.get("to_digits", ""))
+
+          if not (record.get("direction") or "").strip():
+            inline_direction = _sip_message_direction(_sip_message_lines(record.get("raw_message") or record.get("raw_line") or ""))
+            if inline_direction:
+              record["direction"] = inline_direction
 
           matches.append(record)
           if len(matches) >= limit:
@@ -20937,7 +20946,7 @@ def sip_call_search_page(request: Request):
             resultsEl.innerHTML = '<div class="panel"><p class="muted" style="margin:0;">No SIP records matched the current filters.</p></div>';
             return;
           }}
-          let html = '<table><thead><tr><th>Received</th><th>Source</th><th>Call-ID</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Capture File</th><th>Raw</th></tr></thead><tbody>';
+          let html = '<table><thead><tr><th>Received</th><th>Source</th><th>Call-ID</th><th>Direction</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Capture File</th><th>Raw</th></tr></thead><tbody>';
           rows.forEach(function (row, idx) {{
             const bg = idx % 2 === 0 ? '#f7fbff' : '#ffffff';
             const captureFile = (row.raw_file_rel || row.index_file_rel || '').toString();
@@ -20950,6 +20959,7 @@ def sip_call_search_page(request: Request):
               + '<td>' + escapeHtml(formatReceivedTimestamp(row.received_at || '')) + '</td>'
               + '<td><strong>' + escapeHtml(row.source_label || row.source_key || '') + '</strong><br><span class="muted">' + escapeHtml(row.source_ip || '') + '</span></td>'
               + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.call_id || '') + '</td>'
+              + '<td>' + escapeHtml(row.direction || '') + '</td>'
               + '<td>' + escapeHtml(row.method || '') + '</td>'
               + '<td>' + escapeHtml(row.response_code || '') + '</td>'
               + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.from_digits || row.from_value || '') + '</td>'
