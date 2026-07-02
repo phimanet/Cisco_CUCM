@@ -168,6 +168,7 @@ Priority keys:
 - Improved Cisco-GUID search robustness: pasted wrapped values are now canonicalized to 4x10-digit GUID format, and legacy indexed SIP rows now derive missing Cisco-GUID/Call-ID from raw message content before filters are applied.
 - Updated SIP capture file browser defaults to show only the latest 5 files, and added optional modified-time Start/End datetime range filters plus adjustable file-list limit for targeted download windows.
 - Optimized SIP search filter path to avoid deriving Cisco-GUID/Call-ID from every indexed row unless those specific filters are requested, reducing risk of Nginx 504 timeouts on normal digit/date searches.
+- Source tagging expanded to include Ribbon SBC IPs: Las Vegas `10.241.16.217` mapped to `las-voip-rtr`, and Reno `10.141.16.40` mapped to `RNOVOIPRT01` for consistent SIP source labels.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.

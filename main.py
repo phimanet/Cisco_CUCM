@@ -401,7 +401,9 @@ SIP_CALL_SEARCH_DEFAULT_TOTAL_MB = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_TOTAL
 SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB", "15") or "15").strip())
 SIP_CALL_SEARCH_SOURCE_MAP = {
   "10.241.255.3": {"source_key": "las-voip-rtr", "source_label": "Las Vegas CUBE", "source_name": "las-voip-rtr"},
+  "10.241.16.217": {"source_key": "las-voip-rtr", "source_label": "Las Vegas CUBE", "source_name": "las-voip-rtr"},
   "10.141.255.13": {"source_key": "RNOVOIPRT01", "source_label": "Reno CUBE", "source_name": "RNOVOIPRT01"},
+  "10.141.16.40": {"source_key": "RNOVOIPRT01", "source_label": "Reno CUBE", "source_name": "RNOVOIPRT01"},
 }
 SIP_CALL_SEARCH_LOCK = threading.Lock()
 SIP_CALL_SEARCH_LISTENER_STARTED = False
