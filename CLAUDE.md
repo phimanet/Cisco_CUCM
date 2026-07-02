@@ -146,6 +146,7 @@ Priority keys:
 - Search/reconstruction fallback broadened to all source folders for the same day when source-key scoped lookup misses, so parsing/formatting fixes apply across all SIP log files (not router-specific only).
 - Legacy reconstruction trigger expanded: search now reconstructs partial single-line legacy `raw_message` rows (not only blank messages), improving Reno line-based output consistency.
 - Added `Direction` field extraction (`Received`/`Sent`) from SIP message content and surfaced a new Direction column in SIP search results (positioned before Method).
+- Direction column now includes Via endpoint context, rendering labels like `Received from 10.141.18.11:5060` / `Sent from 206.147.150.91:5060` to identify call flow origin quickly.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.

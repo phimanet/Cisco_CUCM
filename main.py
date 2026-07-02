@@ -2049,6 +2049,7 @@ def _sip_extract_first_match(patterns: list[str], text: str) -> str:
 
 def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_meta: dict) -> dict:
   message = (raw_message or "").strip()
+  message_lines = _sip_message_lines(message)
   first_line = ""
   for segment in message.splitlines():
     segment = (segment or "").strip()
@@ -2067,7 +2068,8 @@ def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_m
   response_code = _sip_extract_first_match([r"(?i)^SIP/2\.0\s+(\d{3})\b", r"(?i)\bSIP/2\.0\s+(\d{3})\b"], message)
   if not method and cseq_value:
     method = cseq_value
-  direction = _sip_message_direction(_sip_message_lines(message))
+  direction = _sip_message_direction(message_lines)
+  direction_detail = _sip_direction_label(direction, _sip_extract_via_endpoint(message_lines))
 
   return {
     "received_at": received_at.astimezone().isoformat(),
@@ -2079,6 +2081,7 @@ def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_m
     "origin_id": source_meta.get("origin_id", ""),
     "call_id": call_id,
     "direction": direction,
+    "direction_detail": direction_detail,
     "method": method,
     "response_code": response_code,
     "from_value": from_value,
@@ -2408,6 +2411,7 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
               record.get("raw_message", ""),
               record.get("call_id", ""),
               record.get("direction", ""),
+              record.get("direction_detail", ""),
               record.get("method", ""),
               record.get("response_code", ""),
               record.get("from_value", ""),
@@ -2446,6 +2450,7 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
               enriched = _sip_parse_record(record.get("raw_message", ""), parse_ts, source_meta)
               record["call_id"] = enriched.get("call_id", record.get("call_id", ""))
               record["direction"] = enriched.get("direction", record.get("direction", ""))
+              record["direction_detail"] = enriched.get("direction_detail", record.get("direction_detail", ""))
               record["method"] = enriched.get("method", record.get("method", ""))
               record["response_code"] = enriched.get("response_code", record.get("response_code", ""))
               record["from_value"] = enriched.get("from_value", record.get("from_value", ""))
@@ -2457,6 +2462,11 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
             inline_direction = _sip_message_direction(_sip_message_lines(record.get("raw_message") or record.get("raw_line") or ""))
             if inline_direction:
               record["direction"] = inline_direction
+          if not (record.get("direction_detail") or "").strip():
+            inline_lines = _sip_message_lines(record.get("raw_message") or record.get("raw_line") or "")
+            inline_direction = (record.get("direction") or _sip_message_direction(inline_lines) or "").strip()
+            inline_endpoint = _sip_extract_via_endpoint(inline_lines)
+            record["direction_detail"] = _sip_direction_label(inline_direction, inline_endpoint)
 
           matches.append(record)
           if len(matches) >= limit:
@@ -2786,6 +2796,27 @@ def _sip_extract_via_host(lines: list[str]) -> str:
     if match:
       return (match.group(1) or "").strip()
   return ""
+
+
+def _sip_extract_via_endpoint(lines: list[str]) -> str:
+  for line in lines:
+    text = (line or "").strip()
+    if not text.lower().startswith("via:"):
+      continue
+    match = re.search(r"(?i)^via:\s*sip/2\.0/\w+\s+([^;,\s]+)", text)
+    if match:
+      return (match.group(1) or "").strip()
+  return ""
+
+
+def _sip_direction_label(direction: str, via_endpoint: str) -> str:
+  text = (direction or "").strip()
+  endpoint = (via_endpoint or "").strip()
+  if not text:
+    return ""
+  if not endpoint:
+    return text
+  return f"{text} from {endpoint}"
 
 
 def _sip_message_lines(raw_message: str) -> list[str]:
@@ -20959,7 +20990,7 @@ def sip_call_search_page(request: Request):
               + '<td>' + escapeHtml(formatReceivedTimestamp(row.received_at || '')) + '</td>'
               + '<td><strong>' + escapeHtml(row.source_label || row.source_key || '') + '</strong><br><span class="muted">' + escapeHtml(row.source_ip || '') + '</span></td>'
               + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.call_id || '') + '</td>'
-              + '<td>' + escapeHtml(row.direction || '') + '</td>'
+              + '<td>' + escapeHtml(row.direction_detail || row.direction || '') + '</td>'
               + '<td>' + escapeHtml(row.method || '') + '</td>'
               + '<td>' + escapeHtml(row.response_code || '') + '</td>'
               + '<td style="font-family:Consolas,monospace;">' + escapeHtml(row.from_digits || row.from_value || '') + '</td>'
