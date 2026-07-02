@@ -141,6 +141,7 @@ Priority keys:
 - Repositioned SIP header status tiles to the middle region of the top row, immediately left of the environment banner/navigation controls, to preserve search viewport space.
 - Restyled SIP top header to match Page 1 visual language (AMN dual-gradient bar, shadow/border treatment, AMN brand fallback text, and Page 1-style action buttons/colors).
 - Adjusted SIP middle status cards to compact single-line pills with 32px height so they visually align with the Production/LAB environment pill height in the top header.
+- Corrected header title scoping: "Voice Operations Portal - SIP Call Search" now appears only on the SIP Call Search page; Main/Administrative pages reverted to "Voice Operations Portal".
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
 - Genesys WebRTC Phone mapping updated to use configured station values directly (routing status station name first, user profile station fallback) instead of requiring a strict WebRTC name match.
