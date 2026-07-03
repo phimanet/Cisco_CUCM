@@ -402,7 +402,7 @@ SIP_CALL_SEARCH_LAB_ONLY = (os.getenv("SIP_CALL_SEARCH_LAB_ONLY", "true") or "tr
 }
 SIP_CALL_SEARCH_DEFAULT_UDP_PORT = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_UDP_PORT", "1024") or "1024").strip())
 SIP_CALL_SEARCH_DEFAULT_RETENTION_DAYS = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_RETENTION_DAYS", "14") or "14").strip())
-SIP_CALL_SEARCH_DEFAULT_TOTAL_MB = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_TOTAL_MB", "6144") or "6144").strip())
+SIP_CALL_SEARCH_DEFAULT_TOTAL_MB = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_TOTAL_MB", "12288") or "12288").strip())
 SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB", "15") or "15").strip())
 SIP_CALL_SEARCH_SOURCE_MAP = {
   "10.241.255.3": {"source_key": "las-voip-rtr", "source_label": "Las Vegas CUBE", "source_name": "las-voip-rtr"},
@@ -479,7 +479,7 @@ DEFAULT_SETTINGS = {
   "sip_call_search_enabled": "true",
   "sip_call_search_udp_port": "1024",
   "sip_call_search_retention_days": "14",
-  "sip_call_search_total_mb": "6144",
+  "sip_call_search_total_mb": "12288",
   "sip_call_search_per_file_mb": "15",
 }
 SETTINGS_LOCK = threading.Lock()
@@ -2451,9 +2451,13 @@ def _sip_prune_locked(settings: dict | None = None):
     current_total += day_size
 
   newest_day_key = day_sizes[-1][0] if day_sizes else ""
+  pruned_day_count = 0
+  max_oldest_days_to_prune = 10
 
   for day_key, day_size in day_sizes:
     if current_total <= total_cap_bytes:
+      break
+    if pruned_day_count >= max_oldest_days_to_prune:
       break
     # Safety guard: never prune the newest available capture day.
     if day_key == newest_day_key:
@@ -2466,6 +2470,7 @@ def _sip_prune_locked(settings: dict | None = None):
     if os.path.isdir(index_day_root):
       shutil.rmtree(index_day_root, ignore_errors=True)
     current_total -= day_size
+    pruned_day_count += 1
 
 
 def _sip_capture_listener_loop():
@@ -22155,7 +22160,7 @@ def settings_page(request: Request):
 
           <div class="form-group">
             <label for="sip_call_search_total_mb">SIP Call Search Total Size MB</label>
-            <input type="text" id="sip_call_search_total_mb" name="sip_call_search_total_mb" value="{escape(settings.get('sip_call_search_total_mb', '6144'))}" maxlength="8">
+            <input type="text" id="sip_call_search_total_mb" name="sip_call_search_total_mb" value="{escape(settings.get('sip_call_search_total_mb', '12288'))}" maxlength="8">
             <div class="help-text">Hard cap across all SIP capture files before oldest days are pruned</div>
           </div>
           
