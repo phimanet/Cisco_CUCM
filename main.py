@@ -2775,6 +2775,8 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
             inline_endpoint = _sip_extract_via_endpoint(inline_lines)
             record["direction_detail"] = _sip_direction_label(inline_direction, inline_endpoint)
 
+          _sip_enforce_invite_target_direction(record)
+
           matches.append(record)
           if len(matches) >= limit:
             stop_search = True
@@ -3226,6 +3228,22 @@ def _sip_extract_to_host(to_value: str) -> str:
     port = (match.group(2) or "").strip()
     return f"{host}:{port}" if host and port else host
   return ""
+
+
+def _sip_enforce_invite_target_direction(record: dict):
+  direction = (record.get("direction") or "").strip().lower()
+  method = (record.get("method") or "").strip().upper()
+  response_code = (record.get("response_code") or "").strip()
+  if direction != "sent" or method != "INVITE" or response_code:
+    return
+
+  to_host = _sip_extract_to_host(record.get("to_value") or "")
+  if not to_host:
+    raw_message = (record.get("raw_message") or record.get("raw_line") or "")
+    to_value = _sip_extract_first_match([r"(?im)^To:\s*(.+)$", r"(?im)To\s*[:=]\s*(.+)$"], raw_message)
+    to_host = _sip_extract_to_host(to_value)
+  if to_host:
+    record["direction_detail"] = _sip_direction_label("Sent", to_host)
 
 
 def _sip_direction_label(direction: str, via_endpoint: str) -> str:
