@@ -2050,6 +2050,101 @@ def _sip_format_received_display(value: str) -> str:
     return cleaned.replace("T", " ")
 
 
+def _sip_parse_iso_ts(value: str) -> datetime.datetime | None:
+  text = (value or "").strip()
+  if not text:
+    return None
+  try:
+    parsed = datetime.datetime.fromisoformat(text)
+    if parsed.tzinfo is None:
+      parsed = parsed.replace(tzinfo=datetime.datetime.now().astimezone().tzinfo)
+    return parsed
+  except ValueError:
+    return None
+
+
+def _sip_assign_call_group_ids(records: list[dict]) -> list[dict]:
+  if not records:
+    return records
+
+  indexed = []
+  for idx, record in enumerate(records):
+    ts = _sip_parse_iso_ts(record.get("received_at") or "")
+    indexed.append((idx, ts, record))
+
+  indexed.sort(key=lambda item: item[1] or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc))
+
+  # Cluster by ANI and temporal proximity so one real call spanning multiple legs
+  # is treated as a single trace, even when Call-ID changes across B2BUA hops.
+  cluster_counter = 0
+  clusters_by_ani: dict[str, list[dict]] = {}
+  index_to_cluster: dict[int, int] = {}
+  for idx, ts, record in indexed:
+    ani = (record.get("from_digits") or "").strip()
+    if not ani:
+      ani = (record.get("from_value") or "").strip()
+    if not ani:
+      ani = "unknown-ani"
+
+    cluster_list = clusters_by_ani.setdefault(ani, [])
+    assigned_cluster_id = None
+    for cluster in reversed(cluster_list):
+      cluster_last_ts = cluster.get("last_ts")
+      if ts and cluster_last_ts and (ts - cluster_last_ts).total_seconds() <= 20:
+        assigned_cluster_id = cluster["id"]
+        cluster["last_ts"] = ts
+        break
+    if assigned_cluster_id is None:
+      cluster_counter += 1
+      assigned_cluster_id = cluster_counter
+      cluster_list.append({"id": assigned_cluster_id, "start_ts": ts, "last_ts": ts})
+    index_to_cluster[idx] = assigned_cluster_id
+
+  cluster_records: dict[int, list[dict]] = {}
+  for idx, _ts, record in indexed:
+    cluster_id = index_to_cluster.get(idx)
+    if cluster_id is None:
+      continue
+    cluster_records.setdefault(cluster_id, []).append(record)
+
+  cluster_group_ids: dict[int, str] = {}
+  for cluster_id, group_records in cluster_records.items():
+    anis = sorted({(r.get("from_digits") or "").strip() for r in group_records if (r.get("from_digits") or "").strip()})
+    tos = sorted({(r.get("to_digits") or "").strip() for r in group_records if (r.get("to_digits") or "").strip()})
+    cisco_guids = sorted({(r.get("cisco_guid") or "").strip() for r in group_records if (r.get("cisco_guid") or "").strip()})
+    call_ids = sorted({(r.get("call_id") or "").strip() for r in group_records if (r.get("call_id") or "").strip()})
+    source_pairs = sorted({
+      f"{(r.get('source_key') or '').strip()}:{(r.get('direction') or '').strip()}:{(r.get('direction_detail') or '').strip()}"
+      for r in group_records
+    })
+
+    start_ts = None
+    for r in group_records:
+      ts = _sip_parse_iso_ts(r.get("received_at") or "")
+      if ts is None:
+        continue
+      if start_ts is None or ts < start_ts:
+        start_ts = ts
+    bucket = str(int(start_ts.timestamp()) // 2) if start_ts else "0"
+
+    signature = "|".join([
+      ",".join(anis[:2]),
+      ",".join(tos[:2]),
+      ",".join(cisco_guids[:2]),
+      ",".join(call_ids[:3]),
+      ",".join(source_pairs[:4]),
+      bucket,
+    ])
+    digest = hashlib.sha1(signature.encode("utf-8")).hexdigest()[:12]
+    cluster_group_ids[cluster_id] = f"CG-{bucket}-{digest}"
+
+  for idx, _ts, record in indexed:
+    cluster_id = index_to_cluster.get(idx)
+    record["call_group_id"] = cluster_group_ids.get(cluster_id, "")
+
+  return records
+
+
 def _sip_extract_sip_user_digits(value: str) -> str:
   text = (value or "").strip()
   if not text:
@@ -2492,6 +2587,7 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
 
   start_day = start_dt.astimezone().strftime("%Y-%m-%d") if start_dt else ""
   end_day = end_dt.astimezone().strftime("%Y-%m-%d") if end_dt else ""
+  stop_search = False
 
   index_days = []
   if os.path.isdir(SIP_CALL_SEARCH_INDEX_ROOT):
@@ -2675,10 +2771,15 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
 
           matches.append(record)
           if len(matches) >= limit:
-            return matches
+            stop_search = True
+            break
     except OSError:
       continue
-  return matches
+    if stop_search:
+      break
+
+  _sip_assign_call_group_ids(matches)
+  return matches[:limit]
 
 
 def _sip_list_capture_files(limit: int = 5, start_ts: str = "", end_ts: str = "") -> list[dict]:
@@ -21213,6 +21314,14 @@ def sip_call_search_page(request: Request):
           </div>
           <div class="actions">
             <button type="submit">Search SIP Records</button>
+            <select id="sip-quick-start-minutes" style="border:1px solid var(--amn-border);border-radius:8px;padding:8px 10px;min-height:38px;">
+              <option value="10" selected>Last 10 Minutes</option>
+              <option value="5">Last 5 Minutes</option>
+              <option value="15">Last 15 Minutes</option>
+              <option value="30">Last 30 Minutes</option>
+              <option value="60">Last 60 Minutes</option>
+            </select>
+            <button type="button" id="sip-apply-quick-start-btn" style="background:linear-gradient(180deg,#356a9c,#244e77);">Set Start to Recent</button>
             <button type="button" id="sip-build-ladder-btn" style="background:linear-gradient(180deg,#2f6c48,#1f5336);">Build SIP Ladder (Cisco-GUID / Call-ID)</button>
             <button type="button" id="sip-refresh-status-btn" style="background:linear-gradient(180deg,#516d8d,#355978);">Refresh Status</button>
           </div>
@@ -21249,6 +21358,8 @@ def sip_call_search_page(request: Request):
         const refreshBtn = document.getElementById("sip-refresh-status-btn");
         const refreshFilesBtn = document.getElementById("sip-refresh-files-btn");
         const ladderBtn = document.getElementById("sip-build-ladder-btn");
+        const quickStartBtn = document.getElementById("sip-apply-quick-start-btn");
+        const quickStartMinutesEl = document.getElementById("sip-quick-start-minutes");
         const enabledEl = document.getElementById("sip-stat-enabled");
         const totalEl = document.getElementById("sip-stat-total");
         const filesEl = document.getElementById("sip-stat-files");
@@ -21398,8 +21509,9 @@ def sip_call_search_page(request: Request):
             + '<col>'
             + '<col style="width:170px">'
             + '<col style="width:150px">'
+            + '<col style="width:190px">'
             + '<col style="width:150px">'
-            + '</colgroup><thead><tr><th>Received</th><th>Source</th><th>Direction</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Raw</th><th>Cisco-GUID</th><th>Call-ID</th><th>Capture File</th></tr></thead><tbody>';
+            + '</colgroup><thead><tr><th>Received</th><th>Source</th><th>Direction</th><th>Method</th><th>Response</th><th>From</th><th>To</th><th>Raw</th><th>Cisco-GUID</th><th>Call-ID</th><th>Call Group ID</th><th>Capture File</th></tr></thead><tbody>';
           rows.forEach(function (row, idx) {{
             const bg = idx % 2 === 0 ? '#f7fbff' : '#ffffff';
             const captureFile = (row.raw_file_rel || row.index_file_rel || '').toString();
@@ -21419,6 +21531,7 @@ def sip_call_search_page(request: Request):
               + '<td><details><summary>Show</summary><div style="margin-top:6px;font-family:Consolas,monospace;white-space:pre-wrap;max-width:1000px;">' + escapeHtml(row.raw_message || row.raw_line || '') + '</div></details></td>'
               + '<td style="font-family:Consolas,monospace;white-space:normal;line-height:1.25;">' + formatCiscoGuid(row.cisco_guid || '') + '</td>'
               + '<td style="font-family:Consolas,monospace;white-space:normal;line-height:1.25;">' + formatCallId(row.call_id || '') + '</td>'
+                + '<td style="font-family:Consolas,monospace;white-space:normal;line-height:1.2;">' + escapeHtml(row.call_group_id || '') + '</td>'
               + '<td style="font-family:Consolas,monospace;max-width:340px;word-break:break-word;">' + captureCell + '</td>'
               + '</tr>';
           }});
@@ -21561,6 +21674,19 @@ def sip_call_search_page(request: Request):
           }}
         }}
 
+        function setRecentStartTime() {{
+          if (!form) return;
+          const startInput = form.querySelector('input[name="start_ts"]');
+          const endInput = form.querySelector('input[name="end_ts"]');
+          const minutesRaw = String((quickStartMinutesEl && quickStartMinutesEl.value) || '10').trim();
+          const minutes = Math.max(1, Math.min(240, Number(minutesRaw) || 10));
+          const now = new Date();
+          const start = new Date(now.getTime() - (minutes * 60 * 1000));
+          if (startInput) startInput.value = toDatetimeLocalValue(start);
+          if (endInput) endInput.value = toDatetimeLocalValue(now);
+          statusEl.textContent = 'Start/End set to last ' + minutes + ' minute(s). Click Search SIP Records to run.';
+        }
+
         async function refreshFiles() {{
           if (!filesStatusEl) return;
           filesStatusEl.textContent = 'Loading capture files...';
@@ -21613,6 +21739,7 @@ def sip_call_search_page(request: Request):
         }}
 
         if (form) form.addEventListener('submit', runSearch);
+        if (quickStartBtn) quickStartBtn.addEventListener('click', setRecentStartTime);
         if (refreshBtn) refreshBtn.addEventListener('click', refreshStatus);
         if (refreshFilesBtn) refreshFilesBtn.addEventListener('click', refreshFiles);
         if (ladderBtn) ladderBtn.addEventListener('click', buildLadder);

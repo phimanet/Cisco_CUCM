@@ -196,6 +196,9 @@ Priority keys:
   - Display Call Group ID in search results and enable quick filter to isolate one full call group.
   - Keep individual SIP legs visible while sharing the same group ID for parent-call tracing.
 - Session handoff note: user paused work for today and requested immediate coding continuation on next open, starting with Call Group ID implementation.
+- Implemented deterministic `Call Group ID` assignment in SIP search results using ANI + start-time bucket + strongest available identifiers (Cisco-GUID/Call-ID) + direction/source signature so one real call can be traced across multiple legs.
+- Added `Call Group ID` column in SIP search results table for quick full-call correlation.
+- Added quick search-time controls in SIP Call Search: selectable recent window with button to set Start/End to last N minutes (default Last 10 Minutes) for fast test-call lookups.
 - Fixed SIP listener auto-start on app boot by wiring startup background services into FastAPI startup event so UDP 1024 binding survives service restarts.
 - Source tagging configured for Las Vegas CUBE (`las-voip-rtr` / `10.241.255.3`) and Reno CUBE (`RNOVOIPRT01` / `10.141.255.13`).
 - Genesys Admin extraction enhanced with downloadable raw payload artifact per run: UI now provides a **Download Raw Genesys JSON** link sourced from `/download/job-output/{job_id}` for full payload parsing.
