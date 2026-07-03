@@ -2289,8 +2289,10 @@ def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_m
   via_endpoint = _sip_extract_via_endpoint(message_lines)
   direction_endpoint = inferred_endpoint or via_endpoint
   if (direction or "").strip().lower() == "sent" and (method or "").strip().upper() == "INVITE" and not (response_code or "").strip():
-    # New outbound INVITE leg: prefer Via endpoint explicitly.
-    direction_endpoint = via_endpoint or direction_endpoint
+    # New outbound INVITE leg: use To URI host/IP for the destination endpoint.
+    to_host = _sip_extract_to_host(to_value)
+    if to_host:
+      direction_endpoint = to_host
   direction_detail = _sip_direction_label(direction, direction_endpoint)
 
   return {
