@@ -2287,7 +2287,11 @@ def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_m
   if not direction:
     direction, inferred_endpoint = _sip_infer_direction_from_text(message)
   via_endpoint = _sip_extract_via_endpoint(message_lines)
-  direction_detail = _sip_direction_label(direction, inferred_endpoint or via_endpoint)
+  direction_endpoint = inferred_endpoint or via_endpoint
+  if (direction or "").strip().lower() == "sent" and (method or "").strip().upper() == "INVITE" and not (response_code or "").strip():
+    # New outbound INVITE leg: prefer Via endpoint explicitly.
+    direction_endpoint = via_endpoint or direction_endpoint
+  direction_detail = _sip_direction_label(direction, direction_endpoint)
 
   return {
     "received_at": received_at.astimezone().isoformat(),
@@ -3200,6 +3204,25 @@ def _sip_extract_via_endpoint(lines: list[str]) -> str:
     match = re.search(r"(?i)^via:\s*sip/2\.0/\w+\s+([^;,\s]+)", text)
     if match:
       return (match.group(1) or "").strip()
+  return ""
+
+
+def _sip_extract_to_host(to_value: str) -> str:
+  text = (to_value or "").strip()
+  if not text:
+    return ""
+
+  match = re.search(r"(?i)sips?:[^@>\s]+@([^;>\s:]+)(?::(\d+))?", text)
+  if match:
+    host = (match.group(1) or "").strip()
+    port = (match.group(2) or "").strip()
+    return f"{host}:{port}" if host and port else host
+
+  match = re.search(r"([0-9]{1,3}(?:\.[0-9]{1,3}){3})(?::(\d+))?", text)
+  if match:
+    host = (match.group(1) or "").strip()
+    port = (match.group(2) or "").strip()
+    return f"{host}:{port}" if host and port else host
   return ""
 
 
