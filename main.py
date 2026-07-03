@@ -21314,10 +21314,10 @@ def sip_call_search_page(request: Request):
           </div>
           <div class="actions">
             <button type="submit">Search SIP Records</button>
-            <select id="sip-quick-start-minutes" style="border:1px solid var(--amn-border);border-radius:8px;padding:8px 10px;min-height:38px;">
-              <option value="10" selected>Last 10 Minutes</option>
+            <select id="sip-quick-start-minutes" title="Sets Start to now minus X minutes and End to now" style="border:1px solid var(--amn-border);border-radius:8px;padding:8px 10px;min-height:38px;">
+              <option value="15" selected>Last 15 Minutes</option>
+              <option value="10">Last 10 Minutes</option>
               <option value="5">Last 5 Minutes</option>
-              <option value="15">Last 15 Minutes</option>
               <option value="30">Last 30 Minutes</option>
               <option value="60">Last 60 Minutes</option>
             </select>
@@ -21678,7 +21678,7 @@ def sip_call_search_page(request: Request):
           if (!form) return;
           const startInput = form.querySelector('input[name="start_ts"]');
           const endInput = form.querySelector('input[name="end_ts"]');
-          const minutesRaw = String((quickStartMinutesEl && quickStartMinutesEl.value) || '10').trim();
+          const minutesRaw = String((quickStartMinutesEl && quickStartMinutesEl.value) || '15').trim();
           const minutes = Math.max(1, Math.min(240, Number(minutesRaw) || 10));
           const now = new Date();
           const start = new Date(now.getTime() - (minutes * 60 * 1000));
