@@ -2615,19 +2615,27 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
           if not raw:
             continue
           # Fast prefilter path to avoid expensive JSON decode on clearly non-matching rows.
-          if from_digits and from_digits not in raw:
+          has_from_digits_field = '"from_digits":' in raw
+          has_to_digits_field = '"to_digits":' in raw
+          has_method_field = '"method":' in raw
+          has_response_field = '"response_code":' in raw
+          has_source_field = '"source_key":' in raw
+
+          # Only prefilter on a field when that field is present in the indexed row.
+          # Older legacy rows may omit parsed fields and must flow to reconstruction.
+          if from_digits and has_from_digits_field and from_digits not in raw:
             continue
-          if to_digits and to_digits not in raw:
+          if to_digits and has_to_digits_field and to_digits not in raw:
             continue
-          if method:
+          if method and has_method_field:
             method_token = f'"method":"{method.upper()}"'
             if method_token not in raw:
               continue
-          if response_code:
+          if response_code and has_response_field:
             response_token = f'"response_code":"{response_code}"'
             if response_token not in raw:
               continue
-          if source_key and source_key not in {"las-ribbon-sbc", "rno-ribbon-sbc"}:
+          if source_key and has_source_field and source_key not in {"las-ribbon-sbc", "rno-ribbon-sbc"}:
             source_token = f'"source_key":"{source_key}"'
             if source_token not in raw:
               continue
