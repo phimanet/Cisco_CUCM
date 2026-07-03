@@ -21685,7 +21685,7 @@ def sip_call_search_page(request: Request):
           if (startInput) startInput.value = toDatetimeLocalValue(start);
           if (endInput) endInput.value = toDatetimeLocalValue(now);
           statusEl.textContent = 'Start/End set to last ' + minutes + ' minute(s). Click Search SIP Records to run.';
-        }
+        }}
 
         async function refreshFiles() {{
           if (!filesStatusEl) return;
