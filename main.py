@@ -2450,8 +2450,13 @@ def _sip_prune_locked(settings: dict | None = None):
     day_sizes.append((day_key, day_size))
     current_total += day_size
 
+  newest_day_key = day_sizes[-1][0] if day_sizes else ""
+
   for day_key, day_size in day_sizes:
     if current_total <= total_cap_bytes:
+      break
+    # Safety guard: never prune the newest available capture day.
+    if day_key == newest_day_key:
       break
     for source_name in os.listdir(SIP_CALL_SEARCH_RAW_ROOT) if os.path.isdir(SIP_CALL_SEARCH_RAW_ROOT) else []:
       source_day_root = os.path.join(SIP_CALL_SEARCH_RAW_ROOT, source_name, day_key)
