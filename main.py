@@ -2567,7 +2567,9 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   # - Normal filtered searches: reconstruct enough rows to avoid truncated
   #   single-line Cisco fragments in Show output.
   # - Broad/no-filter searches: skip reconstruction to stay fast.
-  max_legacy_resolve = 400 if legacy_expand else (150 if has_filter else 0)
+  max_legacy_resolve = 300 if legacy_expand else (80 if has_filter else 0)
+  search_started = time.monotonic()
+  max_search_seconds = 16.0 if legacy_expand else 8.0
   query = (criteria.get("query") or "").strip().lower()
   cisco_guid = _sip_normalize_cisco_guid(criteria.get("cisco_guid") or "").lower()
   call_id = _sip_normalize_call_id(criteria.get("call_id") or "").lower()
@@ -2622,6 +2624,9 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
     try:
       with open(index_path, "r", encoding="utf-8") as handle:
         for line in handle:
+          if (time.monotonic() - search_started) > max_search_seconds:
+            stop_search = True
+            break
           raw = (line or "").strip()
           if not raw:
             continue
@@ -2743,39 +2748,43 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
             and record_source_key in {"las-ribbon-sbc", "rno-ribbon-sbc"}
           )
           if (_sip_record_needs_legacy_reconstruction(record) or needs_direction_enrichment) and legacy_resolved_count < max_legacy_resolve:
-            legacy = _sip_resolve_legacy_message(record, source_day_cache, content_cache, line_cache)
-            legacy_resolved_count += 1
-            if legacy.get("raw_file_rel"):
-              record["raw_file_rel"] = legacy.get("raw_file_rel", "")
-            if legacy.get("raw_message"):
-              record["raw_message"] = legacy.get("raw_message", "")
+            # Avoid timeout by skipping expensive file scans once near deadline.
+            if (time.monotonic() - search_started) > (max_search_seconds * 0.85):
+              pass
+            else:
+              legacy = _sip_resolve_legacy_message(record, source_day_cache, content_cache, line_cache)
+              legacy_resolved_count += 1
+              if legacy.get("raw_file_rel"):
+                record["raw_file_rel"] = legacy.get("raw_file_rel", "")
+              if legacy.get("raw_message"):
+                record["raw_message"] = legacy.get("raw_message", "")
 
-            block_id = (legacy.get("block_id") or "").strip()
-            if block_id:
-              if block_id in seen_block_ids:
-                continue
-              seen_block_ids.add(block_id)
+              block_id = (legacy.get("block_id") or "").strip()
+              if block_id:
+                if block_id in seen_block_ids:
+                  continue
+                seen_block_ids.add(block_id)
 
-            if (record.get("raw_message") or "").strip():
-              parse_ts = record_ts if record_ts else datetime.datetime.now(datetime.timezone.utc)
-              source_meta = {
-                "source_ip": record.get("source_ip", ""),
-                "source_key": record.get("source_key", ""),
-                "source_label": record.get("source_label", ""),
-                "source_name": record.get("source_name", ""),
-                "origin_id": record.get("origin_id", ""),
-              }
-              enriched = _sip_parse_record(record.get("raw_message", ""), parse_ts, source_meta)
-              record["cisco_guid"] = enriched.get("cisco_guid", record.get("cisco_guid", ""))
-              record["call_id"] = enriched.get("call_id", record.get("call_id", ""))
-              record["direction"] = enriched.get("direction", record.get("direction", ""))
-              record["direction_detail"] = enriched.get("direction_detail", record.get("direction_detail", ""))
-              record["method"] = enriched.get("method", record.get("method", ""))
-              record["response_code"] = enriched.get("response_code", record.get("response_code", ""))
-              record["from_value"] = enriched.get("from_value", record.get("from_value", ""))
-              record["to_value"] = enriched.get("to_value", record.get("to_value", ""))
-              record["from_digits"] = enriched.get("from_digits", record.get("from_digits", ""))
-              record["to_digits"] = enriched.get("to_digits", record.get("to_digits", ""))
+              if (record.get("raw_message") or "").strip():
+                parse_ts = record_ts if record_ts else datetime.datetime.now(datetime.timezone.utc)
+                source_meta = {
+                  "source_ip": record.get("source_ip", ""),
+                  "source_key": record.get("source_key", ""),
+                  "source_label": record.get("source_label", ""),
+                  "source_name": record.get("source_name", ""),
+                  "origin_id": record.get("origin_id", ""),
+                }
+                enriched = _sip_parse_record(record.get("raw_message", ""), parse_ts, source_meta)
+                record["cisco_guid"] = enriched.get("cisco_guid", record.get("cisco_guid", ""))
+                record["call_id"] = enriched.get("call_id", record.get("call_id", ""))
+                record["direction"] = enriched.get("direction", record.get("direction", ""))
+                record["direction_detail"] = enriched.get("direction_detail", record.get("direction_detail", ""))
+                record["method"] = enriched.get("method", record.get("method", ""))
+                record["response_code"] = enriched.get("response_code", record.get("response_code", ""))
+                record["from_value"] = enriched.get("from_value", record.get("from_value", ""))
+                record["to_value"] = enriched.get("to_value", record.get("to_value", ""))
+                record["from_digits"] = enriched.get("from_digits", record.get("from_digits", ""))
+                record["to_digits"] = enriched.get("to_digits", record.get("to_digits", ""))
 
           if not (record.get("direction") or "").strip():
             raw_for_direction = record.get("raw_message") or record.get("raw_line") or ""
