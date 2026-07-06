@@ -2564,9 +2564,10 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   )
   # Hybrid mode:
   # - Deep mode (checkbox on): reconstruct many legacy rows.
-  # - Normal filtered searches: reconstruct a small set so Raw shows full SIP blocks.
+  # - Normal filtered searches: reconstruct enough rows to avoid truncated
+  #   single-line Cisco fragments in Show output.
   # - Broad/no-filter searches: skip reconstruction to stay fast.
-  max_legacy_resolve = 250 if legacy_expand else (25 if has_filter else 0)
+  max_legacy_resolve = 400 if legacy_expand else (150 if has_filter else 0)
   query = (criteria.get("query") or "").strip().lower()
   cisco_guid = _sip_normalize_cisco_guid(criteria.get("cisco_guid") or "").lower()
   call_id = _sip_normalize_call_id(criteria.get("call_id") or "").lower()
