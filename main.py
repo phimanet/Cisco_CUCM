@@ -404,6 +404,7 @@ SIP_CALL_SEARCH_DEFAULT_UDP_PORT = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_UDP_P
 SIP_CALL_SEARCH_DEFAULT_RETENTION_DAYS = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_RETENTION_DAYS", "14") or "14").strip())
 SIP_CALL_SEARCH_DEFAULT_TOTAL_MB = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_TOTAL_MB", "12288") or "12288").strip())
 SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB", "15") or "15").strip())
+SIP_CALL_SEARCH_INDEX_SHARDS = 3
 SIP_CALL_SEARCH_SOURCE_MAP = {
   "10.241.255.3": {"source_key": "las-voip-rtr", "source_label": "Las Vegas CUBE", "source_name": "las-voip-rtr"},
   "10.241.16.217": {"source_key": "las-ribbon-sbc", "source_label": "Las Vegas Ribbon SBC", "source_name": "las-ribbon-sbc"},
@@ -2353,7 +2354,24 @@ def _sip_current_raw_path_locked(source_key: str, day_key: str, byte_count: int,
 
 
 def _sip_index_path(day_key: str) -> str:
+  # Legacy single-file index path (kept for backward compatibility reads).
   return os.path.join(SIP_CALL_SEARCH_INDEX_ROOT, day_key, f"records-{day_key.replace('-', '')}.jsonl")
+
+
+def _sip_index_shard_path(day_key: str, shard_index: int) -> str:
+  shard = max(1, min(int(shard_index), SIP_CALL_SEARCH_INDEX_SHARDS))
+  return os.path.join(
+    SIP_CALL_SEARCH_INDEX_ROOT,
+    day_key,
+    f"records-{day_key.replace('-', '')}-part{shard:03d}.jsonl",
+  )
+
+
+def _sip_index_paths_for_day(day_key: str) -> list[str]:
+  paths = [_sip_index_path(day_key)]
+  for shard in range(1, SIP_CALL_SEARCH_INDEX_SHARDS + 1):
+    paths.append(_sip_index_shard_path(day_key, shard))
+  return [p for p in paths if os.path.exists(p)]
 
 
 def _sip_store_record(raw_message: str, received_at: datetime.datetime, source_ip: str, origin_id: str = ""):
@@ -2366,7 +2384,15 @@ def _sip_store_record(raw_message: str, received_at: datetime.datetime, source_i
   parsed_size = len(parsed_json.encode("utf-8")) + 1
   day_key = parsed["day_key"]
   raw_path = _sip_current_raw_path_locked(source_meta["source_key"], day_key, parsed_size, settings["per_file_mb"] * 1024 * 1024)
-  index_path = _sip_index_path(day_key)
+  shard_seed = "|".join([
+    day_key,
+    source_meta.get("source_key", ""),
+    parsed.get("call_id", ""),
+    parsed.get("cisco_guid", ""),
+    parsed.get("received_at", ""),
+  ])
+  shard_idx = (int(hashlib.sha1(shard_seed.encode("utf-8")).hexdigest()[:8], 16) % SIP_CALL_SEARCH_INDEX_SHARDS) + 1
+  index_path = _sip_index_shard_path(day_key, shard_idx)
   parsed["raw_file_rel"] = _sip_rel_path(raw_path)
   parsed["index_file_rel"] = _sip_rel_path(index_path)
   parsed_json = json.dumps(parsed, ensure_ascii=False)
@@ -2618,12 +2644,14 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
           continue
         index_days.append(day_key)
   for day_key in sorted(index_days, reverse=True):
-    index_path = _sip_index_path(day_key)
-    if not os.path.exists(index_path):
+    index_paths = _sip_index_paths_for_day(day_key)
+    if not index_paths:
       continue
-    try:
-      with open(index_path, "r", encoding="utf-8") as handle:
-        for line in handle:
+    for index_path in index_paths:
+      try:
+        with open(index_path, "r", encoding="utf-8") as handle:
+          day_lines = handle.readlines()
+        for line in day_lines:
           if (time.monotonic() - search_started) > max_search_seconds:
             stop_search = True
             break
@@ -2809,8 +2837,10 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
           if len(matches) >= limit:
             stop_search = True
             break
-    except OSError:
-      continue
+      except OSError:
+        continue
+      if stop_search:
+        break
     if stop_search:
       break
 
