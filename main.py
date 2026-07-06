@@ -2638,16 +2638,16 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
           if to_digits and has_to_digits_field and to_digits not in raw:
             continue
           if method and has_method_field:
-            method_token = f'"method":"{method.upper()}"'
-            if method_token not in raw:
+            method_pattern = rf'"method"\s*:\s*"{re.escape(method.upper())}"'
+            if not re.search(method_pattern, raw):
               continue
           if response_code and has_response_field:
-            response_token = f'"response_code":"{response_code}"'
-            if response_token not in raw:
+            response_pattern = rf'"response_code"\s*:\s*"{re.escape(response_code)}"'
+            if not re.search(response_pattern, raw):
               continue
           if source_key and has_source_field and source_key not in {"las-ribbon-sbc", "rno-ribbon-sbc"}:
-            source_token = f'"source_key":"{source_key}"'
-            if source_token not in raw:
+            source_pattern = rf'"source_key"\s*:\s*"{re.escape(source_key)}"'
+            if not re.search(source_pattern, raw):
               continue
 
           if start_dt or end_dt:
