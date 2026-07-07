@@ -229,6 +229,7 @@ Priority keys:
 - Added raw capture fallback search path for SIP lookups: when JSONL index search returns zero for a filtered query, the backend now scans raw `ccsipDisplayMsg` blocks directly and parses matching calls from `.log` capture files, covering cases where real call evidence exists in raw capture but the index is incomplete/stale.
 - Mitigated SIP search 504 risk by streaming JSONL index shards and raw capture blocks instead of bulk-loading multi-GB files into memory, allowing time-limit checks to interrupt long searches before Nginx times out.
 - Fixed recent-call raw fallback ordering: raw SIP capture scans now process newest `.log` parts first, so narrow windows like `Last 5 Minutes` reach the latest call blocks before exhausting the search time budget on older files.
+- Extended recent-call raw fallback to Ribbon SBC traces: fallback block detection now recognizes Ribbon `MSGID` packets and parses bracketed Ribbon timestamps, so searches can return both Cisco CUBE and Ribbon SBC legs for the same fresh call path.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.

@@ -2101,6 +2101,29 @@ def _sip_parse_raw_block_timestamp(header_line: str, day_key: str) -> datetime.d
     base_date = datetime.datetime.now().date()
 
   line = (header_line or "")
+  bracket_match = re.search(r"^<\d+>\[([^\]]+)\]", line)
+  if bracket_match:
+    bracket_text = (bracket_match.group(1) or "").strip()
+    iso_candidate = bracket_text.replace("Z", "+00:00")
+    try:
+      parsed = datetime.datetime.fromisoformat(iso_candidate)
+      if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=local_tz)
+      return parsed
+    except ValueError:
+      pass
+    for fmt in (
+      "%Y-%m-%d %H:%M:%S.%f",
+      "%Y-%m-%d %H:%M:%S",
+      "%m/%d/%Y %H:%M:%S.%f",
+      "%m/%d/%Y %H:%M:%S",
+    ):
+      try:
+        parsed = datetime.datetime.strptime(bracket_text, fmt)
+        return parsed.replace(tzinfo=local_tz)
+      except ValueError:
+        continue
+
   match = re.search(r"\b([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+[A-Z]{3}:", line)
   if not match:
     return datetime.datetime.combine(base_date, datetime.time.min, tzinfo=local_tz)
@@ -2210,6 +2233,15 @@ def _sip_capture_records_from_raw(criteria: dict, start_dt: datetime.datetime | 
   max_search_seconds = 8.0
   raw_tokens = [token for token in [query, cisco_guid, call_id.lower(), call_id_digits_search, from_digits, to_digits] if token]
 
+  def _is_cisco_block_start(line: str) -> bool:
+    return "ccsipDisplayMsg:" in (line or "")
+
+  def _is_ribbon_block_start(line: str) -> bool:
+    return bool(re.search(r"\bMSGID:\d+\b", line or ""))
+
+  def _is_prefixed_ribbon_line(line: str) -> bool:
+    return bool(re.match(r"^<\d+>\[[^\]]+\]\s+\d+\s+[0-9a-fA-F]{4}\s+", (line or "").strip()))
+
   def _process_block(block_lines: list[str], rel_path: str, source_meta: dict, day_key: str) -> bool:
     if not block_lines:
       return False
@@ -2270,14 +2302,21 @@ def _sip_capture_records_from_raw(criteria: dict, start_dt: datetime.datetime | 
       try:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as handle:
           current_block = []
+          current_block_kind = ""
           for line_text in handle:
             if (time.monotonic() - search_started) > max_search_seconds:
               return matches[:limit]
             line = line_text.rstrip("\r\n")
-            if "ccsipDisplayMsg:" in line:
+            if _is_cisco_block_start(line) or _is_ribbon_block_start(line):
               if current_block and _process_block(current_block, rel_path, source_meta, day_key):
                 return matches[:limit]
               current_block = [line]
+              current_block_kind = "ribbon" if _is_ribbon_block_start(line) else "cisco"
+            elif current_block_kind == "ribbon" and _is_prefixed_ribbon_line(line):
+              if current_block and _process_block(current_block, rel_path, source_meta, day_key):
+                return matches[:limit]
+              current_block = [line] if _is_ribbon_block_start(line) else []
+              current_block_kind = "ribbon" if _is_ribbon_block_start(line) else ""
             elif current_block:
               current_block.append(line)
           if current_block and _process_block(current_block, rel_path, source_meta, day_key):
