@@ -2210,6 +2210,51 @@ def _sip_capture_records_from_raw(criteria: dict, start_dt: datetime.datetime | 
   max_search_seconds = 8.0
   raw_tokens = [token for token in [query, cisco_guid, call_id.lower(), call_id_digits_search, from_digits, to_digits] if token]
 
+  def _process_block(block_lines: list[str], rel_path: str, source_meta: dict, day_key: str) -> bool:
+    if not block_lines:
+      return False
+    if raw_tokens:
+      lowered = "\n".join(block_lines).lower()
+      if not any(token.lower() in lowered for token in raw_tokens):
+        return False
+
+    message_lines = []
+    for raw_line in block_lines:
+      payload = _sip_strip_debug_prefix(raw_line)
+      if payload.endswith("ccsipDisplayMsg:"):
+        continue
+      message_lines.append(payload)
+    message = "\n".join(message_lines).strip()
+    if not message:
+      return False
+
+    received_at = _sip_parse_raw_block_timestamp(block_lines[0] if block_lines else "", day_key)
+    record = _sip_parse_record(message, received_at, source_meta)
+    record["raw_file_rel"] = rel_path
+    record["index_file_rel"] = ""
+    record["day_key"] = day_key
+    record["received_at_display"] = _sip_format_received_display(record.get("received_at") or "")
+
+    if not _sip_record_matches_search_filters(
+      record,
+      query,
+      cisco_guid,
+      call_id,
+      source_key,
+      method,
+      response_code,
+      from_digits,
+      to_digits,
+      start_dt,
+      end_dt,
+      call_id_is_number_search,
+      call_id_digits_search,
+    ):
+      return False
+
+    matches.append(record)
+    return len(matches) >= limit
+
   for day_key in sorted(day_keys, reverse=True):
     for file_path in _sip_raw_files_for_day(day_key):
       if (time.monotonic() - search_started) > max_search_seconds:
@@ -2224,64 +2269,21 @@ def _sip_capture_records_from_raw(criteria: dict, start_dt: datetime.datetime | 
 
       try:
         with open(file_path, "r", encoding="utf-8", errors="ignore") as handle:
-          lines = handle.read().splitlines()
+          current_block = []
+          for line_text in handle:
+            if (time.monotonic() - search_started) > max_search_seconds:
+              return matches[:limit]
+            line = line_text.rstrip("\r\n")
+            if "ccsipDisplayMsg:" in line:
+              if current_block and _process_block(current_block, rel_path, source_meta, day_key):
+                return matches[:limit]
+              current_block = [line]
+            elif current_block:
+              current_block.append(line)
+          if current_block and _process_block(current_block, rel_path, source_meta, day_key):
+            return matches[:limit]
       except OSError:
         continue
-
-      idx = 0
-      while idx < len(lines):
-        if "ccsipDisplayMsg:" not in (lines[idx] or ""):
-          idx += 1
-          continue
-
-        block_start = idx
-        idx += 1
-        while idx < len(lines) and "ccsipDisplayMsg:" not in (lines[idx] or ""):
-          idx += 1
-        block_lines = lines[block_start:idx]
-        block_text = "\n".join(block_lines)
-        if raw_tokens:
-          lowered = block_text.lower()
-          if not any(token.lower() in lowered for token in raw_tokens):
-            continue
-
-        message_lines = []
-        for raw_line in block_lines:
-          payload = _sip_strip_debug_prefix(raw_line)
-          if payload.endswith("ccsipDisplayMsg:"):
-            continue
-          message_lines.append(payload)
-        message = "\n".join(message_lines).strip()
-        if not message:
-          continue
-
-        received_at = _sip_parse_raw_block_timestamp(block_lines[0] if block_lines else "", day_key)
-        record = _sip_parse_record(message, received_at, source_meta)
-        record["raw_file_rel"] = rel_path
-        record["index_file_rel"] = ""
-        record["day_key"] = day_key
-        record["received_at_display"] = _sip_format_received_display(record.get("received_at") or "")
-
-        if not _sip_record_matches_search_filters(
-          record,
-          query,
-          cisco_guid,
-          call_id,
-          source_key,
-          method,
-          response_code,
-          from_digits,
-          to_digits,
-          start_dt,
-          end_dt,
-          call_id_is_number_search,
-          call_id_digits_search,
-        ):
-          continue
-
-        matches.append(record)
-        if len(matches) >= limit:
-          return matches[:limit]
 
   return matches[:limit]
 
@@ -2987,202 +2989,201 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
     for index_path in index_paths:
       try:
         with open(index_path, "r", encoding="utf-8") as handle:
-          day_lines = handle.readlines()
-        for line in day_lines:
-          if (time.monotonic() - search_started) > max_search_seconds:
-            stop_search = True
-            break
-          raw = (line or "").strip()
-          if not raw:
-            continue
-          # Fast prefilter path to avoid expensive JSON decode on clearly non-matching rows.
-          has_from_digits_field = '"from_digits":' in raw
-          has_to_digits_field = '"to_digits":' in raw
-          has_method_field = '"method":' in raw
-          has_response_field = '"response_code":' in raw
-          has_source_field = '"source_key":' in raw
+          for line in handle:
+            if (time.monotonic() - search_started) > max_search_seconds:
+              stop_search = True
+              break
+            raw = (line or "").strip()
+            if not raw:
+              continue
+            # Fast prefilter path to avoid expensive JSON decode on clearly non-matching rows.
+            has_from_digits_field = '"from_digits":' in raw
+            has_to_digits_field = '"to_digits":' in raw
+            has_method_field = '"method":' in raw
+            has_response_field = '"response_code":' in raw
+            has_source_field = '"source_key":' in raw
 
-          # Only prefilter on a field when that field is present in the indexed row.
-          # Older legacy rows may omit parsed fields and must flow to reconstruction.
-          if from_digits and has_from_digits_field and from_digits not in raw:
-            continue
-          if to_digits and has_to_digits_field and to_digits not in raw:
-            continue
-          if method and has_method_field:
-            method_pattern = rf'"method"\s*:\s*"{re.escape(method.upper())}"'
-            if not re.search(method_pattern, raw):
+            # Only prefilter on a field when that field is present in the indexed row.
+            # Older legacy rows may omit parsed fields and must flow to reconstruction.
+            if from_digits and has_from_digits_field and from_digits not in raw:
               continue
-          if response_code and has_response_field:
-            response_pattern = rf'"response_code"\s*:\s*"{re.escape(response_code)}"'
-            if not re.search(response_pattern, raw):
+            if to_digits and has_to_digits_field and to_digits not in raw:
               continue
-          if source_key and has_source_field and source_key not in {"las-ribbon-sbc", "rno-ribbon-sbc"}:
-            source_pattern = rf'"source_key"\s*:\s*"{re.escape(source_key)}"'
-            if not re.search(source_pattern, raw):
+            if method and has_method_field:
+              method_pattern = rf'"method"\s*:\s*"{re.escape(method.upper())}"'
+              if not re.search(method_pattern, raw):
+                continue
+            if response_code and has_response_field:
+              response_pattern = rf'"response_code"\s*:\s*"{re.escape(response_code)}"'
+              if not re.search(response_pattern, raw):
+                continue
+            if source_key and has_source_field and source_key not in {"las-ribbon-sbc", "rno-ribbon-sbc"}:
+              source_pattern = rf'"source_key"\s*:\s*"{re.escape(source_key)}"'
+              if not re.search(source_pattern, raw):
+                continue
+
+            if start_dt or end_dt:
+              ts_match = re.search(r'"received_at":"([^"]+)"', raw)
+              if ts_match:
+                ts_text = (ts_match.group(1) or "").strip()
+                try:
+                  quick_ts = datetime.datetime.fromisoformat(ts_text)
+                  if start_dt and quick_ts < start_dt:
+                    continue
+                  if end_dt and quick_ts > end_dt:
+                    continue
+                except ValueError:
+                  pass
+
+            try:
+              record = json.loads(raw)
+            except json.JSONDecodeError:
               continue
 
-          if start_dt or end_dt:
-            ts_match = re.search(r'"received_at":"([^"]+)"', raw)
-            if ts_match:
-              ts_text = (ts_match.group(1) or "").strip()
-              try:
-                quick_ts = datetime.datetime.fromisoformat(ts_text)
-                if start_dt and quick_ts < start_dt:
+            # Legacy indexed rows may not contain cisco_guid/call_id fields yet.
+            # Derive only when a corresponding filter is actually in use.
+            if need_cisco_guid and not (record.get("cisco_guid") or "").strip():
+              raw_for_guid = (record.get("raw_message") or record.get("raw_line") or "")
+              parsed_guid = _sip_extract_first_match([r"(?im)^Cisco-Guid:\s*(.+)$", r"(?im)Cisco-Guid\s*[:=]\s*(.+)$"], raw_for_guid)
+              record["cisco_guid"] = _sip_normalize_cisco_guid(parsed_guid)
+            if need_call_id and not (record.get("call_id") or "").strip():
+              raw_for_call_id = (record.get("raw_message") or record.get("raw_line") or "")
+              parsed_call_id = _sip_extract_first_match([r"(?im)^Call-ID:\s*(.+)$", r"(?im)Call-ID\s*[:=]\s*(.+)$"], raw_for_call_id)
+              record["call_id"] = _sip_normalize_call_id(parsed_call_id)
+
+            record_ts_text = (record.get("received_at") or "").strip()
+            try:
+              record_ts = datetime.datetime.fromisoformat(record_ts_text)
+            except ValueError:
+              record_ts = None
+            record["received_at_display"] = _sip_format_received_display(record_ts_text)
+
+            if start_dt and record_ts and record_ts < start_dt:
+              continue
+            if end_dt and record_ts and record_ts > end_dt:
+              continue
+            if source_key:
+              record_key = (record.get("source_key") or "").strip().lower()
+              record_ip = (record.get("source_ip") or "").strip()
+              if source_key == "las-ribbon-sbc":
+                if record_ip != "10.241.16.217":
                   continue
-                if end_dt and quick_ts > end_dt:
+              elif source_key == "rno-ribbon-sbc":
+                if record_ip != "10.141.16.40":
                   continue
-              except ValueError:
+              else:
+                if record_key != source_key:
+                  continue
+            if cisco_guid and cisco_guid not in _sip_normalize_cisco_guid(record.get("cisco_guid") or "").lower():
+              continue
+            if call_id:
+              record_call_id = _sip_normalize_call_id(record.get("call_id") or "").lower()
+              if call_id in record_call_id:
                 pass
-
-          try:
-            record = json.loads(raw)
-          except json.JSONDecodeError:
-            continue
-
-          # Legacy indexed rows may not contain cisco_guid/call_id fields yet.
-          # Derive only when a corresponding filter is actually in use.
-          if need_cisco_guid and not (record.get("cisco_guid") or "").strip():
-            raw_for_guid = (record.get("raw_message") or record.get("raw_line") or "")
-            parsed_guid = _sip_extract_first_match([r"(?im)^Cisco-Guid:\s*(.+)$", r"(?im)Cisco-Guid\s*[:=]\s*(.+)$"], raw_for_guid)
-            record["cisco_guid"] = _sip_normalize_cisco_guid(parsed_guid)
-          if need_call_id and not (record.get("call_id") or "").strip():
-            raw_for_call_id = (record.get("raw_message") or record.get("raw_line") or "")
-            parsed_call_id = _sip_extract_first_match([r"(?im)^Call-ID:\s*(.+)$", r"(?im)Call-ID\s*[:=]\s*(.+)$"], raw_for_call_id)
-            record["call_id"] = _sip_normalize_call_id(parsed_call_id)
-
-          record_ts_text = (record.get("received_at") or "").strip()
-          try:
-            record_ts = datetime.datetime.fromisoformat(record_ts_text)
-          except ValueError:
-            record_ts = None
-          record["received_at_display"] = _sip_format_received_display(record_ts_text)
-
-          if start_dt and record_ts and record_ts < start_dt:
-            continue
-          if end_dt and record_ts and record_ts > end_dt:
-            continue
-          if source_key:
-            record_key = (record.get("source_key") or "").strip().lower()
-            record_ip = (record.get("source_ip") or "").strip()
-            if source_key == "las-ribbon-sbc":
-              if record_ip != "10.241.16.217":
+              elif call_id_is_number_search and (
+                _sip_record_matches_party_digits(record, call_id_digits_search, "from")
+                or _sip_record_matches_party_digits(record, call_id_digits_search, "to")
+              ):
+                pass
+              else:
                 continue
-            elif source_key == "rno-ribbon-sbc":
-              if record_ip != "10.141.16.40":
-                continue
-            else:
-              if record_key != source_key:
-                continue
-          if cisco_guid and cisco_guid not in _sip_normalize_cisco_guid(record.get("cisco_guid") or "").lower():
-            continue
-          if call_id:
-            record_call_id = _sip_normalize_call_id(record.get("call_id") or "").lower()
-            if call_id in record_call_id:
-              pass
-            elif call_id_is_number_search and (
-              _sip_record_matches_party_digits(record, call_id_digits_search, "from")
-              or _sip_record_matches_party_digits(record, call_id_digits_search, "to")
-            ):
-              pass
-            else:
+            if method and method not in (record.get("method") or "").strip().lower():
               continue
-          if method and method not in (record.get("method") or "").strip().lower():
-            continue
-          if response_code and response_code not in (record.get("response_code") or "").strip().lower():
-            continue
-          if from_digits and not _sip_record_matches_party_digits(record, from_digits, "from"):
-            continue
-          if to_digits and not _sip_record_matches_party_digits(record, to_digits, "to"):
-            continue
-          if query:
-            haystack = " ".join([
-              record.get("raw_line", ""),
-              record.get("raw_message", ""),
-              record.get("cisco_guid", ""),
-              record.get("call_id", ""),
-              record.get("direction", ""),
-              record.get("direction_detail", ""),
-              record.get("method", ""),
-              record.get("response_code", ""),
-              record.get("from_value", ""),
-              record.get("to_value", ""),
-              record.get("source_key", ""),
-              record.get("source_label", ""),
-            ]).lower()
-            if query not in haystack:
+            if response_code and response_code not in (record.get("response_code") or "").strip().lower():
               continue
+            if from_digits and not _sip_record_matches_party_digits(record, from_digits, "from"):
+              continue
+            if to_digits and not _sip_record_matches_party_digits(record, to_digits, "to"):
+              continue
+            if query:
+              haystack = " ".join([
+                record.get("raw_line", ""),
+                record.get("raw_message", ""),
+                record.get("cisco_guid", ""),
+                record.get("call_id", ""),
+                record.get("direction", ""),
+                record.get("direction_detail", ""),
+                record.get("method", ""),
+                record.get("response_code", ""),
+                record.get("from_value", ""),
+                record.get("to_value", ""),
+                record.get("source_key", ""),
+                record.get("source_label", ""),
+              ]).lower()
+              if query not in haystack:
+                continue
 
-          # Legacy line-based records can be expensive to reconstruct.
-          # Only resolve after quick filters, and cap total reconstructions per request.
-          # Also force enrichment for Ribbon rows when Direction is blank so
-          # metadata preamble markers (sending/received) can be recovered.
-          record_source_key = (record.get("source_key") or "").strip().lower()
-          needs_direction_enrichment = (
-            not (record.get("direction") or "").strip()
-            and record_source_key in {"las-ribbon-sbc", "rno-ribbon-sbc"}
-          )
-          if (_sip_record_needs_legacy_reconstruction(record) or needs_direction_enrichment) and legacy_resolved_count < max_legacy_resolve:
-            # Avoid timeout by skipping expensive file scans once near deadline.
-            if (time.monotonic() - search_started) > (max_search_seconds * 0.85):
-              pass
-            else:
-              legacy = _sip_resolve_legacy_message(record, source_day_cache, content_cache, line_cache)
-              legacy_resolved_count += 1
-              if legacy.get("raw_file_rel"):
-                record["raw_file_rel"] = legacy.get("raw_file_rel", "")
-              if legacy.get("raw_message"):
-                record["raw_message"] = legacy.get("raw_message", "")
+            # Legacy line-based records can be expensive to reconstruct.
+            # Only resolve after quick filters, and cap total reconstructions per request.
+            # Also force enrichment for Ribbon rows when Direction is blank so
+            # metadata preamble markers (sending/received) can be recovered.
+            record_source_key = (record.get("source_key") or "").strip().lower()
+            needs_direction_enrichment = (
+              not (record.get("direction") or "").strip()
+              and record_source_key in {"las-ribbon-sbc", "rno-ribbon-sbc"}
+            )
+            if (_sip_record_needs_legacy_reconstruction(record) or needs_direction_enrichment) and legacy_resolved_count < max_legacy_resolve:
+              # Avoid timeout by skipping expensive file scans once near deadline.
+              if (time.monotonic() - search_started) > (max_search_seconds * 0.85):
+                pass
+              else:
+                legacy = _sip_resolve_legacy_message(record, source_day_cache, content_cache, line_cache)
+                legacy_resolved_count += 1
+                if legacy.get("raw_file_rel"):
+                  record["raw_file_rel"] = legacy.get("raw_file_rel", "")
+                if legacy.get("raw_message"):
+                  record["raw_message"] = legacy.get("raw_message", "")
 
-              block_id = (legacy.get("block_id") or "").strip()
-              if block_id:
-                if block_id in seen_block_ids:
-                  continue
-                seen_block_ids.add(block_id)
+                block_id = (legacy.get("block_id") or "").strip()
+                if block_id:
+                  if block_id in seen_block_ids:
+                    continue
+                  seen_block_ids.add(block_id)
 
-              if (record.get("raw_message") or "").strip():
-                parse_ts = record_ts if record_ts else datetime.datetime.now(datetime.timezone.utc)
-                source_meta = {
-                  "source_ip": record.get("source_ip", ""),
-                  "source_key": record.get("source_key", ""),
-                  "source_label": record.get("source_label", ""),
-                  "source_name": record.get("source_name", ""),
-                  "origin_id": record.get("origin_id", ""),
-                }
-                enriched = _sip_parse_record(record.get("raw_message", ""), parse_ts, source_meta)
-                record["cisco_guid"] = enriched.get("cisco_guid", record.get("cisco_guid", ""))
-                record["call_id"] = enriched.get("call_id", record.get("call_id", ""))
-                record["direction"] = enriched.get("direction", record.get("direction", ""))
-                record["direction_detail"] = enriched.get("direction_detail", record.get("direction_detail", ""))
-                record["method"] = enriched.get("method", record.get("method", ""))
-                record["response_code"] = enriched.get("response_code", record.get("response_code", ""))
-                record["from_value"] = enriched.get("from_value", record.get("from_value", ""))
-                record["to_value"] = enriched.get("to_value", record.get("to_value", ""))
-                record["from_digits"] = enriched.get("from_digits", record.get("from_digits", ""))
-                record["to_digits"] = enriched.get("to_digits", record.get("to_digits", ""))
+                if (record.get("raw_message") or "").strip():
+                  parse_ts = record_ts if record_ts else datetime.datetime.now(datetime.timezone.utc)
+                  source_meta = {
+                    "source_ip": record.get("source_ip", ""),
+                    "source_key": record.get("source_key", ""),
+                    "source_label": record.get("source_label", ""),
+                    "source_name": record.get("source_name", ""),
+                    "origin_id": record.get("origin_id", ""),
+                  }
+                  enriched = _sip_parse_record(record.get("raw_message", ""), parse_ts, source_meta)
+                  record["cisco_guid"] = enriched.get("cisco_guid", record.get("cisco_guid", ""))
+                  record["call_id"] = enriched.get("call_id", record.get("call_id", ""))
+                  record["direction"] = enriched.get("direction", record.get("direction", ""))
+                  record["direction_detail"] = enriched.get("direction_detail", record.get("direction_detail", ""))
+                  record["method"] = enriched.get("method", record.get("method", ""))
+                  record["response_code"] = enriched.get("response_code", record.get("response_code", ""))
+                  record["from_value"] = enriched.get("from_value", record.get("from_value", ""))
+                  record["to_value"] = enriched.get("to_value", record.get("to_value", ""))
+                  record["from_digits"] = enriched.get("from_digits", record.get("from_digits", ""))
+                  record["to_digits"] = enriched.get("to_digits", record.get("to_digits", ""))
 
-          if not (record.get("direction") or "").strip():
-            raw_for_direction = record.get("raw_message") or record.get("raw_line") or ""
-            inline_direction = _sip_message_direction(_sip_message_lines(raw_for_direction))
-            if inline_direction:
-              record["direction"] = inline_direction
-            else:
-              inferred_direction, inferred_endpoint = _sip_infer_direction_from_text(raw_for_direction)
-              if inferred_direction:
-                record["direction"] = inferred_direction
-                if not (record.get("direction_detail") or "").strip():
-                  record["direction_detail"] = _sip_direction_label(inferred_direction, inferred_endpoint)
-          if not (record.get("direction_detail") or "").strip():
-            inline_lines = _sip_message_lines(record.get("raw_message") or record.get("raw_line") or "")
-            inline_direction = (record.get("direction") or _sip_message_direction(inline_lines) or "").strip()
-            inline_endpoint = _sip_extract_via_endpoint(inline_lines)
-            record["direction_detail"] = _sip_direction_label(inline_direction, inline_endpoint)
+            if not (record.get("direction") or "").strip():
+              raw_for_direction = record.get("raw_message") or record.get("raw_line") or ""
+              inline_direction = _sip_message_direction(_sip_message_lines(raw_for_direction))
+              if inline_direction:
+                record["direction"] = inline_direction
+              else:
+                inferred_direction, inferred_endpoint = _sip_infer_direction_from_text(raw_for_direction)
+                if inferred_direction:
+                  record["direction"] = inferred_direction
+                  if not (record.get("direction_detail") or "").strip():
+                    record["direction_detail"] = _sip_direction_label(inferred_direction, inferred_endpoint)
+            if not (record.get("direction_detail") or "").strip():
+              inline_lines = _sip_message_lines(record.get("raw_message") or record.get("raw_line") or "")
+              inline_direction = (record.get("direction") or _sip_message_direction(inline_lines) or "").strip()
+              inline_endpoint = _sip_extract_via_endpoint(inline_lines)
+              record["direction_detail"] = _sip_direction_label(inline_direction, inline_endpoint)
 
-          _sip_enforce_invite_target_direction(record)
+            _sip_enforce_invite_target_direction(record)
 
-          matches.append(record)
-          if len(matches) >= limit:
-            stop_search = True
-            break
+            matches.append(record)
+            if len(matches) >= limit:
+              stop_search = True
+              break
       except OSError:
         continue
       if stop_search:
