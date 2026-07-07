@@ -3289,7 +3289,7 @@ def _sip_raw_files_for_source_day(source_key: str, day_key: str) -> list[str]:
     full_path = os.path.join(source_day_root, name)
     if os.path.isfile(full_path):
       files.append(full_path)
-  files.sort()
+  files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
   return files
 
 
@@ -3316,7 +3316,7 @@ def _sip_raw_files_for_day(day_key: str) -> list[str]:
       if os.path.isfile(full_path):
         files.append(full_path)
 
-  files.sort()
+  files.sort(key=lambda path: os.path.getmtime(path), reverse=True)
   return files
 
 
