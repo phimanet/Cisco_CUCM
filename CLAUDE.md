@@ -223,6 +223,7 @@ Priority keys:
 
 ### 2026-07-07
 - Fixed SIP Call Search browser-to-server time-window mismatch: `datetime-local` search/file filter values are now serialized to timezone-aware ISO timestamps before request submission, preventing recent-call searches from missing records when operator timezone differs from the Ubuntu server timezone.
+- Expanded SIP ANI/DNIS extraction and filter fallback for inbound call search: `From Digits` / `To Digits` now consider alternate SIP identity headers (`P-Asserted-Identity`, `Remote-Party-ID`, `P-Preferred-Identity`, `Diversion`, `History-Info`, request URI) and can match against raw SIP message content when older indexed rows have incomplete parsed digit fields.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.

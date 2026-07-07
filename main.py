@@ -2151,17 +2151,97 @@ def _sip_extract_sip_user_digits(value: str) -> str:
   if not text:
     return ""
 
-  # Prefer SIP URI user part, e.g. sip:8585236648@10.141.18.11 -> 8585236648.
-  match = re.search(r"(?i)sips?:\s*\+?([0-9]+)(?=@)", text)
+  # Prefer URI user part, e.g. sip:8585236648@10.141.18.11 or tel:+18585236648.
+  match = re.search(r"(?i)(?:sips?|tel):\s*\+?([0-9]+)(?=[@;>]|$)", text)
   if match:
     return _sip_extract_digits(match.group(1))
 
   # Fallback to bracketed URI user if format is non-standard.
-  match = re.search(r"<\s*(?:sips?:)?\s*\+?([0-9]+)(?=@)", text, flags=re.IGNORECASE)
+  match = re.search(r"<\s*(?:(?:sips?|tel):)?\s*\+?([0-9]+)(?=[@;>]|$)", text, flags=re.IGNORECASE)
   if match:
     return _sip_extract_digits(match.group(1))
 
   return _sip_extract_digits(text)
+
+
+def _sip_extract_named_header(message: str, header_names: list[str]) -> str:
+  text = (message or "")
+  if not text or not header_names:
+    return ""
+  header_pattern = "|".join(re.escape(name) for name in header_names if (name or "").strip())
+  if not header_pattern:
+    return ""
+  return _sip_extract_first_match([rf"(?im)^(?:{header_pattern})\s*:\s*(.+)$"], text)
+
+
+def _sip_extract_request_uri_digits(message: str) -> str:
+  text = (message or "")
+  if not text:
+    return ""
+  first_line = ""
+  for line in text.splitlines():
+    candidate = (line or "").strip()
+    if candidate:
+      first_line = candidate
+      break
+  if not first_line:
+    return ""
+  match = re.search(r"(?i)^(?:INVITE|REGISTER|BYE|ACK|CANCEL|OPTIONS|INFO|UPDATE|SUBSCRIBE|NOTIFY|REFER|PRACK|MESSAGE|PUBLISH)\s+(?:sips?|tel):\s*\+?([0-9]+)(?=[@;>\s]|$)", first_line)
+  if match:
+    return _sip_extract_digits(match.group(1))
+  return ""
+
+
+def _sip_extract_party_digits(message: str, party: str) -> str:
+  text = (message or "")
+  if not text:
+    return ""
+
+  normalized_party = (party or "").strip().lower()
+  if normalized_party == "from":
+    header_candidates = [
+      ["From", "f"],
+      ["P-Asserted-Identity"],
+      ["Remote-Party-ID"],
+      ["P-Preferred-Identity"],
+    ]
+  else:
+    header_candidates = [
+      ["To", "t"],
+      ["Diversion"],
+      ["History-Info"],
+      ["Request-URI"],
+    ]
+
+  for header_names in header_candidates:
+    header_value = _sip_extract_named_header(text, header_names)
+    digits = _sip_extract_sip_user_digits(header_value)
+    if digits:
+      return digits
+
+  if normalized_party == "to":
+    return _sip_extract_request_uri_digits(text)
+
+  return ""
+
+
+def _sip_record_matches_party_digits(record: dict, target_digits: str, party: str) -> bool:
+  target = _sip_extract_digits(target_digits or "")
+  if not target:
+    return True
+
+  field_name = "from_digits" if (party or "").strip().lower() == "from" else "to_digits"
+  direct_value = _sip_extract_digits(record.get(field_name) or "")
+  if direct_value and target in direct_value:
+    return True
+
+  raw_message = (record.get("raw_message") or record.get("raw_line") or "")
+  fallback_value = _sip_extract_party_digits(raw_message, party)
+  if fallback_value and target in fallback_value:
+    record[field_name] = fallback_value
+    return True
+
+  return False
 
 
 def _sip_extract_first_match(patterns: list[str], text: str) -> str:
@@ -2275,6 +2355,8 @@ def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_m
   cisco_guid = _sip_normalize_cisco_guid(cisco_guid)
   from_value = _sip_extract_first_match([r"(?im)^From:\s*(.+)$", r"(?im)From\s*[:=]\s*(.+)$"], message)
   to_value = _sip_extract_first_match([r"(?im)^To:\s*(.+)$", r"(?im)To\s*[:=]\s*(.+)$"], message)
+  from_digits = _sip_extract_party_digits(message, "from")
+  to_digits = _sip_extract_party_digits(message, "to")
   cseq_value = _sip_extract_first_match([r"(?im)^CSeq:\s*\d+\s+([A-Z]+)$", r"(?im)CSeq\s*[:=]\s*\d+\s+([A-Z]+)$"], message)
   method = _sip_extract_first_match([
     r"(?i)^(INVITE|REGISTER|BYE|ACK|CANCEL|OPTIONS|INFO|UPDATE|SUBSCRIBE|NOTIFY|REFER|PRACK|MESSAGE|PUBLISH)\s+sip:",
@@ -2312,8 +2394,8 @@ def _sip_parse_record(raw_message: str, received_at: datetime.datetime, source_m
     "response_code": response_code,
     "from_value": from_value,
     "to_value": to_value,
-    "from_digits": _sip_extract_sip_user_digits(from_value),
-    "to_digits": _sip_extract_sip_user_digits(to_value),
+    "from_digits": from_digits,
+    "to_digits": to_digits,
     "cseq_method": cseq_value,
     "raw_line": first_line,
     "raw_message": message,
@@ -2744,9 +2826,9 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
             continue
           if response_code and response_code not in (record.get("response_code") or "").strip().lower():
             continue
-          if from_digits and from_digits not in (record.get("from_digits") or ""):
+          if from_digits and not _sip_record_matches_party_digits(record, from_digits, "from"):
             continue
-          if to_digits and to_digits not in (record.get("to_digits") or ""):
+          if to_digits and not _sip_record_matches_party_digits(record, to_digits, "to"):
             continue
           if query:
             haystack = " ".join([
