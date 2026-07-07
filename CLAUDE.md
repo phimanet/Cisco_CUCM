@@ -226,6 +226,7 @@ Priority keys:
 - Expanded SIP ANI/DNIS extraction and filter fallback for inbound call search: `From Digits` / `To Digits` now consider alternate SIP identity headers (`P-Asserted-Identity`, `Remote-Party-ID`, `P-Preferred-Identity`, `Diversion`, `History-Info`, request URI) and can match against raw SIP message content when older indexed rows have incomplete parsed digit fields.
 - Hardened SIP search UX for operator input patterns: a digits-only value entered in the `Call-ID` field is now treated as a caller/called number fallback match, and the UI placeholder/status text now advertise that behavior to reduce false-zero searches.
 - Fixed legacy CUBE line parsing for SIP search: header extraction now strips syslog debug prefixes before matching `From:`, `To:`, `Call-ID:`, and related SIP headers, allowing older single-line indexed records to match ANI/DNIS/Call-ID searches (validated against raw `6194104147` call block at `2026-07-07 13:33:44 PST`).
+- Added raw capture fallback search path for SIP lookups: when JSONL index search returns zero for a filtered query, the backend now scans raw `ccsipDisplayMsg` blocks directly and parses matching calls from `.log` capture files, covering cases where real call evidence exists in raw capture but the index is incomplete/stale.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.

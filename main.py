@@ -2064,6 +2064,228 @@ def _sip_parse_iso_ts(value: str) -> datetime.datetime | None:
     return None
 
 
+def _sip_source_meta_for_key(source_key: str) -> dict:
+  key = (source_key or "").strip()
+  if not key:
+    return {
+      "source_ip": "",
+      "source_key": "",
+      "source_label": "",
+      "source_name": "",
+      "origin_id": "",
+    }
+  for source_ip, source_info in SIP_CALL_SEARCH_SOURCE_MAP.items():
+    if (source_info.get("source_key") or "").strip() == key:
+      return {
+        "source_ip": source_ip,
+        "source_key": key,
+        "source_label": (source_info.get("source_label") or key).strip(),
+        "source_name": (source_info.get("source_name") or key).strip(),
+        "origin_id": (source_info.get("source_name") or key).strip(),
+      }
+  return {
+    "source_ip": "",
+    "source_key": key,
+    "source_label": key,
+    "source_name": key,
+    "origin_id": key,
+  }
+
+
+def _sip_parse_raw_block_timestamp(header_line: str, day_key: str) -> datetime.datetime:
+  local_tz = datetime.datetime.now().astimezone().tzinfo
+  day_text = (day_key or "").strip()
+  try:
+    base_date = datetime.date.fromisoformat(day_text) if day_text else datetime.datetime.now().date()
+  except ValueError:
+    base_date = datetime.datetime.now().date()
+
+  line = (header_line or "")
+  match = re.search(r"\b([A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}(?:\.\d+)?)\s+[A-Z]{3}:", line)
+  if not match:
+    return datetime.datetime.combine(base_date, datetime.time.min, tzinfo=local_tz)
+
+  stamp = re.sub(r"\s+", " ", match.group(1).strip())
+  year = base_date.year
+  for fmt in ("%Y %b %d %H:%M:%S.%f", "%Y %b %d %H:%M:%S"):
+    try:
+      parsed = datetime.datetime.strptime(f"{year} {stamp}", fmt)
+      return parsed.replace(tzinfo=local_tz)
+    except ValueError:
+      continue
+  return datetime.datetime.combine(base_date, datetime.time.min, tzinfo=local_tz)
+
+
+def _sip_record_matches_search_filters(
+  record: dict,
+  query: str,
+  cisco_guid: str,
+  call_id: str,
+  source_key: str,
+  method: str,
+  response_code: str,
+  from_digits: str,
+  to_digits: str,
+  start_dt: datetime.datetime | None,
+  end_dt: datetime.datetime | None,
+  call_id_is_number_search: bool,
+  call_id_digits_search: str,
+) -> bool:
+  record_ts = _sip_parse_iso_ts(record.get("received_at") or "")
+  if start_dt and record_ts and record_ts < start_dt:
+    return False
+  if end_dt and record_ts and record_ts > end_dt:
+    return False
+
+  if source_key:
+    record_key = (record.get("source_key") or "").strip().lower()
+    if record_key != source_key:
+      return False
+  if cisco_guid and cisco_guid not in _sip_normalize_cisco_guid(record.get("cisco_guid") or "").lower():
+    return False
+  if call_id:
+    record_call_id = _sip_normalize_call_id(record.get("call_id") or "").lower()
+    if call_id in record_call_id:
+      pass
+    elif call_id_is_number_search and (
+      _sip_record_matches_party_digits(record, call_id_digits_search, "from")
+      or _sip_record_matches_party_digits(record, call_id_digits_search, "to")
+    ):
+      pass
+    else:
+      return False
+  if method and method not in (record.get("method") or "").strip().lower():
+    return False
+  if response_code and response_code not in (record.get("response_code") or "").strip().lower():
+    return False
+  if from_digits and not _sip_record_matches_party_digits(record, from_digits, "from"):
+    return False
+  if to_digits and not _sip_record_matches_party_digits(record, to_digits, "to"):
+    return False
+  if query:
+    haystack = " ".join([
+      record.get("raw_line", ""),
+      record.get("raw_message", ""),
+      record.get("cisco_guid", ""),
+      record.get("call_id", ""),
+      record.get("direction", ""),
+      record.get("direction_detail", ""),
+      record.get("method", ""),
+      record.get("response_code", ""),
+      record.get("from_value", ""),
+      record.get("to_value", ""),
+      record.get("source_key", ""),
+      record.get("source_label", ""),
+    ]).lower()
+    if query not in haystack:
+      return False
+  return True
+
+
+def _sip_capture_records_from_raw(criteria: dict, start_dt: datetime.datetime | None, end_dt: datetime.datetime | None, limit: int) -> list[dict]:
+  query = (criteria.get("query") or "").strip().lower()
+  cisco_guid = _sip_normalize_cisco_guid(criteria.get("cisco_guid") or "").lower()
+  raw_call_id_input = (criteria.get("call_id") or "").strip()
+  call_id = _sip_normalize_call_id(raw_call_id_input).lower()
+  source_key = (criteria.get("source_key") or "").strip().lower()
+  method = (criteria.get("method") or "").strip().lower()
+  response_code = (criteria.get("response_code") or "").strip().lower()
+  from_digits = _sip_extract_digits(criteria.get("from_digits") or "")
+  to_digits = _sip_extract_digits(criteria.get("to_digits") or "")
+  call_id_digits_search = _sip_extract_digits(raw_call_id_input) if _sip_value_looks_like_phone_digits(raw_call_id_input) else ""
+  call_id_is_number_search = bool(call_id_digits_search) and not from_digits and not to_digits
+
+  start_day = start_dt.astimezone().strftime("%Y-%m-%d") if start_dt else ""
+  end_day = end_dt.astimezone().strftime("%Y-%m-%d") if end_dt else ""
+  day_keys = []
+  for day_key in _sip_day_keys():
+    if start_day and day_key < start_day:
+      continue
+    if end_day and day_key > end_day:
+      continue
+    day_keys.append(day_key)
+
+  matches = []
+  search_started = time.monotonic()
+  max_search_seconds = 8.0
+  raw_tokens = [token for token in [query, cisco_guid, call_id.lower(), call_id_digits_search, from_digits, to_digits] if token]
+
+  for day_key in sorted(day_keys, reverse=True):
+    for file_path in _sip_raw_files_for_day(day_key):
+      if (time.monotonic() - search_started) > max_search_seconds:
+        return matches[:limit]
+
+      rel_path = _sip_rel_path(file_path)
+      path_parts = rel_path.split("/")
+      file_source_key = path_parts[1] if len(path_parts) >= 3 and path_parts[0] == "raw" else ""
+      if source_key and file_source_key and file_source_key.lower() != source_key:
+        continue
+      source_meta = _sip_source_meta_for_key(file_source_key)
+
+      try:
+        with open(file_path, "r", encoding="utf-8", errors="ignore") as handle:
+          lines = handle.read().splitlines()
+      except OSError:
+        continue
+
+      idx = 0
+      while idx < len(lines):
+        if "ccsipDisplayMsg:" not in (lines[idx] or ""):
+          idx += 1
+          continue
+
+        block_start = idx
+        idx += 1
+        while idx < len(lines) and "ccsipDisplayMsg:" not in (lines[idx] or ""):
+          idx += 1
+        block_lines = lines[block_start:idx]
+        block_text = "\n".join(block_lines)
+        if raw_tokens:
+          lowered = block_text.lower()
+          if not any(token.lower() in lowered for token in raw_tokens):
+            continue
+
+        message_lines = []
+        for raw_line in block_lines:
+          payload = _sip_strip_debug_prefix(raw_line)
+          if payload.endswith("ccsipDisplayMsg:"):
+            continue
+          message_lines.append(payload)
+        message = "\n".join(message_lines).strip()
+        if not message:
+          continue
+
+        received_at = _sip_parse_raw_block_timestamp(block_lines[0] if block_lines else "", day_key)
+        record = _sip_parse_record(message, received_at, source_meta)
+        record["raw_file_rel"] = rel_path
+        record["index_file_rel"] = ""
+        record["day_key"] = day_key
+        record["received_at_display"] = _sip_format_received_display(record.get("received_at") or "")
+
+        if not _sip_record_matches_search_filters(
+          record,
+          query,
+          cisco_guid,
+          call_id,
+          source_key,
+          method,
+          response_code,
+          from_digits,
+          to_digits,
+          start_dt,
+          end_dt,
+          call_id_is_number_search,
+          call_id_digits_search,
+        ):
+          continue
+
+        matches.append(record)
+        if len(matches) >= limit:
+          return matches[:limit]
+
+  return matches[:limit]
+
+
 def _sip_assign_call_group_ids(records: list[dict]) -> list[dict]:
   if not records:
     return records
@@ -2967,6 +3189,9 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
         break
     if stop_search:
       break
+
+  if not matches and any([query, cisco_guid, call_id, from_digits, to_digits]):
+    matches = _sip_capture_records_from_raw(criteria, start_dt, end_dt, limit)
 
   _sip_assign_call_group_ids(matches)
   return matches[:limit]
