@@ -21556,6 +21556,14 @@ def sip_call_search_page(request: Request):
           return yyyy + '-' + mm + '-' + dd + 'T' + hh + ':' + mi;
         }}
 
+        function normalizeDatetimeLocalForApi(value) {{
+          const text = String(value || '').trim();
+          if (!text) return '';
+          const parsed = new Date(text);
+          if (Number.isNaN(parsed.getTime())) return text;
+          return parsed.toISOString();
+        }}
+
         function setDefaultDateRange() {{
           if (!form) return;
           const startInput = form.querySelector('input[name="start_ts"]');
@@ -21759,7 +21767,10 @@ def sip_call_search_page(request: Request):
           try {{
             const fd = new FormData(form);
             const body = {{}};
-            fd.forEach(function (value, key) {{ body[key] = String(value || '').trim(); }});
+            fd.forEach(function (value, key) {{
+              const text = String(value || '').trim();
+              body[key] = (key === 'start_ts' || key === 'end_ts') ? normalizeDatetimeLocalForApi(text) : text;
+            }});
             const response = await fetch('/sip-call-search/search', {{
               method: 'POST',
               headers: {{ 'Content-Type': 'application/json' }},
@@ -21794,8 +21805,8 @@ def sip_call_search_page(request: Request):
           try {{
             const params = new URLSearchParams();
             const limitValue = String((filesLimitEl && filesLimitEl.value) || '5').trim();
-            const startValue = String((filesStartTsEl && filesStartTsEl.value) || '').trim();
-            const endValue = String((filesEndTsEl && filesEndTsEl.value) || '').trim();
+            const startValue = normalizeDatetimeLocalForApi(String((filesStartTsEl && filesStartTsEl.value) || '').trim());
+            const endValue = normalizeDatetimeLocalForApi(String((filesEndTsEl && filesEndTsEl.value) || '').trim());
             params.set('limit', limitValue || '5');
             if (startValue) params.set('start_ts', startValue);
             if (endValue) params.set('end_ts', endValue);

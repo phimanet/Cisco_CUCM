@@ -221,6 +221,9 @@ Priority keys:
 - Queue membership retrieval now uses multi-endpoint fallback (`/members`, `/members?expand=user`, `/users`) with per-strategy page diagnostics surfaced in the UI and response payload.
 - Queue-based user extraction fallback now reuses the same queue-members helper so membership checks benefit from identical endpoint fallback behavior.
 
+### 2026-07-07
+- Fixed SIP Call Search browser-to-server time-window mismatch: `datetime-local` search/file filter values are now serialized to timezone-aware ISO timestamps before request submission, preventing recent-call searches from missing records when operator timezone differs from the Ubuntu server timezone.
+
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
 - Verified LAB parity after pull/restart: `/healthz` now returns `git_commit":"0c59386"` and service is healthy.
