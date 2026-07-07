@@ -2244,6 +2244,17 @@ def _sip_record_matches_party_digits(record: dict, target_digits: str, party: st
   return False
 
 
+def _sip_value_looks_like_phone_digits(value: str) -> bool:
+  text = (value or "").strip()
+  if not text:
+    return False
+  digits = _sip_extract_digits(text)
+  if len(digits) < 7 or len(digits) > 15:
+    return False
+  simplified = re.sub(r"[\s().+-]", "", text)
+  return simplified.isdigit()
+
+
 def _sip_extract_first_match(patterns: list[str], text: str) -> str:
   for pattern in patterns:
     match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
@@ -2680,7 +2691,8 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   max_search_seconds = 16.0 if legacy_expand else 8.0
   query = (criteria.get("query") or "").strip().lower()
   cisco_guid = _sip_normalize_cisco_guid(criteria.get("cisco_guid") or "").lower()
-  call_id = _sip_normalize_call_id(criteria.get("call_id") or "").lower()
+  raw_call_id_input = (criteria.get("call_id") or "").strip()
+  call_id = _sip_normalize_call_id(raw_call_id_input).lower()
   need_cisco_guid = bool(cisco_guid)
   need_call_id = bool(call_id)
   source_key = (criteria.get("source_key") or "").strip().lower()
@@ -2688,6 +2700,8 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
   response_code = (criteria.get("response_code") or "").strip().lower()
   from_digits = _sip_extract_digits(criteria.get("from_digits") or "")
   to_digits = _sip_extract_digits(criteria.get("to_digits") or "")
+  call_id_digits_search = _sip_extract_digits(raw_call_id_input) if _sip_value_looks_like_phone_digits(raw_call_id_input) else ""
+  call_id_is_number_search = bool(call_id_digits_search) and not from_digits and not to_digits
   start_ts = (criteria.get("start_ts") or "").strip()
   end_ts = (criteria.get("end_ts") or "").strip()
   try:
@@ -2820,8 +2834,17 @@ def _sip_capture_records_for_search(criteria: dict) -> list[dict]:
                 continue
           if cisco_guid and cisco_guid not in _sip_normalize_cisco_guid(record.get("cisco_guid") or "").lower():
             continue
-          if call_id and call_id not in _sip_normalize_call_id(record.get("call_id") or "").lower():
-            continue
+          if call_id:
+            record_call_id = _sip_normalize_call_id(record.get("call_id") or "").lower()
+            if call_id in record_call_id:
+              pass
+            elif call_id_is_number_search and (
+              _sip_record_matches_party_digits(record, call_id_digits_search, "from")
+              or _sip_record_matches_party_digits(record, call_id_digits_search, "to")
+            ):
+              pass
+            else:
+              continue
           if method and method not in (record.get("method") or "").strip().lower():
             continue
           if response_code and response_code not in (record.get("response_code") or "").strip().lower():
@@ -21481,7 +21504,7 @@ def sip_call_search_page(request: Request):
           <div class="search-grid">
             <select name="source_key"><option value="">All Sources</option><option value="las-voip-rtr">Las Vegas CUBE</option><option value="las-ribbon-sbc">Las Vegas Ribbon SBC</option><option value="RNOVOIPRT01">Reno CUBE</option><option value="rno-ribbon-sbc">Reno Ribbon SBC</option></select>
             <input name="cisco_guid" placeholder="Cisco-GUID (recommended)">
-            <input name="call_id" placeholder="Call-ID (optional)">
+            <input name="call_id" placeholder="Call-ID or phone number (optional)">
             <input name="method" placeholder="Method (INVITE, BYE, etc.)">
             <input name="response_code" placeholder="Response Code (200, 404, etc.)">
             <input name="from_digits" placeholder="From Digits">
@@ -21509,7 +21532,7 @@ def sip_call_search_page(request: Request):
             <button type="button" id="sip-refresh-status-btn" style="background:linear-gradient(180deg,#516d8d,#355978);">Refresh Status</button>
           </div>
         </form>
-        <p class="muted" id="sip-search-status" style="min-height:18px;">Ready. Normal filtered searches auto-reconstruct a small set of legacy rows; enable Deep Legacy Parse for broader legacy reconstruction.</p>
+        <p class="muted" id="sip-search-status" style="min-height:18px;">Ready. Normal filtered searches auto-reconstruct a small set of legacy rows; enable Deep Legacy Parse for broader legacy reconstruction. A digits-only value in the Call-ID box also searches caller/called numbers.</p>
         <div id="sip-search-results" style="overflow-x:auto;"></div>
         <p class="muted" id="sip-ladder-status" style="min-height:18px;margin-top:10px;">Cisco-GUID ladder diagram is generated on demand (Call-ID supported for compatibility).</p>
         <div id="sip-ladder-output" style="overflow-x:auto;"></div>
