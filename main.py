@@ -2164,6 +2164,16 @@ def _sip_extract_sip_user_digits(value: str) -> str:
   return _sip_extract_digits(text)
 
 
+def _sip_normalize_message_for_header_search(text: str) -> str:
+  raw_text = (text or "")
+  if not raw_text:
+    return ""
+  normalized_lines = []
+  for line in raw_text.splitlines():
+    normalized_lines.append(_sip_strip_debug_prefix(line))
+  return "\n".join(normalized_lines)
+
+
 def _sip_extract_named_header(message: str, header_names: list[str]) -> str:
   text = (message or "")
   if not text or not header_names:
@@ -2175,7 +2185,7 @@ def _sip_extract_named_header(message: str, header_names: list[str]) -> str:
 
 
 def _sip_extract_request_uri_digits(message: str) -> str:
-  text = (message or "")
+  text = _sip_normalize_message_for_header_search(message)
   if not text:
     return ""
   first_line = ""
@@ -2256,11 +2266,20 @@ def _sip_value_looks_like_phone_digits(value: str) -> bool:
 
 
 def _sip_extract_first_match(patterns: list[str], text: str) -> str:
+  raw_text = (text or "")
   for pattern in patterns:
-    match = re.search(pattern, text, flags=re.IGNORECASE | re.MULTILINE)
+    match = re.search(pattern, raw_text, flags=re.IGNORECASE | re.MULTILINE)
     if match:
       value = match.group(1).strip()
       return value
+
+  normalized_text = _sip_normalize_message_for_header_search(raw_text)
+  if normalized_text and normalized_text != raw_text:
+    for pattern in patterns:
+      match = re.search(pattern, normalized_text, flags=re.IGNORECASE | re.MULTILINE)
+      if match:
+        value = match.group(1).strip()
+        return value
   return ""
 
 
