@@ -5227,6 +5227,7 @@ def _wants_json_response(request: Request) -> bool:
     "/strike-mask/in-use",
     "/lookup/sms-number-look",
     "/twilio/amieweb/sms-host",
+    "/twilio/amieweb/hosting-ready",
     "/cert-manager/lab/inventory",
     "/ops/integrations/feasibility",
     "/ops/parity-report",
@@ -6385,6 +6386,117 @@ def _list_twilio_incoming_phone_numbers(lookup_sid: str, lookup_token: str, forc
     return {"ok": True, "status": "OK", "numbers": cached_numbers}
   except Exception as exc:
     return {"ok": False, "status": f"Lookup error: {exc}", "numbers": []}
+
+
+def _normalize_twilio_hosted_status(value: str) -> str:
+  return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
+
+
+def _list_twilio_hosted_number_orders(lookup_sid: str, lookup_token: str) -> dict:
+  if not lookup_sid or not lookup_token:
+    return {"ok": False, "status": "Twilio account not configured", "orders": []}
+
+  if TWILIO_ACCOUNT_SID and lookup_sid == TWILIO_ACCOUNT_SID:
+    return {
+      "ok": False,
+      "status": "Twilio subaccount SID is required; parent account is not allowed for hosted-number lookup",
+      "orders": [],
+    }
+
+  hosted_order_endpoints = [
+    "https://preview.twilio.com/HostedNumbers/HostedNumberOrders",
+    "https://preview.twilio.com/HostedNumbers/HostedNumberOrders.json",
+    f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers/HostedNumberOrders.json",
+    f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers/HostedNumberOrders",
+    "https://api.twilio.com/2010-04-01/IncomingPhoneNumbers/HostedNumberOrders.json",
+    "https://api.twilio.com/2010-04-01/IncomingPhoneNumbers/HostedNumberOrders",
+  ]
+
+  auth_attempts = [(lookup_sid, lookup_token, "subaccount", False)]
+  if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_ACCOUNT_SID != lookup_sid:
+    auth_attempts.append((TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, "parent-account", True))
+
+  attempt_errors = []
+  for auth_sid, auth_token, auth_label, include_account_sid in auth_attempts:
+    for endpoint in hosted_order_endpoints:
+      try:
+        orders = []
+        next_url = endpoint
+        next_params = {"PageSize": 100}
+        if include_account_sid:
+          next_params["AccountSid"] = lookup_sid
+
+        while next_url:
+          response = requests.get(
+            next_url,
+            params=next_params,
+            auth=(auth_sid, auth_token),
+            verify=False,
+            timeout=20,
+          )
+
+          if response.status_code != 200:
+            body = {}
+            if response.text:
+              try:
+                body = response.json()
+              except Exception:
+                body = {}
+            err_message = str(body.get("message", "") or body.get("Message", "")).strip()
+            if not err_message:
+              raw_message = (response.text or "").strip().replace("\r", " ").replace("\n", " ")
+              err_message = raw_message[:220] if raw_message else f"HTTP {response.status_code}"
+            attempt_errors.append(f"AMIEWeb {auth_label} [{endpoint}]: {err_message}")
+            orders = []
+            break
+
+          payload = response.json() if response.text else {}
+          page_orders = []
+          for key in [
+            "orders",
+            "hosted_number_orders",
+            "incoming_phone_number_hosted_number_orders",
+            "incoming_phone_numbers_hosted_number_orders",
+          ]:
+            value = payload.get(key)
+            if isinstance(value, list):
+              page_orders = value
+              break
+
+          if not page_orders and isinstance(payload, dict):
+            # Some Twilio endpoints can return a single order object.
+            status_marker = str(payload.get("status", "") or payload.get("Status", "")).strip()
+            sid_marker = str(payload.get("sid", "") or payload.get("Sid", "")).strip()
+            if status_marker or sid_marker:
+              page_orders = [payload]
+
+          orders.extend(page_orders)
+
+          next_uri = str(payload.get("next_page_uri", "") or "").strip()
+          if next_uri:
+            next_url = urljoin("https://api.twilio.com", next_uri)
+            next_params = None
+          else:
+            next_url = None
+
+        if orders or not attempt_errors:
+          return {
+            "ok": True,
+            "status": "OK",
+            "orders": orders,
+            "lookup_account_sid": lookup_sid,
+            "lookup_account_name": TWILIO_SUBACCOUNT_NAME,
+          }
+      except Exception as exc:
+        attempt_errors.append(f"AMIEWeb {auth_label} [{endpoint}]: Hosted order lookup error: {exc}")
+
+  return {
+    "ok": False,
+    "status": " | ".join(attempt_errors) if attempt_errors else "Hosted order lookup failed",
+    "orders": [],
+    "lookup_account_sid": lookup_sid,
+    "lookup_account_name": TWILIO_SUBACCOUNT_NAME,
+  }
 
 
 def _get_twilio_next_friendly_name_seed(account: str = "default") -> dict:
@@ -20377,6 +20489,7 @@ def page3_twilio_items(request: Request):
           __SMS_LOOK_MENU__
           __SMS_EXPERIMENTAL_MENU__
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-hosting-ready">Twilio Hosting Status - Ready to Verify Ownership</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
@@ -20472,6 +20585,22 @@ def page3_twilio_items(request: Request):
             </form>
             <p id="twilio-friendly-status-status" style="color:#2c5c8a; min-height:18px;">Use this for long-running completion checks (minutes/hours/days).</p>
             <div id="twilio-friendly-status-results" style="overflow-x:auto;"></div>
+          </div>
+        </section>
+
+        <section class="tool-panel" data-panel="twilio-hosting-ready">
+          <div class="panel">
+            <h3>Twilio Hosting Status - Ready to Verify Ownership</h3>
+            <p>AMIEWeb-only lookup for Hosted Numbers under Port &amp; Host. Returns numbers that are in <strong>Ready to Verify Ownership</strong> status.</p>
+            <form id="twilio-hosting-ready-form">
+              <div class="search-filter-row">
+                <input name="phone_number" placeholder="Optional phone (example: +14697061956)">
+                <input name="limit" type="number" min="1" max="500" value="100" placeholder="Max rows">
+                <button type="submit">Lookup Ready-to-Verify</button>
+              </div>
+            </form>
+            <p id="twilio-hosting-ready-status" style="color:#2c5c8a; min-height:18px;">Use phone filter to test a specific hosted number, or leave blank to list all ready-to-verify rows.</p>
+            <div id="twilio-hosting-ready-results" style="overflow-x:auto;"></div>
           </div>
         </section>
 
@@ -21271,6 +21400,73 @@ def page3_twilio_items(request: Request):
               renderVerificationQueue(rows, submitted.loa_mode === "per_number" ? "Per Number" : "Single LOA for Batch", submitted.loa_batch_reference || "");
             } catch (err) {
               statusEl.textContent = "Update failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        })();
+
+        // Twilio Hosted Numbers lookup: Ready to Verify Ownership (AMIEWeb only)
+        (function () {
+          const form = document.getElementById("twilio-hosting-ready-form");
+          const statusEl = document.getElementById("twilio-hosting-ready-status");
+          const resultsEl = document.getElementById("twilio-hosting-ready-results");
+
+          if (!form || !statusEl || !resultsEl) return;
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Looking up AMIEWeb hosted numbers...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(form);
+              const response = await fetch("/twilio/amieweb/hosting-ready", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload && payload.error) || "Hosted-number lookup failed.");
+              }
+
+              const rows = payload.rows || [];
+              const phoneFilter = payload.phone_number || "";
+              if (phoneFilter) {
+                statusEl.textContent = `Phone filter ${phoneFilter}: ${rows.length} Ready-to-Verify row(s) found.`;
+              } else {
+                statusEl.textContent = `Found ${rows.length} Ready-to-Verify row(s) in AMIEWeb.`;
+              }
+
+              if (!rows.length) {
+                resultsEl.innerHTML = "";
+                return;
+              }
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Phone Number</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Friendly Name</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Capabilities</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Status</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Order SID</th>';
+              html += '</tr></thead><tbody>';
+
+              rows.forEach(function (row, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.phone_number || "-") + '</td>';
+                html += '<td style="padding:7px 10px;">' + (row.friendly_name || "-") + '</td>';
+                html += '<td style="padding:7px 10px;">' + (row.capabilities || "-") + '</td>';
+                html += '<td style="padding:7px 10px;">' + (row.status || "-") + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.order_sid || "-") + '</td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+            } catch (err) {
+              statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
             }
           });
         })();
@@ -25134,6 +25330,114 @@ def twilio_amieweb_sms_host_route(
         "error": str(exc),
         "results": [],
       }, status_code=500)
+
+
+@app.post("/twilio/amieweb/hosting-ready")
+def twilio_amieweb_hosting_ready_route(
+  phone_number: str = Form(""),
+  limit: str = Form("100"),
+):
+  try:
+    lookup_sid = _resolve_twilio_lookup_account_sid()
+    lookup_token = _resolve_twilio_lookup_auth_token_for_sid(lookup_sid)
+    if not lookup_sid or not lookup_token:
+      return JSONResponse({
+        "ok": False,
+        "error": "Twilio AMIEWeb account is not configured.",
+        "rows": [],
+      }, status_code=503)
+
+    if TWILIO_ACCOUNT_SID and lookup_sid == TWILIO_ACCOUNT_SID:
+      return JSONResponse({
+        "ok": False,
+        "error": "Twilio subaccount SID is required; parent account is not allowed for hosted-number lookup.",
+        "rows": [],
+      }, status_code=503)
+
+    try:
+      safe_limit = max(1, min(int((limit or "100").strip()), 500))
+    except Exception:
+      safe_limit = 100
+
+    clean_phone = _normalize_phone_to_e164((phone_number or "").strip())
+    phone_candidates = set()
+    if clean_phone:
+      digits = "".join(ch for ch in clean_phone if ch.isdigit())
+      phone_candidates = {clean_phone, digits}
+      if len(digits) == 11 and digits.startswith("1"):
+        phone_candidates.add(digits[1:])
+        phone_candidates.add(f"+{digits[1:]}")
+
+    listed = _list_twilio_hosted_number_orders(lookup_sid, lookup_token)
+    if not listed.get("ok"):
+      return JSONResponse({
+        "ok": False,
+        "error": str(listed.get("status", "Hosted order lookup failed")),
+        "rows": [],
+      }, status_code=502)
+
+    ready_status_keys = {
+      "readytoverifyownership",
+      "readytoverify",
+      "readyforverification",
+      "readyforverifyownership",
+    }
+
+    rows = []
+    for order in listed.get("orders", []) or []:
+      if not isinstance(order, dict):
+        continue
+
+      status_raw = str(order.get("status", "") or order.get("Status", "") or "").strip()
+      if _normalize_twilio_hosted_status(status_raw) not in ready_status_keys:
+        continue
+
+      order_phone = str(
+        order.get("phone_number", "")
+        or order.get("incoming_phone_number", "")
+        or order.get("request_phone_number", "")
+        or order.get("phoneNumber", "")
+        or ""
+      ).strip()
+      order_digits = "".join(ch for ch in order_phone if ch.isdigit())
+
+      if phone_candidates and order_phone not in phone_candidates and order_digits not in phone_candidates:
+        continue
+
+      capabilities_obj = order.get("capabilities") if isinstance(order.get("capabilities"), dict) else {}
+      cap_parts = []
+      if str(capabilities_obj.get("mms", order.get("mms_capable", ""))).strip().lower() in {"true", "1", "yes", "y"}:
+        cap_parts.append("mms")
+      if str(capabilities_obj.get("sms", order.get("sms_capable", ""))).strip().lower() in {"true", "1", "yes", "y"}:
+        cap_parts.append("sms")
+      if not cap_parts:
+        cap_parts = ["sms"]
+
+      rows.append({
+        "phone_number": order_phone or "-",
+        "friendly_name": str(order.get("friendly_name", "") or order.get("FriendlyName", "") or "").strip() or "-",
+        "capabilities": ", ".join(cap_parts),
+        "status": status_raw or "Ready to Verify Ownership",
+        "order_sid": str(order.get("sid", "") or order.get("Sid", "") or "").strip() or "-",
+      })
+
+      if len(rows) >= safe_limit:
+        break
+
+    return JSONResponse({
+      "ok": True,
+      "count": len(rows),
+      "phone_number": clean_phone,
+      "lookup_account_name": str(listed.get("lookup_account_name", "") or TWILIO_SUBACCOUNT_NAME),
+      "lookup_account_sid": str(listed.get("lookup_account_sid", "") or lookup_sid),
+      "rows": rows,
+    })
+  except Exception as exc:
+    return JSONResponse({
+      "ok": False,
+      "error": str(exc),
+      "rows": [],
+    }, status_code=500)
 
 
 @app.get("/download/twilio-sms-hosting-audit")

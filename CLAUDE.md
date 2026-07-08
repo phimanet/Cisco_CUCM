@@ -234,6 +234,7 @@ Priority keys:
 
 ### 2026-07-08
 - Enhanced Build User DN Type labels on Main Operations Build Cisco Jabber form to show dynamic area-code context from DN Prefix Settings: `Recruiter (prefix)`, `General Employee (prefix)`, and `Strike Employee (prefix)`. Labels now update automatically as DN Prefix Settings change.
+- Added new SMS Item Menu function (AMIEWeb-only): **Twilio Hosting Status - Ready to Verify Ownership**. This queries Twilio Hosted Number Orders and returns rows currently in Ready-to-Verify status, with optional direct phone filter support (example: `+14697061956`) and table columns for phone number, friendly name, capabilities, status, and order SID.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
