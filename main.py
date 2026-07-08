@@ -6490,9 +6490,36 @@ def _list_twilio_hosted_number_orders(lookup_sid: str, lookup_token: str) -> dic
       except Exception as exc:
         attempt_errors.append(f"AMIEWeb {auth_label} [{endpoint}]: Hosted order lookup error: {exc}")
 
+  errors_joined = " | ".join(attempt_errors)
+  lower_errors = errors_joined.lower()
+  preview_not_enabled = (
+    "/hostednumbers/hostednumberorders" in lower_errors
+    and "not found" in lower_errors
+  )
+  hosted_orders_path_missing = (
+    "/incomingphonenumbers/hostednumberorders" in lower_errors
+    and "not found" in lower_errors
+  )
+  parent_auth_failed = (
+    "amieweb parent-account" in lower_errors
+    and ("authenticate" in lower_errors or "20003" in lower_errors)
+  )
+
+  concise_status = ""
+  if preview_not_enabled or hosted_orders_path_missing:
+    concise_status = (
+      "Twilio Hosted Numbers lookup is unavailable for this AMIEWeb account path. "
+      "The HostedNumberOrders endpoints returned not found, which typically means Hosted Numbers Developer Preview "
+      "is not enabled (or no longer exposed) for this account context."
+    )
+    if parent_auth_failed:
+      concise_status += " Parent-account fallback authentication also failed (20003)."
+    concise_status += " Next: open a Twilio support ticket and ask them to confirm Hosted Numbers API availability for subaccount "
+    concise_status += f"{lookup_sid} (AMNOne-Notification-PROD)."
+
   return {
     "ok": False,
-    "status": " | ".join(attempt_errors) if attempt_errors else "Hosted order lookup failed",
+    "status": concise_status or (errors_joined if errors_joined else "Hosted order lookup failed"),
     "orders": [],
     "lookup_account_sid": lookup_sid,
     "lookup_account_name": TWILIO_SUBACCOUNT_NAME,
