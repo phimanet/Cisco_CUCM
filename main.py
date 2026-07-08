@@ -2239,9 +2239,6 @@ def _sip_capture_records_from_raw(criteria: dict, start_dt: datetime.datetime | 
   def _is_ribbon_block_start(line: str) -> bool:
     return bool(re.search(r"\bMSGID:\d+\b", line or ""))
 
-  def _is_prefixed_ribbon_line(line: str) -> bool:
-    return bool(re.match(r"^<\d+>\[[^\]]+\]\s+\d+\s+[0-9a-fA-F]{4}\s+", (line or "").strip()))
-
   def _process_block(block_lines: list[str], rel_path: str, source_meta: dict, day_key: str) -> bool:
     if not block_lines:
       return False
@@ -2312,11 +2309,6 @@ def _sip_capture_records_from_raw(criteria: dict, start_dt: datetime.datetime | 
                 return matches[:limit]
               current_block = [line]
               current_block_kind = "ribbon" if _is_ribbon_block_start(line) else "cisco"
-            elif current_block_kind == "ribbon" and _is_prefixed_ribbon_line(line):
-              if current_block and _process_block(current_block, rel_path, source_meta, day_key):
-                return matches[:limit]
-              current_block = [line] if _is_ribbon_block_start(line) else []
-              current_block_kind = "ribbon" if _is_ribbon_block_start(line) else ""
             elif current_block:
               current_block.append(line)
           if current_block and _process_block(current_block, rel_path, source_meta, day_key):
