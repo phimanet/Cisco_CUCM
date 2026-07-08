@@ -232,6 +232,9 @@ Priority keys:
 - Extended recent-call raw fallback to Ribbon SBC traces: fallback block detection now recognizes Ribbon `MSGID` packets and parses bracketed Ribbon timestamps, so searches can return both Cisco CUBE and Ribbon SBC legs for the same fresh call path.
 - Refined Ribbon raw fallback block boundaries: Ribbon `MSGID` groups now remain contiguous until the next block start, preventing premature block splits that could hide traversed Ribbon SBC call legs in recent searches.
 
+### 2026-07-08
+- Enhanced Build User DN Type labels on Main Operations Build Cisco Jabber form to show dynamic area-code context from DN Prefix Settings: `Recruiter (prefix)`, `General Employee (prefix)`, and `Strike Employee (prefix)`. Labels now update automatically as DN Prefix Settings change.
+
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
 - Verified LAB parity after pull/restart: `/healthz` now returns `git_commit":"0c59386"` and service is healthy.

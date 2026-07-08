@@ -11734,6 +11734,13 @@ def menu_page(request: Request):
           <span>LAB-only listener and search page for Cisco CUBE debug ccsip messages.</span>
         </a>
 """
+  dn_mapping = _get_dn_mapping()
+  recruiter_prefix = str((dn_mapping.get("recruiter") or ("", ""))[0] or "").strip()
+  general_prefix = str((dn_mapping.get("general") or ("", ""))[0] or "").strip()
+  strike_prefix = str((dn_mapping.get("strike") or ("", ""))[0] or "").strip()
+  dn_type_recruiter_label = escape(f"Recruiter ({recruiter_prefix})")
+  dn_type_general_label = escape(f"General Employee ({general_prefix})")
+  dn_type_strike_label = escape(f"Strike Employee ({strike_prefix})")
   html = """
 <html>
   <head>
@@ -13039,9 +13046,9 @@ __ADMIN_CARD__
 
         DN Type:<br>
         <select name="dn_type">
-          <option value="recruiter">Recruiter</option>
-          <option value="general" selected>General FTE</option>
-          <option value="strike">Strike</option>
+          <option value="recruiter">__DN_TYPE_RECRUITER_LABEL__</option>
+          <option value="general" selected>__DN_TYPE_GENERAL_LABEL__</option>
+          <option value="strike">__DN_TYPE_STRIKE_LABEL__</option>
         </select><br><br>
 
         <div class="action-row">
@@ -15604,7 +15611,7 @@ __ADMIN_CARD__
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__SIP_CALL_SEARCH_CARD__", sip_card_html).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
+""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__SIP_CALL_SEARCH_CARD__", sip_card_html).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DN_TYPE_RECRUITER_LABEL__", dn_type_recruiter_label).replace("__DN_TYPE_GENERAL_LABEL__", dn_type_general_label).replace("__DN_TYPE_STRIKE_LABEL__", dn_type_strike_label)
 
   return HTMLResponse(
     content=html,
