@@ -20516,12 +20516,12 @@ def page3_twilio_items(request: Request):
           __SMS_LOOK_MENU__
           __SMS_EXPERIMENTAL_MENU__
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
-          <button type="button" class="portal-nav-btn" data-panel="twilio-hosting-ready">Twilio Hosting Status - Ready to Verify Ownership (Testing)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
           <button type="button" class="portal-nav-btn" data-panel="aerialink-amieclassic">Aerialink SMS-AMIEClassic Lookup</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-hosting-ready">Twilio Hosting Status - Ready to Verify Ownership (Testing)</button>
         </div>
       </aside>
 
