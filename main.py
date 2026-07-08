@@ -20516,7 +20516,7 @@ def page3_twilio_items(request: Request):
           __SMS_LOOK_MENU__
           __SMS_EXPERIMENTAL_MENU__
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
-          <button type="button" class="portal-nav-btn" data-panel="twilio-hosting-ready">Twilio Hosting Status - Ready to Verify Ownership</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-hosting-ready">Twilio Hosting Status - Ready to Verify Ownership (Testing)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
@@ -20617,7 +20617,7 @@ def page3_twilio_items(request: Request):
 
         <section class="tool-panel" data-panel="twilio-hosting-ready">
           <div class="panel">
-            <h3>Twilio Hosting Status - Ready to Verify Ownership</h3>
+            <h3>Twilio Hosting Status - Ready to Verify Ownership (Testing)</h3>
             <p>AMIEWeb-only lookup for Hosted Numbers under Port &amp; Host. Returns numbers that are in <strong>Ready to Verify Ownership</strong> status.</p>
             <form id="twilio-hosting-ready-form">
               <div class="search-filter-row">
