@@ -238,6 +238,7 @@ Priority keys:
 
 ### 2026-07-09
 - Hardened Aerialink lookup flow used by SMS Item Menu (Aerialink SMS-AMIEClassic panel and shared SMS lookup): preflight now treats HTTP `400/422` as endpoint reachable (query-shape mismatch) instead of hard-fail, and runtime lookup now retries multiple request patterns (`codes`, `code`, `phoneNumber`, `number`, `msisdn`, and path-style `/codes/{digits}`) before declaring not provisioned.
+- Added repository-level script-change lock guard: new `.githooks/pre-commit` blocks commits touching `main.py`, `toolkit/*`, and `scripts/*` unless explicit override env var `ALLOW_PROTECTED_SCRIPT_CHANGES=1` is set. Added enable helpers at `scripts/enable_protected_script_lock.sh` and `scripts/enable_protected_script_lock.ps1`.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
