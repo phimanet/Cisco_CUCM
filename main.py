@@ -18097,6 +18097,145 @@ def menu_admin_page(request: Request):
         <p id="admin-strikemask-reverse-summary" style="color:#355978; min-height:18px;"></p>
       </section>
 
+      <section class="panel tool-panel" data-panel="hunt-list-members">
+        <h3>Hunt List Members</h3>
+        <p>Search Hunt List names, select one, then list all member extensions with resolved owner names.</p>
+        <form id="admin-hunt-list-members-form">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+
+          <div class="compact-inline-row">
+            <span>Search Hunt List Name:</span>
+            <input name="line_group_search" placeholder="Example_HuntList">
+            <button type="button" id="admin-hunt-list-search-btn">Search Hunt Lists</button>
+          </div><br>
+
+          <p id="admin-hunt-list-search-status" style="color:#2c5c8a; min-height:18px;">Search first, then choose a matching Hunt List.</p>
+
+          <div class="compact-inline-row">
+            <span>Select Matching Hunt List:</span>
+            <select name="line_group_name" required style="min-width:340px;">
+              <option value="" selected>Select a Hunt List...</option>
+            </select>
+          </div><br>
+
+          <button type="submit">Lookup Hunt List Members</button>
+        </form>
+
+        <p id="admin-hunt-list-members-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Search and select a Hunt List to view members.</p>
+        <div id="admin-hunt-list-members-results" style="overflow-x:auto;"></div>
+      </section>
+
+      <script>
+        (function () {
+          const form = document.getElementById("admin-hunt-list-members-form");
+          const searchBtn = document.getElementById("admin-hunt-list-search-btn");
+          const searchStatusEl = document.getElementById("admin-hunt-list-search-status");
+          const statusEl = document.getElementById("admin-hunt-list-members-status");
+          const resultsEl = document.getElementById("admin-hunt-list-members-results");
+          const selectEl = form ? form.querySelector('select[name="line_group_name"]') : null;
+
+          if (!form || !searchBtn || !searchStatusEl || !statusEl || !resultsEl || !selectEl) {
+            return;
+          }
+
+          async function searchHuntLists() {
+            searchStatusEl.textContent = "Searching Hunt Lists...";
+
+            while (selectEl.options.length > 1) {
+              selectEl.remove(1);
+            }
+            selectEl.value = "";
+
+            try {
+              const response = await fetch("/line-groups/search", {
+                method: "POST",
+                body: new FormData(form),
+              });
+
+              if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(errorText || `Request failed with status ${response.status}`);
+              }
+
+              const payload = await response.json();
+              const matches = payload.matches || [];
+              if (!matches.length) {
+                searchStatusEl.textContent = "No matching Hunt Lists found.";
+                return;
+              }
+
+              matches.forEach((name) => {
+                const opt = document.createElement("option");
+                opt.value = name;
+                opt.textContent = name;
+                selectEl.appendChild(opt);
+              });
+
+              if (matches.length === 1) {
+                selectEl.value = matches[0];
+              }
+
+              searchStatusEl.textContent = `Found ${matches.length} matching Hunt List(s).`;
+            } catch (err) {
+              searchStatusEl.textContent = `Search failed: ${(err && err.message) || "Unknown error."}`;
+            }
+          }
+
+          async function lookupMembers(event) {
+            event.preventDefault();
+            statusEl.textContent = "Loading Hunt List members...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const response = await fetch("/line-groups/members", {
+                method: "POST",
+                body: new FormData(form),
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload && payload.error && payload.error.message) || payload.detail || payload.error || `Request failed with status ${response.status}`);
+              }
+
+              const members = payload.members || [];
+              statusEl.textContent = `Hunt List "${payload.line_group_name || ""}" has ${members.length} member(s).`;
+
+              if (!members.length) {
+                resultsEl.innerHTML = "<p style=\"margin:0; color:#355978;\">No members found for this Hunt List.</p>";
+                return;
+              }
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Owner Name</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Route Partition</th>';
+              html += '</tr></thead><tbody>';
+
+              members.forEach((member, index) => {
+                const bg = index % 2 === 0 ? "#f7fbff" : "#ffffff";
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (member.extension || "") + '</td>';
+                html += '<td style="padding:7px 10px;">' + (member.owner_name || "Unknown") + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (member.partition || "") + '</td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+            } catch (err) {
+              statusEl.textContent = `Lookup failed: ${(err && err.message) || "Unknown error."}`;
+            }
+          }
+
+          searchBtn.addEventListener("click", searchHuntLists);
+          form.addEventListener("submit", lookupMembers);
+        })();
+      </script>
+
       <section class="panel tool-panel" data-panel="jabbernotify">
         <h3>Send Jabber Training Notification</h3>
         <p>Search for an employee by last name, then send them the Cisco Jabber ready email (with their telephone number and training link). Use this to test or resend the notification.</p>
