@@ -155,7 +155,7 @@ def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_nam
     """
     Search CUCM end users by last name (required) and optional first name.
     Returns a list of user dicts:
-            userid, first_name, last_name, display_name, email, telephone,
+            userid, first_name, last_name, display_name, title, email, telephone,
       primary_extension, devices (list of {name, type, extensions}).
     """
     last_name = (last_name or "").strip()
@@ -249,6 +249,7 @@ def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_nam
             "first_name": _find_first_text(user_node, [["firstName"]]),
             "last_name": _find_first_text(user_node, [["lastName"]]),
             "display_name": _find_first_text(user_node, [["displayName"]]),
+            "title": _find_first_text(user_node, [["title"]]),
             "email": _find_first_text(user_node, [["mailid"]]),
             "telephone": _find_first_text(user_node, [["telephoneNumber"], ["telephone"]]),
             "primary_extension": primary_ext,
