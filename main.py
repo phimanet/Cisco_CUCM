@@ -12832,6 +12832,55 @@ __ADMIN_CARD__
 
       <section class="portal-main">
 
+    <script>
+      (function () {
+        function bindPortalNavFallback() {
+          const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn[data-panel]"));
+          const panels = Array.from(document.querySelectorAll(".tool-panel"));
+          if (!navButtons.length || !panels.length) {
+            return;
+          }
+
+          function showPanel(panelKey) {
+            if (!panelKey) {
+              return;
+            }
+            panels.forEach((panel) => {
+              panel.classList.toggle("active", panel.dataset.panel === panelKey);
+            });
+            navButtons.forEach((btn) => {
+              btn.classList.toggle("active", btn.dataset.panel === panelKey);
+            });
+          }
+
+          navButtons.forEach((btn) => {
+            if (btn.dataset.navFallbackBound === "1") {
+              return;
+            }
+            btn.dataset.navFallbackBound = "1";
+            btn.addEventListener("click", () => {
+              const panelKey = (btn.dataset.panel || "").trim();
+              if (!panelKey) {
+                return;
+              }
+              showPanel(panelKey);
+            });
+          });
+
+          const initialPanel = (new URLSearchParams(window.location.search).get("panel") || "").trim();
+          if (initialPanel && panels.some((panel) => panel.dataset.panel === initialPanel)) {
+            showPanel(initialPanel);
+          }
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", bindPortalNavFallback);
+        } else {
+          bindPortalNavFallback();
+        }
+      })();
+    </script>
+
     <section class="tool-panel active" data-panel="personlookup">
 
     <h3>Person Lookup - Search by Name</h3>
@@ -17702,6 +17751,55 @@ def menu_admin_page(request: Request):
         </aside>
 
         <section class="portal-main">
+
+      <script>
+        (function () {
+          function bindPortalNavFallback() {
+            const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn[data-panel]"));
+            const panels = Array.from(document.querySelectorAll(".tool-panel"));
+            if (!navButtons.length || !panels.length) {
+              return;
+            }
+
+            function showPanel(panelKey) {
+              if (!panelKey) {
+                return;
+              }
+              panels.forEach((panel) => {
+                panel.classList.toggle("active", panel.dataset.panel === panelKey);
+              });
+              navButtons.forEach((btn) => {
+                btn.classList.toggle("active", btn.dataset.panel === panelKey);
+              });
+            }
+
+            navButtons.forEach((btn) => {
+              if (btn.dataset.navFallbackBound === "1") {
+                return;
+              }
+              btn.dataset.navFallbackBound = "1";
+              btn.addEventListener("click", () => {
+                const panelKey = (btn.dataset.panel || "").trim();
+                if (!panelKey) {
+                  return;
+                }
+                showPanel(panelKey);
+              });
+            });
+
+            const initialPanel = (new URLSearchParams(window.location.search).get("panel") || "").trim();
+            if (initialPanel && panels.some((panel) => panel.dataset.panel === initialPanel)) {
+              showPanel(initialPanel);
+            }
+          }
+
+          if (document.readyState === "loading") {
+            document.addEventListener("DOMContentLoaded", bindPortalNavFallback);
+          } else {
+            bindPortalNavFallback();
+          }
+        })();
+      </script>
 
       <section class="panel tool-panel active" data-panel="personlookup">
         <h3>Employee Lookup by Name</h3>
