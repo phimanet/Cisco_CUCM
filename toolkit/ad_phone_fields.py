@@ -801,8 +801,15 @@ def _lookup_ad_group_ldapsearch(group_name, auth_context):
     if not bind_user:
         return None, "LDAP bind requires username"
 
-    scheme = "ldaps" if bool(config.get("use_ssl")) else "ldap"
-    uri = f"{scheme}://{config.get('server')}:{int(config.get('port') or (636 if scheme == 'ldaps' else 389))}"
+    primary_scheme = "ldaps" if bool(config.get("use_ssl")) else "ldap"
+    primary_port = int(config.get("port") or (636 if primary_scheme == "ldaps" else 389))
+    uri_candidates = [f"{primary_scheme}://{config.get('server')}:{primary_port}"]
+
+    # Read-only fallback matrix for environments where LDAPS 636 is blocked or cert chain is internal.
+    if primary_scheme == "ldaps":
+        uri_candidates.append(f"ldap://{config.get('server')}:389")
+    else:
+        uri_candidates.append(f"ldaps://{config.get('server')}:636")
     escaped = _escape_ldap_filter_value(group_name)
     search_filter = (
         f"(&(objectClass=group)(|"
@@ -812,42 +819,56 @@ def _lookup_ad_group_ldapsearch(group_name, auth_context):
         "))"
     )
 
-    cmd = [
-        ldapsearch_bin,
-        "-LLL",
-        "-x",
-        "-H",
-        uri,
-        "-D",
-        bind_user,
-        "-w",
-        password,
-        "-b",
-        str(config.get("base_dn") or ""),
-        search_filter,
-        "cn",
-        "name",
-        "sAMAccountName",
-        "distinguishedName",
-        "objectGUID",
-        "objectSid",
-        "groupType",
-    ]
+    last_error = ""
+    completed = None
+    for uri in uri_candidates:
+        cmd = [
+            ldapsearch_bin,
+            "-LLL",
+            "-x",
+            "-o",
+            "nettimeout=8",
+            "-o",
+            "TLS_REQCERT=never",
+            "-H",
+            uri,
+            "-D",
+            bind_user,
+            "-w",
+            password,
+            "-b",
+            str(config.get("base_dn") or ""),
+            search_filter,
+            "cn",
+            "name",
+            "sAMAccountName",
+            "distinguishedName",
+            "objectGUID",
+            "objectSid",
+            "groupType",
+        ]
 
-    try:
-        completed = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-    except Exception as exc:
-        return None, f"ldapsearch execution failed: {exc}"
+        try:
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except Exception as exc:
+            last_error = f"ldapsearch execution failed: {exc}"
+            continue
 
-    if completed.returncode != 0:
+        if completed.returncode == 0:
+            break
+
         error_text = (completed.stderr or "").strip() or (completed.stdout or "").strip()
-        return None, error_text or f"ldapsearch failed with exit code {completed.returncode}"
+        last_error = f"{uri}: {error_text or f'ldapsearch failed with exit code {completed.returncode}'}"
+        completed = None
+
+    if completed is None:
+        return None, last_error or "ldapsearch failed"
 
     attrs = _parse_ldif_attributes(completed.stdout or "")
     if not attrs:
