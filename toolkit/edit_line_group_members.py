@@ -190,9 +190,9 @@ def search_line_groups(cucm_host, cucm_user, cucm_pass, search_text):
         if name:
             names.append(name)
 
-    filtered_names = _filter_names_by_partial_query(names, search_text)
-    if filtered_names:
-        return filtered_names
+    direct_names = sorted(set(names))
+    if direct_names:
+        return direct_names
 
     # Fallback: if filtered query found nothing, get full list and apply local fuzzy filter.
     # This handles CUCM-side search edge cases where wildcard matching is too strict.
@@ -209,7 +209,7 @@ def search_line_groups(cucm_host, cucm_user, cucm_pass, search_text):
                     full_names.append(name)
             return _filter_names_by_partial_query(full_names, search_text)
 
-    return filtered_names
+    return direct_names
 
 
 def get_line_group_members(cucm_host, cucm_user, cucm_pass, line_group_name):
