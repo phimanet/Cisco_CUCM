@@ -4,6 +4,7 @@ import re
 import shutil
 import subprocess
 import uuid
+import base64
 
 try:
     from ldap3 import (
@@ -683,6 +684,170 @@ def inspect_ad_group_identifiers(group_name, auth_context=None):
         result["source"] = "ldap"
         return result, ""
 
-    if ps_error and ldap_error:
-        return None, f"{ps_error}; LDAP fallback failed: {ldap_error}"
-    return None, ps_error or ldap_error or "AD group lookup failed"
+    ldapsearch_data, ldapsearch_error = _lookup_ad_group_ldapsearch(clean_name, auth_context)
+    if not ldapsearch_error and isinstance(ldapsearch_data, dict):
+        result = dict(ldapsearch_data)
+        result["query"] = clean_name
+        result["source"] = "ldapsearch"
+        return result, ""
+
+    if ps_error and ldap_error and ldapsearch_error:
+        return None, f"{ps_error}; LDAP fallback failed: {ldap_error}; ldapsearch fallback failed: {ldapsearch_error}"
+    return None, ps_error or ldap_error or ldapsearch_error or "AD group lookup failed"
+
+
+def _resolve_ldapsearch_bind_user(auth_context, config):
+    username = str((auth_context or {}).get("username") or "").strip()
+    if not username:
+        return ""
+
+    if "@" in username:
+        return username
+
+    if "\\" in username:
+        username = username.split("\\", 1)[-1].strip()
+
+    upn_suffix = str((config or {}).get("upn_suffix") or "").strip()
+    if upn_suffix:
+        return f"{username}@{upn_suffix}"
+
+    default_domain = str((config or {}).get("default_domain") or "").strip()
+    if default_domain and "." in default_domain:
+        return f"{username}@{default_domain}"
+
+    return username
+
+
+def _parse_ldif_attributes(output_text):
+    lines = str(output_text or "").splitlines()
+    unfolded = []
+    for line in lines:
+        if line.startswith(" ") and unfolded:
+            unfolded[-1] = unfolded[-1] + line[1:]
+        else:
+            unfolded.append(line)
+
+    attrs = {}
+    for line in unfolded:
+        raw = line.strip()
+        if not raw or raw.startswith("#"):
+            continue
+
+        if "::" in raw:
+            key, value = raw.split("::", 1)
+            key = key.strip()
+            value = value.strip()
+            try:
+                decoded = base64.b64decode(value)
+            except Exception:
+                decoded = b""
+            attrs.setdefault(key, []).append(decoded)
+            continue
+
+        if ":" in raw:
+            key, value = raw.split(":", 1)
+            attrs.setdefault(key.strip(), []).append(value.strip())
+
+    return attrs
+
+
+def _lookup_ad_group_ldapsearch(group_name, auth_context):
+    ldapsearch_bin = shutil.which("ldapsearch")
+    if not ldapsearch_bin:
+        return None, "ldapsearch executable was not found on this server"
+
+    config, config_error = _resolve_ldap_config()
+    if config_error:
+        return None, config_error
+
+    password = str((auth_context or {}).get("password") or "")
+    if not password:
+        return None, "LDAP bind requires username and password"
+
+    bind_user = _resolve_ldapsearch_bind_user(auth_context, config)
+    if not bind_user:
+        return None, "LDAP bind requires username"
+
+    scheme = "ldaps" if bool(config.get("use_ssl")) else "ldap"
+    uri = f"{scheme}://{config.get('server')}:{int(config.get('port') or (636 if scheme == 'ldaps' else 389))}"
+    escaped = _escape_ldap_filter_value(group_name)
+    search_filter = (
+        f"(&(objectClass=group)(|"
+        f"(cn={escaped})"
+        f"(name={escaped})"
+        f"(sAMAccountName={escaped})"
+        "))"
+    )
+
+    cmd = [
+        ldapsearch_bin,
+        "-LLL",
+        "-x",
+        "-H",
+        uri,
+        "-D",
+        bind_user,
+        "-w",
+        password,
+        "-b",
+        str(config.get("base_dn") or ""),
+        search_filter,
+        "cn",
+        "name",
+        "sAMAccountName",
+        "distinguishedName",
+        "objectGUID",
+        "objectSid",
+        "groupType",
+    ]
+
+    try:
+        completed = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except Exception as exc:
+        return None, f"ldapsearch execution failed: {exc}"
+
+    if completed.returncode != 0:
+        error_text = (completed.stderr or "").strip() or (completed.stdout or "").strip()
+        return None, error_text or f"ldapsearch failed with exit code {completed.returncode}"
+
+    attrs = _parse_ldif_attributes(completed.stdout or "")
+    if not attrs:
+        return {"found": False}, ""
+
+    dn = ""
+    if attrs.get("distinguishedName"):
+        dn = _guid_to_string(attrs.get("distinguishedName", [""])[0])
+    elif attrs.get("dn"):
+        dn = _guid_to_string(attrs.get("dn", [""])[0])
+
+    name = ""
+    if attrs.get("name"):
+        name = _guid_to_string(attrs.get("name", [""])[0])
+    elif attrs.get("cn"):
+        name = _guid_to_string(attrs.get("cn", [""])[0])
+
+    sam = _guid_to_string((attrs.get("sAMAccountName") or [""])[0])
+    guid = _guid_to_string((attrs.get("objectGUID") or [None])[0])
+    sid = _sid_to_string((attrs.get("objectSid") or [None])[0])
+    group_type_raw = (attrs.get("groupType") or [""])[0]
+    try:
+        group_type = int(str(group_type_raw).strip())
+    except Exception:
+        group_type = None
+
+    return {
+        "found": bool(dn or name or sam),
+        "name": name,
+        "samAccountName": sam,
+        "distinguishedName": dn,
+        "objectGUID": guid,
+        "sid": sid,
+        "groupCategory": _group_category_from_group_type(group_type) if group_type is not None else "",
+        "groupScope": _group_scope_from_group_type(group_type) if group_type is not None else "",
+    }, ""
