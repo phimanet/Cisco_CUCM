@@ -1,6 +1,7 @@
 import csv
 import datetime
 import io
+import re
 import requests
 import urllib3
 import xml.etree.ElementTree as ET
@@ -75,6 +76,42 @@ def _soap_list_line_groups(search_text):
         </axl:listLineGroup>
     </soapenv:Body>
 </soapenv:Envelope>"""
+
+
+def _normalize_partial_text(value):
+    text = str(value or "").lower()
+    return re.sub(r"[^a-z0-9]", "", text)
+
+
+def _filter_names_by_partial_query(names, search_text):
+    query = str(search_text or "").strip()
+    if not query:
+        return sorted(set(names))
+
+    lowered_query = query.lower()
+    normalized_query = _normalize_partial_text(query)
+    query_tokens = [tok for tok in re.split(r"[^a-z0-9]+", lowered_query) if tok]
+
+    matched = []
+    for name in sorted(set(names)):
+        lowered_name = str(name or "").lower()
+        normalized_name = _normalize_partial_text(lowered_name)
+
+        # Direct partial match first.
+        if lowered_query in lowered_name:
+            matched.append(name)
+            continue
+
+        # Ignore separators for partial matching (space, underscore, hyphen, etc.).
+        if normalized_query and normalized_query in normalized_name:
+            matched.append(name)
+            continue
+
+        # Multi-token partial support: all tokens must appear somewhere in the name.
+        if query_tokens and all(tok in lowered_name or tok in normalized_name for tok in query_tokens):
+            matched.append(name)
+
+    return matched
 
 
 def _soap_update_line_group_members(line_group_name, members):
@@ -153,7 +190,26 @@ def search_line_groups(cucm_host, cucm_user, cucm_pass, search_text):
         if name:
             names.append(name)
 
-    return sorted(set(names))
+    filtered_names = _filter_names_by_partial_query(names, search_text)
+    if filtered_names:
+        return filtered_names
+
+    # Fallback: if filtered query found nothing, get full list and apply local fuzzy filter.
+    # This handles CUCM-side search edge cases where wildcard matching is too strict.
+    if str(search_text or "").strip():
+        full_response = _axl_post(session, cucm_host, _soap_list_line_groups(""))
+        if full_response.status_code == 200:
+            full_root = ET.fromstring(full_response.text)
+            full_names = []
+            for elem in full_root.iter():
+                if _strip_ns(elem.tag) != "lineGroup":
+                    continue
+                name = _find_first_text(elem, [["name"]])
+                if name:
+                    full_names.append(name)
+            return _filter_names_by_partial_query(full_names, search_text)
+
+    return filtered_names
 
 
 def get_line_group_members(cucm_host, cucm_user, cucm_pass, line_group_name):
