@@ -5379,6 +5379,19 @@ async def auth_middleware(request: Request, call_next):
 
   session = _get_auth_session(request)
   if not session:
+    if _wants_json_response(request):
+      return JSONResponse(
+        {
+          "ok": False,
+          "error": {
+            "type": "auth_error",
+            "message": "Authentication required.",
+            "path": request.url.path,
+            "status": 401,
+          },
+        },
+        status_code=401,
+      )
     return RedirectResponse(url="/", status_code=303)
 
   request.state.auth_session = session
