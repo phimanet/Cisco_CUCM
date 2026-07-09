@@ -13121,14 +13121,6 @@ __ADMIN_CARD__
 
     <div class="jabber-check-layout" style="display:block;">
       <form id="extension-lookup-form" class="jabber-check-form">
-        <div class="compact-inline-row">
-          <span>Cisco Callmanager Username:</span>
-          <input name="cucm_user" value="__AUTH_USER__" required>
-        </div><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
-
         Extension / DN Pattern:<br>
         <input name="pattern" placeholder="4695551234" required><br><br>
 
