@@ -5149,27 +5149,56 @@ def _check_aerialink_feasibility(force_refresh: bool = False) -> dict:
       endpoint_path = AERIALINK_ACCOUNT_CODE_LOOKUP_PATH or "/codes"
       endpoint_path = endpoint_path if endpoint_path.startswith("/") else f"/{endpoint_path}"
       probe_url = f"{AERIALINK_V5_BASE_URL}{endpoint_path}"
-      resp = requests.get(
-        probe_url,
-        params={"codes": "10000000000"},
-        headers={"Accept": "application/json"},
-        auth=HTTPBasicAuth(AERIALINK_USERNAME, AERIALINK_PASSWORD),
-        verify=False,
-        timeout=20,
-      )
+      probe_attempts = [
+        (probe_url, {"codes": "10000000000"}),
+        (probe_url, {"code": "10000000000"}),
+        (probe_url, {"phoneNumber": "10000000000"}),
+        (probe_url, {"number": "10000000000"}),
+        (f"{probe_url.rstrip('/')}/10000000000", None),
+      ]
 
-      if resp.status_code == 200:
-        result["ok"] = True
-        result["status"] = "Aerialink API reachable"
-      elif resp.status_code in {401, 403}:
-        result["status"] = f"Aerialink authentication failed (HTTP {resp.status_code})"
-        result["hint"] = "Verify AERIALINK_USERNAME/AERIALINK_PASSWORD and account permissions."
-      elif resp.status_code == 404:
-        result["status"] = "Aerialink lookup endpoint not found (HTTP 404)"
-        result["hint"] = "Verify AERIALINK_ACCOUNT_CODE_LOOKUP_PATH against your account API documentation."
-      else:
-        result["status"] = f"Aerialink API probe failed (HTTP {resp.status_code})"
-        result["hint"] = "Confirm endpoint path, credentials, and network egress from this host."
+      probe_errors = []
+      for attempt_url, attempt_params in probe_attempts:
+        resp = requests.get(
+          attempt_url,
+          params=attempt_params,
+          headers={"Accept": "application/json"},
+          auth=HTTPBasicAuth(AERIALINK_USERNAME, AERIALINK_PASSWORD),
+          verify=False,
+          timeout=20,
+        )
+
+        if resp.status_code == 200:
+          result["ok"] = True
+          result["status"] = "Aerialink API reachable"
+          result["hint"] = ""
+          break
+
+        if resp.status_code in {400, 422}:
+          # Endpoint is reachable; request shape may differ by tenant implementation.
+          result["ok"] = True
+          result["status"] = f"Aerialink API reachable (HTTP {resp.status_code} query validation)"
+          result["hint"] = "Endpoint is reachable. Lookup flow will continue with alternate query patterns."
+          break
+
+        if resp.status_code in {401, 403}:
+          result["status"] = f"Aerialink authentication failed (HTTP {resp.status_code})"
+          result["hint"] = "Verify AERIALINK_USERNAME/AERIALINK_PASSWORD and account permissions."
+          break
+
+        if resp.status_code == 404:
+          probe_errors.append(f"{attempt_url}: 404")
+          continue
+
+        probe_errors.append(f"{attempt_url}: HTTP {resp.status_code}")
+
+      if not result.get("ok") and not result.get("status", "").startswith("Aerialink authentication failed"):
+        if probe_errors and all("404" in err for err in probe_errors):
+          result["status"] = "Aerialink lookup endpoint not found (HTTP 404)"
+          result["hint"] = "Verify AERIALINK_ACCOUNT_CODE_LOOKUP_PATH against your account API documentation."
+        else:
+          result["status"] = "Aerialink API probe failed"
+          result["hint"] = "Confirm endpoint path, credentials, and network egress from this host."
     except Exception as exc:
       result["status"] = f"Aerialink API probe error: {exc}"
       result["hint"] = "Confirm DNS/network reachability and TLS policy from this host."
@@ -7185,7 +7214,7 @@ def _lookup_aerialink_account_code_by_phone(phone_number: str) -> dict:
 
   endpoint_path = AERIALINK_ACCOUNT_CODE_LOOKUP_PATH or "/codes"
   endpoint_path = endpoint_path if endpoint_path.startswith("/") else f"/{endpoint_path}"
-  url = f"{AERIALINK_V5_BASE_URL}{endpoint_path}"
+  base_url = f"{AERIALINK_V5_BASE_URL}{endpoint_path}"
 
   number_digits = "".join(ch for ch in e164 if ch.isdigit())
   candidates = {e164, number_digits}
@@ -7194,51 +7223,90 @@ def _lookup_aerialink_account_code_by_phone(phone_number: str) -> dict:
     candidates.add(f"+{number_digits[1:]}")
 
   try:
-    response = requests.get(
-      url,
-      params={"codes": number_digits},
-      headers={"Accept": "application/json"},
-      auth=HTTPBasicAuth(AERIALINK_USERNAME, AERIALINK_PASSWORD),
-      verify=False,
-      timeout=25,
-    )
-    if response.status_code != 200:
-      return {
-        "enabled": True,
-        "found": False,
-        "provisioned": False,
-        "requested_number": e164,
-        "matched_number": "",
-        "status": _build_lookup_error("Aerialink lookup", f"HTTP {response.status_code}", "Verify endpoint path, credentials, and network egress from this host."),
-      }
+    attempts = [
+      (base_url, {"codes": number_digits}),
+      (base_url, {"code": number_digits}),
+      (base_url, {"phoneNumber": number_digits}),
+      (base_url, {"number": number_digits}),
+      (base_url, {"msisdn": number_digits}),
+      (f"{base_url.rstrip('/')}/{number_digits}", None),
+    ]
 
-    payload = response.json() if response.text else {}
-    records = []
-    if isinstance(payload, list):
-      records = payload
-    elif isinstance(payload, dict):
-      for key in ["codes", "data", "results", "items"]:
-        value = payload.get(key)
-        if isinstance(value, list):
-          records = value
-          break
+    request_errors = []
+    any_records = False
 
-    matched = ""
-    for record in records:
-      if not isinstance(record, dict):
+    for attempt_url, attempt_params in attempts:
+      response = requests.get(
+        attempt_url,
+        params=attempt_params,
+        headers={"Accept": "application/json"},
+        auth=HTTPBasicAuth(AERIALINK_USERNAME, AERIALINK_PASSWORD),
+        verify=False,
+        timeout=25,
+      )
+
+      if response.status_code in {401, 403}:
+        return {
+          "enabled": True,
+          "found": False,
+          "provisioned": False,
+          "requested_number": e164,
+          "matched_number": "",
+          "status": _build_lookup_error("Aerialink lookup", f"HTTP {response.status_code}", "Verify Aerialink credentials and account permissions."),
+        }
+
+      if response.status_code in {404, 400, 422}:
+        request_errors.append(f"{attempt_url} -> HTTP {response.status_code}")
         continue
-      for field in ["code", "phoneNumber", "phone_number", "number", "msisdn"]:
-        candidate = str(record.get(field) or "").strip()
-        if not candidate:
-          continue
-        candidate_digits = "".join(ch for ch in candidate if ch.isdigit())
-        if candidate in candidates or candidate_digits in candidates:
-          matched = candidate
-          break
-      if matched:
-        break
 
-    if not records or not matched:
+      if response.status_code != 200:
+        request_errors.append(f"{attempt_url} -> HTTP {response.status_code}")
+        continue
+
+      payload = response.json() if response.text else {}
+      records = []
+      if isinstance(payload, list):
+        records = payload
+      elif isinstance(payload, dict):
+        for key in ["codes", "data", "results", "items", "records"]:
+          value = payload.get(key)
+          if isinstance(value, list):
+            records = value
+            break
+        if not records:
+          has_single_candidate = any(payload.get(field) for field in ["code", "phoneNumber", "phone_number", "number", "msisdn"])
+          if has_single_candidate:
+            records = [payload]
+
+      if records:
+        any_records = True
+
+      matched = ""
+      for record in records:
+        if not isinstance(record, dict):
+          continue
+        for field in ["code", "phoneNumber", "phone_number", "number", "msisdn", "value"]:
+          candidate = str(record.get(field) or "").strip()
+          if not candidate:
+            continue
+          candidate_digits = "".join(ch for ch in candidate if ch.isdigit())
+          if candidate in candidates or candidate_digits in candidates:
+            matched = candidate
+            break
+        if matched:
+          break
+
+      if matched:
+        return {
+          "enabled": True,
+          "found": True,
+          "provisioned": True,
+          "requested_number": e164,
+          "matched_number": matched,
+          "status": "Provisioned on Aerialink account",
+        }
+
+    if any_records:
       return {
         "enabled": True,
         "found": False,
@@ -7248,13 +7316,16 @@ def _lookup_aerialink_account_code_by_phone(phone_number: str) -> dict:
         "status": "Not provisioned on Aerialink account",
       }
 
+    concise = "Aerialink lookup endpoint reachable but request format/path may not match this tenant API."
+    if request_errors:
+      concise += " Tried multiple query patterns; no 200 response."
     return {
       "enabled": True,
-      "found": True,
-      "provisioned": True,
+      "found": False,
+      "provisioned": False,
       "requested_number": e164,
-      "matched_number": matched,
-      "status": "Provisioned on Aerialink account",
+      "matched_number": "",
+      "status": concise,
     }
   except Exception as exc:
     return {
