@@ -17735,8 +17735,8 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=teams-telephony'">Create Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=teams-telephony-remove'">Remove Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM (Main Ops)</button>
-            <button type="button" class="portal-nav-btn" data-panel="hunt-list-members">Hunt List Members</button>
-            <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=linegroup'">Update Hunt List Line Group (Main Ops)</button>
+            <button type="button" class="portal-nav-btn" data-panel="hunt-list-members">Hunt List Members (Search Line Groups)</button>
+            <button type="button" class="portal-nav-btn" data-panel="linegroup-admin">Update Hunt List Line Group</button>
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
@@ -18099,23 +18099,23 @@ def menu_admin_page(request: Request):
 
       <section class="panel tool-panel" data-panel="hunt-list-members">
         <h3>Hunt List Members</h3>
-        <p>Search Hunt List names, select one, then list all member extensions with resolved owner names.</p>
+        <p>Search Line Group names (used by Hunt Lists), select one, then list all member extensions with resolved owner names.</p>
         <form id="admin-hunt-list-members-form">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
 
           <div class="compact-inline-row">
-            <span>Search Hunt List Name:</span>
+            <span>Search Line Group Name:</span>
             <input name="line_group_search" placeholder="Example_HuntList">
-            <button type="button" id="admin-hunt-list-search-btn">Search Hunt Lists</button>
+            <button type="button" id="admin-hunt-list-search-btn">Search Line Groups</button>
           </div><br>
 
-          <p id="admin-hunt-list-search-status" style="color:#2c5c8a; min-height:18px;">Search first, then choose a matching Hunt List.</p>
+          <p id="admin-hunt-list-search-status" style="color:#2c5c8a; min-height:18px;">Search first, then choose a matching Line Group.</p>
 
           <div class="compact-inline-row">
-            <span>Select Matching Hunt List:</span>
+            <span>Select Matching Line Group:</span>
             <select name="line_group_name" required style="min-width:340px;">
-              <option value="" selected>Select a Hunt List...</option>
+              <option value="" selected>Select a Line Group...</option>
             </select>
           </div><br>
 
@@ -18124,6 +18124,49 @@ def menu_admin_page(request: Request):
 
         <p id="admin-hunt-list-members-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Search and select a Hunt List to view members.</p>
         <div id="admin-hunt-list-members-results" style="overflow-x:auto;"></div>
+      </section>
+
+      <section class="panel tool-panel" data-panel="linegroup-admin">
+        <h3>Edit Line Group Members (Add/Remove DN) (Option 17)</h3>
+        <p>Search Line Group names, select one, then add or remove a DN member.</p>
+        <form id="admin-line-group-form" action="/line-groups/edit-members" method="post">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+
+          <div class="compact-inline-row">
+            <span>Search Line Group Name:</span>
+            <input name="line_group_search" placeholder="Example_LineGroup">
+            <button type="button" id="admin-line-group-search-btn">Search Line Groups</button>
+          </div><br>
+          <p id="admin-line-group-search-status" style="color:#2c5c8a; min-height:18px;">Search first, then choose a matching Line Group.</p>
+
+          <div class="compact-inline-row">
+            <span>Select Matching Line Group:</span>
+            <select name="line_group_name" required style="min-width:340px;">
+              <option value="" selected>Select a Line Group...</option>
+            </select>
+          </div><br>
+
+          <div class="compact-inline-row">
+            <span>Action:</span>
+            <select name="membership_action" required>
+              <option value="add" selected>Add DN</option>
+              <option value="remove">Remove DN</option>
+            </select>
+          </div><br>
+
+          <div class="compact-inline-row">
+            <span>Directory Number Pattern:</span>
+            <input name="dn_pattern" placeholder="8585236620" required>
+          </div><br>
+
+          <div class="compact-inline-row">
+            <span>Route Partition:</span>
+            <input name="dn_partition" value="ENT_DEVICE_PT" required>
+          </div><br>
+
+          <button type="submit">Run Edit Line Group Members (Option 17)</button>
+        </form>
       </section>
 
       <script>
@@ -18140,7 +18183,7 @@ def menu_admin_page(request: Request):
           }
 
           async function searchHuntLists() {
-            searchStatusEl.textContent = "Searching Hunt Lists...";
+              searchStatusEl.textContent = "Searching Line Groups...";
 
             while (selectEl.options.length > 1) {
               selectEl.remove(1);
@@ -18161,7 +18204,7 @@ def menu_admin_page(request: Request):
               const payload = await response.json();
               const matches = payload.matches || [];
               if (!matches.length) {
-                searchStatusEl.textContent = "No matching Hunt Lists found.";
+                searchStatusEl.textContent = "No matching Line Groups found.";
                 return;
               }
 
@@ -18176,7 +18219,7 @@ def menu_admin_page(request: Request):
                 selectEl.value = matches[0];
               }
 
-              searchStatusEl.textContent = `Found ${matches.length} matching Hunt List(s).`;
+              searchStatusEl.textContent = `Found ${matches.length} matching Line Group(s).`;
             } catch (err) {
               searchStatusEl.textContent = `Search failed: ${(err && err.message) || "Unknown error."}`;
             }
@@ -18233,6 +18276,64 @@ def menu_admin_page(request: Request):
 
           searchBtn.addEventListener("click", searchHuntLists);
           form.addEventListener("submit", lookupMembers);
+        })();
+      </script>
+
+      <script>
+        (function () {
+          const form = document.getElementById("admin-line-group-form");
+          const searchBtn = document.getElementById("admin-line-group-search-btn");
+          const searchStatusEl = document.getElementById("admin-line-group-search-status");
+          const selectEl = form ? form.querySelector('select[name="line_group_name"]') : null;
+
+          if (!form || !searchBtn || !searchStatusEl || !selectEl) {
+            return;
+          }
+
+          async function searchLineGroupsForEdit() {
+            searchStatusEl.textContent = "Searching Line Groups...";
+
+            while (selectEl.options.length > 1) {
+              selectEl.remove(1);
+            }
+            selectEl.value = "";
+
+            try {
+              const response = await fetch("/line-groups/search", {
+                method: "POST",
+                body: new FormData(form),
+              });
+
+              if (!response.ok) {
+                const errorText = await response.text();
+                throw new Error(errorText || `Request failed with status ${response.status}`);
+              }
+
+              const payload = await response.json();
+              const matches = payload.matches || [];
+              if (!matches.length) {
+                searchStatusEl.textContent = "No matching Line Groups found.";
+                return;
+              }
+
+              matches.forEach((name) => {
+                const opt = document.createElement("option");
+                opt.value = name;
+                opt.textContent = name;
+                selectEl.appendChild(opt);
+              });
+
+              if (matches.length === 1) {
+                selectEl.value = matches[0];
+              }
+
+              searchStatusEl.textContent = `Found ${matches.length} matching Line Group(s).`;
+            } catch (err) {
+              searchStatusEl.textContent = `Search failed: ${(err && err.message) || "Unknown error."}`;
+            }
+          }
+
+          searchBtn.addEventListener("click", searchLineGroupsForEdit);
         })();
       </script>
 
