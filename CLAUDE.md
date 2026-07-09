@@ -243,6 +243,7 @@ Priority keys:
 - Added new Page 2 read-only panel **Security Group Identifier (Read-Only)** to verify AD group identity for `AzAppReg_CiscoUnity-PROD_EmailIntegration`, returning Name, SamAccountName, DistinguishedName, ObjectGUID, SID, GroupCategory, and GroupScope without modifying memberships.
 - Verified read-only security-group identity for future enhancement lock: Name/SamAccountName `AzAppReg_CiscoUnity-PROD_EmailIntegration`, DistinguishedName `CN=AzAppReg_CiscoUnity-PROD_EmailIntegration,OU=Distribution Groups,OU=Corp,DC=ahs,DC=int`, ObjectGUID `03cde812-4279-4c3e-a0d6-704ed5843bf6`, GroupCategory `Security`, GroupScope `Universal`.
 - Decision confirmed: do **not** modify the current working AD phone update workflow (`telephoneNumber`/`ipPhone`) at this time; keep enhancement implementation deferred until explicitly approved.
+- Future enhancement requirement captured: when approved for coding, Build Cisco Jabber flow should add user to the fixed security group (`AzAppReg_CiscoUnity-PROD_EmailIntegration`) after AD phone update, and Separation workflow should remove user from that same security group after AD phone fields are cleared.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
