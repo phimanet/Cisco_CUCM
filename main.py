@@ -25008,7 +25008,7 @@ def lookup_extension_route(
       clean_pattern = (pattern or "").strip()
       if not clean_pattern:
           raise RuntimeError("Extension pattern is required.")
-      result = lookup_extension_owner(cucm_host, cucm_user, cucm_pass, clean_pattern)
+      result = lookup_extension_owner(cucm_host, cucm_user, cucm_pass, clean_pattern, include_line_groups=True)
       return JSONResponse({"ok": True, **result})
     except RuntimeError:
       raise
@@ -25586,7 +25586,7 @@ async def bulk_lookup_extension_route(
 
     for pattern in patterns:
       try:
-        result = lookup_extension_owner(cucm_host, cucm_user, cucm_pass, pattern)
+        result = lookup_extension_owner(cucm_host, cucm_user, cucm_pass, pattern, include_line_groups=True)
         matches = result.get("matches") or []
       except Exception as exc:
         error_inputs += 1
@@ -27358,7 +27358,7 @@ def _resolve_hunt_member_owner_name(cucm_host: str, cucm_user: str, cucm_pass: s
     return "Unknown"
 
   try:
-    result = lookup_extension_owner(cucm_host, cucm_user, cucm_pass, clean_pattern)
+    result = lookup_extension_owner(cucm_host, cucm_user, cucm_pass, clean_pattern, include_line_groups=False)
     matches = result.get("matches") or []
     exact_matches = [
       row for row in matches

@@ -240,7 +240,7 @@ def _find_line_groups_for_dn(cucm_host, cucm_user, cucm_pass, pattern, partition
     return sorted({name for name in matched_groups if name})
 
 
-def lookup_extension_owner(cucm_host, cucm_user, cucm_pass, pattern):
+def lookup_extension_owner(cucm_host, cucm_user, cucm_pass, pattern, include_line_groups=False):
     """
     Reverse lookup: given a DN pattern, find which device(s) and user(s) own it.
     Returns a dict:
@@ -284,19 +284,20 @@ def lookup_extension_owner(cucm_host, cucm_user, cucm_pass, pattern):
         return {"pattern": pattern, "matches": []}
 
     line_group_map = {}
-    for line in matched_lines:
-        key = (line.get("pattern", ""), line.get("partition", ""))
-        line_group_map[key] = _find_line_groups_for_dn(
-            cucm_host,
-            cucm_user,
-            cucm_pass,
-            line.get("pattern", ""),
-            line.get("partition", ""),
-        )
+    if include_line_groups:
+        for line in matched_lines:
+            key = (line.get("pattern", ""), line.get("partition", ""))
+            line_group_map[key] = _find_line_groups_for_dn(
+                cucm_host,
+                cucm_user,
+                cucm_pass,
+                line.get("pattern", ""),
+                line.get("partition", ""),
+            )
 
     matches = []
     for line in matched_lines:
-        line_groups = line_group_map.get((line.get("pattern", ""), line.get("partition", "")), [])
+        line_groups = line_group_map.get((line.get("pattern", ""), line.get("partition", "")), []) if include_line_groups else []
         try:
             devices = _get_line_associated_devices(
                 session, cucm_host, line["pattern"], line["partition"]
