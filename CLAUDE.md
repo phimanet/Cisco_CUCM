@@ -241,6 +241,8 @@ Priority keys:
 - Added repository-level script-change lock guard: new `.githooks/pre-commit` blocks commits touching `main.py`, `toolkit/*`, and `scripts/*` unless explicit override env var `ALLOW_PROTECTED_SCRIPT_CHANGES=1` is set. Added enable helpers at `scripts/enable_protected_script_lock.sh` and `scripts/enable_protected_script_lock.ps1`.
 - Added new Page 2 panel **Hunt List Members** above existing Update Hunt List Line Group menu item: supports hunt-list search/selection using the same line-group search pattern and lists current member extensions with resolved owner name (display name/owner ID fallback, plus line alerting-name fallback), with inline table output.
 - Added new Page 2 read-only panel **Security Group Identifier (Read-Only)** to verify AD group identity for `AzAppReg_CiscoUnity-PROD_EmailIntegration`, returning Name, SamAccountName, DistinguishedName, ObjectGUID, SID, GroupCategory, and GroupScope without modifying memberships.
+- Verified read-only security-group identity for future enhancement lock: Name/SamAccountName `AzAppReg_CiscoUnity-PROD_EmailIntegration`, DistinguishedName `CN=AzAppReg_CiscoUnity-PROD_EmailIntegration,OU=Distribution Groups,OU=Corp,DC=ahs,DC=int`, ObjectGUID `03cde812-4279-4c3e-a0d6-704ed5843bf6`, GroupCategory `Security`, GroupScope `Universal`.
+- Decision confirmed: do **not** modify the current working AD phone update workflow (`telephoneNumber`/`ipPhone`) at this time; keep enhancement implementation deferred until explicitly approved.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
