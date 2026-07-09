@@ -3946,6 +3946,21 @@ def _validate_cucm_login(cucm_host: str, cucm_user: str, cucm_pass: str):
   </soapenv:Body>
 </soapenv:Envelope>"""
 
+  fallback_xml = """<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:listUser>
+      <searchCriteria>
+        <userid>%</userid>
+      </searchCriteria>
+      <returnedTags>
+        <userid/>
+      </returnedTags>
+    </axl:listUser>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
   url = f"https://{cucm_host}:8443/axl/"
   try:
     response = requests.post(
@@ -3961,6 +3976,23 @@ def _validate_cucm_login(cucm_host: str, cucm_user: str, cucm_pass: str):
 
   if response.status_code == 200:
     return True, "Login successful"
+
+  # Some CUCM accounts can run operational AXL queries but are restricted for getCCMVersion.
+  # If that specific probe is denied, try a minimal listUser probe before failing login.
+  if response.status_code == 401:
+    try:
+      fallback_response = requests.post(
+        url,
+        data=fallback_xml.encode("utf-8"),
+        headers={"Content-Type": "text/xml"},
+        auth=HTTPBasicAuth(cucm_user, cucm_pass),
+        timeout=20,
+        verify=False,
+      )
+      if fallback_response.status_code == 200:
+        return True, "Login successful"
+    except Exception:
+      pass
 
   return False, f"Login failed (HTTP {response.status_code}). Verify host/username/password."
 
