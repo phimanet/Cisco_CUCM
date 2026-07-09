@@ -18125,11 +18125,6 @@ def menu_admin_page(request: Request):
 
         <p id="admin-hunt-list-members-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Search and select a Hunt List to view members.</p>
         <div id="admin-hunt-list-members-results" style="overflow-x:auto;"></div>
-
-        <details id="admin-hunt-list-debug-wrap" style="margin-top:12px; border:1px solid #c8dbee; border-radius:6px; padding:8px 10px; background:#f8fbff;">
-          <summary style="cursor:pointer; font-weight:700; color:#1d4f91;">Debug Console (Temporary)</summary>
-          <pre id="admin-hunt-list-debug" style="margin:8px 0 0 0; max-height:220px; overflow:auto; font-size:12px; line-height:1.35; white-space:pre-wrap;">Debug ready (Hunt List Members).</pre>
-        </details>
       </section>
 
       <section class="panel tool-panel" data-panel="linegroup-admin">
@@ -18174,11 +18169,6 @@ def menu_admin_page(request: Request):
 
           <button type="submit">Run Edit Line Group Members (Option 17)</button>
         </form>
-
-        <details id="admin-line-group-debug-wrap" style="margin-top:12px; border:1px solid #c8dbee; border-radius:6px; padding:8px 10px; background:#f8fbff;">
-          <summary style="cursor:pointer; font-weight:700; color:#1d4f91;">Debug Console (Temporary)</summary>
-          <pre id="admin-line-group-debug" style="margin:8px 0 0 0; max-height:220px; overflow:auto; font-size:12px; line-height:1.35; white-space:pre-wrap;">Debug ready (Update Hunt List Line Group).</pre>
-        </details>
       </section>
 
       <script src="/assets/page2-linegroup-search.js"></script>
