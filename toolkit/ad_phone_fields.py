@@ -45,9 +45,42 @@ def _format_phone_plain(phone):
 
 
 def _resolve_powershell_executable():
-    for candidate in ["powershell", "pwsh"]:
-        if shutil.which(candidate):
-            return candidate
+    candidates = [
+        "powershell",
+        "pwsh",
+        "/usr/bin/pwsh",
+        "/usr/local/bin/pwsh",
+        "/opt/microsoft/powershell/7/pwsh",
+        "/usr/bin/powershell",
+        "/usr/local/bin/powershell",
+    ]
+    for candidate in candidates:
+        if os.path.isabs(candidate):
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+            continue
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return ""
+
+
+def _resolve_ldapsearch_executable():
+    candidates = [
+        "ldapsearch",
+        "/usr/bin/ldapsearch",
+        "/usr/local/bin/ldapsearch",
+        "/bin/ldapsearch",
+        "/usr/sbin/ldapsearch",
+    ]
+    for candidate in candidates:
+        if os.path.isabs(candidate):
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+            continue
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
     return ""
 
 
@@ -752,7 +785,7 @@ def _parse_ldif_attributes(output_text):
 
 
 def _lookup_ad_group_ldapsearch(group_name, auth_context):
-    ldapsearch_bin = shutil.which("ldapsearch")
+    ldapsearch_bin = _resolve_ldapsearch_executable()
     if not ldapsearch_bin:
         return None, "ldapsearch executable was not found on this server"
 
