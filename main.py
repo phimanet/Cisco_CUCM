@@ -13119,7 +13119,7 @@ __ADMIN_CARD__
     <h3>Extension Reverse Lookup</h3>
     <p>Enter a DN pattern (exact or partial) to find which device and user it is assigned to.</p>
 
-    <div class="jabber-check-layout">
+    <div class="jabber-check-layout" style="display:block;">
       <form id="extension-lookup-form" class="jabber-check-form">
         <div class="compact-inline-row">
           <span>Cisco Callmanager Username:</span>
@@ -13138,7 +13138,7 @@ __ADMIN_CARD__
         </div>
       </form>
 
-      <section class="jabber-check-output" aria-live="polite" style="flex: 1 1 600px; min-width: 320px;">
+      <section class="jabber-check-output" aria-live="polite" style="margin-top:12px;">
         <h4>Lookup Result</h4>
         <p id="extension-lookup-status" class="jabber-check-status">Enter a DN and click Look Up Extension.</p>
         <div id="extension-lookup-results" style="overflow-x: auto;"></div>
