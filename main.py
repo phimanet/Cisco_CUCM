@@ -18108,7 +18108,7 @@ def menu_admin_page(request: Request):
           <div class="compact-inline-row">
             <span>Search Line Group Name:</span>
             <input name="line_group_search" placeholder="Example_HuntList">
-            <button type="button" id="admin-hunt-list-search-btn" onclick="if (window.__adminSearchLineGroups) { window.__adminSearchLineGroups('admin-hunt-list-members-form', 'admin-hunt-list-search-status', 'admin-hunt-list-debug'); } return false;">Search Line Groups</button>
+            <button type="button" id="admin-hunt-list-search-btn">Search Line Groups</button>
           </div><br>
 
           <p id="admin-hunt-list-search-status" style="color:#2c5c8a; min-height:18px;">Search first (or leave blank for all), then choose a matching Line Group.</p>
@@ -18143,7 +18143,7 @@ def menu_admin_page(request: Request):
           <div class="compact-inline-row">
             <span>Search Line Group Name:</span>
             <input name="line_group_search" placeholder="Example_LineGroup">
-            <button type="button" id="admin-line-group-search-btn" onclick="if (window.__adminSearchLineGroups) { window.__adminSearchLineGroups('admin-line-group-form', 'admin-line-group-search-status', 'admin-line-group-debug'); } return false;">Search Line Groups</button>
+            <button type="button" id="admin-line-group-search-btn">Search Line Groups</button>
           </div><br>
           <p id="admin-line-group-search-status" style="color:#2c5c8a; min-height:18px;">Search first, then choose a matching Line Group.</p>
 
@@ -18180,6 +18180,8 @@ def menu_admin_page(request: Request):
           <pre id="admin-line-group-debug" style="margin:8px 0 0 0; max-height:220px; overflow:auto; font-size:12px; line-height:1.35; white-space:pre-wrap;">Debug ready (Update Hunt List Line Group).</pre>
         </details>
       </section>
+
+      <script src="/assets/page2-linegroup-search.js"></script>
 
       <script>
         (function () {
@@ -27491,6 +27493,144 @@ def search_line_groups_route(
     search_text=line_group_search,
   )
   return JSONResponse({"matches": matches})
+
+
+@app.get("/assets/page2-linegroup-search.js")
+def page2_linegroup_search_js():
+  js = r'''
+(function () {
+  function writeDebug(debugId, message, data) {
+    const debugEl = document.getElementById(debugId);
+    if (!debugEl) {
+      return;
+    }
+    const stamp = new Date().toISOString();
+    let line = `[${stamp}] ${message}`;
+    if (typeof data !== "undefined") {
+      if (typeof data === "string") {
+        line += `\n${data}`;
+      } else {
+        try {
+          line += `\n${JSON.stringify(data, null, 2)}`;
+        } catch (_err) {
+          line += `\n${String(data)}`;
+        }
+      }
+    }
+    debugEl.textContent = (line + "\n\n" + debugEl.textContent).slice(0, 20000);
+  }
+
+  async function runSearch(formId, statusId, debugId) {
+    const form = document.getElementById(formId);
+    const statusEl = document.getElementById(statusId);
+    const selectEl = form ? form.querySelector('select[name="line_group_name"]') : null;
+    const searchField = form ? form.querySelector('input[name="line_group_search"]') : null;
+
+    if (!form || !statusEl || !selectEl) {
+      writeDebug(debugId, "Search aborted: missing form/status/select", { formId, statusId });
+      return;
+    }
+
+    writeDebug(debugId, "Search button clicked");
+    statusEl.textContent = "Searching Line Groups...";
+
+    while (selectEl.options.length > 1) {
+      selectEl.remove(1);
+    }
+    selectEl.value = "";
+
+    const initialSearch = String((searchField && searchField.value) || "").trim();
+    writeDebug(debugId, "Search started", { endpoint: "/line-groups/search", query: initialSearch });
+
+    try {
+      const response = await fetch("/line-groups/search", {
+        method: "POST",
+        body: new FormData(form),
+        credentials: "same-origin",
+        headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+      });
+
+      const responseText = await response.text();
+      writeDebug(debugId, "Primary response", { status: response.status, ok: response.ok, text: responseText.slice(0, 2000) });
+
+      let payload = {};
+      try {
+        payload = responseText ? JSON.parse(responseText) : {};
+      } catch (_parseErr) {
+        payload = { matches: [] };
+      }
+
+      let matches = Array.isArray(payload.matches) ? payload.matches : [];
+
+      if (!matches.length && initialSearch) {
+        const fallbackFd = new FormData(form);
+        fallbackFd.set("line_group_search", "");
+        const fallbackResponse = await fetch("/line-groups/search", {
+          method: "POST",
+          body: fallbackFd,
+          credentials: "same-origin",
+          headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+        });
+        const fallbackText = await fallbackResponse.text();
+        writeDebug(debugId, "Fallback response", { status: fallbackResponse.status, ok: fallbackResponse.ok, text: fallbackText.slice(0, 2000) });
+
+        try {
+          const fallbackPayload = fallbackText ? JSON.parse(fallbackText) : {};
+          matches = Array.isArray(fallbackPayload.matches) ? fallbackPayload.matches : [];
+        } catch (_parseErr) {
+          matches = [];
+        }
+      }
+
+      if (!matches.length) {
+        statusEl.textContent = "No matching Line Groups found.";
+        writeDebug(debugId, "Search completed with zero matches");
+        return;
+      }
+
+      matches.forEach((name) => {
+        const opt = document.createElement("option");
+        opt.value = name;
+        opt.textContent = name;
+        selectEl.appendChild(opt);
+      });
+
+      if (matches.length === 1) {
+        selectEl.value = matches[0];
+      }
+
+      statusEl.textContent = `Found ${matches.length} matching Line Group(s).`;
+      writeDebug(debugId, "Search completed", { count: matches.length, first: matches[0] || "" });
+    } catch (err) {
+      statusEl.textContent = `Search failed: ${(err && err.message) || "Unknown error."}`;
+      writeDebug(debugId, "Search exception", (err && err.stack) || (err && err.message) || String(err));
+    }
+  }
+
+  function bindButton(buttonId, formId, statusId, debugId) {
+    const btn = document.getElementById(buttonId);
+    if (!btn) {
+      return;
+    }
+    btn.addEventListener("click", function (event) {
+      event.preventDefault();
+      runSearch(formId, statusId, debugId);
+    });
+    writeDebug(debugId, "Search handler bound", { buttonId });
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", function () {
+      bindButton("admin-hunt-list-search-btn", "admin-hunt-list-members-form", "admin-hunt-list-search-status", "admin-hunt-list-debug");
+      bindButton("admin-line-group-search-btn", "admin-line-group-form", "admin-line-group-search-status", "admin-line-group-debug");
+    });
+  } else {
+    bindButton("admin-hunt-list-search-btn", "admin-hunt-list-members-form", "admin-hunt-list-search-status", "admin-hunt-list-debug");
+    bindButton("admin-line-group-search-btn", "admin-line-group-form", "admin-line-group-search-status", "admin-line-group-debug");
+  }
+})();
+'''
+  return Response(content=js, media_type="application/javascript")
 
 
 @app.post("/export/rpo-phones")
