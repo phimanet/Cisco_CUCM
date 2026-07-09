@@ -240,6 +240,7 @@ Priority keys:
 - Hardened Aerialink lookup flow used by SMS Item Menu (Aerialink SMS-AMIEClassic panel and shared SMS lookup): preflight now treats HTTP `400/422` as endpoint reachable (query-shape mismatch) instead of hard-fail, and runtime lookup now retries multiple request patterns (`codes`, `code`, `phoneNumber`, `number`, `msisdn`, and path-style `/codes/{digits}`) before declaring not provisioned.
 - Added repository-level script-change lock guard: new `.githooks/pre-commit` blocks commits touching `main.py`, `toolkit/*`, and `scripts/*` unless explicit override env var `ALLOW_PROTECTED_SCRIPT_CHANGES=1` is set. Added enable helpers at `scripts/enable_protected_script_lock.sh` and `scripts/enable_protected_script_lock.ps1`.
 - Added new Page 2 panel **Hunt List Members** above existing Update Hunt List Line Group menu item: supports hunt-list search/selection using the same line-group search pattern and lists current member extensions with resolved owner name (display name/owner ID fallback, plus line alerting-name fallback), with inline table output.
+- Added new Page 2 read-only panel **Security Group Identifier (Read-Only)** to verify AD group identity for `AzAppReg_CiscoUnity-PROD_EmailIntegration`, returning Name, SamAccountName, DistinguishedName, ObjectGUID, SID, GroupCategory, and GroupScope without modifying memberships.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.

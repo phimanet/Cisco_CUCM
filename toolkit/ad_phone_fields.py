@@ -3,6 +3,7 @@ import os
 import re
 import shutil
 import subprocess
+import uuid
 
 try:
     from ldap3 import (
@@ -15,6 +16,7 @@ try:
         Connection,
         Server,
     )
+    from ldap3.utils.conv import format_sid
 
     LDAP3_AVAILABLE = True
 except Exception:
@@ -456,3 +458,231 @@ if ($payload.username -and $payload.password) {
             return False, f"AD clear failed for {sam}: {clear_error}; LDAP fallback failed: {ldap_error}"
 
     return True, f"Cleared AD phone fields for {sam}"
+
+
+def _normalize_group_lookup_name(value):
+    return str(value or "").strip()
+
+
+def _group_scope_from_group_type(group_type_value):
+    try:
+        raw = int(group_type_value)
+    except Exception:
+        return ""
+
+    normalized = raw & 0xFFFFFFFF
+    scope_bits = normalized & 0x0000000E
+    if scope_bits == 0x00000002:
+        return "Global"
+    if scope_bits == 0x00000004:
+        return "DomainLocal"
+    if scope_bits == 0x00000008:
+        return "Universal"
+    return ""
+
+
+def _group_category_from_group_type(group_type_value):
+    try:
+        raw = int(group_type_value)
+    except Exception:
+        return ""
+
+    normalized = raw & 0xFFFFFFFF
+    return "Security" if (normalized & 0x80000000) else "Distribution"
+
+
+def _guid_to_string(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return str(uuid.UUID(bytes_le=bytes(value)))
+        except Exception:
+            try:
+                return str(uuid.UUID(bytes=bytes(value)))
+            except Exception:
+                return ""
+    return str(value).strip()
+
+
+def _sid_to_string(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return format_sid(bytes(value))
+        except Exception:
+            return ""
+    return str(value).strip()
+
+
+def _lookup_ad_group_powershell(group_name, auth_context):
+    payload = {
+        "username": (auth_context or {}).get("username", ""),
+        "password": (auth_context or {}).get("password", ""),
+        "group_name": group_name,
+    }
+    script = r"""
+$payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
+Import-Module ActiveDirectory -ErrorAction Stop
+
+$groupName = [string]$payload.group_name
+$group = $null
+
+if ($payload.username -and $payload.password) {
+    $secure = ConvertTo-SecureString $payload.password -AsPlainText -Force
+    $cred = [System.Management.Automation.PSCredential]::new($payload.username, $secure)
+    $group = Get-ADGroup -Credential $cred -Filter "Name -eq '$groupName'" -Properties DistinguishedName,ObjectGUID,SID,GroupCategory,GroupScope,Name,SamAccountName -ErrorAction Stop
+} else {
+    $group = Get-ADGroup -Filter "Name -eq '$groupName'" -Properties DistinguishedName,ObjectGUID,SID,GroupCategory,GroupScope,Name,SamAccountName -ErrorAction Stop
+}
+
+if ($null -eq $group) {
+    @{ found = $false } | ConvertTo-Json -Compress
+    exit 0
+}
+
+@{
+    found = $true
+    name = [string]$group.Name
+    samAccountName = [string]$group.SamAccountName
+    distinguishedName = [string]$group.DistinguishedName
+    objectGUID = [string]$group.ObjectGUID
+    sid = [string]$group.SID
+    groupCategory = [string]$group.GroupCategory
+    groupScope = [string]$group.GroupScope
+} | ConvertTo-Json -Compress
+"""
+
+    data, error = _run_powershell_json(script, payload)
+    if error:
+        return None, error
+    if not isinstance(data, dict):
+        return None, "AD group lookup returned an invalid response"
+    return data, ""
+
+
+def _lookup_ad_group_ldap(group_name, auth_context):
+    if not LDAP3_AVAILABLE:
+        return None, "ldap3 package is not installed on this server"
+
+    config, config_error = _resolve_ldap_config()
+    if config_error:
+        return None, config_error
+
+    bind_user, bind_auth, bind_error = _resolve_ldap_bind_credentials(auth_context, config)
+    if bind_error:
+        return None, bind_error
+
+    try:
+        server = Server(
+            config["server"],
+            port=config["port"],
+            use_ssl=config["use_ssl"],
+            get_info=ALL,
+            connect_timeout=20,
+        )
+        conn = Connection(
+            server,
+            user=bind_user,
+            password=str((auth_context or {}).get("password") or ""),
+            authentication=bind_auth,
+            auto_bind=True,
+            receive_timeout=20,
+        )
+    except Exception as exc:
+        return None, f"LDAP bind failed: {exc}"
+
+    escaped = _escape_ldap_filter_value(group_name)
+    search_filter = (
+        f"(&(objectClass=group)(|"
+        f"(cn={escaped})"
+        f"(name={escaped})"
+        f"(sAMAccountName={escaped})"
+        "))"
+    )
+
+    try:
+        ok = conn.search(
+            search_base=config["base_dn"],
+            search_filter=search_filter,
+            search_scope=SUBTREE,
+            attributes=[
+                "distinguishedName",
+                "cn",
+                "name",
+                "sAMAccountName",
+                "objectGUID",
+                "objectSid",
+                "groupType",
+            ],
+        )
+    except Exception as exc:
+        try:
+            conn.unbind()
+        except Exception:
+            pass
+        return None, f"LDAP search failed: {exc}"
+
+    if not ok or not conn.entries:
+        try:
+            conn.unbind()
+        except Exception:
+            pass
+        return {"found": False}, ""
+
+    entry = conn.entries[0]
+    dn = str(getattr(entry, "entry_dn", "") or "").strip()
+    name = str(getattr(getattr(entry, "name", None), "value", "") or getattr(getattr(entry, "cn", None), "value", "") or "").strip()
+    sam = str(getattr(getattr(entry, "sAMAccountName", None), "value", "") or "").strip()
+    guid = _guid_to_string(getattr(getattr(entry, "objectGUID", None), "value", None))
+    sid = _sid_to_string(getattr(getattr(entry, "objectSid", None), "value", None))
+    group_type = getattr(getattr(entry, "groupType", None), "value", None)
+    category = _group_category_from_group_type(group_type)
+    scope = _group_scope_from_group_type(group_type)
+
+    try:
+        conn.unbind()
+    except Exception:
+        pass
+
+    return {
+        "found": True,
+        "name": name,
+        "samAccountName": sam,
+        "distinguishedName": dn,
+        "objectGUID": guid,
+        "sid": sid,
+        "groupCategory": category,
+        "groupScope": scope,
+    }, ""
+
+
+def inspect_ad_group_identifiers(group_name, auth_context=None):
+    clean_name = _normalize_group_lookup_name(group_name)
+    if not clean_name:
+        return None, "group_name is required"
+
+    ps_data, ps_error = _lookup_ad_group_powershell(clean_name, auth_context)
+    if not ps_error and isinstance(ps_data, dict):
+        result = dict(ps_data)
+        result["query"] = clean_name
+        result["source"] = "powershell"
+        return result, ""
+
+    ldap_data, ldap_error = _lookup_ad_group_ldap(clean_name, auth_context)
+    if not ldap_error and isinstance(ldap_data, dict):
+        result = dict(ldap_data)
+        result["query"] = clean_name
+        result["source"] = "ldap"
+        return result, ""
+
+    if ps_error and ldap_error:
+        return None, f"{ps_error}; LDAP fallback failed: {ldap_error}"
+    return None, ps_error or ldap_error or "AD group lookup failed"

@@ -65,6 +65,7 @@ from toolkit.remove_teams_telephony_user import (
   lookup_teams_telephony_removal_candidate,
   remove_teams_telephony_user,
 )
+from toolkit.ad_phone_fields import inspect_ad_group_identifiers
 
 logger = logging.getLogger(__name__)
 
@@ -17774,6 +17775,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unityldapsync">Trigger Unity LDAP Sync</button>
+            <button type="button" class="portal-nav-btn" data-panel="ad-group-identifiers">Security Group Identifier (Read-Only)</button>
             <button type="button" class="portal-nav-btn" data-panel="sep-sms-report">SMS Separation Email Process</button>
             <button type="button" class="portal-nav-btn" data-panel="dn-avail-report">DN Number Pool Availability Report</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page4'">Server Certificate Manager (Page 4)</button>
@@ -17968,6 +17970,26 @@ def menu_admin_page(request: Request):
 
           <button type="submit">Run Unity LDAP Sync</button>
         </form>
+      </section>
+
+      <section class="panel tool-panel" data-panel="ad-group-identifiers">
+        <h3>Security Group Identifier (Read-Only)</h3>
+        <p>Reads AD security group identifiers for verification only. This tool does not add, remove, or modify any group membership.</p>
+        <form id="admin-ad-group-identifiers-form">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+
+          <div class="compact-inline-row">
+            <span>Security Group Name:</span>
+            <input name="group_name" value="AzAppReg_CiscoUnity-PROD_EmailIntegration" readonly required style="min-width:420px;">
+          </div><br>
+
+          <button type="submit">Read Group Identifiers (Read-Only)</button>
+        </form>
+
+        <p id="admin-ad-group-identifiers-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Click Read Group Identifiers to verify DN/ObjectGUID/SID.</p>
+        <div id="admin-ad-group-identifiers-results" style="overflow-x:auto;"></div>
       </section>
 
       <section class="panel tool-panel" data-panel="translookup">
@@ -19328,6 +19350,86 @@ def menu_admin_page(request: Request):
 
             } catch (err) {
               statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        })();
+      </script>
+
+      <script>
+        (function () {
+          const form = document.getElementById("admin-ad-group-identifiers-form");
+          const statusEl = document.getElementById("admin-ad-group-identifiers-status");
+          const resultsEl = document.getElementById("admin-ad-group-identifiers-results");
+
+          if (!form || !statusEl || !resultsEl) {
+            return;
+          }
+
+          function escapeHtml(value) {
+            return String(value || "")
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/\"/g, "&quot;")
+              .replace(/'/g, "&#39;");
+          }
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Reading AD group identifiers...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const response = await fetch("/admin/ad-group-identifiers", {
+                method: "POST",
+                body: new FormData(form),
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                const msg = (payload.error && payload.error.message) || payload.detail || "Read failed.";
+                throw new Error(msg);
+              }
+
+              if (!payload.found) {
+                statusEl.textContent = `Group not found: ${payload.query || "(unknown)"}`;
+                return;
+              }
+
+              statusEl.textContent = `Group verified: ${payload.name || payload.query || ""}`;
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Property</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Value</th>';
+              html += '</tr></thead><tbody>';
+
+              const rows = [
+                ["Query", payload.query || ""],
+                ["Name", payload.name || ""],
+                ["SamAccountName", payload.samAccountName || ""],
+                ["DistinguishedName", payload.distinguishedName || ""],
+                ["ObjectGUID", payload.objectGUID || ""],
+                ["SID", payload.sid || ""],
+                ["GroupCategory", payload.groupCategory || ""],
+                ["GroupScope", payload.groupScope || ""],
+                ["Source", payload.source || ""],
+              ];
+
+              rows.forEach(function (entry, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c; white-space:nowrap;">' + escapeHtml(entry[0]) + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace; white-space:pre-wrap; word-break:break-word;">' + escapeHtml(entry[1] || "—") + '</td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+            } catch (err) {
+              statusEl.textContent = `Read failed: ${(err && err.message) || "Unknown error."}`;
             }
           });
         })();
@@ -27457,6 +27559,34 @@ def line_group_members_route(
     "count": len(resolved_members),
     "members": resolved_members,
   })
+
+
+@app.post("/admin/ad-group-identifiers")
+def admin_ad_group_identifiers_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  group_name: str = Form(...),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+  clean_group = str(group_name or "").strip()
+  if not clean_group:
+    raise RuntimeError("group_name is required")
+
+  result, error = inspect_ad_group_identifiers(
+    clean_group,
+    auth_context={
+      "username": cucm_user,
+      "password": cucm_pass,
+    },
+  )
+  if error:
+    raise RuntimeError(f"AD group identifier lookup failed: {error}")
+
+  return JSONResponse({"ok": True, **(result or {})})
 
 
 @app.post("/line-groups/edit-members")
