@@ -1,8 +1,10 @@
 import requests
 import urllib3
 import xml.etree.ElementTree as ET
+import re
 from requests.auth import HTTPBasicAuth
 from xml.sax.saxutils import escape as xml_escape
+from .edit_line_group_members import search_line_groups, get_line_group_members
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -190,6 +192,54 @@ def _get_user_info(session, cucm_host, userid):
     }
 
 
+def _normalize_dn(value):
+    return re.sub(r"\D", "", str(value or ""))
+
+
+def _dn_patterns_match(member_pattern, target_pattern):
+    member_text = str(member_pattern or "").strip()
+    target_text = str(target_pattern or "").strip()
+    if not member_text or not target_text:
+        return False
+    if member_text == target_text:
+        return True
+
+    member_digits = _normalize_dn(member_text)
+    target_digits = _normalize_dn(target_text)
+    return bool(member_digits and target_digits and member_digits == target_digits)
+
+
+def _find_line_groups_for_dn(cucm_host, cucm_user, cucm_pass, pattern, partition=""):
+    clean_pattern = str(pattern or "").strip()
+    clean_partition = str(partition or "").strip()
+    if not clean_pattern:
+        return []
+
+    try:
+        all_groups = search_line_groups(cucm_host, cucm_user, cucm_pass, "")
+    except Exception:
+        return []
+
+    matched_groups = []
+    for group_name in all_groups:
+        try:
+            members = get_line_group_members(cucm_host, cucm_user, cucm_pass, group_name)
+        except Exception:
+            continue
+
+        for member in members:
+            member_pattern = str(member.get("pattern", "") or "").strip()
+            member_partition = str(member.get("routePartitionName", "") or "").strip()
+            if not _dn_patterns_match(member_pattern, clean_pattern):
+                continue
+            if clean_partition and member_partition and member_partition != clean_partition:
+                continue
+            matched_groups.append(str(group_name or "").strip())
+            break
+
+    return sorted({name for name in matched_groups if name})
+
+
 def lookup_extension_owner(cucm_host, cucm_user, cucm_pass, pattern):
     """
     Reverse lookup: given a DN pattern, find which device(s) and user(s) own it.
@@ -233,8 +283,20 @@ def lookup_extension_owner(cucm_host, cucm_user, cucm_pass, pattern):
     if not matched_lines:
         return {"pattern": pattern, "matches": []}
 
+    line_group_map = {}
+    for line in matched_lines:
+        key = (line.get("pattern", ""), line.get("partition", ""))
+        line_group_map[key] = _find_line_groups_for_dn(
+            cucm_host,
+            cucm_user,
+            cucm_pass,
+            line.get("pattern", ""),
+            line.get("partition", ""),
+        )
+
     matches = []
     for line in matched_lines:
+        line_groups = line_group_map.get((line.get("pattern", ""), line.get("partition", "")), [])
         try:
             devices = _get_line_associated_devices(
                 session, cucm_host, line["pattern"], line["partition"]
@@ -252,6 +314,8 @@ def lookup_extension_owner(cucm_host, cucm_user, cucm_pass, pattern):
                 "all_lines": [],
                 "owner_userid": None,
                 "user": {},
+                "line_groups": line_groups,
+                "line_group_count": len(line_groups),
             })
             continue
 
@@ -269,6 +333,8 @@ def lookup_extension_owner(cucm_host, cucm_user, cucm_pass, pattern):
                 "all_lines": all_lines,
                 "owner_userid": owner_userid,
                 "user": user_info,
+                "line_groups": line_groups,
+                "line_group_count": len(line_groups),
             })
 
     return {"pattern": pattern, "matches": matches}

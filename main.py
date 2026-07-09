@@ -13187,6 +13187,7 @@ __ADMIN_CARD__
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Partition</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Device</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Type</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Line Group(s)</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Owner</th>';
             html += '<th style="padding:8px 10px; text-align:left;">All Lines on Device</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
@@ -13200,6 +13201,7 @@ __ADMIN_CARD__
               const ownerName = (m.user && (m.user.display_name || ((m.user.first_name || "") + " " + (m.user.last_name || "")).trim())) || "";
               const ownerCell = uid ? (ownerName ? ownerName + "<br><span style='font-family:Consolas,monospace;font-size:11px;'>" + uid + "</span>" : uid) : "\u2014";
               const allLines = (m.all_lines || []).map(function (l) { return l.pattern; }).join(", ") || "\u2014";
+              const lineGroups = (m.line_groups || []).join(", ") || "\u2014";
 
               const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;";
               const actionBtns = uid
@@ -13213,6 +13215,7 @@ __ADMIN_CARD__
               html += '<td style="padding:7px 10px; font-size:12px;">' + (m.partition || "\u2014") + '</td>';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + dev + '</td>';
               html += '<td style="padding:7px 10px; font-size:12px;">' + devType + '</td>';
+              html += '<td style="padding:7px 10px; font-size:12px; color:#355978;">' + lineGroups + '</td>';
               html += '<td style="padding:7px 10px;">' + ownerCell + '</td>';
               html += '<td style="padding:7px 10px; font-size:12px; color:#355978;">' + allLines + '</td>';
               html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(2,max-content);gap:4px;align-items:start;">' + actionBtns + '</div></td>';
@@ -25568,6 +25571,8 @@ async def bulk_lookup_extension_route(
       "status",
       "matched_pattern",
       "partition",
+      "line_groups",
+      "line_group_count",
       "device_name",
       "device_type",
       "owner_userid",
@@ -25587,13 +25592,13 @@ async def bulk_lookup_extension_route(
         matches = result.get("matches") or []
       except Exception as exc:
         error_inputs += 1
-        writer.writerow([pattern, "ERROR", "", "", "", "", "", "", "", str(exc)])
+        writer.writerow([pattern, "ERROR", "", "", "", "", "", "", "", "", "", str(exc)])
         result_rows += 1
         continue
 
       if not matches:
         no_result_inputs += 1
-        writer.writerow([pattern, "NO_RESULTS", "", "", "", "", "", "", "", "No matches found"])
+        writer.writerow([pattern, "NO_RESULTS", "", "", "", "", "", "", "", "", "", "No matches found"])
         result_rows += 1
         continue
 
@@ -25605,6 +25610,8 @@ async def bulk_lookup_extension_route(
           "FOUND",
           match.get("pattern", ""),
           match.get("partition", ""),
+          ", ".join(match.get("line_groups") or []),
+          match.get("line_group_count", 0),
           match.get("device_name", ""),
           match.get("device_type", ""),
           match.get("owner_userid", ""),
