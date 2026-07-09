@@ -18100,7 +18100,7 @@ def menu_admin_page(request: Request):
       <section class="panel tool-panel" data-panel="hunt-list-members">
         <h3>Hunt List Members</h3>
         <p>Search Line Group names (used by Hunt Lists), select one, then list all member extensions with resolved owner names.</p>
-        <form id="admin-hunt-list-members-form">
+        <form id="admin-hunt-list-members-form" action="javascript:void(0)" method="post" onsubmit="return false;">
           <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
@@ -18120,7 +18120,7 @@ def menu_admin_page(request: Request):
             </select>
           </div><br>
 
-          <button type="submit">Lookup Hunt List Members</button>
+          <button type="button" id="admin-hunt-list-members-lookup-btn">Lookup Hunt List Members</button>
         </form>
 
         <p id="admin-hunt-list-members-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Search and select a Hunt List to view members.</p>
@@ -27597,6 +27597,76 @@ def page2_linegroup_search_js():
     }
   }
 
+  async function runHuntMembersLookup() {
+    const form = document.getElementById("admin-hunt-list-members-form");
+    const statusEl = document.getElementById("admin-hunt-list-members-status");
+    const resultsEl = document.getElementById("admin-hunt-list-members-results");
+    const selectEl = form ? form.querySelector('select[name="line_group_name"]') : null;
+
+    if (!form || !statusEl || !resultsEl || !selectEl) {
+      return;
+    }
+
+    const selectedGroup = String(selectEl.value || "").trim();
+    if (!selectedGroup) {
+      statusEl.textContent = "Please select a matching Line Group first.";
+      return;
+    }
+
+    statusEl.textContent = "Loading Hunt List members...";
+    resultsEl.innerHTML = "";
+
+    try {
+      const response = await fetch("/line-groups/members", {
+        method: "POST",
+        body: new FormData(form),
+        credentials: "same-origin",
+        headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+      });
+
+      const responseText = await response.text();
+      let payload = {};
+      try {
+        payload = responseText ? JSON.parse(responseText) : {};
+      } catch (_parseErr) {
+        payload = {};
+      }
+
+      if (!response.ok || !payload.ok) {
+        throw new Error((payload && payload.error && payload.error.message) || payload.detail || payload.error || `Request failed with status ${response.status}`);
+      }
+
+      const members = payload.members || [];
+      statusEl.textContent = `Hunt List "${payload.line_group_name || ""}" has ${members.length} member(s).`;
+
+      if (!members.length) {
+        resultsEl.innerHTML = "<p style=\"margin:0; color:#355978;\">No members found for this Hunt List.</p>";
+        return;
+      }
+
+      let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+      html += '<thead><tr style="background:#005eb8; color:#fff;">';
+      html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
+      html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Owner Name</th>';
+      html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Route Partition</th>';
+      html += '</tr></thead><tbody>';
+
+      members.forEach((member, index) => {
+        const bg = index % 2 === 0 ? "#f7fbff" : "#ffffff";
+        html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+        html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (member.extension || "") + '</td>';
+        html += '<td style="padding:7px 10px;">' + (member.owner_name || "Unknown") + '</td>';
+        html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (member.partition || "") + '</td>';
+        html += '</tr>';
+      });
+
+      html += '</tbody></table>';
+      resultsEl.innerHTML = html;
+    } catch (err) {
+      statusEl.textContent = `Lookup failed: ${(err && err.message) || "Unknown error."}`;
+    }
+  }
+
   function bindButton(buttonId, formId, statusId, debugId) {
     const btn = document.getElementById(buttonId);
     if (!btn) {
@@ -27609,14 +27679,33 @@ def page2_linegroup_search_js():
     writeDebug(debugId, "Search handler bound", { buttonId });
   }
 
+  function bindHuntMembersLookup() {
+    const form = document.getElementById("admin-hunt-list-members-form");
+    const btn = document.getElementById("admin-hunt-list-members-lookup-btn");
+    if (!form || !btn) {
+      return;
+    }
+
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      runHuntMembersLookup();
+    });
+    btn.addEventListener("click", function (event) {
+      event.preventDefault();
+      runHuntMembersLookup();
+    });
+  }
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", function () {
       bindButton("admin-hunt-list-search-btn", "admin-hunt-list-members-form", "admin-hunt-list-search-status", "admin-hunt-list-debug");
       bindButton("admin-line-group-search-btn", "admin-line-group-form", "admin-line-group-search-status", "admin-line-group-debug");
+      bindHuntMembersLookup();
     });
   } else {
     bindButton("admin-hunt-list-search-btn", "admin-hunt-list-members-form", "admin-hunt-list-search-status", "admin-hunt-list-debug");
     bindButton("admin-line-group-search-btn", "admin-line-group-form", "admin-line-group-search-status", "admin-line-group-debug");
+    bindHuntMembersLookup();
   }
 })();
 '''
