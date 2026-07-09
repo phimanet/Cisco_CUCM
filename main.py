@@ -18110,7 +18110,7 @@ def menu_admin_page(request: Request):
             <button type="button" id="admin-hunt-list-search-btn">Search Line Groups</button>
           </div><br>
 
-          <p id="admin-hunt-list-search-status" style="color:#2c5c8a; min-height:18px;">Search first, then choose a matching Line Group.</p>
+          <p id="admin-hunt-list-search-status" style="color:#2c5c8a; min-height:18px;">Search first (or leave blank for all), then choose a matching Line Group.</p>
 
           <div class="compact-inline-row">
             <span>Select Matching Line Group:</span>
@@ -18191,9 +18191,12 @@ def menu_admin_page(request: Request):
             selectEl.value = "";
 
             try {
+              const initialFormData = new FormData(form);
+              const searchText = String(initialFormData.get("line_group_search") || "").trim();
+
               const response = await fetch("/line-groups/search", {
                 method: "POST",
-                body: new FormData(form),
+                body: initialFormData,
               });
 
               if (!response.ok) {
@@ -18202,7 +18205,23 @@ def menu_admin_page(request: Request):
               }
 
               const payload = await response.json();
-              const matches = payload.matches || [];
+              let matches = payload.matches || [];
+
+              // If a specific filter returns no rows, automatically retry blank search
+              // so operators can still pick a valid line group quickly.
+              if (!matches.length && searchText) {
+                const fallbackFormData = new FormData(form);
+                fallbackFormData.set("line_group_search", "");
+                const fallbackResponse = await fetch("/line-groups/search", {
+                  method: "POST",
+                  body: fallbackFormData,
+                });
+                if (fallbackResponse.ok) {
+                  const fallbackPayload = await fallbackResponse.json();
+                  matches = fallbackPayload.matches || [];
+                }
+              }
+
               if (!matches.length) {
                 searchStatusEl.textContent = "No matching Line Groups found.";
                 return;
@@ -18219,7 +18238,11 @@ def menu_admin_page(request: Request):
                 selectEl.value = matches[0];
               }
 
-              searchStatusEl.textContent = `Found ${matches.length} matching Line Group(s).`;
+              if (searchText) {
+                searchStatusEl.textContent = `Loaded ${matches.length} Line Group(s). If your filter is too narrow, choose from this list.`;
+              } else {
+                searchStatusEl.textContent = `Found ${matches.length} matching Line Group(s).`;
+              }
             } catch (err) {
               searchStatusEl.textContent = `Search failed: ${(err && err.message) || "Unknown error."}`;
             }
