@@ -18108,7 +18108,7 @@ def menu_admin_page(request: Request):
           <div class="compact-inline-row">
             <span>Search Line Group Name:</span>
             <input name="line_group_search" placeholder="Example_HuntList">
-            <button type="button" id="admin-hunt-list-search-btn" onclick="if (window.__adminSearchLineGroups) { window.__adminSearchLineGroups('admin-hunt-list-members-form', 'admin-hunt-list-search-status', 'admin-hunt-list-debug'); } return false;">Search Line Groups</button>
+            <button type="button" id="admin-hunt-list-search-btn" onclick="var d=document.getElementById('admin-hunt-list-debug'); if(d){d.textContent='[CLICK] Hunt List search button pressed\\n\\n'+d.textContent;} var s=document.getElementById('admin-hunt-list-search-status'); if(s){s.textContent='Search click captured. Running...';} if (window.__adminSearchLineGroups) { window.__adminSearchLineGroups('admin-hunt-list-members-form', 'admin-hunt-list-search-status', 'admin-hunt-list-debug'); } return false;">Search Line Groups</button>
           </div><br>
 
           <p id="admin-hunt-list-search-status" style="color:#2c5c8a; min-height:18px;">Search first (or leave blank for all), then choose a matching Line Group.</p>
@@ -18128,7 +18128,7 @@ def menu_admin_page(request: Request):
 
         <details id="admin-hunt-list-debug-wrap" style="margin-top:12px; border:1px solid #c8dbee; border-radius:6px; padding:8px 10px; background:#f8fbff;">
           <summary style="cursor:pointer; font-weight:700; color:#1d4f91;">Debug Console (Temporary)</summary>
-          <pre id="admin-hunt-list-debug" style="margin:8px 0 0 0; max-height:220px; overflow:auto; font-size:12px; line-height:1.35; white-space:pre-wrap;"></pre>
+          <pre id="admin-hunt-list-debug" style="margin:8px 0 0 0; max-height:220px; overflow:auto; font-size:12px; line-height:1.35; white-space:pre-wrap;">Debug ready (Hunt List Members).</pre>
         </details>
       </section>
 
@@ -18143,7 +18143,7 @@ def menu_admin_page(request: Request):
           <div class="compact-inline-row">
             <span>Search Line Group Name:</span>
             <input name="line_group_search" placeholder="Example_LineGroup">
-            <button type="button" id="admin-line-group-search-btn" onclick="if (window.__adminSearchLineGroups) { window.__adminSearchLineGroups('admin-line-group-form', 'admin-line-group-search-status', 'admin-line-group-debug'); } return false;">Search Line Groups</button>
+            <button type="button" id="admin-line-group-search-btn" onclick="var d=document.getElementById('admin-line-group-debug'); if(d){d.textContent='[CLICK] Update Hunt List Line Group search button pressed\\n\\n'+d.textContent;} var s=document.getElementById('admin-line-group-search-status'); if(s){s.textContent='Search click captured. Running...';} if (window.__adminSearchLineGroups) { window.__adminSearchLineGroups('admin-line-group-form', 'admin-line-group-search-status', 'admin-line-group-debug'); } return false;">Search Line Groups</button>
           </div><br>
           <p id="admin-line-group-search-status" style="color:#2c5c8a; min-height:18px;">Search first, then choose a matching Line Group.</p>
 
@@ -18177,7 +18177,7 @@ def menu_admin_page(request: Request):
 
         <details id="admin-line-group-debug-wrap" style="margin-top:12px; border:1px solid #c8dbee; border-radius:6px; padding:8px 10px; background:#f8fbff;">
           <summary style="cursor:pointer; font-weight:700; color:#1d4f91;">Debug Console (Temporary)</summary>
-          <pre id="admin-line-group-debug" style="margin:8px 0 0 0; max-height:220px; overflow:auto; font-size:12px; line-height:1.35; white-space:pre-wrap;"></pre>
+          <pre id="admin-line-group-debug" style="margin:8px 0 0 0; max-height:220px; overflow:auto; font-size:12px; line-height:1.35; white-space:pre-wrap;">Debug ready (Update Hunt List Line Group).</pre>
         </details>
       </section>
 
