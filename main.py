@@ -51,7 +51,7 @@ from toolkit.add_secondary_devices import (
   delete_secondary_mobile_devices,
 )
 from toolkit.called_name_change import run_called_name_change
-from toolkit.edit_line_group_members import edit_line_group_members, search_line_groups
+from toolkit.edit_line_group_members import edit_line_group_members, search_line_groups, get_line_group_members
 from toolkit.extract_rpo_phones import extract_rpo_phones
 from toolkit.person_lookup import search_persons_by_name
 from toolkit.extension_lookup import lookup_extension_owner, check_user_devices
@@ -5238,6 +5238,7 @@ def _wants_json_response(request: Request) -> bool:
     return True
   if request.url.path in {
     "/line-groups/search",
+    "/line-groups/members",
     "/audit-trail/stats",
     "/healthz",
     "/lookup/person",
@@ -14274,6 +14275,48 @@ __ADMIN_CARD__
     </div>
     </section>
 
+    <section class="tool-panel" data-panel="hunt-list-members">
+
+    <h3>Hunt List Members</h3>
+
+    <div class="secondary-layout">
+      <form id="hunt-list-members-form" class="secondary-form" action="/line-groups/members" method="post">
+        <div class="compact-inline-row">
+          <span>Cisco Callmanager Username:</span>
+          <input name="cucm_user" value="__AUTH_USER__" required>
+        </div><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
+        Search Hunt List Name:<br>
+        <input name="line_group_search" placeholder="Example_HuntList"><br><br>
+
+        <div class="action-row">
+          <button type="button" id="hunt-list-search-btn">Search Hunt Lists</button>
+        </div>
+        <p id="hunt-list-search-status" class="secondary-status">Search first, then choose a matching Hunt List.</p>
+        <br>
+
+        Select Matching Hunt List:<br>
+        <select name="line_group_name" required>
+          <option value="" selected>Select a Hunt List...</option>
+        </select><br><br>
+
+        <div class="action-row">
+          <button type="submit">Lookup Hunt List Members</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
+      </form>
+
+      <section class="secondary-output" aria-live="polite">
+        <h4>Hunt List Members</h4>
+        <p id="hunt-list-members-status" class="secondary-status">Search and select a Hunt List to view members.</p>
+        <div id="hunt-list-members-results" style="overflow-x:auto;"></div>
+      </section>
+    </div>
+    </section>
+
     <section class="tool-panel" data-panel="linegroup">
 
     <h3>Edit Line Group Members (Add/Remove DN) (Option 17)</h3>
@@ -14958,11 +15001,16 @@ __ADMIN_CARD__
         }
       }
 
-      async function searchLineGroups(form) {
-        const searchStatusEl = document.getElementById("line-group-search-status");
+      async function searchLineGroups(form, options = {}) {
+        const searchStatusEl = document.getElementById(options.statusId || "line-group-search-status");
         const selectEl = form.querySelector('select[name="line_group_name"]');
+        const entityLabel = options.entityLabel || "Line Group";
 
-        searchStatusEl.textContent = "Searching Line Groups...";
+        if (!searchStatusEl || !selectEl) {
+          return;
+        }
+
+        searchStatusEl.textContent = `Searching ${entityLabel}s...`;
 
         while (selectEl.options.length > 1) {
           selectEl.remove(1);
@@ -14985,7 +15033,7 @@ __ADMIN_CARD__
           const matches = result.matches || [];
 
           if (!matches.length) {
-            searchStatusEl.textContent = "No matching Line Groups found.";
+            searchStatusEl.textContent = `No matching ${entityLabel}s found.`;
             return;
           }
 
@@ -15000,9 +15048,64 @@ __ADMIN_CARD__
             selectEl.value = matches[0];
           }
 
-          searchStatusEl.textContent = `Found ${matches.length} matching Line Group(s).`;
+          searchStatusEl.textContent = `Found ${matches.length} matching ${entityLabel}(s).`;
         } catch (error) {
           searchStatusEl.textContent = `Search failed: ${error.message || "Unknown error."}`;
+        }
+      }
+
+      async function lookupHuntListMembers(form) {
+        const statusEl = document.getElementById("hunt-list-members-status");
+        const resultsEl = document.getElementById("hunt-list-members-results");
+        if (!statusEl || !resultsEl) {
+          return;
+        }
+
+        statusEl.textContent = "Loading Hunt List members...";
+        resultsEl.innerHTML = "";
+
+        try {
+          const formData = new FormData(form);
+          const response = await fetch("/line-groups/members", {
+            method: "POST",
+            body: formData,
+            credentials: "same-origin",
+            headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+          });
+
+          const payload = await response.json();
+          if (!response.ok || !payload.ok) {
+            throw new Error((payload && payload.error && payload.error.message) || payload.detail || payload.error || `Request failed with status ${response.status}`);
+          }
+
+          const members = payload.members || [];
+          statusEl.textContent = `Hunt List "${payload.line_group_name || ""}" has ${members.length} member(s).`;
+
+          if (!members.length) {
+            resultsEl.innerHTML = "<p style=\"margin:0; color:#355978;\">No members found for this Hunt List.</p>";
+            return;
+          }
+
+          let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+          html += '<thead><tr style="background:#005eb8; color:#fff;">';
+          html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
+          html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Owner Name</th>';
+          html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Route Partition</th>';
+          html += '</tr></thead><tbody>';
+
+          members.forEach((member, index) => {
+            const bg = index % 2 === 0 ? "#f7fbff" : "#ffffff";
+            html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+            html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (member.extension || "") + '</td>';
+            html += '<td style="padding:7px 10px;">' + (member.owner_name || "Unknown") + '</td>';
+            html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (member.partition || "") + '</td>';
+            html += '</tr>';
+          });
+
+          html += '</tbody></table>';
+          resultsEl.innerHTML = html;
+        } catch (error) {
+          statusEl.textContent = `Lookup failed: ${error.message || "Unknown error."}`;
         }
       }
 
@@ -15133,6 +15236,12 @@ __ADMIN_CARD__
             return;
           }
 
+          if (form.id === "hunt-list-members-form") {
+            event.preventDefault();
+            lookupHuntListMembers(form);
+            return;
+          }
+
           if (form.id === "rpo-form") {
             event.preventDefault();
             submitSecondaryInline(form, {
@@ -15160,6 +15269,14 @@ __ADMIN_CARD__
       if (lineGroupForm && lineGroupSearchBtn) {
         lineGroupSearchBtn.addEventListener("click", () => {
           searchLineGroups(lineGroupForm);
+        });
+      }
+
+      const huntListForm = document.getElementById("hunt-list-members-form");
+      const huntListSearchBtn = document.getElementById("hunt-list-search-btn");
+      if (huntListForm && huntListSearchBtn) {
+        huntListSearchBtn.addEventListener("click", () => {
+          searchLineGroups(huntListForm, { statusId: "hunt-list-search-status", entityLabel: "Hunt List" });
         });
       }
 
@@ -17569,6 +17686,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=teams-telephony'">Create Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=teams-telephony-remove'">Remove Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM (Main Ops)</button>
+            <button type="button" class="portal-nav-btn" data-panel="hunt-list-members">Hunt List Members</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=linegroup'">Update Hunt List Line Group (Main Ops)</button>
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
@@ -26635,6 +26753,133 @@ def delete_secondary_mobile_devices_route(
     })
 
   return _render_job_result("Remove only Jabber Mobile - iPhone or Android", data, filename, back_url="/page2")
+
+
+def _xml_local_name(tag: str) -> str:
+  return tag.split("}", 1)[-1] if "}" in tag else tag
+
+
+def _axl_lookup_line_alerting_name(cucm_host: str, cucm_user: str, cucm_pass: str, pattern: str, partition: str = "") -> str:
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (partition or "").strip()
+  if not clean_pattern:
+    return ""
+
+  partition_block = f"<routePartitionName>{escape(clean_partition)}</routePartitionName>" if clean_partition else ""
+  soap_xml = f"""<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getLine sequence="1">
+      <pattern>{escape(clean_pattern)}</pattern>
+      {partition_block}
+    </axl:getLine>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  try:
+    response = requests.post(
+      f"https://{cucm_host}:8443/axl/",
+      data=soap_xml.encode("utf-8"),
+      headers={"Content-Type": "text/xml"},
+      auth=HTTPBasicAuth(cucm_user, cucm_pass),
+      timeout=60,
+      verify=False,
+    )
+    if response.status_code != 200:
+      return ""
+
+    root = ET.fromstring(response.text)
+    for node in root.iter():
+      if _xml_local_name(node.tag) != "line":
+        continue
+      for child in node.iter():
+        tag_name = _xml_local_name(child.tag)
+        if tag_name in {"alertingName", "asciiAlertingName", "description"}:
+          value = str(child.text or "").strip()
+          if value:
+            return value
+      return ""
+  except Exception:
+    return ""
+
+  return ""
+
+
+def _resolve_hunt_member_owner_name(cucm_host: str, cucm_user: str, cucm_pass: str, pattern: str, partition: str = "") -> str:
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (partition or "").strip()
+  if not clean_pattern:
+    return "Unknown"
+
+  try:
+    result = lookup_extension_owner(cucm_host, cucm_user, cucm_pass, clean_pattern)
+    matches = result.get("matches") or []
+    exact_matches = [
+      row for row in matches
+      if str(row.get("pattern", "") or "").strip() == clean_pattern
+      and (not clean_partition or str(row.get("partition", "") or "").strip() == clean_partition)
+    ]
+    candidate_rows = exact_matches if exact_matches else matches
+
+    for row in candidate_rows:
+      user = row.get("user") or {}
+      display_name = str(user.get("display_name", "") or "").strip()
+      if display_name:
+        return display_name
+
+      first_name = str(user.get("first_name", "") or "").strip()
+      last_name = str(user.get("last_name", "") or "").strip()
+      combined = f"{first_name} {last_name}".strip()
+      if combined:
+        return combined
+
+      owner_userid = str(row.get("owner_userid", "") or "").strip()
+      if owner_userid:
+        return owner_userid
+  except Exception:
+    pass
+
+  alerting_name = _axl_lookup_line_alerting_name(cucm_host, cucm_user, cucm_pass, clean_pattern, clean_partition)
+  return alerting_name or "Unknown"
+
+
+@app.post("/line-groups/members")
+def line_group_members_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  line_group_name: str = Form(...),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+  members = get_line_group_members(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    line_group_name=line_group_name,
+  )
+
+  resolved_members = []
+  for member in members:
+    pattern = str(member.get("pattern", "") or "").strip()
+    partition = str(member.get("routePartitionName", "") or "").strip()
+    owner_name = _resolve_hunt_member_owner_name(cucm_host, cucm_user, cucm_pass, pattern, partition)
+    resolved_members.append({
+      "extension": pattern,
+      "owner_name": owner_name,
+      "partition": partition,
+      "line_selection_order": str(member.get("lineSelectionOrder", "") or "").strip(),
+    })
+
+  return JSONResponse({
+    "ok": True,
+    "line_group_name": (line_group_name or "").strip(),
+    "count": len(resolved_members),
+    "members": resolved_members,
+  })
 
 
 @app.post("/line-groups/edit-members")

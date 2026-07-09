@@ -156,6 +156,25 @@ def search_line_groups(cucm_host, cucm_user, cucm_pass, search_text):
     return sorted(set(names))
 
 
+def get_line_group_members(cucm_host, cucm_user, cucm_pass, line_group_name):
+    """Return current members for a single Line Group as pattern/partition/order rows."""
+    clean_group = (line_group_name or "").strip()
+    if not clean_group:
+        raise RuntimeError("Line Group Name is required")
+
+    session = requests.Session()
+    session.verify = False
+    session.trust_env = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    response = _axl_post(session, cucm_host, _soap_get_line_group(clean_group))
+    if response.status_code != 200:
+        raise RuntimeError(f"getLineGroup failed with HTTP {response.status_code}: {response.text[:1200]}")
+
+    root = ET.fromstring(response.text)
+    return _extract_line_group_members(root)
+
+
 def edit_line_group_members(cucm_host, cucm_user, cucm_pass, line_group_name, action, dn_pattern, dn_partition):
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_group = (line_group_name or "").strip().replace(" ", "_") or "line_group"
