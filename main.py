@@ -18124,6 +18124,11 @@ def menu_admin_page(request: Request):
 
         <p id="admin-hunt-list-members-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Search and select a Hunt List to view members.</p>
         <div id="admin-hunt-list-members-results" style="overflow-x:auto;"></div>
+
+        <details id="admin-hunt-list-debug-wrap" style="margin-top:12px; border:1px solid #c8dbee; border-radius:6px; padding:8px 10px; background:#f8fbff;">
+          <summary style="cursor:pointer; font-weight:700; color:#1d4f91;">Debug Console (Temporary)</summary>
+          <pre id="admin-hunt-list-debug" style="margin:8px 0 0 0; max-height:220px; overflow:auto; font-size:12px; line-height:1.35; white-space:pre-wrap;"></pre>
+        </details>
       </section>
 
       <section class="panel tool-panel" data-panel="linegroup-admin">
@@ -18167,6 +18172,11 @@ def menu_admin_page(request: Request):
 
           <button type="submit">Run Edit Line Group Members (Option 17)</button>
         </form>
+
+        <details id="admin-line-group-debug-wrap" style="margin-top:12px; border:1px solid #c8dbee; border-radius:6px; padding:8px 10px; background:#f8fbff;">
+          <summary style="cursor:pointer; font-weight:700; color:#1d4f91;">Debug Console (Temporary)</summary>
+          <pre id="admin-line-group-debug" style="margin:8px 0 0 0; max-height:220px; overflow:auto; font-size:12px; line-height:1.35; white-space:pre-wrap;"></pre>
+        </details>
       </section>
 
       <script>
@@ -18176,14 +18186,39 @@ def menu_admin_page(request: Request):
           const searchStatusEl = document.getElementById("admin-hunt-list-search-status");
           const statusEl = document.getElementById("admin-hunt-list-members-status");
           const resultsEl = document.getElementById("admin-hunt-list-members-results");
+          const debugEl = document.getElementById("admin-hunt-list-debug");
           const selectEl = form ? form.querySelector('select[name="line_group_name"]') : null;
 
           if (!form || !searchBtn || !searchStatusEl || !statusEl || !resultsEl || !selectEl) {
             return;
           }
 
+          function writeDebug(message, data) {
+            if (!debugEl) {
+              return;
+            }
+            const stamp = new Date().toISOString();
+            let line = `[${stamp}] ${message}`;
+            if (typeof data !== "undefined") {
+              if (typeof data === "string") {
+                line += `\n${data}`;
+              } else {
+                try {
+                  line += `\n${JSON.stringify(data, null, 2)}`;
+                } catch (_err) {
+                  line += `\n${String(data)}`;
+                }
+              }
+            }
+            debugEl.textContent = (line + "\n\n" + debugEl.textContent).slice(0, 16000);
+          }
+
           async function searchHuntLists() {
               searchStatusEl.textContent = "Searching Line Groups...";
+              writeDebug("Search button clicked", {
+                endpoint: "/line-groups/search",
+                line_group_search: String((form.querySelector('input[name="line_group_search"]') || {}).value || "").trim(),
+              });
 
             while (selectEl.options.length > 1) {
               selectEl.remove(1);
@@ -18198,13 +18233,15 @@ def menu_admin_page(request: Request):
                 method: "POST",
                 body: initialFormData,
               });
+              const responseText = await response.text();
+              writeDebug("Primary search response", { status: response.status, ok: response.ok, text: responseText.slice(0, 2000) });
 
               if (!response.ok) {
-                const errorText = await response.text();
+                const errorText = responseText;
                 throw new Error(errorText || `Request failed with status ${response.status}`);
               }
 
-              const payload = await response.json();
+              const payload = responseText ? JSON.parse(responseText) : {};
               let matches = payload.matches || [];
 
               // If a specific filter returns no rows, automatically retry blank search
@@ -18216,8 +18253,10 @@ def menu_admin_page(request: Request):
                   method: "POST",
                   body: fallbackFormData,
                 });
+                const fallbackText = await fallbackResponse.text();
+                writeDebug("Fallback search response", { status: fallbackResponse.status, ok: fallbackResponse.ok, text: fallbackText.slice(0, 2000) });
                 if (fallbackResponse.ok) {
-                  const fallbackPayload = await fallbackResponse.json();
+                  const fallbackPayload = fallbackText ? JSON.parse(fallbackText) : {};
                   matches = fallbackPayload.matches || [];
                 }
               }
@@ -18244,6 +18283,7 @@ def menu_admin_page(request: Request):
                 searchStatusEl.textContent = `Found ${matches.length} matching Line Group(s).`;
               }
             } catch (err) {
+              writeDebug("Search failed", (err && err.stack) || (err && err.message) || String(err));
               searchStatusEl.textContent = `Search failed: ${(err && err.message) || "Unknown error."}`;
             }
           }
@@ -18252,6 +18292,10 @@ def menu_admin_page(request: Request):
             event.preventDefault();
             statusEl.textContent = "Loading Hunt List members...";
             resultsEl.innerHTML = "";
+            writeDebug("Lookup members submitted", {
+              endpoint: "/line-groups/members",
+              line_group_name: String((form.querySelector('select[name="line_group_name"]') || {}).value || "").trim(),
+            });
 
             try {
               const response = await fetch("/line-groups/members", {
@@ -18260,8 +18304,9 @@ def menu_admin_page(request: Request):
                 credentials: "same-origin",
                 headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
               });
-
-              const payload = await response.json();
+              const responseText = await response.text();
+              writeDebug("Lookup members response", { status: response.status, ok: response.ok, text: responseText.slice(0, 2000) });
+              const payload = responseText ? JSON.parse(responseText) : {};
               if (!response.ok || !payload.ok) {
                 throw new Error((payload && payload.error && payload.error.message) || payload.detail || payload.error || `Request failed with status ${response.status}`);
               }
@@ -18293,6 +18338,7 @@ def menu_admin_page(request: Request):
               html += '</tbody></table>';
               resultsEl.innerHTML = html;
             } catch (err) {
+              writeDebug("Lookup members failed", (err && err.stack) || (err && err.message) || String(err));
               statusEl.textContent = `Lookup failed: ${(err && err.message) || "Unknown error."}`;
             }
           }
@@ -18307,14 +18353,39 @@ def menu_admin_page(request: Request):
           const form = document.getElementById("admin-line-group-form");
           const searchBtn = document.getElementById("admin-line-group-search-btn");
           const searchStatusEl = document.getElementById("admin-line-group-search-status");
+          const debugEl = document.getElementById("admin-line-group-debug");
           const selectEl = form ? form.querySelector('select[name="line_group_name"]') : null;
 
           if (!form || !searchBtn || !searchStatusEl || !selectEl) {
             return;
           }
 
+          function writeDebug(message, data) {
+            if (!debugEl) {
+              return;
+            }
+            const stamp = new Date().toISOString();
+            let line = `[${stamp}] ${message}`;
+            if (typeof data !== "undefined") {
+              if (typeof data === "string") {
+                line += `\n${data}`;
+              } else {
+                try {
+                  line += `\n${JSON.stringify(data, null, 2)}`;
+                } catch (_err) {
+                  line += `\n${String(data)}`;
+                }
+              }
+            }
+            debugEl.textContent = (line + "\n\n" + debugEl.textContent).slice(0, 16000);
+          }
+
           async function searchLineGroupsForEdit() {
             searchStatusEl.textContent = "Searching Line Groups...";
+            writeDebug("Search button clicked", {
+              endpoint: "/line-groups/search",
+              line_group_search: String((form.querySelector('input[name="line_group_search"]') || {}).value || "").trim(),
+            });
 
             while (selectEl.options.length > 1) {
               selectEl.remove(1);
@@ -18326,13 +18397,15 @@ def menu_admin_page(request: Request):
                 method: "POST",
                 body: new FormData(form),
               });
+              const responseText = await response.text();
+              writeDebug("Search response", { status: response.status, ok: response.ok, text: responseText.slice(0, 2000) });
 
               if (!response.ok) {
-                const errorText = await response.text();
+                const errorText = responseText;
                 throw new Error(errorText || `Request failed with status ${response.status}`);
               }
 
-              const payload = await response.json();
+              const payload = responseText ? JSON.parse(responseText) : {};
               const matches = payload.matches || [];
               if (!matches.length) {
                 searchStatusEl.textContent = "No matching Line Groups found.";
@@ -18352,6 +18425,7 @@ def menu_admin_page(request: Request):
 
               searchStatusEl.textContent = `Found ${matches.length} matching Line Group(s).`;
             } catch (err) {
+              writeDebug("Search failed", (err && err.stack) || (err && err.message) || String(err));
               searchStatusEl.textContent = `Search failed: ${(err && err.message) || "Unknown error."}`;
             }
           }
