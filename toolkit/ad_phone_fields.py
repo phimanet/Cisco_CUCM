@@ -403,9 +403,16 @@ if ($null -eq $user) {
         return data, ""
 
     ldap_data, ldap_error = _run_ldap_lookup(samaccountname, auth_context)
-    if ldap_error:
-        return None, f"{error}; LDAP fallback failed: {ldap_error}"
-    return ldap_data, ""
+    if not ldap_error and isinstance(ldap_data, dict):
+        return ldap_data, ""
+
+    ldapsearch_data, ldapsearch_error = _lookup_ad_user_ldapsearch(samaccountname, auth_context)
+    if not ldapsearch_error and isinstance(ldapsearch_data, dict):
+        return ldapsearch_data, ""
+
+    if ldap_error and ldapsearch_error:
+        return None, f"{error}; LDAP fallback failed: {ldap_error}; ldapsearch fallback failed: {ldapsearch_error}"
+    return None, f"{error}; LDAP fallback failed: {ldap_error or ldapsearch_error}"
 
 
 def update_ad_phone_fields(samaccountname, phone_number, auth_context=None):
@@ -461,7 +468,16 @@ if ($payload.username -and $payload.password) {
             },
         )
         if ldap_error:
-            return False, f"AD update failed for {sam}: {update_error}; LDAP fallback failed: {ldap_error}"
+            ldapsearch_error = _run_ldapmodify_attributes(
+                user_data.get("distinguishedName", ""),
+                auth_context,
+                replace_attrs={
+                    "telephoneNumber": formatted_dash,
+                    "ipPhone": formatted_plain,
+                },
+            )
+            if ldapsearch_error:
+                return False, f"AD update failed for {sam}: {update_error}; LDAP fallback failed: {ldap_error}; ldapsearch fallback failed: {ldapsearch_error}"
 
     return True, f"Updated AD phone fields for {sam} (telephoneNumber={formatted_dash}, ipPhone={formatted_plain})"
 
@@ -509,7 +525,13 @@ if ($payload.username -and $payload.password) {
             clear_attrs=["telephoneNumber", "ipPhone"],
         )
         if ldap_error:
-            return False, f"AD clear failed for {sam}: {clear_error}; LDAP fallback failed: {ldap_error}"
+            ldapsearch_error = _run_ldapmodify_attributes(
+                user_data.get("distinguishedName", ""),
+                auth_context,
+                clear_attrs=["telephoneNumber", "ipPhone"],
+            )
+            if ldapsearch_error:
+                return False, f"AD clear failed for {sam}: {clear_error}; LDAP fallback failed: {ldap_error}; ldapsearch fallback failed: {ldapsearch_error}"
 
     return True, f"Cleared AD phone fields for {sam}"
 
@@ -1199,6 +1221,127 @@ def _run_ldapmodify_membership(config, bind_user, password, group_dn, user_dn, a
         last_error = f"{uri}: {error_text or f'ldapmodify failed with exit code {completed.returncode}'}"
 
     return last_error or "ldapmodify failed"
+
+
+def _run_ldapmodify_attributes(distinguished_name, auth_context, replace_attrs=None, clear_attrs=None):
+    dn = str(distinguished_name or "").strip()
+    if not dn:
+        return "AD distinguishedName was not provided"
+
+    config, config_error = _resolve_ldap_config()
+    if config_error:
+        return config_error
+
+    password = str((auth_context or {}).get("password") or "")
+    if not password:
+        return "LDAP bind requires username and password"
+
+    bind_user = _resolve_ldapsearch_bind_user(auth_context, config)
+    if not bind_user:
+        return "LDAP bind requires username"
+
+    ldapmodify_bin = _resolve_ldapmodify_executable()
+    if not ldapmodify_bin:
+        return "ldapmodify executable was not found on this server"
+
+    lines = [f"dn: {dn}", "changetype: modify"]
+    for key, value in (replace_attrs or {}).items():
+        attr = str(key or "").strip()
+        if not attr:
+            continue
+        lines.append(f"replace: {attr}")
+        lines.append(f"{attr}: {str(value or '').strip()}")
+        lines.append("-")
+    for key in (clear_attrs or []):
+        attr = str(key or "").strip()
+        if not attr:
+            continue
+        lines.append(f"delete: {attr}")
+        lines.append("-")
+
+    if len(lines) <= 2:
+        return "No LDAP changes were provided"
+
+    ldif = "\n".join(lines) + "\n"
+
+    last_error = ""
+    for uri in _ldap_uri_candidates(config):
+        cmd = [
+            ldapmodify_bin,
+            "-x",
+            "-o",
+            "nettimeout=8",
+            "-o",
+            "TLS_REQCERT=never",
+            "-H",
+            uri,
+            "-D",
+            bind_user,
+            "-w",
+            password,
+        ]
+
+        try:
+            completed = subprocess.run(
+                cmd,
+                input=ldif,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except Exception as exc:
+            last_error = f"ldapmodify execution failed: {exc}"
+            continue
+
+        if completed.returncode == 0:
+            return ""
+
+        error_text = (completed.stderr or "").strip() or (completed.stdout or "").strip()
+        last_error = f"{uri}: {error_text or f'ldapmodify failed with exit code {completed.returncode}'}"
+
+    return last_error or "ldapmodify failed"
+
+
+def _lookup_ad_user_ldapsearch(samaccountname, auth_context):
+    config, config_error = _resolve_ldap_config()
+    if config_error:
+        return None, config_error
+
+    password = str((auth_context or {}).get("password") or "")
+    if not password:
+        return None, "LDAP bind requires username and password"
+
+    bind_user = _resolve_ldapsearch_bind_user(auth_context, config)
+    if not bind_user:
+        return None, "LDAP bind requires username"
+
+    search_filter = f"(&(objectClass=user)(sAMAccountName={_escape_ldap_filter_value(samaccountname)}))"
+    attrs, lookup_error = _run_ldapsearch_query(
+        config,
+        bind_user,
+        password,
+        search_filter,
+        ["distinguishedName", "telephoneNumber", "ipPhone", "sAMAccountName"],
+    )
+    if lookup_error:
+        return None, lookup_error
+
+    dn = _first_attr_value(attrs or {}, ["distinguishedName", "dn"])
+    if not dn:
+        return {
+            "found": False,
+            "distinguishedName": "",
+            "telephoneNumber": "",
+            "ipPhone": "",
+        }, ""
+
+    return {
+        "found": True,
+        "distinguishedName": dn,
+        "telephoneNumber": _first_attr_value(attrs or {}, ["telephoneNumber"]),
+        "ipPhone": _first_attr_value(attrs or {}, ["ipPhone"]),
+    }, ""
 
 
 def _manage_ad_group_membership_ldapsearch(samaccountname, group_name, action, auth_context):

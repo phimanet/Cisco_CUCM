@@ -257,6 +257,7 @@ Priority keys:
 - Fixed **Remove only Jabber Mobile** search on both Menu and Administrative pages: form submission is now explicitly JS-driven (no native page submit fallback), preventing unwanted redirect to Start Here and restoring search execution on button click.
 - Hardened mobile-delete search inline hooks for browser compatibility by removing dependence on inline `event` object and adding explicit missing-handler status messaging if JS does not load.
 - Added panel-local fallback script in Menu -> Remove only Jabber Mobile so `runMenuMobileDeleteSearch` and delete actions are defined directly at panel render time, preventing no-op search when downstream script registration is skipped.
+- Expanded AD phone-field update fallback chain used by Option 11 to include `ldapsearch` lookup + `ldapmodify` attribute update/clear path when both PowerShell and Python `ldap3` are unavailable, aligning behavior with Linux-host AD tooling environments.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
