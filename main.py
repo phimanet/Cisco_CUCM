@@ -16290,6 +16290,23 @@ __ADMIN_CARD__
         }
       }
 
+      // Fallback for admin action-button navigation if query prefill is lost.
+      try {
+        const storedPanel = (sessionStorage.getItem("menu_prefill_panel") || "").trim();
+        const storedTargetUser = (sessionStorage.getItem("menu_prefill_target_user") || "").trim();
+        if (storedPanel && storedTargetUser) {
+          const storedTargetPanel = panels.find((panel) => panel.dataset.panel === storedPanel);
+          if (storedTargetPanel) {
+            showPanel(storedPanel);
+            applyPanelPrefill(storedTargetPanel, storedTargetUser, "");
+          }
+        }
+        sessionStorage.removeItem("menu_prefill_panel");
+        sessionStorage.removeItem("menu_prefill_target_user");
+      } catch (_err) {
+        // Ignore sessionStorage read failures.
+      }
+
 
 
       // ---- Duplicate device pre-check ---------------------------------------
@@ -19472,6 +19489,12 @@ def menu_admin_page(request: Request):
                   const confirmed = confirm(`Open Offboard workflow for ${uid} in __ENV_TEXT__?\n\nThis leads to Separate Employee-Delete Jabber/VM.`);
                   if (!confirmed) {
                     return;
+                  }
+                  try {
+                    sessionStorage.setItem("menu_prefill_panel", "offboard");
+                    sessionStorage.setItem("menu_prefill_target_user", uid);
+                  } catch (_err) {
+                    // Ignore sessionStorage failures and rely on URL query fallback.
                   }
                   const qs = new URLSearchParams({ panel: "offboard", target_user: uid });
                   window.location.href = "/menu?" + qs.toString();
