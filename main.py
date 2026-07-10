@@ -14151,7 +14151,7 @@ __ADMIN_CARD__
     <section class="tool-panel" data-panel="mobiledelete">
     <h3>Remove only Jabber Mobile - iPhone or Android</h3>
     <p>Lookup by last name, then remove Jabber iPhone (TCT), Jabber Android (BOT), or both. This does not delete CSF or voicemail.</p>
-    <form id="menu-mobile-delete-lookup-form" class="jabber-check-form" style="max-width:700px;">
+    <form id="menu-mobile-delete-lookup-form" class="jabber-check-form" style="max-width:700px;" action="javascript:void(0)" method="post" onsubmit="if (window.runMenuMobileDeleteSearch) { return window.runMenuMobileDeleteSearch(event); } return false;">
       <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
       <input type="hidden" name="cucm_user" value="__AUTH_USER__">
       <input type="hidden" name="cucm_pass" value="">
@@ -14167,7 +14167,7 @@ __ADMIN_CARD__
       </div><br>
 
       <div class="action-row">
-        <button type="submit">Search Users for Mobile Delete</button>
+        <button id="menu-mobile-delete-search-btn" type="button">Search Users for Mobile Delete</button>
         <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
       </div>
     </form>
@@ -15618,6 +15618,7 @@ __ADMIN_CARD__
 
       (function () {
         const form = document.getElementById("menu-mobile-delete-lookup-form");
+        const searchBtn = document.getElementById("menu-mobile-delete-search-btn");
         const statusEl = document.getElementById("menu-mobile-delete-status");
         const resultsEl = document.getElementById("menu-mobile-delete-results");
 
@@ -15666,8 +15667,10 @@ __ADMIN_CARD__
           actionForm.submit();
         }
 
-        form.addEventListener("submit", async function (event) {
-          event.preventDefault();
+        async function runMenuMobileDeleteSearch(event) {
+          if (event) {
+            event.preventDefault();
+          }
           statusEl.textContent = "Searching...";
           resultsEl.innerHTML = "";
 
@@ -15743,7 +15746,14 @@ __ADMIN_CARD__
           } catch (err) {
             statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
           }
-        });
+          return false;
+        }
+
+        window.runMenuMobileDeleteSearch = runMenuMobileDeleteSearch;
+        form.addEventListener("submit", runMenuMobileDeleteSearch);
+        if (searchBtn) {
+          searchBtn.addEventListener("click", runMenuMobileDeleteSearch);
+        }
       })();
 
       (function () {
@@ -17880,7 +17890,7 @@ def menu_admin_page(request: Request):
       <section class="panel tool-panel" data-panel="mobiledelete">
         <h3>Remove only Jabber Mobile - iPhone or Android</h3>
         <p>Lookup by last name, then remove Jabber iPhone (TCT), Jabber Android (BOT), or both. This does not delete CSF or voicemail.</p>
-        <form id="admin-mobile-delete-lookup-form">
+        <form id="admin-mobile-delete-lookup-form" action="javascript:void(0)" method="post" onsubmit="if (window.runAdminMobileDeleteSearch) { return window.runAdminMobileDeleteSearch(event); } return false;">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
 
@@ -17894,7 +17904,7 @@ def menu_admin_page(request: Request):
             <input name="first_name" placeholder="John">
           </div><br>
 
-          <button type="submit">Search Users for Mobile Delete</button>
+          <button id="admin-mobile-delete-search-btn" type="button">Search Users for Mobile Delete</button>
         </form>
 
         <p id="admin-mobile-delete-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
@@ -19270,6 +19280,7 @@ def menu_admin_page(request: Request):
       <script>
         (function () {
           const form = document.getElementById("admin-mobile-delete-lookup-form");
+          const searchBtn = document.getElementById("admin-mobile-delete-search-btn");
           const statusEl = document.getElementById("admin-mobile-delete-status");
           const resultsEl = document.getElementById("admin-mobile-delete-results");
 
@@ -19316,8 +19327,10 @@ def menu_admin_page(request: Request):
             actionForm.submit();
           }
 
-          form.addEventListener("submit", async function (event) {
-            event.preventDefault();
+          async function runAdminMobileDeleteSearch(event) {
+            if (event) {
+              event.preventDefault();
+            }
             statusEl.textContent = "Searching...";
             resultsEl.innerHTML = "";
 
@@ -19393,7 +19406,14 @@ def menu_admin_page(request: Request):
             } catch (err) {
               statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
             }
-          });
+            return false;
+          }
+
+          window.runAdminMobileDeleteSearch = runAdminMobileDeleteSearch;
+          form.addEventListener("submit", runAdminMobileDeleteSearch);
+          if (searchBtn) {
+            searchBtn.addEventListener("click", runAdminMobileDeleteSearch);
+          }
         })();
       </script>
 
