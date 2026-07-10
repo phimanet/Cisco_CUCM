@@ -85,6 +85,25 @@ def _resolve_ldapsearch_executable():
     return ""
 
 
+def _resolve_ldapmodify_executable():
+    candidates = [
+        "ldapmodify",
+        "/usr/bin/ldapmodify",
+        "/usr/local/bin/ldapmodify",
+        "/bin/ldapmodify",
+        "/usr/sbin/ldapmodify",
+    ]
+    for candidate in candidates:
+        if os.path.isabs(candidate):
+            if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+                return candidate
+            continue
+        resolved = shutil.which(candidate)
+        if resolved:
+            return resolved
+    return ""
+
+
 def _escape_ldap_filter_value(value):
     escaped = str(value or "")
     escaped = escaped.replace("\\", r"\5c")
@@ -1029,6 +1048,283 @@ def _manage_ad_group_membership_ldap(samaccountname, group_name, action, auth_co
             pass
 
 
+def _ldap_uri_candidates(config):
+    primary_scheme = "ldaps" if bool((config or {}).get("use_ssl")) else "ldap"
+    primary_port = int((config or {}).get("port") or (636 if primary_scheme == "ldaps" else 389))
+    candidates = [f"{primary_scheme}://{config.get('server')}:{primary_port}"]
+    if primary_scheme == "ldaps":
+        candidates.append(f"ldap://{config.get('server')}:389")
+    else:
+        candidates.append(f"ldaps://{config.get('server')}:636")
+    return candidates
+
+
+def _ldif_value_to_text(value):
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return value.decode("utf-8", errors="ignore").strip()
+        except Exception:
+            return ""
+    return str(value or "").strip()
+
+
+def _first_attr_value(attrs, keys):
+    for key in keys:
+        values = attrs.get(key) or []
+        if not values:
+            continue
+        for value in values:
+            text = _ldif_value_to_text(value)
+            if text:
+                return text
+    return ""
+
+
+def _attr_values_lower(attrs, key):
+    values = attrs.get(key) or []
+    out = []
+    for value in values:
+        text = _ldif_value_to_text(value)
+        if text:
+            out.append(text.lower())
+    return out
+
+
+def _run_ldapsearch_query(config, bind_user, password, search_filter, attributes):
+    ldapsearch_bin = _resolve_ldapsearch_executable()
+    if not ldapsearch_bin:
+        return None, "ldapsearch executable was not found on this server"
+
+    last_error = ""
+    completed = None
+    for uri in _ldap_uri_candidates(config):
+        cmd = [
+            ldapsearch_bin,
+            "-LLL",
+            "-x",
+            "-o",
+            "nettimeout=8",
+            "-o",
+            "TLS_REQCERT=never",
+            "-H",
+            uri,
+            "-D",
+            bind_user,
+            "-w",
+            password,
+            "-b",
+            str(config.get("base_dn") or ""),
+            search_filter,
+        ]
+        cmd.extend(attributes or [])
+
+        try:
+            completed = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except Exception as exc:
+            last_error = f"ldapsearch execution failed: {exc}"
+            continue
+
+        if completed.returncode == 0:
+            return _parse_ldif_attributes(completed.stdout or ""), ""
+
+        error_text = (completed.stderr or "").strip() or (completed.stdout or "").strip()
+        last_error = f"{uri}: {error_text or f'ldapsearch failed with exit code {completed.returncode}'}"
+
+    return None, last_error or "ldapsearch failed"
+
+
+def _run_ldapmodify_membership(config, bind_user, password, group_dn, user_dn, action):
+    ldapmodify_bin = _resolve_ldapmodify_executable()
+    if not ldapmodify_bin:
+        return "ldapmodify executable was not found on this server"
+
+    if action not in {"add", "remove"}:
+        return "ldapmodify action must be add or remove"
+
+    op = "add" if action == "add" else "delete"
+    ldif = (
+        f"dn: {group_dn}\n"
+        "changetype: modify\n"
+        f"{op}: member\n"
+        f"member: {user_dn}\n"
+        "-\n"
+    )
+
+    last_error = ""
+    for uri in _ldap_uri_candidates(config):
+        cmd = [
+            ldapmodify_bin,
+            "-x",
+            "-o",
+            "nettimeout=8",
+            "-o",
+            "TLS_REQCERT=never",
+            "-H",
+            uri,
+            "-D",
+            bind_user,
+            "-w",
+            password,
+        ]
+
+        try:
+            completed = subprocess.run(
+                cmd,
+                input=ldif,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                check=False,
+            )
+        except Exception as exc:
+            last_error = f"ldapmodify execution failed: {exc}"
+            continue
+
+        if completed.returncode == 0:
+            return ""
+
+        error_text = (completed.stderr or "").strip() or (completed.stdout or "").strip()
+        normalized = error_text.lower()
+        if action == "add" and ("type or value exists" in normalized or "attribute or value exists" in normalized):
+            return ""
+        if action == "remove" and ("no such attribute" in normalized or "can't delete" in normalized):
+            return ""
+
+        last_error = f"{uri}: {error_text or f'ldapmodify failed with exit code {completed.returncode}'}"
+
+    return last_error or "ldapmodify failed"
+
+
+def _manage_ad_group_membership_ldapsearch(samaccountname, group_name, action, auth_context):
+    config, config_error = _resolve_ldap_config()
+    if config_error:
+        return None, config_error
+
+    password = str((auth_context or {}).get("password") or "")
+    if not password:
+        return None, "LDAP bind requires username and password"
+
+    bind_user = _resolve_ldapsearch_bind_user(auth_context, config)
+    if not bind_user:
+        return None, "LDAP bind requires username"
+
+    user_filter = f"(&(objectClass=user)(sAMAccountName={_escape_ldap_filter_value(samaccountname)}))"
+    user_attrs, user_error = _run_ldapsearch_query(
+        config,
+        bind_user,
+        password,
+        user_filter,
+        ["distinguishedName", "sAMAccountName", "memberOf"],
+    )
+    if user_error:
+        return None, user_error
+
+    user_dn = _first_attr_value(user_attrs or {}, ["distinguishedName", "dn"])
+    user_sam = _first_attr_value(user_attrs or {}, ["sAMAccountName", "samAccountName"]) or samaccountname
+    if not user_dn:
+        return {
+            "ok": False,
+            "action": action,
+            "changed": False,
+            "userFound": False,
+            "groupFound": True,
+            "isMember": False,
+            "message": f"AD user '{samaccountname}' was not found",
+        }, ""
+
+    group_filter = (
+        f"(&(objectClass=group)(|"
+        f"(cn={_escape_ldap_filter_value(group_name)})"
+        f"(name={_escape_ldap_filter_value(group_name)})"
+        f"(sAMAccountName={_escape_ldap_filter_value(group_name)})"
+        "))"
+    )
+    group_attrs, group_error = _run_ldapsearch_query(
+        config,
+        bind_user,
+        password,
+        group_filter,
+        ["distinguishedName", "cn", "name", "sAMAccountName"],
+    )
+    if group_error:
+        return None, group_error
+
+    group_dn = _first_attr_value(group_attrs or {}, ["distinguishedName", "dn"])
+    group_name_value = _first_attr_value(group_attrs or {}, ["name", "cn"]) or group_name
+    group_sam = _first_attr_value(group_attrs or {}, ["sAMAccountName", "samAccountName"])
+    if not group_dn:
+        return {
+            "ok": False,
+            "action": action,
+            "changed": False,
+            "userFound": True,
+            "groupFound": False,
+            "isMember": False,
+            "userSamAccountName": user_sam,
+            "userDistinguishedName": user_dn,
+            "message": f"AD group '{group_name}' was not found",
+        }, ""
+
+    member_of_values = _attr_values_lower(user_attrs or {}, "memberOf")
+    is_member = group_dn.lower() in member_of_values
+    changed = False
+    message = ""
+
+    if action == "add":
+        if is_member:
+            message = "User is already a member"
+        else:
+            modify_error = _run_ldapmodify_membership(config, bind_user, password, group_dn, user_dn, "add")
+            if modify_error:
+                return None, f"LDAP add membership failed: {modify_error}"
+            changed = True
+            message = "User added to group"
+    elif action == "remove":
+        if not is_member:
+            message = "User is not currently a member"
+        else:
+            modify_error = _run_ldapmodify_membership(config, bind_user, password, group_dn, user_dn, "remove")
+            if modify_error:
+                return None, f"LDAP remove membership failed: {modify_error}"
+            changed = True
+            message = "User removed from group"
+    else:
+        message = "User is currently a member" if is_member else "User is not currently a member"
+
+    # Re-check membership after modification to return final state.
+    refreshed_user_attrs, refreshed_error = _run_ldapsearch_query(
+        config,
+        bind_user,
+        password,
+        user_filter,
+        ["memberOf"],
+    )
+    if not refreshed_error and isinstance(refreshed_user_attrs, dict):
+        refreshed_member_of = _attr_values_lower(refreshed_user_attrs, "memberOf")
+        is_member = group_dn.lower() in refreshed_member_of
+
+    return {
+        "ok": True,
+        "action": action,
+        "changed": changed,
+        "userFound": True,
+        "groupFound": True,
+        "userSamAccountName": user_sam,
+        "userDistinguishedName": user_dn,
+        "groupName": group_name_value,
+        "groupSamAccountName": group_sam,
+        "groupDistinguishedName": group_dn,
+        "isMember": is_member,
+        "message": message,
+    }, ""
+
+
 def manage_ad_group_membership(samaccountname, group_name, action, auth_context=None):
     sam = _normalize_samaccountname(samaccountname)
     if not sam:
@@ -1054,9 +1350,15 @@ def manage_ad_group_membership(samaccountname, group_name, action, auth_context=
         result["source"] = "ldap"
         return bool(result.get("ok")), result, ""
 
-    if ps_error and ldap_error:
-        return False, None, f"{ps_error}; LDAP fallback failed: {ldap_error}"
-    return False, None, ps_error or ldap_error or "AD group membership operation failed"
+    ldapsearch_data, ldapsearch_error = _manage_ad_group_membership_ldapsearch(sam, clean_group, normalized_action, auth_context)
+    if not ldapsearch_error and isinstance(ldapsearch_data, dict):
+        result = dict(ldapsearch_data)
+        result["source"] = "ldapsearch"
+        return bool(result.get("ok")), result, ""
+
+    if ps_error and ldap_error and ldapsearch_error:
+        return False, None, f"{ps_error}; LDAP fallback failed: {ldap_error}; ldapsearch fallback failed: {ldapsearch_error}"
+    return False, None, ps_error or ldap_error or ldapsearch_error or "AD group membership operation failed"
 
 
 def _resolve_ldapsearch_bind_user(auth_context, config):

@@ -13305,13 +13305,9 @@ __ADMIN_CARD__
 
     <div class="jabber-check-layout">
       <form id="jabber-check-form" class="target-user-form jabber-check-form" action="/check/jabber-status?embedded=1" method="post" target="jabber-check-frame">
-        <div class="compact-inline-row">
-          <span>Cisco Callmanager Username:</span>
-          <input name="cucm_user" value="__AUTH_USER__" required>
-        </div><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
 
         User ID to check:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
@@ -13333,17 +13329,13 @@ __ADMIN_CARD__
     <section class="tool-panel" data-panel="build">
 
     <h3>Build Cisco Jabber Laptop and Voicemail - New Hire or New Jabber Laptop/VM Add</h3>
-    <p>Authentication note: Cisco Callmanager credentials entered below are reused for Unity voicemail and Active Directory actions.</p>
+    <p>Authentication note: Uses cached Cisco Callmanager credentials from your current login session for Unity voicemail and Active Directory actions.</p>
 
     <div class="build-user-layout">
       <form id="build-user-form" class="target-user-form build-user-form" action="javascript:void(0)" method="post" onsubmit="return false;">
-        <div class="compact-inline-row">
-          <span>Cisco Callmanager Username:</span>
-          <input name="cucm_user" value="__AUTH_USER__" required>
-        </div><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
 
         User ID for person to Build Jabber for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
@@ -13458,13 +13450,9 @@ __ADMIN_CARD__
 
     <div class="build-user-layout">
       <form id="teams-telephony-form" class="target-user-form build-user-form" action="javascript:void(0)" method="post" onsubmit="return false;">
-        <div class="compact-inline-row">
-          <span>Cisco Callmanager Username:</span>
-          <input name="cucm_user" value="__AUTH_USER__" required>
-        </div><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
 
         <div style="margin: 0 0 14px 0; padding: 12px; border: 1px solid #c8dbee; border-radius: 10px; background: #f7fbff;">
           <strong style="display:block; margin-bottom:10px; color:#002f6c;">Lookup by Name</strong>
@@ -13601,7 +13589,7 @@ __ADMIN_CARD__
             }
 
             if (!cucmUser || (!cucmPass && window.__hasCachedCucmPassword !== true)) {
-              lookupStatusEl.textContent = "Enter CUCM username and password (or use cached login) before searching.";
+              lookupStatusEl.textContent = "Session credentials expired. Please log in again.";
               return;
             }
 
@@ -13702,13 +13690,9 @@ __ADMIN_CARD__
 
     <div class="build-user-layout">
       <form id="teams-remove-form" class="target-user-form build-user-form" action="javascript:void(0)" method="post" onsubmit="return false;">
-        <div class="compact-inline-row">
-          <span>Cisco Callmanager Username:</span>
-          <input name="cucm_user" value="__AUTH_USER__" required>
-        </div><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
 
         <div style="margin: 0 0 14px 0; padding: 12px; border: 1px solid #c8dbee; border-radius: 10px; background: #fff6f6;">
           <strong style="display:block; margin-bottom:10px; color:#7a1020;">Lookup by Name</strong>
@@ -13781,7 +13765,7 @@ __ADMIN_CARD__
         }
 
         if (!cucmUser || (!cucmPass && window.__hasCachedCucmPassword !== true)) {
-          statusEl.textContent = "Enter CUCM username and password (or use cached login) before searching.";
+          statusEl.textContent = "Session credentials expired. Please log in again.";
           return;
         }
 
@@ -14024,13 +14008,9 @@ __ADMIN_CARD__
 
     <div class="secondary-layout">
       <form id="called-name-form" class="target-user-form secondary-form" action="/called-name-change" method="post">
-        <div class="compact-inline-row">
-          <span>Cisco Callmanager Username:</span>
-          <input name="cucm_user" value="__AUTH_USER__" required>
-        </div><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
 
         User ID for name change update:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
@@ -14125,17 +14105,13 @@ __ADMIN_CARD__
     <section class="tool-panel" data-panel="offboard">
 
     <h3 class="offboard-h3">Offboard User - Delete all Jabber and Voicemail Box (Option 10)</h3>
-    <p>Authentication note: Cisco Callmanager credentials entered below are reused for Unity voicemail and Active Directory actions.</p>
+    <p>Authentication note: Uses cached Cisco Callmanager credentials from your current login session for Unity voicemail and Active Directory actions.</p>
 
     <div class="offboard-layout">
       <form id="offboard-user-form" class="target-user-form offboard-form" action="javascript:void(0)" method="post" onsubmit="return false;">
-        <div class="compact-inline-row">
-          <span>Cisco Callmanager Username:</span>
-          <input name="cucm_user" value="__AUTH_USER__" required>
-        </div><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
 
         User ID for person to Offboard:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
@@ -14246,17 +14222,13 @@ __ADMIN_CARD__
     <section class="tool-panel" data-panel="ad">
 
     <h3>Update Active Directory Telephone and ipPhone field only (Option 11)</h3>
-    <p>Authentication note: Cisco Callmanager credentials entered below are used for Active Directory authentication.</p>
+    <p>Authentication note: Uses cached Cisco Callmanager credentials from your current login session for Active Directory authentication.</p>
 
     <div class="ad-update-layout">
       <form id="ad-update-form" class="target-user-form ad-update-form" action="/update/ad-phone-fields" method="post">
-        <div class="compact-inline-row">
-          <span>Cisco Callmanager Username:</span>
-          <input name="cucm_user" value="__AUTH_USER__" required>
-        </div><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
 
         User ID for person to update:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
@@ -14289,13 +14261,9 @@ __ADMIN_CARD__
 
     <div class="secondary-layout">
       <form id="secondary-tct-form" class="target-user-form secondary-form" action="/add/secondary-tct-device" method="post">
-        <div class="compact-inline-row">
-          <span>Cisco Callmanager Username:</span>
-          <input name="cucm_user" value="__AUTH_USER__" required>
-        </div><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
 
         User ID for person to add secondary iPhone device for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
@@ -14325,13 +14293,9 @@ __ADMIN_CARD__
 
     <div class="secondary-layout">
       <form id="secondary-bot-form" class="target-user-form secondary-form" action="/add/secondary-bot-device" method="post">
-        <div class="compact-inline-row">
-          <span>Cisco Callmanager Username:</span>
-          <input name="cucm_user" value="__AUTH_USER__" required>
-        </div><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
 
         User ID for person to add secondary Android device for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
@@ -14361,13 +14325,9 @@ __ADMIN_CARD__
 
     <div class="secondary-layout">
       <form id="hunt-list-members-form" class="secondary-form" action="/line-groups/members" method="post">
-        <div class="compact-inline-row">
-          <span>Cisco Callmanager Username:</span>
-          <input name="cucm_user" value="__AUTH_USER__" required>
-        </div><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
 
         Search Hunt List Name:<br>
         <input name="line_group_search" placeholder="Example_HuntList"><br><br>
@@ -14403,13 +14363,9 @@ __ADMIN_CARD__
 
     <div class="secondary-layout">
       <form id="line-group-form" class="secondary-form" action="/line-groups/edit-members" method="post">
-        <div class="compact-inline-row">
-          <span>Cisco Callmanager Username:</span>
-          <input name="cucm_user" value="__AUTH_USER__" required>
-        </div><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
 
         Search Line Group Name:<br>
         <input name="line_group_search" placeholder="Example_LineGroup"><br><br>
@@ -14460,14 +14416,9 @@ __ADMIN_CARD__
     <h3>Send Jabber Number/Training Notification</h3>
     <p>Search for an employee by last name, then send them the Cisco Jabber ready email with their telephone number and training link. Use this to test the email or resend it to any user.</p>
     <form id="jabbernotify-form" class="jabber-check-form" style="max-width:520px;">
-      <div class="compact-inline-row">
-        <span>Cisco Callmanager Username:</span>
-        <input name="cucm_user" value="__AUTH_USER__" required>
-      </div><br>
-      <div class="compact-inline-row">
-        <span>Cisco Callmanager Password:</span>
-        <input type="password" name="cucm_pass" required>
-      </div><br>
+            <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+      <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+      <input type="hidden" name="cucm_pass" value="">
       <div class="compact-inline-row">
         <span>Last Name:</span>
         <input id="jabbernotify-last-name" placeholder="Smith" required>
@@ -14490,14 +14441,9 @@ __ADMIN_CARD__
     <h3>Re-send Jabber Mobile Email Instructions</h3>
     <p>Send the same mobile Jabber instruction email that is sent after Jabber iPhone or Jabber Android is created.</p>
     <form id="mobile-jabber-notify-form" class="jabber-check-form" style="max-width:520px;">
-      <div class="compact-inline-row">
-        <span>Cisco Callmanager Username:</span>
-        <input name="cucm_user" value="__AUTH_USER__" required>
-      </div><br>
-      <div class="compact-inline-row">
-        <span>Cisco Callmanager Password:</span>
-        <input type="password" name="cucm_pass" required>
-      </div><br>
+            <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+      <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+      <input type="hidden" name="cucm_pass" value="">
       User ID:<br>
       <input id="mobile-jabber-target-user" name="target_user" placeholder="john.doe" required style="width:min(280px,100%);"><br><br>
       <div class="action-row">
@@ -14510,14 +14456,9 @@ __ADMIN_CARD__
     <hr style="margin:16px 0; border:none; border-top:1px solid #d6e4f3;">
     <p style="margin:0 0 10px 0; color:#355978;">Or lookup by name and send from the results:</p>
     <form id="mobile-jabber-lookup-form" class="jabber-check-form" style="max-width:520px;">
-      <div class="compact-inline-row">
-        <span>Cisco Callmanager Username:</span>
-        <input name="cucm_user" value="__AUTH_USER__" required>
-      </div><br>
-      <div class="compact-inline-row">
-        <span>Cisco Callmanager Password:</span>
-        <input type="password" name="cucm_pass" required>
-      </div><br>
+            <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+      <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+      <input type="hidden" name="cucm_pass" value="">
       <div class="compact-inline-row">
         <span>Last Name:</span>
         <input id="mobile-jabber-last-name" name="last_name" placeholder="Smith" required>
@@ -14545,13 +14486,9 @@ __ADMIN_CARD__
 
     <div class="build-user-layout">
       <form id="rebuild-user-form" class="target-user-form build-user-form" action="/rebuild/user-csf-phone" method="post">
-        <div class="compact-inline-row">
-          <span>Cisco Callmanager Username:</span>
-          <input name="cucm_user" value="__AUTH_USER__" required>
-        </div><br>
-
-        Cisco Callmanager Password:<br>
-        <input type="password" name="cucm_pass" required><br><br>
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
 
         User ID for person to Re-Build Jabber for:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
@@ -15381,7 +15318,7 @@ __ADMIN_CARD__
           var cucmUser = ((userField && userField.value) || "").trim();
           var cucmPass = (passField && passField.value) || "";
           if (!lastName) { jnStatus.textContent = "Last Name is required."; return; }
-          if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) { jnStatus.textContent = "Enter CUCM username and password (or use cached login) first."; return; }
+          if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) { jnStatus.textContent = "Session credentials expired. Please log in again."; return; }
           try {
             var fd = new FormData();
             fd.append("cucm_user", cucmUser);
@@ -15465,7 +15402,7 @@ __ADMIN_CARD__
           var targetUser = ((targetField && targetField.value) || "").trim();
 
           if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
-            statusEl.textContent = "Enter CUCM username and password (or use cached login) first.";
+            statusEl.textContent = "Session credentials expired. Please log in again.";
             return;
           }
           if (!targetUser) {
@@ -15511,7 +15448,7 @@ __ADMIN_CARD__
             var firstName = ((firstNameField && firstNameField.value) || "").trim();
 
             if (!cucmUser || (!cucmPass && !hasCachedCucmPassword)) {
-              lookupStatusEl.textContent = "Enter CUCM username and password (or use cached login) first.";
+              lookupStatusEl.textContent = "Session credentials expired. Please log in again.";
               return;
             }
             if (!lastName) {
@@ -26899,13 +26836,15 @@ def reset_unity_voicemail_pin_route(
 @app.post("/update/ad-phone-fields")
 def update_ad_phone_fields_route(
     request: Request,
+    cucm_host: str = Form(""),
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
     target_user: str = Form(...),
     phone_number: str = Form(""),
     inline: bool = Query(False),
 ):
-    _update_cached_credentials(request, cucm_host="", cucm_user=cucm_user)
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
     data, filename = update_ad_phone_fields_only(
       target_user=target_user,
       phone_number=phone_number,
@@ -26914,7 +26853,7 @@ def update_ad_phone_fields_route(
     )
     _append_audit_event(
       action="update_ad_phone_only_option_11",
-      cucm_host="",
+      cucm_host=cucm_host,
       operator=cucm_user,
       target=target_user,
       output_filename=filename,
@@ -28074,5 +28013,7 @@ def extract_rpo_phones_route(
       })
 
     return _render_job_result("Extract RPO Phones (Option 18)", data, filename, back_url="/page2")
+
+
 
 
