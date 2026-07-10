@@ -14151,7 +14151,7 @@ __ADMIN_CARD__
     <section class="tool-panel" data-panel="mobiledelete">
     <h3>Remove only Jabber Mobile - iPhone or Android</h3>
     <p>Lookup by last name, then remove Jabber iPhone (TCT), Jabber Android (BOT), or both. This does not delete CSF or voicemail.</p>
-    <form id="menu-mobile-delete-lookup-form" class="jabber-check-form" style="max-width:700px;" action="javascript:void(0)" method="post" onsubmit="if (window.runMenuMobileDeleteSearch) { return window.runMenuMobileDeleteSearch(event); } return false;">
+    <form id="menu-mobile-delete-lookup-form" class="jabber-check-form" style="max-width:700px;" action="javascript:void(0)" method="post" onsubmit="if (window.runMenuMobileDeleteSearch) { return window.runMenuMobileDeleteSearch(); } var s=document.getElementById('menu-mobile-delete-status'); if (s) { s.textContent='Search handler missing (JS did not load).'; } return false;">
       <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
       <input type="hidden" name="cucm_user" value="__AUTH_USER__">
       <input type="hidden" name="cucm_pass" value="">
@@ -14167,7 +14167,7 @@ __ADMIN_CARD__
       </div><br>
 
       <div class="action-row">
-        <button id="menu-mobile-delete-search-btn" type="button">Search Users for Mobile Delete</button>
+        <button id="menu-mobile-delete-search-btn" type="button" onclick="if (window.runMenuMobileDeleteSearch) { return window.runMenuMobileDeleteSearch(); } var s=document.getElementById('menu-mobile-delete-status'); if (s) { s.textContent='Search handler missing (JS did not load).'; } return false;">Search Users for Mobile Delete</button>
         <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
       </div>
     </form>
@@ -17890,7 +17890,7 @@ def menu_admin_page(request: Request):
       <section class="panel tool-panel" data-panel="mobiledelete">
         <h3>Remove only Jabber Mobile - iPhone or Android</h3>
         <p>Lookup by last name, then remove Jabber iPhone (TCT), Jabber Android (BOT), or both. This does not delete CSF or voicemail.</p>
-        <form id="admin-mobile-delete-lookup-form" action="javascript:void(0)" method="post" onsubmit="if (window.runAdminMobileDeleteSearch) { return window.runAdminMobileDeleteSearch(event); } return false;">
+        <form id="admin-mobile-delete-lookup-form" action="javascript:void(0)" method="post" onsubmit="if (window.runAdminMobileDeleteSearch) { return window.runAdminMobileDeleteSearch(); } var s=document.getElementById('admin-mobile-delete-status'); if (s) { s.textContent='Search handler missing (JS did not load).'; } return false;">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
 
@@ -17904,7 +17904,7 @@ def menu_admin_page(request: Request):
             <input name="first_name" placeholder="John">
           </div><br>
 
-          <button id="admin-mobile-delete-search-btn" type="button">Search Users for Mobile Delete</button>
+          <button id="admin-mobile-delete-search-btn" type="button" onclick="if (window.runAdminMobileDeleteSearch) { return window.runAdminMobileDeleteSearch(); } var s=document.getElementById('admin-mobile-delete-status'); if (s) { s.textContent='Search handler missing (JS did not load).'; } return false;">Search Users for Mobile Delete</button>
         </form>
 
         <p id="admin-mobile-delete-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>

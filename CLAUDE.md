@@ -255,6 +255,7 @@ Priority keys:
 - Fixed Start Here action-button reliability for person/extension lookup tables by replacing inline `onclick` prefill buttons with data-attribute click bindings; this resolves intermittent no-op behavior reported on **Build Android** (Option 4 prefill).
 - Hardened Start Here prefill action buttons (Build Jabber/iPhone/Android, Reset PIN, Name Update) with direct DOM fallback panel-switch/prefill logic when global prefill helper is unavailable, addressing full no-op behavior while keeping email resend actions unchanged.
 - Fixed **Remove only Jabber Mobile** search on both Menu and Administrative pages: form submission is now explicitly JS-driven (no native page submit fallback), preventing unwanted redirect to Start Here and restoring search execution on button click.
+- Hardened mobile-delete search inline hooks for browser compatibility by removing dependence on inline `event` object and adding explicit missing-handler status messaging if JS does not load.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
