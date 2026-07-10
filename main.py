@@ -13055,7 +13055,34 @@ __ADMIN_CARD__
                 if (!panelKey) {
                   return;
                 }
-                window.prefillPanel(panelKey, uid, "");
+                if (typeof window.prefillPanel === "function") {
+                  window.prefillPanel(panelKey, uid, "");
+                  return;
+                }
+
+                const allPanels = Array.from(document.querySelectorAll(".tool-panel"));
+                const allNavButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
+                allPanels.forEach(function (panel) {
+                  panel.classList.toggle("active", panel.dataset.panel === panelKey);
+                });
+                allNavButtons.forEach(function (navBtn) {
+                  navBtn.classList.toggle("active", navBtn.dataset.panel === panelKey);
+                });
+
+                const panel = allPanels.find(function (p) {
+                  return p.dataset.panel === panelKey;
+                });
+                if (!panel) {
+                  return;
+                }
+
+                ['input[name="target_user"]', 'input[name="voicemail_user"]'].forEach(function (selector) {
+                  const field = panel.querySelector(selector);
+                  if (field) {
+                    field.value = uid || "";
+                  }
+                });
+                panel.scrollIntoView({ behavior: "smooth", block: "start" });
               });
             });
 
@@ -13271,7 +13298,34 @@ __ADMIN_CARD__
                 if (!panelKey) {
                   return;
                 }
-                window.prefillPanel(panelKey, uid, "");
+                if (typeof window.prefillPanel === "function") {
+                  window.prefillPanel(panelKey, uid, "");
+                  return;
+                }
+
+                const allPanels = Array.from(document.querySelectorAll(".tool-panel"));
+                const allNavButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
+                allPanels.forEach(function (panel) {
+                  panel.classList.toggle("active", panel.dataset.panel === panelKey);
+                });
+                allNavButtons.forEach(function (navBtn) {
+                  navBtn.classList.toggle("active", navBtn.dataset.panel === panelKey);
+                });
+
+                const panel = allPanels.find(function (p) {
+                  return p.dataset.panel === panelKey;
+                });
+                if (!panel) {
+                  return;
+                }
+
+                ['input[name="target_user"]', 'input[name="voicemail_user"]'].forEach(function (selector) {
+                  const field = panel.querySelector(selector);
+                  if (field) {
+                    field.value = uid || "";
+                  }
+                });
+                panel.scrollIntoView({ behavior: "smooth", block: "start" });
               });
             });
 
