@@ -14359,6 +14359,35 @@ __ADMIN_CARD__
           return;
         }
 
+        // Panel-local prefill fallback so action-button navigation always carries target user.
+        (function hydrateOffboardTargetUser() {
+          const targetUserField = form.querySelector('input[name="target_user"]');
+          if (!targetUserField) {
+            return;
+          }
+
+          const qs = new URLSearchParams(window.location.search || "");
+          let candidate = (qs.get("target_user") || "").trim();
+          if (!candidate) {
+            try {
+              candidate = (sessionStorage.getItem("menu_prefill_target_user") || "").trim();
+            } catch (_err) {
+              candidate = "";
+            }
+          }
+
+          if (candidate) {
+            targetUserField.value = candidate;
+          }
+
+          try {
+            sessionStorage.removeItem("menu_prefill_target_user");
+            sessionStorage.removeItem("menu_prefill_panel");
+          } catch (_err) {
+            // Ignore sessionStorage cleanup failures.
+          }
+        })();
+
         async function runOffboard() {
           const targetUserField = form.querySelector('input[name="target_user"]');
           const targetUser = ((targetUserField && targetUserField.value) || "").trim();

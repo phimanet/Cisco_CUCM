@@ -262,6 +262,7 @@ Priority keys:
 - Added support for optional LDAP service-account bind overrides (`AD_LDAP_BIND_USER` + `AD_LDAP_BIND_PASSWORD`) for AD update/group LDAP paths, and improved Option 11 failure detail for LDAP insufficient-access (`LDAP 50`) to explicitly indicate delegated write rights are required.
 - Hardened Build User CSF Phone run button handler to execute even if shared duplicate-device precheck helper is unavailable, preventing no-op behavior on button click.
 - Added offboard action-button prefill fallback between Admin search and Main Offboard panel using sessionStorage handoff (`menu_prefill_panel` / `menu_prefill_target_user`) so selected usernames carry reliably into Separate Employee workflow.
+- Added panel-local Offboard prefill hydration in the Offboard script (URL `target_user` + sessionStorage fallback) to guarantee target user population even when global menu prefill script does not run.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
