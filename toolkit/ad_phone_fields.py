@@ -148,8 +148,13 @@ def _resolve_ldap_config():
 
 
 def _resolve_ldap_bind_credentials(auth_context, config):
-    username = str((auth_context or {}).get("username") or "").strip()
-    password = str((auth_context or {}).get("password") or "")
+    env_bind_user = str(os.getenv("AD_LDAP_BIND_USER") or "").strip()
+    env_bind_password = str(os.getenv("AD_LDAP_BIND_PASSWORD") or "")
+    if bool(env_bind_user) != bool(env_bind_password):
+        return None, None, "AD_LDAP_BIND_USER and AD_LDAP_BIND_PASSWORD must be set together"
+
+    username = env_bind_user or str((auth_context or {}).get("username") or "").strip()
+    password = env_bind_password or str((auth_context or {}).get("password") or "")
     if not username or not password:
         return None, None, "LDAP bind requires username and password"
 
@@ -194,6 +199,8 @@ def _run_ldap_lookup(samaccountname, auth_context):
     if bind_error:
         return None, bind_error
 
+    bind_password = str(os.getenv("AD_LDAP_BIND_PASSWORD") or str((auth_context or {}).get("password") or ""))
+
     try:
         server = Server(
             config["server"],
@@ -205,7 +212,7 @@ def _run_ldap_lookup(samaccountname, auth_context):
         conn = Connection(
             server,
             user=bind_user,
-            password=str((auth_context or {}).get("password") or ""),
+            password=bind_password,
             authentication=bind_auth,
             auto_bind=True,
             receive_timeout=20,
@@ -270,6 +277,8 @@ def _run_ldap_modify(distinguished_name, auth_context, replace_attrs=None, clear
     if bind_error:
         return bind_error
 
+    bind_password = str(os.getenv("AD_LDAP_BIND_PASSWORD") or str((auth_context or {}).get("password") or ""))
+
     try:
         server = Server(
             config["server"],
@@ -281,7 +290,7 @@ def _run_ldap_modify(distinguished_name, auth_context, replace_attrs=None, clear
         conn = Connection(
             server,
             user=bind_user,
-            password=str((auth_context or {}).get("password") or ""),
+            password=bind_password,
             authentication=bind_auth,
             auto_bind=True,
             receive_timeout=20,
@@ -1232,7 +1241,7 @@ def _run_ldapmodify_attributes(distinguished_name, auth_context, replace_attrs=N
     if config_error:
         return config_error
 
-    password = str((auth_context or {}).get("password") or "")
+    password = str(os.getenv("AD_LDAP_BIND_PASSWORD") or str((auth_context or {}).get("password") or ""))
     if not password:
         return "LDAP bind requires username and password"
 
@@ -1298,6 +1307,9 @@ def _run_ldapmodify_attributes(distinguished_name, auth_context, replace_attrs=N
             return ""
 
         error_text = (completed.stderr or "").strip() or (completed.stdout or "").strip()
+        normalized = error_text.lower()
+        if "insufficient access" in normalized or "insuff_access_rights" in normalized or "(50)" in normalized:
+            return "Insufficient AD permissions (LDAP 50). Grant write access to telephoneNumber/ipPhone or configure AD_LDAP_BIND_USER/AD_LDAP_BIND_PASSWORD with a delegated service account"
         last_error = f"{uri}: {error_text or f'ldapmodify failed with exit code {completed.returncode}'}"
 
     return last_error or "ldapmodify failed"
@@ -1349,7 +1361,7 @@ def _manage_ad_group_membership_ldapsearch(samaccountname, group_name, action, a
     if config_error:
         return None, config_error
 
-    password = str((auth_context or {}).get("password") or "")
+    password = str(os.getenv("AD_LDAP_BIND_PASSWORD") or str((auth_context or {}).get("password") or ""))
     if not password:
         return None, "LDAP bind requires username and password"
 
@@ -1505,7 +1517,8 @@ def manage_ad_group_membership(samaccountname, group_name, action, auth_context=
 
 
 def _resolve_ldapsearch_bind_user(auth_context, config):
-    username = str((auth_context or {}).get("username") or "").strip()
+    env_bind_user = str(os.getenv("AD_LDAP_BIND_USER") or "").strip()
+    username = env_bind_user or str((auth_context or {}).get("username") or "").strip()
     if not username:
         return ""
 
@@ -1568,7 +1581,7 @@ def _lookup_ad_group_ldapsearch(group_name, auth_context):
     if config_error:
         return None, config_error
 
-    password = str((auth_context or {}).get("password") or "")
+    password = str(os.getenv("AD_LDAP_BIND_PASSWORD") or str((auth_context or {}).get("password") or ""))
     if not password:
         return None, "LDAP bind requires username and password"
 
