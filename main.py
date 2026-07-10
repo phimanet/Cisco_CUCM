@@ -13023,14 +13023,14 @@ __ADMIN_CARD__
 
               const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;";
               const actionBtns =
-                `<button type="button" style="${btnStyle}background:#005eb8;color:#fff;" onclick="prefillPanel('precheck','${uid}')">Check Jabber</button>` +
-                `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build Jabber</button>` +
-                `<button type="button" style="${btnStyle}background:#0e7490;color:#fff;" onclick="prefillPanel('tct','${uid}')">Build iPhone</button>` +
-                `<button type="button" style="${btnStyle}background:#7c3aed;color:#fff;" onclick="prefillPanel('bot','${uid}')">Build Android</button>` +
+                `<button type="button" style="${btnStyle}background:#005eb8;color:#fff;" data-prefill-panel="precheck" data-prefill-user="${uid}">Check Jabber</button>` +
+                `<button type="button" style="${btnStyle}background:#237741;color:#fff;" data-prefill-panel="build" data-prefill-user="${uid}">Build Jabber</button>` +
+                `<button type="button" style="${btnStyle}background:#0e7490;color:#fff;" data-prefill-panel="tct" data-prefill-user="${uid}">Build iPhone</button>` +
+                `<button type="button" style="${btnStyle}background:#7c3aed;color:#fff;" data-prefill-panel="bot" data-prefill-user="${uid}">Build Android</button>` +
                 `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" data-mobile-resend-uid="${uid}">Re-send Mobile Email</button>` +
                 `<button type="button" style="${btnStyle}background:#1f7a3d;color:#fff;" data-lookup-notify-uid="${uid}" data-lookup-notify-tel="${(r.telephone || "")}">Send New Jabber Email</button>` +
-                `<button type="button" style="${btnStyle}background:#b45309;color:#fff;" onclick="prefillPanel('pin','${uid}')">Reset Voicemail PIN</button>` +
-                `<button type="button" style="${btnStyle}background:#8a5a00;color:#fff;" onclick="prefillPanel('namechange','${uid}')">Name Update</button>`;
+                `<button type="button" style="${btnStyle}background:#b45309;color:#fff;" data-prefill-panel="pin" data-prefill-user="${uid}">Reset Voicemail PIN</button>` +
+                `<button type="button" style="${btnStyle}background:#8a5a00;color:#fff;" data-prefill-panel="namechange" data-prefill-user="${uid}">Name Update</button>`;
 
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
               html += '<td style="padding:7px 10px;">' + name + '</td>';
@@ -13047,6 +13047,17 @@ __ADMIN_CARD__
 
             html += '</tbody></table>';
             resultsEl.innerHTML = html;
+
+            resultsEl.querySelectorAll('button[data-prefill-panel]').forEach(function (btn) {
+              btn.addEventListener("click", function () {
+                const panelKey = btn.getAttribute("data-prefill-panel") || "";
+                const uid = btn.getAttribute("data-prefill-user") || "";
+                if (!panelKey) {
+                  return;
+                }
+                window.prefillPanel(panelKey, uid, "");
+              });
+            });
 
             resultsEl.querySelectorAll('button[data-lookup-notify-uid]').forEach(function (btn) {
               btn.addEventListener("click", async function () {
@@ -13233,8 +13244,8 @@ __ADMIN_CARD__
 
               const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;";
               const actionBtns = uid
-                ? `<button type="button" style="${btnStyle}background:#005eb8;color:#fff;" onclick="prefillPanel('precheck','${uid}')">Check Jabber</button>` +
-                  `<button type="button" style="${btnStyle}background:#237741;color:#fff;" onclick="prefillPanel('build','${uid}')">Build Jabber</button>` +
+                ? `<button type="button" style="${btnStyle}background:#005eb8;color:#fff;" data-prefill-panel="precheck" data-prefill-user="${uid}">Check Jabber</button>` +
+                  `<button type="button" style="${btnStyle}background:#237741;color:#fff;" data-prefill-panel="build" data-prefill-user="${uid}">Build Jabber</button>` +
                   `<button type="button" style="${btnStyle}background:#0f766e;color:#fff;" data-mobile-resend-uid="${uid}">Re-send Mobile Email</button>`
                 : "\u2014";
 
@@ -13252,6 +13263,17 @@ __ADMIN_CARD__
 
             html += '</tbody></table>';
             resultsEl.innerHTML = html;
+
+            resultsEl.querySelectorAll('button[data-prefill-panel]').forEach(function (btn) {
+              btn.addEventListener("click", function () {
+                const panelKey = btn.getAttribute("data-prefill-panel") || "";
+                const uid = btn.getAttribute("data-prefill-user") || "";
+                if (!panelKey) {
+                  return;
+                }
+                window.prefillPanel(panelKey, uid, "");
+              });
+            });
 
             resultsEl.querySelectorAll('button[data-mobile-resend-uid]').forEach(function (btn) {
               btn.addEventListener("click", async function () {

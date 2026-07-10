@@ -252,6 +252,7 @@ Priority keys:
 - Removed repeated CUCM username/password prompts from Menu and Administrative menu workflows by switching affected forms to hidden cached-session CUCM fields (`cucm_host`, `cucm_user`, `cucm_pass`) so operators are not asked to re-enter credentials during normal session use.
 - Updated AD group membership helper fallback chain to include `ldapsearch` + `ldapmodify` path when both PowerShell and Python `ldap3` are unavailable, aligning behavior with Linux-host-compatible AD tooling expectations.
 - Removed visible Unity Admin username/password fields from Menu -> Reset Unity Voicemail PIN panel and switched that workflow to hidden cached-session Unity credentials (`unity_user`, `unity_pass`) for consistent no-reprompt behavior.
+- Fixed Start Here action-button reliability for person/extension lookup tables by replacing inline `onclick` prefill buttons with data-attribute click bindings; this resolves intermittent no-op behavior reported on **Build Android** (Option 4 prefill).
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
