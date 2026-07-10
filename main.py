@@ -13505,15 +13505,24 @@ __ADMIN_CARD__
           }
         }
 
-        form.addEventListener("submit", function (event) {
-          event.preventDefault();
-          checkForDuplicateDevices(form, ["csf"]).then((proceed) => { if (proceed) runBuild(); });
-        });
+        function runBuildWithDuplicateGuard(event) {
+          if (event) {
+            event.preventDefault();
+          }
 
-        button.addEventListener("click", function (event) {
-          event.preventDefault();
-          checkForDuplicateDevices(form, ["csf"]).then((proceed) => { if (proceed) runBuild(); });
-        });
+          if (typeof checkForDuplicateDevices === "function") {
+            checkForDuplicateDevices(form, ["csf"]).then((proceed) => {
+              if (proceed) runBuild();
+            });
+            return;
+          }
+
+          // Fallback path when shared duplicate-check helper is unavailable.
+          runBuild();
+        }
+
+        form.addEventListener("submit", runBuildWithDuplicateGuard);
+        button.addEventListener("click", runBuildWithDuplicateGuard);
 
       })();
     </script>

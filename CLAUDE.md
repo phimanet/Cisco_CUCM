@@ -260,6 +260,7 @@ Priority keys:
 - Expanded AD phone-field update fallback chain used by Option 11 to include `ldapsearch` lookup + `ldapmodify` attribute update/clear path when both PowerShell and Python `ldap3` are unavailable, aligning behavior with Linux-host AD tooling environments.
 - Added panel-local action handler for Menu -> Block Inbound Calls by Caller ID Number so Block/Lookup/List/Delete actions execute via inline-safe JS hooks and no longer fall back to Start Here when downstream script registration is skipped.
 - Added support for optional LDAP service-account bind overrides (`AD_LDAP_BIND_USER` + `AD_LDAP_BIND_PASSWORD`) for AD update/group LDAP paths, and improved Option 11 failure detail for LDAP insufficient-access (`LDAP 50`) to explicitly indicate delegated write rights are required.
+- Hardened Build User CSF Phone run button handler to execute even if shared duplicate-device precheck helper is unavailable, preventing no-op behavior on button click.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
