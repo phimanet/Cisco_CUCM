@@ -251,6 +251,7 @@ Priority keys:
 - Added UI result summary table for each membership action showing final membership state, changed/not-changed state, user/group DNs, and backend source (`powershell` or `ldap`) to support proof-of-control before wiring into Jabber Build/Separation workflows.
 - Removed repeated CUCM username/password prompts from Menu and Administrative menu workflows by switching affected forms to hidden cached-session CUCM fields (`cucm_host`, `cucm_user`, `cucm_pass`) so operators are not asked to re-enter credentials during normal session use.
 - Updated AD group membership helper fallback chain to include `ldapsearch` + `ldapmodify` path when both PowerShell and Python `ldap3` are unavailable, aligning behavior with Linux-host-compatible AD tooling expectations.
+- Removed visible Unity Admin username/password fields from Menu -> Reset Unity Voicemail PIN panel and switched that workflow to hidden cached-session Unity credentials (`unity_user`, `unity_pass`) for consistent no-reprompt behavior.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.

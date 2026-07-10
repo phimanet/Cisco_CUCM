@@ -14037,14 +14037,12 @@ __ADMIN_CARD__
     <section class="tool-panel" data-panel="pin">
 
     <h3>Reset Unity Voicemail PIN - with email notification</h3>
+    <p>Authentication note: Uses cached Unity/CUCM credentials from your current login session.</p>
 
     <div class="secondary-layout">
       <form id="reset-pin-form" class="secondary-form" action="/reset/unity-voicemail-pin" method="post">
-        Unity Admin Username:<br>
-        <input name="unity_user" value="__AUTH_USER__" required><br><br>
-
-        Unity Admin Password:<br>
-        <input type="password" name="unity_pass" required><br><br>
+        <input type="hidden" name="unity_user" value="__AUTH_USER__">
+        <input type="hidden" name="unity_pass" value="">
 
         Voicemail Username to Reset PIN for:<br>
         <input name="voicemail_user" placeholder="john.doe" required><br><br>
