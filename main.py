@@ -454,6 +454,7 @@ DEFAULT_SETTINGS = {
   "general_fte_prefix": "945",
   "strike_prefix": "817",
   "recruiter_prefix": "469",
+  "admin_users": "",
   "twilio_loa_recipient_name": "Laura Alvarez",
   "twilio_loa_recipient_email": "laura.alvarez@amnhealthare.com",
   "twilio_loa_recipient_phone": "+18583503289",
@@ -1802,11 +1803,18 @@ def _is_admin_user(username: str) -> bool:
   if normalized.startswith("phimane") or normalized.startswith("laura") or normalized.startswith("jerald"):
     return True
 
+  configured_admins = {
+    (u or "").strip().lower()
+    for u in (str(_load_settings().get("admin_users", "") or "")).split(",")
+    if (u or "").strip()
+  }
+  effective_admin_users = set(ADMIN_USERS) | configured_admins
+
   # Backward-compatible default: if allowlist is not configured, do not restrict.
-  if not ADMIN_USERS:
+  if not effective_admin_users:
     return True
 
-  return normalized in ADMIN_USERS
+  return normalized in effective_admin_users
 
 
 def _update_cached_credentials(
@@ -24161,6 +24169,12 @@ def settings_page(request: Request):
           </div>
 
           <div class="form-group">
+            <label for="admin_users">Additional Admin Users</label>
+            <input type="text" id="admin_users" name="admin_users" value="{escape(settings.get('admin_users', ''))}" maxlength="800">
+            <div class="help-text">Optional comma-separated usernames allowed to access Administrative Items (for example: user1,user2)</div>
+          </div>
+
+          <div class="form-group">
             <label for="twilio_loa_recipient_name">Twilio LOA Recipient Name</label>
             <input type="text" id="twilio_loa_recipient_name" name="twilio_loa_recipient_name" value="{escape(settings.get('twilio_loa_recipient_name', 'Laura Alvarez'))}" maxlength="120">
             <div class="help-text">Default person for LOA handoff during Twilio hosted-number onboarding</div>
@@ -24230,6 +24244,7 @@ def settings_page(request: Request):
           general_fte_prefix: document.getElementById('general_fte_prefix').value.trim(),
           strike_prefix: document.getElementById('strike_prefix').value.trim(),
           recruiter_prefix: document.getElementById('recruiter_prefix').value.trim(),
+          admin_users: document.getElementById('admin_users').value.trim(),
           twilio_loa_recipient_name: document.getElementById('twilio_loa_recipient_name').value.trim(),
           twilio_loa_recipient_email: document.getElementById('twilio_loa_recipient_email').value.trim(),
           twilio_loa_recipient_phone: document.getElementById('twilio_loa_recipient_phone').value.trim(),
@@ -24316,6 +24331,7 @@ def update_settings_api(request: Request, body: dict = None):
     general_fte_prefix = (body.get("general_fte_prefix", "") or "").strip()
     strike_prefix = (body.get("strike_prefix", "") or "").strip()
     recruiter_prefix = (body.get("recruiter_prefix", "") or "").strip()
+    admin_users = (body.get("admin_users", "") or "").strip()
     twilio_loa_recipient_name = (body.get("twilio_loa_recipient_name", "") or "").strip()
     twilio_loa_recipient_email = (body.get("twilio_loa_recipient_email", "") or "").strip()
     twilio_loa_recipient_phone = (body.get("twilio_loa_recipient_phone", "") or "").strip()
@@ -24331,6 +24347,18 @@ def update_settings_api(request: Request, body: dict = None):
     # Validate that all are numeric
     if not (general_fte_prefix.isdigit() and strike_prefix.isdigit() and recruiter_prefix.isdigit()):
       return JSONResponse({"ok": False, "error": "All prefixes must be numeric"}, status_code=400)
+
+    if admin_users:
+      invalid_admin_users = [
+        token for token in [p.strip() for p in admin_users.split(",") if p.strip()]
+        if not re.fullmatch(r"[A-Za-z0-9._@-]+", token)
+      ]
+      if invalid_admin_users:
+        return JSONResponse({"ok": False, "error": "Additional Admin Users contains invalid characters"}, status_code=400)
+
+    normalized_admin_users = ",".join(
+      sorted({token.lower() for token in [p.strip() for p in admin_users.split(",") if p.strip()]})
+    )
 
     if sip_call_search_enabled and sip_call_search_enabled not in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
       return JSONResponse({"ok": False, "error": "SIP Call Search Enabled must be true or false"}, status_code=400)
@@ -24349,6 +24377,7 @@ def update_settings_api(request: Request, body: dict = None):
       "general_fte_prefix": general_fte_prefix,
       "strike_prefix": strike_prefix,
       "recruiter_prefix": recruiter_prefix,
+      "admin_users": normalized_admin_users,
       "twilio_loa_recipient_name": twilio_loa_recipient_name,
       "twilio_loa_recipient_email": twilio_loa_recipient_email,
       "twilio_loa_recipient_phone": twilio_loa_recipient_phone,
