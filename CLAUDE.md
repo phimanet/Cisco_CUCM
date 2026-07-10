@@ -245,6 +245,11 @@ Priority keys:
 - Decision confirmed: do **not** modify the current working AD phone update workflow (`telephoneNumber`/`ipPhone`) at this time; keep enhancement implementation deferred until explicitly approved.
 - Future enhancement requirement captured: when approved for coding, Build Cisco Jabber flow should add user to the fixed security group (`AzAppReg_CiscoUnity-PROD_EmailIntegration`) after AD phone update, and Separation workflow should remove user from that same security group after AD phone fields are cleared.
 
+### 2026-07-10
+- Added new Page 2 function **Check Unifed Messaging Security Group** with a fixed group target (`AzAppReg_CiscoUnity-PROD_EmailIntegration`) and per-user actions to check membership, add member, or remove member using AD User ID (`samAccountName`).
+- Added backend route `/admin/ad-group-membership` and toolkit helper `manage_ad_group_membership(...)` with PowerShell ActiveDirectory path plus LDAP fallback so membership validation/mutation can run on both Windows-style and Ubuntu LDAP environments.
+- Added UI result summary table for each membership action showing final membership state, changed/not-changed state, user/group DNs, and backend source (`powershell` or `ldap`) to support proof-of-control before wiring into Jabber Build/Separation workflows.
+
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
 - Verified LAB parity after pull/restart: `/healthz` now returns `git_commit":"0c59386"` and service is healthy.

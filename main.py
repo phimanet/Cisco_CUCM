@@ -65,7 +65,7 @@ from toolkit.remove_teams_telephony_user import (
   lookup_teams_telephony_removal_candidate,
   remove_teams_telephony_user,
 )
-from toolkit.ad_phone_fields import inspect_ad_group_identifiers
+from toolkit.ad_phone_fields import inspect_ad_group_identifiers, manage_ad_group_membership
 
 logger = logging.getLogger(__name__)
 
@@ -17775,6 +17775,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unityldapsync">Trigger Unity LDAP Sync</button>
+            <button type="button" class="portal-nav-btn" data-panel="ad-group-membership">Check Unifed Messaging Security Group</button>
             <button type="button" class="portal-nav-btn" data-panel="ad-group-identifiers">Security Group Identifier (Read-Only)</button>
             <button type="button" class="portal-nav-btn" data-panel="sep-sms-report">SMS Separation Email Process</button>
             <button type="button" class="portal-nav-btn" data-panel="dn-avail-report">DN Number Pool Availability Report</button>
@@ -17990,6 +17991,36 @@ def menu_admin_page(request: Request):
 
         <p id="admin-ad-group-identifiers-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Click Read Group Identifiers to verify DN/ObjectGUID/SID.</p>
         <div id="admin-ad-group-identifiers-results" style="overflow-x:auto;"></div>
+      </section>
+
+      <section class="panel tool-panel" data-panel="ad-group-membership">
+        <h3>Check Unifed Messaging Security Group</h3>
+        <p>Check, add, or remove a person in the fixed AD security group <strong>AzAppReg_CiscoUnity-PROD_EmailIntegration</strong> using their AD User ID (samAccountName).</p>
+        <form id="admin-ad-group-membership-form">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <input type="hidden" name="membership_action" value="check">
+
+          <div class="compact-inline-row">
+            <span>Security Group Name:</span>
+            <input name="group_name" value="AzAppReg_CiscoUnity-PROD_EmailIntegration" readonly required style="min-width:420px;">
+          </div><br>
+
+          <div class="compact-inline-row">
+            <span>AD User ID (samAccountName):</span>
+            <input name="target_user" placeholder="john.doe" required style="min-width:260px;">
+          </div><br>
+
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="submit" data-membership-action="check">Check Member</button>
+            <button type="button" data-membership-action="add" style="background:linear-gradient(180deg,#2f855a,#256b47);">Add Member</button>
+            <button type="button" data-membership-action="remove" style="background:linear-gradient(180deg,#9f1239,#7f1d1d);">Remove Member</button>
+          </div>
+        </form>
+
+        <p id="admin-ad-group-membership-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter AD User ID, then click Check Member, Add Member, or Remove Member.</p>
+        <div id="admin-ad-group-membership-results" style="overflow-x:auto;"></div>
       </section>
 
       <section class="panel tool-panel" data-panel="translookup">
@@ -19431,6 +19462,105 @@ def menu_admin_page(request: Request):
             } catch (err) {
               statusEl.textContent = `Read failed: ${(err && err.message) || "Unknown error."}`;
             }
+          });
+        })();
+      </script>
+
+      <script>
+        (function () {
+          const form = document.getElementById("admin-ad-group-membership-form");
+          const statusEl = document.getElementById("admin-ad-group-membership-status");
+          const resultsEl = document.getElementById("admin-ad-group-membership-results");
+
+          if (!form || !statusEl || !resultsEl) {
+            return;
+          }
+
+          function escapeHtml(value) {
+            return String(value || "")
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/\"/g, "&quot;")
+              .replace(/'/g, "&#39;");
+          }
+
+          async function submitWithAction(action) {
+            const actionInput = form.querySelector('input[name="membership_action"]');
+            if (!actionInput) {
+              return;
+            }
+
+            actionInput.value = action;
+            statusEl.textContent = action === "check"
+              ? "Checking group membership..."
+              : (action === "add" ? "Adding group membership..." : "Removing group membership...");
+            resultsEl.innerHTML = "";
+
+            try {
+              const response = await fetch("/admin/ad-group-membership", {
+                method: "POST",
+                body: new FormData(form),
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                const msg = (payload.error && payload.error.message) || payload.detail || "Group membership operation failed.";
+                throw new Error(msg);
+              }
+
+              const memberLabel = payload.isMember ? "Yes" : "No";
+              statusEl.textContent = payload.message || `Action completed (${action}).`;
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Property</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Value</th>';
+              html += '</tr></thead><tbody>';
+
+              const rows = [
+                ["Action", payload.action || action],
+                ["Membership Now", memberLabel],
+                ["Changed", payload.changed ? "Yes" : "No"],
+                ["AD User ID", payload.userSamAccountName || ""],
+                ["User DistinguishedName", payload.userDistinguishedName || ""],
+                ["Group Name", payload.groupName || ""],
+                ["Group SamAccountName", payload.groupSamAccountName || ""],
+                ["Group DistinguishedName", payload.groupDistinguishedName || ""],
+                ["Source", payload.source || ""],
+                ["Message", payload.message || ""],
+              ];
+
+              rows.forEach(function (entry, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c; white-space:nowrap;">' + escapeHtml(entry[0]) + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace; white-space:pre-wrap; word-break:break-word;">' + escapeHtml(entry[1] || "-") + '</td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+            } catch (err) {
+              statusEl.textContent = `Operation failed: ${(err && err.message) || "Unknown error."}`;
+            }
+          }
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            await submitWithAction("check");
+          });
+
+          form.querySelectorAll("button[data-membership-action]").forEach(function (btn) {
+            const action = (btn.getAttribute("data-membership-action") || "").trim().toLowerCase();
+            if (!action || action === "check") {
+              return;
+            }
+            btn.addEventListener("click", async function () {
+              await submitWithAction(action);
+            });
           });
         })();
       </script>
@@ -27585,6 +27715,34 @@ def admin_ad_group_identifiers_route(
   )
   if error:
     raise RuntimeError(f"AD group identifier lookup failed: {error}")
+
+  return JSONResponse({"ok": True, **(result or {})})
+
+
+@app.post("/admin/ad-group-membership")
+def admin_ad_group_membership_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  group_name: str = Form(...),
+  target_user: str = Form(...),
+  membership_action: str = Form("check"),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+  success, result, error = manage_ad_group_membership(
+    target_user,
+    group_name,
+    membership_action,
+    auth_context={
+      "username": cucm_user,
+      "password": cucm_pass,
+    },
+  )
+  if not success:
+    return JSONResponse({"ok": False, "error": {"message": error or "Membership operation failed"}}, status_code=400)
 
   return JSONResponse({"ok": True, **(result or {})})
 

@@ -9,6 +9,7 @@ import base64
 try:
     from ldap3 import (
         ALL,
+        MODIFY_ADD,
         MODIFY_DELETE,
         MODIFY_REPLACE,
         NTLM,
@@ -727,6 +728,335 @@ def inspect_ad_group_identifiers(group_name, auth_context=None):
     if ps_error and ldap_error and ldapsearch_error:
         return None, f"{ps_error}; LDAP fallback failed: {ldap_error}; ldapsearch fallback failed: {ldapsearch_error}"
     return None, ps_error or ldap_error or ldapsearch_error or "AD group lookup failed"
+
+
+def _normalize_membership_action(value):
+    action = str(value or "").strip().lower()
+    if action in {"check", "add", "remove"}:
+        return action
+    return ""
+
+
+def _manage_ad_group_membership_powershell(samaccountname, group_name, action, auth_context):
+    payload = {
+        "username": (auth_context or {}).get("username", ""),
+        "password": (auth_context or {}).get("password", ""),
+        "samaccountname": samaccountname,
+        "group_name": group_name,
+        "action": action,
+    }
+    script = r"""
+$payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
+Import-Module ActiveDirectory -ErrorAction Stop
+
+$sam = [string]$payload.samaccountname
+$groupName = [string]$payload.group_name
+$action = ([string]$payload.action).ToLowerInvariant()
+
+$cred = $null
+if ($payload.username -and $payload.password) {
+    $secure = ConvertTo-SecureString $payload.password -AsPlainText -Force
+    $cred = [System.Management.Automation.PSCredential]::new($payload.username, $secure)
+}
+
+if ($cred) {
+    $user = Get-ADUser -Credential $cred -LDAPFilter "(sAMAccountName=$sam)" -Properties distinguishedName,memberOf -ErrorAction SilentlyContinue
+    $group = Get-ADGroup -Credential $cred -Filter "Name -eq '$groupName'" -Properties distinguishedName,name,samAccountName -ErrorAction SilentlyContinue
+} else {
+    $user = Get-ADUser -LDAPFilter "(sAMAccountName=$sam)" -Properties distinguishedName,memberOf -ErrorAction SilentlyContinue
+    $group = Get-ADGroup -Filter "Name -eq '$groupName'" -Properties distinguishedName,name,samAccountName -ErrorAction SilentlyContinue
+}
+
+if ($null -eq $user) {
+    @{ ok = $false; userFound = $false; groupFound = ($null -ne $group); message = "AD user '$sam' was not found" } | ConvertTo-Json -Compress
+    exit 0
+}
+
+if ($null -eq $group) {
+    @{ ok = $false; userFound = $true; groupFound = $false; message = "AD group '$groupName' was not found" } | ConvertTo-Json -Compress
+    exit 0
+}
+
+$groupDn = [string]$group.DistinguishedName
+$userDn = [string]$user.DistinguishedName
+$isMember = $false
+if ($user.memberOf) {
+    foreach ($dn in @($user.memberOf)) {
+        if ([string]::Equals([string]$dn, $groupDn, [System.StringComparison]::OrdinalIgnoreCase)) {
+            $isMember = $true
+            break
+        }
+    }
+}
+
+$changed = $false
+$message = ""
+
+if ($action -eq "add") {
+    if (-not $isMember) {
+        if ($cred) {
+            Add-ADGroupMember -Credential $cred -Identity $groupDn -Members $userDn -ErrorAction Stop
+            $user = Get-ADUser -Credential $cred -Identity $userDn -Properties memberOf -ErrorAction Stop
+        } else {
+            Add-ADGroupMember -Identity $groupDn -Members $userDn -ErrorAction Stop
+            $user = Get-ADUser -Identity $userDn -Properties memberOf -ErrorAction Stop
+        }
+
+        $isMember = $false
+        if ($user.memberOf) {
+            foreach ($dn in @($user.memberOf)) {
+                if ([string]::Equals([string]$dn, $groupDn, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $isMember = $true
+                    break
+                }
+            }
+        }
+
+        $changed = $isMember
+        $message = if ($isMember) { "User added to group" } else { "Add requested but membership could not be confirmed" }
+    } else {
+        $message = "User is already a member"
+    }
+} elseif ($action -eq "remove") {
+    if ($isMember) {
+        if ($cred) {
+            Remove-ADGroupMember -Credential $cred -Identity $groupDn -Members $userDn -Confirm:$false -ErrorAction Stop
+            $user = Get-ADUser -Credential $cred -Identity $userDn -Properties memberOf -ErrorAction Stop
+        } else {
+            Remove-ADGroupMember -Identity $groupDn -Members $userDn -Confirm:$false -ErrorAction Stop
+            $user = Get-ADUser -Identity $userDn -Properties memberOf -ErrorAction Stop
+        }
+
+        $isMember = $false
+        if ($user.memberOf) {
+            foreach ($dn in @($user.memberOf)) {
+                if ([string]::Equals([string]$dn, $groupDn, [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $isMember = $true
+                    break
+                }
+            }
+        }
+
+        $changed = -not $isMember
+        $message = if (-not $isMember) { "User removed from group" } else { "Remove requested but membership still present" }
+    } else {
+        $message = "User is not currently a member"
+    }
+} else {
+    $message = if ($isMember) { "User is currently a member" } else { "User is not currently a member" }
+}
+
+@{
+    ok = $true
+    action = $action
+    changed = $changed
+    userFound = $true
+    groupFound = $true
+    userSamAccountName = $sam
+    userDistinguishedName = $userDn
+    groupName = [string]$group.Name
+    groupSamAccountName = [string]$group.SamAccountName
+    groupDistinguishedName = $groupDn
+    isMember = $isMember
+    message = $message
+} | ConvertTo-Json -Compress
+"""
+
+    data, error = _run_powershell_json(script, payload)
+    if error:
+        return None, error
+    if not isinstance(data, dict):
+        return None, "AD group membership operation returned an invalid response"
+    return data, ""
+
+
+def _manage_ad_group_membership_ldap(samaccountname, group_name, action, auth_context):
+    if not LDAP3_AVAILABLE:
+        return None, "ldap3 package is not installed on this server"
+
+    config, config_error = _resolve_ldap_config()
+    if config_error:
+        return None, config_error
+
+    bind_user, bind_auth, bind_error = _resolve_ldap_bind_credentials(auth_context, config)
+    if bind_error:
+        return None, bind_error
+
+    try:
+        server = Server(
+            config["server"],
+            port=config["port"],
+            use_ssl=config["use_ssl"],
+            get_info=ALL,
+            connect_timeout=20,
+        )
+        conn = Connection(
+            server,
+            user=bind_user,
+            password=str((auth_context or {}).get("password") or ""),
+            authentication=bind_auth,
+            auto_bind=True,
+            receive_timeout=20,
+        )
+    except Exception as exc:
+        return None, f"LDAP bind failed: {exc}"
+
+    try:
+        user_filter = f"(&(objectClass=user)(sAMAccountName={_escape_ldap_filter_value(samaccountname)}))"
+        ok_user = conn.search(
+            search_base=config["base_dn"],
+            search_filter=user_filter,
+            search_scope=SUBTREE,
+            attributes=["distinguishedName", "sAMAccountName", "memberOf"],
+        )
+        if not ok_user or not conn.entries:
+            return {
+                "ok": False,
+                "action": action,
+                "changed": False,
+                "userFound": False,
+                "groupFound": True,
+                "isMember": False,
+                "message": f"AD user '{samaccountname}' was not found",
+            }, ""
+
+        user_entry = conn.entries[0]
+        user_dn = str(getattr(user_entry, "entry_dn", "") or "").strip()
+        user_sam = str(getattr(getattr(user_entry, "sAMAccountName", None), "value", samaccountname) or samaccountname).strip()
+        member_of_values = [str(v or "").strip().lower() for v in (getattr(getattr(user_entry, "memberOf", None), "values", []) or [])]
+
+        group_filter = (
+            f"(&(objectClass=group)(|"
+            f"(cn={_escape_ldap_filter_value(group_name)})"
+            f"(name={_escape_ldap_filter_value(group_name)})"
+            f"(sAMAccountName={_escape_ldap_filter_value(group_name)})"
+            f"))"
+        )
+        ok_group = conn.search(
+            search_base=config["base_dn"],
+            search_filter=group_filter,
+            search_scope=SUBTREE,
+            attributes=["distinguishedName", "cn", "name", "sAMAccountName"],
+        )
+        if not ok_group or not conn.entries:
+            return {
+                "ok": False,
+                "action": action,
+                "changed": False,
+                "userFound": True,
+                "groupFound": False,
+                "isMember": False,
+                "userSamAccountName": user_sam,
+                "userDistinguishedName": user_dn,
+                "message": f"AD group '{group_name}' was not found",
+            }, ""
+
+        group_entry = conn.entries[0]
+        group_dn = str(getattr(group_entry, "entry_dn", "") or "").strip()
+        group_name_value = str(
+            getattr(getattr(group_entry, "name", None), "value", "")
+            or getattr(getattr(group_entry, "cn", None), "value", "")
+            or group_name
+        ).strip()
+        group_sam = str(getattr(getattr(group_entry, "sAMAccountName", None), "value", "") or "").strip()
+
+        is_member = group_dn.lower() in member_of_values
+        changed = False
+        message = ""
+
+        if action == "add":
+            if is_member:
+                message = "User is already a member"
+            else:
+                ok_modify = conn.modify(group_dn, {"member": [(MODIFY_ADD, [user_dn])]})
+                if not ok_modify:
+                    result = conn.result or {}
+                    desc = str(result.get("description") or "unknown").strip()
+                    msg = str(result.get("message") or "").strip()
+                    return None, f"LDAP add membership failed ({desc}): {msg}".strip()
+                changed = True
+                message = "User added to group"
+        elif action == "remove":
+            if not is_member:
+                message = "User is not currently a member"
+            else:
+                ok_modify = conn.modify(group_dn, {"member": [(MODIFY_DELETE, [user_dn])]})
+                if not ok_modify:
+                    result = conn.result or {}
+                    desc = str(result.get("description") or "unknown").strip()
+                    msg = str(result.get("message") or "").strip()
+                    return None, f"LDAP remove membership failed ({desc}): {msg}".strip()
+                changed = True
+                message = "User removed from group"
+        else:
+            message = "User is currently a member" if is_member else "User is not currently a member"
+
+        # Re-check membership after any attempted modification.
+        conn.search(
+            search_base=config["base_dn"],
+            search_filter=user_filter,
+            search_scope=SUBTREE,
+            attributes=["memberOf"],
+        )
+        if conn.entries:
+            refreshed = conn.entries[0]
+            refreshed_member_of = [
+                str(v or "").strip().lower()
+                for v in (getattr(getattr(refreshed, "memberOf", None), "values", []) or [])
+            ]
+            is_member = group_dn.lower() in refreshed_member_of
+
+        return {
+            "ok": True,
+            "action": action,
+            "changed": changed,
+            "userFound": True,
+            "groupFound": True,
+            "userSamAccountName": user_sam,
+            "userDistinguishedName": user_dn,
+            "groupName": group_name_value,
+            "groupSamAccountName": group_sam,
+            "groupDistinguishedName": group_dn,
+            "isMember": is_member,
+            "message": message,
+        }, ""
+    except Exception as exc:
+        return None, f"LDAP membership operation failed: {exc}"
+    finally:
+        try:
+            conn.unbind()
+        except Exception:
+            pass
+
+
+def manage_ad_group_membership(samaccountname, group_name, action, auth_context=None):
+    sam = _normalize_samaccountname(samaccountname)
+    if not sam:
+        return False, None, "Invalid or empty AD samAccountName"
+
+    clean_group = _normalize_group_lookup_name(group_name)
+    if not clean_group:
+        return False, None, "group_name is required"
+
+    normalized_action = _normalize_membership_action(action)
+    if not normalized_action:
+        return False, None, "action must be one of: check, add, remove"
+
+    ps_data, ps_error = _manage_ad_group_membership_powershell(sam, clean_group, normalized_action, auth_context)
+    if not ps_error and isinstance(ps_data, dict):
+        result = dict(ps_data)
+        result["source"] = "powershell"
+        return bool(result.get("ok")), result, ""
+
+    ldap_data, ldap_error = _manage_ad_group_membership_ldap(sam, clean_group, normalized_action, auth_context)
+    if not ldap_error and isinstance(ldap_data, dict):
+        result = dict(ldap_data)
+        result["source"] = "ldap"
+        return bool(result.get("ok")), result, ""
+
+    if ps_error and ldap_error:
+        return False, None, f"{ps_error}; LDAP fallback failed: {ldap_error}"
+    return False, None, ps_error or ldap_error or "AD group membership operation failed"
 
 
 def _resolve_ldapsearch_bind_user(auth_context, config):
