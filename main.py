@@ -14174,6 +14174,136 @@ __ADMIN_CARD__
 
     <p id="menu-mobile-delete-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
     <div id="menu-mobile-delete-results" style="overflow-x:auto;"></div>
+
+    <script>
+      (function () {
+        const form = document.getElementById("menu-mobile-delete-lookup-form");
+        const statusEl = document.getElementById("menu-mobile-delete-status");
+        const resultsEl = document.getElementById("menu-mobile-delete-results");
+
+        if (!form || !statusEl || !resultsEl) {
+          return;
+        }
+
+        if (typeof window.runMenuMobileDeleteDelete !== "function") {
+          window.runMenuMobileDeleteDelete = function (uid, mode) {
+            const removeTct = mode === "tct" || mode === "both";
+            const removeBot = mode === "bot" || mode === "both";
+            const label = mode === "tct" ? "TCT only" : (mode === "bot" ? "BOT only" : "TCT and BOT");
+
+            const confirmed = confirm(
+              `Delete mobile Jabber devices for ${uid}?\n\nSelection: ${label}\n\nThis action will not delete CSF or voicemail.`
+            );
+            if (!confirmed) {
+              return false;
+            }
+
+            const actionForm = document.createElement("form");
+            actionForm.method = "post";
+            actionForm.action = "/delete/secondary-mobile-devices";
+
+            const fields = {
+              cucm_host: "__AUTH_CUCM_HOST__",
+              cucm_user: "__AUTH_USER__",
+              cucm_pass: "",
+              target_user: uid || "",
+              remove_tct: removeTct ? "1" : "0",
+              remove_bot: removeBot ? "1" : "0",
+            };
+
+            Object.entries(fields).forEach(([name, value]) => {
+              const input = document.createElement("input");
+              input.type = "hidden";
+              input.name = name;
+              input.value = value;
+              actionForm.appendChild(input);
+            });
+
+            document.body.appendChild(actionForm);
+            actionForm.submit();
+            return false;
+          };
+        }
+
+        if (typeof window.runMenuMobileDeleteSearch !== "function") {
+          window.runMenuMobileDeleteSearch = async function (event) {
+            if (event) {
+              event.preventDefault();
+            }
+
+            statusEl.textContent = "Searching...";
+            resultsEl.innerHTML = "";
+
+            try {
+              const formData = new FormData(form);
+              const response = await fetch("/lookup/person", {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+              });
+
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                const msg = (payload && payload.error && payload.error.message) || payload.detail || "Search failed.";
+                throw new Error(msg);
+              }
+
+              const results = payload.results || [];
+              if (!results.length) {
+                statusEl.textContent = "No users found matching that name.";
+                return false;
+              }
+
+              statusEl.textContent = `Found ${results.length} user(s). Choose delete action.`;
+
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Delete Actions</th>';
+              html += '</tr></thead><tbody>';
+
+              results.forEach(function (r, i) {
+                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+                const email = r.email || "\u2014";
+                const telephone = r.telephone || "\u2014";
+                const uid = r.userid || "";
+                const devList = (r.devices || []).map(function (d) {
+                  const exts = (d.extensions || []).join(", ") || "\u2014";
+                  return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
+                }).join("<br>") || "\u2014";
+
+                const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;color:#fff;";
+                const tctBtn = `<button type="button" style="${btnStyle}background:#0e7490;" onclick="return window.runMenuMobileDeleteDelete('${uid}','tct');">Delete iPhone (TCT)</button>`;
+                const botBtn = `<button type="button" style="${btnStyle}background:#7c3aed;" onclick="return window.runMenuMobileDeleteDelete('${uid}','bot');">Delete Android (BOT)</button>`;
+                const bothBtn = `<button type="button" style="${btnStyle}background:#b00020;" onclick="return window.runMenuMobileDeleteDelete('${uid}','both');">Delete Both</button>`;
+
+                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px;">' + name + '</td>';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+                html += '<td style="padding:7px 10px;">' + email + '</td>';
+                html += '<td style="padding:7px 10px;">' + telephone + '</td>';
+                html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
+                html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(2,max-content);gap:4px;align-items:start;">' + tctBtn + botBtn + bothBtn + '</div></td>';
+                html += '</tr>';
+              });
+
+              html += '</tbody></table>';
+              resultsEl.innerHTML = html;
+            } catch (err) {
+              statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+            }
+
+            return false;
+          };
+        }
+      })();
+    </script>
     </section>
 
     <section class="tool-panel" data-panel="offboard">

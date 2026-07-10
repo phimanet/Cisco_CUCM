@@ -256,6 +256,7 @@ Priority keys:
 - Hardened Start Here prefill action buttons (Build Jabber/iPhone/Android, Reset PIN, Name Update) with direct DOM fallback panel-switch/prefill logic when global prefill helper is unavailable, addressing full no-op behavior while keeping email resend actions unchanged.
 - Fixed **Remove only Jabber Mobile** search on both Menu and Administrative pages: form submission is now explicitly JS-driven (no native page submit fallback), preventing unwanted redirect to Start Here and restoring search execution on button click.
 - Hardened mobile-delete search inline hooks for browser compatibility by removing dependence on inline `event` object and adding explicit missing-handler status messaging if JS does not load.
+- Added panel-local fallback script in Menu -> Remove only Jabber Mobile so `runMenuMobileDeleteSearch` and delete actions are defined directly at panel render time, preventing no-op search when downstream script registration is skipped.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
