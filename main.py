@@ -18454,10 +18454,11 @@ def menu_admin_page(request: Request):
           <input name="pattern_query" placeholder="55512" required><br><br>
 
           <button type="submit">Search Translation Patterns</button>
-          <button type="button" id="admin-trans-pattern-list-all" style="margin-left:8px; background:linear-gradient(180deg,#1d4f91,#12386a);">List All Translation Patterns</button>
+          <button type="button" id="admin-trans-pattern-list-download" style="margin-left:8px; background:linear-gradient(180deg,#1d4f91,#12386a);">List and Download</button>
         </form>
 
         <p id="admin-trans-pattern-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a pattern and click Search.</p>
+        <p><a id="admin-trans-pattern-download" href="#" style="display:none; font-weight:700;">Download Translation Pattern CSV</a></p>
         <div id="admin-trans-pattern-results" style="overflow-x:auto;"></div>
       </section>
 
@@ -20010,7 +20011,8 @@ def menu_admin_page(request: Request):
           const form = document.getElementById("admin-trans-pattern-form");
           const statusEl = document.getElementById("admin-trans-pattern-status");
           const resultsEl = document.getElementById("admin-trans-pattern-results");
-          const listAllBtn = document.getElementById("admin-trans-pattern-list-all");
+          const listDownloadBtn = document.getElementById("admin-trans-pattern-list-download");
+          const downloadEl = document.getElementById("admin-trans-pattern-download");
 
           if (!form || !statusEl || !resultsEl) return;
 
@@ -20081,9 +20083,36 @@ def menu_admin_page(request: Request):
             }
           }
 
+          function buildTranslationPatternCsv(rows) {
+            const headers = ["pattern", "route_partition", "description", "called_party_transform_mask"];
+            const escapeCsv = function (value) {
+              const text = String(value == null ? "" : value);
+              if (/[",\n]/.test(text)) {
+                return '"' + text.replace(/"/g, '""') + '"';
+              }
+              return text;
+            };
+
+            const lines = [headers.join(",")];
+            (rows || []).forEach(function (row) {
+              lines.push([
+                row.pattern || "",
+                row.route_partition || "",
+                row.description || "",
+                row.called_party_transform_mask || "",
+              ].map(escapeCsv).join(","));
+            });
+            return lines.join("\n") + "\n";
+          }
+
           async function runLookup(listAllMode) {
             statusEl.textContent = listAllMode ? "Loading all translation patterns..." : "Searching translation patterns...";
             resultsEl.innerHTML = "";
+            if (downloadEl) {
+              downloadEl.style.display = "none";
+              downloadEl.removeAttribute("href");
+              downloadEl.removeAttribute("download");
+            }
 
             try {
               const formData = new FormData(form);
@@ -20111,6 +20140,23 @@ def menu_admin_page(request: Request):
               statusEl.textContent = listAllMode
                 ? `Loaded ${results.length} translation pattern(s).`
                 : `Found ${results.length} translation pattern(s).`;
+
+              if (listAllMode && downloadEl) {
+                const csvText = buildTranslationPatternCsv(results);
+                const blob = new Blob([csvText], { type: "text/csv;charset=utf-8" });
+                const objectUrl = URL.createObjectURL(blob);
+                const filename = "translation_patterns_list.csv";
+                downloadEl.href = objectUrl;
+                downloadEl.download = filename;
+                downloadEl.style.display = "inline";
+
+                const autoLink = document.createElement("a");
+                autoLink.href = objectUrl;
+                autoLink.download = filename;
+                document.body.appendChild(autoLink);
+                autoLink.click();
+                document.body.removeChild(autoLink);
+              }
 
               let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
               html += '<thead><tr style="background:#005eb8; color:#fff;">';
@@ -20173,8 +20219,8 @@ def menu_admin_page(request: Request):
             await runLookup(false);
           });
 
-          if (listAllBtn) {
-            listAllBtn.addEventListener("click", async function () {
+          if (listDownloadBtn) {
+            listDownloadBtn.addEventListener("click", async function () {
               await runLookup(true);
             });
           }
