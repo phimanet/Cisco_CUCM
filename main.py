@@ -18446,14 +18446,14 @@ def menu_admin_page(request: Request):
       <section class="panel tool-panel" data-panel="translookup">
         <h3>Translation Pattern Lookup</h3>
         <p>Search translation patterns and return pattern, description, and called party transform mask.</p>
-        <form id="admin-trans-pattern-form">
+        <form id="admin-trans-pattern-form" action="javascript:void(0)" method="post" onsubmit="if (window.runAdminTransPatternLookup) { window.runAdminTransPatternLookup(false); } return false;">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
 
           Pattern contains:<br>
           <input name="pattern_query" placeholder="55512" required><br><br>
 
-          <button type="submit">Search Translation Patterns</button>
+          <button type="button" onclick="if (window.runAdminTransPatternLookup) { window.runAdminTransPatternLookup(false); } else { var s=document.getElementById('admin-trans-pattern-status'); if (s) { s.textContent='Search handler missing (JS did not load).'; } } return false;">Search Translation Patterns</button>
           <button type="button" id="admin-trans-pattern-list-download" style="margin-left:8px; background:linear-gradient(180deg,#1d4f91,#12386a);">List and Download</button>
         </form>
 
@@ -20105,7 +20105,7 @@ def menu_admin_page(request: Request):
             return lines.join("\n") + "\n";
           }
 
-          async function runLookup(listAllMode) {
+          window.runAdminTransPatternLookup = async function (listAllMode) {
             statusEl.textContent = listAllMode ? "Loading all translation patterns..." : "Searching translation patterns...";
             resultsEl.innerHTML = "";
             if (downloadEl) {
@@ -20212,16 +20212,16 @@ def menu_admin_page(request: Request):
             } catch (err) {
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
             }
-          }
+          };
 
           form.addEventListener("submit", async function (event) {
             event.preventDefault();
-            await runLookup(false);
+            await window.runAdminTransPatternLookup(false);
           });
 
           if (listDownloadBtn) {
             listDownloadBtn.addEventListener("click", async function () {
-              await runLookup(true);
+              await window.runAdminTransPatternLookup(true);
             });
           }
         })();
