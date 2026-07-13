@@ -13049,6 +13049,7 @@ __ADMIN_CARD__
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Title</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Translated Number</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
@@ -13060,6 +13061,7 @@ __ADMIN_CARD__
               const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
               const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
               const ext = r.primary_extension || "\u2014";
+              const translatedNumber = (r.translated_number || "").trim() || "N/A";
               const title = r.title || "\u2014";
               const email = r.email || "\u2014";
               const telephone = r.telephone || "\u2014";
@@ -13093,6 +13095,7 @@ __ADMIN_CARD__
               html += '<td style="padding:7px 10px;">' + title + '</td>';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
               html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
+              html += '<td style="padding:7px 10px; font-weight:700; color:#12304a;">' + translatedNumber + '</td>';
               html += '<td style="padding:7px 10px;">' + email + '</td>';
               html += '<td style="padding:7px 10px;">' + telephone + '</td>';
               html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
@@ -19457,6 +19460,7 @@ def menu_admin_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Title</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Translated Number</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
@@ -19468,6 +19472,7 @@ def menu_admin_page(request: Request):
                 const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
                 const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
                 const ext = r.primary_extension || "\u2014";
+                const translatedNumber = (r.translated_number || "").trim() || "N/A";
                 const title = r.title || "\u2014";
                 const email = r.email || "\u2014";
                 const telephone = r.telephone || "\u2014";
@@ -19499,6 +19504,7 @@ def menu_admin_page(request: Request):
                 html += '<td style="padding:7px 10px;">' + title + '</td>';
                 html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
                 html += '<td style="padding:7px 10px; font-weight:700; color:#002f6c;">' + ext + '</td>';
+                html += '<td style="padding:7px 10px; font-weight:700; color:#12304a;">' + translatedNumber + '</td>';
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
                 html += '<td style="padding:7px 10px;">' + telephone + '</td>';
                 html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';

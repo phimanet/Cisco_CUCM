@@ -114,6 +114,25 @@ def _soap_get_phone(phone_name):
 </soapenv:Envelope>"""
 
 
+def _soap_list_trans_pattern_by_description(description_fragment):
+        return f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"{SOAPENV_NS}\" xmlns:axl=\"{AXL_NS}\">
+    <soapenv:Header/>
+    <soapenv:Body>
+        <axl:listTransPattern sequence=\"1\">
+            <searchCriteria>
+                <description>%{xml_escape(description_fragment.strip())}%</description>
+            </searchCriteria>
+            <returnedTags>
+                <pattern/>
+                <description/>
+                <calledPartyTransformationMask/>
+            </returnedTags>
+        </axl:listTransPattern>
+    </soapenv:Body>
+</soapenv:Envelope>"""
+
+
 def _parse_phone_lines(xml_text):
     if not xml_text:
         return []
@@ -149,6 +168,55 @@ def _device_type(name):
     if upper.startswith("TAB"):
         return "TAB (Jabber Tablet)"
     return "Phone"
+
+
+def _parse_trans_patterns(xml_text):
+    if not xml_text:
+        return []
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return []
+
+    rows = []
+    for elem in root.iter():
+        if _strip_ns(elem.tag) != "transPattern":
+            continue
+        pattern = _find_first_text(elem, [["pattern"]])
+        description = _find_first_text(elem, [["description"]])
+        mask = _find_first_text(elem, [["calledPartyTransformationMask"], ["calledPartyTransformMask"]])
+        if pattern:
+            rows.append({
+                "pattern": pattern,
+                "description": description,
+                "mask": mask,
+            })
+    return rows
+
+
+def _lookup_translated_number(session, cucm_host, first_name, last_name, extension_candidates):
+    clean_first = (first_name or "").strip()
+    clean_last = (last_name or "").strip()
+    mask_candidates = {str(ext or "").strip() for ext in (extension_candidates or []) if str(ext or "").strip()}
+    if not clean_first or not clean_last or not mask_candidates:
+        return ""
+
+    description_fragment = f"{clean_first} {clean_last}".strip()
+    try:
+        list_xml = _axl_post(session, cucm_host, _soap_list_trans_pattern_by_description(description_fragment))
+    except Exception:
+        return ""
+
+    matches = []
+    for row in _parse_trans_patterns(list_xml):
+        if (row.get("mask") or "").strip() in mask_candidates:
+            matches.append((row.get("pattern") or "").strip())
+
+    if not matches:
+        return ""
+
+    # Keep a stable, deterministic selection if multiple patterns match the same person/mask.
+    return sorted(set(matches))[0]
 
 
 def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_name=""):
@@ -230,6 +298,7 @@ def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_nam
         # Look up each device for its lines
         devices = []
         primary_ext = ""
+        extension_candidates = []
         for dev_name in associated:
             try:
                 phone_xml = _axl_post(session, cucm_host, _soap_get_phone(dev_name))
@@ -243,6 +312,15 @@ def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_nam
             })
             if not primary_ext and lines:
                 primary_ext = lines[0]
+            extension_candidates.extend(lines)
+
+        translated_number = _lookup_translated_number(
+            session,
+            cucm_host,
+            _find_first_text(user_node, [["firstName"]]),
+            _find_first_text(user_node, [["lastName"]]),
+            ([primary_ext] if primary_ext else []) + extension_candidates,
+        )
 
         results.append({
             "userid": _find_first_text(user_node, [["userid"]]) or uid,
@@ -253,6 +331,7 @@ def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_nam
             "email": _find_first_text(user_node, [["mailid"]]),
             "telephone": _find_first_text(user_node, [["telephoneNumber"], ["telephone"]]),
             "primary_extension": primary_ext,
+            "translated_number": translated_number,
             "devices": devices,
         })
 
