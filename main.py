@@ -20087,7 +20087,7 @@ def menu_admin_page(request: Request):
             const headers = ["pattern", "route_partition", "description", "called_party_transform_mask"];
             const escapeCsv = function (value) {
               const text = String(value == null ? "" : value);
-              if (/[",\n]/.test(text)) {
+              if (/[",\\n]/.test(text)) {
                 return '"' + text.replace(/"/g, '""') + '"';
               }
               return text;
@@ -20102,7 +20102,7 @@ def menu_admin_page(request: Request):
                 row.called_party_transform_mask || "",
               ].map(escapeCsv).join(","));
             });
-            return lines.join("\n") + "\n";
+            return lines.join("\\n") + "\\n";
           }
 
           window.runAdminTransPatternLookup = async function (listAllMode) {
