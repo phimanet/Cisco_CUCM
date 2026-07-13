@@ -5286,6 +5286,8 @@ def _wants_json_response(request: Request) -> bool:
     "/lookup/person",
     "/lookup/extension",
     "/lookup/translation-pattern",
+    "/translation-pattern/point-2481001",
+    "/translation-pattern/delete",
     "/translation-pattern/twilio-inbound-verification",
     "/inbound-callerid/block",
     "/bulk/lookup/person",
@@ -20010,6 +20012,73 @@ def menu_admin_page(request: Request):
 
           if (!form || !statusEl || !resultsEl) return;
 
+          function escapeHtml(value) {
+            return String(value == null ? "" : value)
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/\"/g, "&quot;")
+              .replace(/'/g, "&#39;");
+          }
+
+          async function runRowAction(action, item, rowEl, buttonEl) {
+            const pattern = (item && item.pattern) || "";
+            const routePartition = (item && item.route_partition) || "";
+            if (!pattern || !routePartition) {
+              throw new Error("Pattern and route partition are required for this action.");
+            }
+
+            const endpoint = action === "point"
+              ? "/translation-pattern/point-2481001"
+              : "/translation-pattern/delete";
+
+            const formData = new FormData();
+            formData.append("pattern", pattern);
+            formData.append("route_partition", routePartition);
+
+            const originalText = buttonEl ? buttonEl.textContent : "";
+            if (buttonEl) {
+              buttonEl.disabled = true;
+              buttonEl.textContent = action === "point" ? "Updating..." : "Deleting...";
+            }
+
+            try {
+              const response = await fetch(endpoint, {
+                method: "POST",
+                body: formData,
+                credentials: "same-origin",
+              });
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                const msg = (payload.error && payload.error.message) || "Action failed.";
+                throw new Error(msg);
+              }
+
+              statusEl.textContent = payload.message || "Action completed.";
+
+              if (action === "point") {
+                const updated = payload.result || {};
+                const descCell = rowEl ? rowEl.querySelector('td[data-col="description"]') : null;
+                const maskCell = rowEl ? rowEl.querySelector('td[data-col="mask"]') : null;
+                if (descCell) {
+                  descCell.textContent = updated.description || "\u2014";
+                }
+                if (maskCell) {
+                  maskCell.textContent = updated.called_party_transform_mask || "\u2014";
+                }
+              } else if (action === "delete") {
+                if (rowEl) {
+                  rowEl.remove();
+                }
+              }
+            } finally {
+              if (buttonEl) {
+                buttonEl.disabled = false;
+                buttonEl.textContent = originalText;
+              }
+            }
+          }
+
           form.addEventListener("submit", async function (event) {
             event.preventDefault();
             statusEl.textContent = "Searching translation patterns...";
@@ -20042,19 +20111,52 @@ def menu_admin_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Pattern</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Description</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Called Party Transform Mask</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
               html += '</tr></thead><tbody>';
 
               results.forEach(function (item, i) {
                 const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
-                html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
-                html += '<td style="padding:7px 10px; font-family:Consolas,monospace; color:#002f6c; font-weight:700;">' + (item.pattern || "\u2014") + '</td>';
-                html += '<td style="padding:7px 10px;">' + (item.description || "\u2014") + '</td>';
-                html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (item.called_party_transform_mask || "\u2014") + '</td>';
+                const pattern = item.pattern || "";
+                const routePartition = item.route_partition || "";
+                html += '<tr data-pattern="' + escapeHtml(pattern) + '" data-partition="' + escapeHtml(routePartition) + '" style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                html += '<td style="padding:7px 10px; font-family:Consolas,monospace; color:#002f6c; font-weight:700;">' + escapeHtml(item.pattern || "\u2014") + '</td>';
+                html += '<td data-col="description" style="padding:7px 10px;">' + escapeHtml(item.description || "\u2014") + '</td>';
+                html += '<td data-col="mask" style="padding:7px 10px; font-family:Consolas,monospace;">' + escapeHtml(item.called_party_transform_mask || "\u2014") + '</td>';
+                html += '<td style="padding:7px 10px; white-space:nowrap;">';
+                html += '<button type="button" data-trans-action="point" style="margin-right:6px; background:linear-gradient(180deg,#2563eb,#1d4ed8);">Point to 2481001</button>';
+                html += '<button type="button" data-trans-action="delete" style="background:linear-gradient(180deg,#9f1239,#7f1d1d);">Delete Translation</button>';
+                html += '</td>';
                 html += '</tr>';
               });
 
               html += '</tbody></table>';
               resultsEl.innerHTML = html;
+
+              resultsEl.querySelectorAll('button[data-trans-action]').forEach(function (btn) {
+                btn.addEventListener("click", async function () {
+                  const action = (btn.getAttribute("data-trans-action") || "").trim().toLowerCase();
+                  const rowEl = btn.closest("tr");
+                  const item = {
+                    pattern: rowEl ? (rowEl.getAttribute("data-pattern") || "") : "",
+                    route_partition: rowEl ? (rowEl.getAttribute("data-partition") || "") : "",
+                  };
+
+                  if (action === "delete") {
+                    const patternLabel = item.pattern || "(unknown)";
+                    const partitionLabel = item.route_partition || "(unknown partition)";
+                    const confirmed = window.confirm(`Delete translation pattern ${patternLabel}/${partitionLabel}?`);
+                    if (!confirmed) {
+                      return;
+                    }
+                  }
+
+                  try {
+                    await runRowAction(action, item, rowEl, btn);
+                  } catch (err) {
+                    statusEl.textContent = "Action failed: " + ((err && err.message) || "Unknown error.");
+                  }
+                });
+              });
             } catch (err) {
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
             }
@@ -25768,6 +25870,169 @@ def lookup_translation_pattern_route(
 
     results = lookup_translation_patterns(cucm_host, cucm_user, cucm_pass, clean_pattern)
     return JSONResponse({"ok": True, "query": clean_pattern, "results": results})
+
+
+def _update_translation_pattern_to_available_2481001(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  pattern: str,
+  route_partition: str,
+) -> dict:
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (route_partition or "").strip()
+  if not clean_pattern or not clean_partition:
+    raise RuntimeError("pattern and route_partition are required")
+
+  new_mask = STRIKE_MASK_AVAILABLE_TRANSFORM_MASK
+  new_description = f"{clean_pattern} - Available {new_mask}"
+
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:updateTransPattern sequence=\"1\">
+      <pattern>{xml_escape(clean_pattern)}</pattern>
+      <routePartitionName>{xml_escape(clean_partition)}</routePartitionName>
+      <description>{xml_escape(new_description)}</description>
+      <calledPartyTransformationMask>{xml_escape(new_mask)}</calledPartyTransformationMask>
+    </axl:updateTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=soap.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    verify=False,
+    timeout=60,
+  )
+  if response.status_code != 200:
+    raise RuntimeError(f"updateTransPattern failed HTTP {response.status_code}: {response.text[:800]}")
+
+  return {
+    "pattern": clean_pattern,
+    "route_partition": clean_partition,
+    "description": new_description,
+    "called_party_transform_mask": new_mask,
+  }
+
+
+def _delete_translation_pattern_by_pattern_partition(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  pattern: str,
+  route_partition: str,
+):
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (route_partition or "").strip()
+  if not clean_pattern or not clean_partition:
+    raise RuntimeError("pattern and route_partition are required")
+
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:removeTransPattern sequence=\"1\">
+      <pattern>{xml_escape(clean_pattern)}</pattern>
+      <routePartitionName>{xml_escape(clean_partition)}</routePartitionName>
+    </axl:removeTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=soap.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    verify=False,
+    timeout=60,
+  )
+  if response.status_code != 200:
+    raise RuntimeError(f"removeTransPattern failed HTTP {response.status_code}: {response.text[:800]}")
+
+
+@app.post("/translation-pattern/point-2481001")
+def translation_pattern_point_2481001_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  pattern: str = Form(...),
+  route_partition: str = Form(...),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+  result = _update_translation_pattern_to_available_2481001(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    pattern=pattern,
+    route_partition=route_partition,
+  )
+
+  _append_audit_event(
+    action="translation_pattern_point_2481001",
+    cucm_host=cucm_host,
+    operator=cucm_user,
+    target=f"{result.get('pattern', '')}/{result.get('route_partition', '')}",
+    output_filename="inline_json_ok",
+    inline_mode=True,
+  )
+
+  return JSONResponse({
+    "ok": True,
+    "message": f"Updated {result.get('pattern', '')}/{result.get('route_partition', '')} to Available 2481001.",
+    "result": result,
+  })
+
+
+@app.post("/translation-pattern/delete")
+def translation_pattern_delete_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  pattern: str = Form(...),
+  route_partition: str = Form(...),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (route_partition or "").strip()
+  _delete_translation_pattern_by_pattern_partition(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    pattern=clean_pattern,
+    route_partition=clean_partition,
+  )
+
+  _append_audit_event(
+    action="translation_pattern_delete",
+    cucm_host=cucm_host,
+    operator=cucm_user,
+    target=f"{clean_pattern}/{clean_partition}",
+    output_filename="inline_json_ok",
+    inline_mode=True,
+  )
+
+  return JSONResponse({
+    "ok": True,
+    "message": f"Deleted translation pattern {clean_pattern}/{clean_partition}.",
+  })
 
 
 @app.post("/translation-pattern/template/from-example")
