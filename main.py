@@ -18454,6 +18454,7 @@ def menu_admin_page(request: Request):
           <input name="pattern_query" placeholder="55512" required><br><br>
 
           <button type="submit">Search Translation Patterns</button>
+          <button type="button" id="admin-trans-pattern-list-all" style="margin-left:8px; background:linear-gradient(180deg,#1d4f91,#12386a);">List All Translation Patterns</button>
         </form>
 
         <p id="admin-trans-pattern-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a pattern and click Search.</p>
@@ -20009,6 +20010,7 @@ def menu_admin_page(request: Request):
           const form = document.getElementById("admin-trans-pattern-form");
           const statusEl = document.getElementById("admin-trans-pattern-status");
           const resultsEl = document.getElementById("admin-trans-pattern-results");
+          const listAllBtn = document.getElementById("admin-trans-pattern-list-all");
 
           if (!form || !statusEl || !resultsEl) return;
 
@@ -20079,13 +20081,15 @@ def menu_admin_page(request: Request):
             }
           }
 
-          form.addEventListener("submit", async function (event) {
-            event.preventDefault();
-            statusEl.textContent = "Searching translation patterns...";
+          async function runLookup(listAllMode) {
+            statusEl.textContent = listAllMode ? "Loading all translation patterns..." : "Searching translation patterns...";
             resultsEl.innerHTML = "";
 
             try {
               const formData = new FormData(form);
+              if (listAllMode) {
+                formData.set("pattern_query", "%");
+              }
               const response = await fetch("/lookup/translation-pattern", {
                 method: "POST",
                 body: formData,
@@ -20104,7 +20108,9 @@ def menu_admin_page(request: Request):
                 return;
               }
 
-              statusEl.textContent = `Found ${results.length} translation pattern(s).`;
+              statusEl.textContent = listAllMode
+                ? `Loaded ${results.length} translation pattern(s).`
+                : `Found ${results.length} translation pattern(s).`;
 
               let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
               html += '<thead><tr style="background:#005eb8; color:#fff;">';
@@ -20160,7 +20166,18 @@ def menu_admin_page(request: Request):
             } catch (err) {
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
             }
+          }
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            await runLookup(false);
           });
+
+          if (listAllBtn) {
+            listAllBtn.addEventListener("click", async function () {
+              await runLookup(true);
+            });
+          }
         })();
       </script>
 
