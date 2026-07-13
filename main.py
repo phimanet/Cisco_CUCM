@@ -349,6 +349,7 @@ ADMIN_USERS = {
   for u in (os.getenv("ADMIN_USERS", "") or "").split(",")
   if (u or "").strip()
 }
+UNIFIED_MESSAGING_SECURITY_GROUP = "AzAppReg_CiscoUnity-PROD_EmailIntegration"
 AUDIT_RETENTION_DAYS = 365
 AUDIT_FIELDS = [
   "timestamp",
@@ -10199,6 +10200,53 @@ def _append_result_row(csv_data, step: str, status: str, details: str) -> bytes:
     writer = csv.writer(output)
     writer.writerow([step, status, details])
     return output.getvalue().encode("utf-8")
+
+
+def _ensure_unified_messaging_security_group_membership(
+  target_user: str,
+  cucm_user: str,
+  cucm_pass: str,
+) -> tuple[str, str]:
+  clean_target_user = (target_user or "").strip()
+  if not clean_target_user:
+    return "Skipped", "Target user is blank; membership check skipped"
+
+  auth_context = {
+    "username": (cucm_user or "").strip(),
+    "password": (cucm_pass or "").strip(),
+  }
+
+  check_ok, check_result, check_error = manage_ad_group_membership(
+    clean_target_user,
+    UNIFIED_MESSAGING_SECURITY_GROUP,
+    "check",
+    auth_context=auth_context,
+  )
+  if not check_ok:
+    return "Failed", f"Membership check failed for {UNIFIED_MESSAGING_SECURITY_GROUP}: {check_error or 'Unknown error'}"
+
+  check_source = str((check_result or {}).get("source", "")).strip() or "unknown"
+  if bool((check_result or {}).get("isMember")):
+    return "Success", f"Already a member of {UNIFIED_MESSAGING_SECURITY_GROUP} (source={check_source})"
+
+  add_ok, add_result, add_error = manage_ad_group_membership(
+    clean_target_user,
+    UNIFIED_MESSAGING_SECURITY_GROUP,
+    "add",
+    auth_context=auth_context,
+  )
+  if not add_ok:
+    if bool((add_result or {}).get("isMember")):
+      add_source = str((add_result or {}).get("source", "")).strip() or check_source
+      return "Success", f"Already a member of {UNIFIED_MESSAGING_SECURITY_GROUP} (source={add_source})"
+    return "Failed", f"Failed to add to {UNIFIED_MESSAGING_SECURITY_GROUP}: {add_error or 'Unknown error'}"
+
+  add_source = str((add_result or {}).get("source", "")).strip() or check_source
+  changed = bool((add_result or {}).get("changed"))
+  message = str((add_result or {}).get("message", "")).strip()
+  if changed:
+    return "Success", f"Added to {UNIFIED_MESSAGING_SECURITY_GROUP} (source={add_source})"
+  return "Success", message or f"Already a member of {UNIFIED_MESSAGING_SECURITY_GROUP} (source={add_source})"
 
 
 def _lookup_user_contact(cucm_host: str, cucm_user: str, cucm_pass: str, target_user: str) -> tuple[str, str]:
@@ -25382,6 +25430,20 @@ async def build_user_csf_phone(
       output_filename=filename,
       inline_mode=inline,
     )
+
+    voicemail_ready = _csv_has_success_step(data, {"Unity Voicemail"})
+    if voicemail_ready:
+      group_status, group_details = _ensure_unified_messaging_security_group_membership(
+        target_user=clean_target_user,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+      )
+    else:
+      group_status, group_details = (
+        "Skipped",
+        "Unity Voicemail did not complete successfully; security-group update skipped",
+      )
+    data = _append_result_row(data, "Unified Messaging Security Group", group_status, group_details)
 
     build_ready_for_email = _csv_has_success_step(data, {"Add Phone", "Update User", "Unity Voicemail"})
     if build_ready_for_email:
