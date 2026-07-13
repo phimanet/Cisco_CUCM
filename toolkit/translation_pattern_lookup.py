@@ -10,7 +10,7 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 SOAPENV_NS = "http://schemas.xmlsoap.org/soap/envelope/"
 AXL_NS = "http://www.cisco.com/AXL/API/15.0"
-MAX_RESULTS = 200
+MAX_RESULTS = 5000
 
 
 def _strip_ns(tag):
