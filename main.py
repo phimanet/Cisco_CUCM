@@ -5305,6 +5305,14 @@ def _wants_json_response(request: Request) -> bool:
     "/cert-manager/lab/inventory",
     "/ops/integrations/feasibility",
     "/ops/parity-report",
+    "/admin/separation-sms-report/config",
+    "/admin/separation-sms-report/save-config",
+    "/admin/separation-sms-report/run",
+    "/admin/separation-sms-report/history",
+    "/admin/dn-avail-report/config",
+    "/admin/dn-avail-report/save-config",
+    "/admin/dn-avail-report/run",
+    "/admin/dn-avail-report/history",
   }:
     return True
   return False
