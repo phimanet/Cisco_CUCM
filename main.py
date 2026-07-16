@@ -11744,6 +11744,12 @@ def genesys_admin_placeholder(request: Request):
                     status: response.status,
                     ok: response.ok,
                     payload_ok: Boolean(payload && payload.ok),
+                    requested: Number((payload && payload.requested) || 0),
+                    success_count: Number((payload && payload.success_count) || 0),
+                    failure_count: Number((payload && payload.failure_count) || 0),
+                    first_error: (Array.isArray(payload && payload.results) && payload.results.find(function (r) { return !(r && r.ok); })
+                      ? String((payload.results.find(function (r) { return !(r && r.ok); }) || {}).error || "")
+                      : ""),
                   });
 
                   if (!response.ok || !payload.ok) {
@@ -12024,6 +12030,12 @@ def genesys_admin_placeholder(request: Request):
                 status: batchResponse.status,
                 ok: batchResponse.ok,
                 payload_ok: Boolean(batchPayload && batchPayload.ok),
+                requested: Number((batchPayload && batchPayload.requested) || 0),
+                success_count: Number((batchPayload && batchPayload.success_count) || 0),
+                failure_count: Number((batchPayload && batchPayload.failure_count) || 0),
+                first_error: (Array.isArray(batchPayload && batchPayload.results) && batchPayload.results.find(function (r) { return !(r && r.ok); })
+                  ? String((batchPayload.results.find(function (r) { return !(r && r.ok); }) || {}).error || "")
+                  : ""),
               });
               if (!batchResponse.ok || !batchPayload.ok) {
                 throw new Error((batchPayload && batchPayload.error) || "Batch build failed.");
