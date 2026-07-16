@@ -11549,12 +11549,12 @@ def genesys_admin_placeholder(request: Request):
 
           <div id="genesys-bulk-email-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
             <h3 style="margin-top:0;">Bulk WebRTC build</h3>
-            <form id="genesys-bulk-email-form" onsubmit="return window._genesysBulkEmailInlineSubmit ? window._genesysBulkEmailInlineSubmit(event) : false;">
+            <form id="genesys-bulk-email-form" onsubmit="return window._genesysBulkEmailInlineSubmit ? window._genesysBulkEmailInlineSubmit() : false;">
               <div class="search-filter-row" style="align-items:flex-start;">
                 <textarea name="email_list" placeholder="Paste 1 or more email addresses here, one per line or comma-separated." style="width:100%; min-height:170px; resize:vertical; padding:10px; border-radius:10px; border:1px solid var(--amn-border);"></textarea>
               </div>
               <div class="search-filter-row">
-                <button type="button" id="genesys-bulk-email-build-btn" style="background:#2d7a43;" onclick="if(window._genesysBulkEmailInlineSubmit){window._genesysBulkEmailInlineSubmit(event);}">Build WebRTC Phones</button>
+                <button type="submit" id="genesys-bulk-email-build-btn" style="background:#2d7a43;">Build WebRTC Phones</button>
                 <span id="genesys-bulk-email-count" style="font-size:12px; color:#4e6a84;">Paste email addresses to queue builds.</span>
               </div>
             </form>
