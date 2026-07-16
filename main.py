@@ -11306,13 +11306,13 @@ def genesys_admin_placeholder(request: Request):
       <div class="portal-shell">
         <aside class="portal-sidebar">
           <h4>Genesys Menu</h4>
-          <button type="button" class="portal-nav-btn active" data-panel-target="genesys-user-panel">Extract User by Name</button>
+          <button type="button" class="portal-nav-btn active" data-panel-target="genesys-user-panel">Genesys User WebRTC Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel">Queue Lookup</button>
         </aside>
 
         <section class="portal-main">
           <div id="genesys-user-panel" class="panel genesys-panel">
-            <h3 style="margin-top:0;">Extract User by Name</h3>
+            <h3 style="margin-top:0;">Genesys User WebRTC Lookup</h3>
 
             <form id="genesys-user-search-form">
               <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
