@@ -1329,12 +1329,42 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
       "create_mode": create_mode,
     }
 
-  ok_assoc, _, assoc_err, assoc_status = _genesys_send_json(
-    "PUT",
-    api_base,
-    access_token,
-    f"/api/v2/users/{resolved_user_id}/station/defaultstation/{station_id}",
-  )
+  ok_assoc = False
+  assoc_err = ""
+  assoc_status = 0
+  assoc_retry_notes = []
+  for assoc_attempt in range(6):
+    ok_assoc, _, assoc_err, assoc_status = _genesys_send_json(
+      "PUT",
+      api_base,
+      access_token,
+      f"/api/v2/users/{resolved_user_id}/station/defaultstation/{station_id}",
+    )
+    if ok_assoc or assoc_status == 202:
+      break
+
+    assoc_err_text = str(assoc_err or "").strip().lower()
+    retry_station_not_ready = assoc_status == 404 and "station" in assoc_err_text and "not found" in assoc_err_text
+    if not retry_station_not_ready or assoc_attempt >= 5:
+      break
+
+    assoc_retry_notes.append(f"PUT {assoc_status} {assoc_err}")
+    # Genesys can briefly return 404 for a just-created station; re-resolve and retry.
+    ok_stations_retry, stations_body_retry, stations_err_retry = _genesys_get_json(
+      api_base,
+      access_token,
+      "/api/v2/stations",
+      params={"webRtcUserId": resolved_user_id},
+    )
+    if ok_stations_retry:
+      entities_retry = stations_body_retry.get("entities", []) if isinstance(stations_body_retry, dict) else []
+      refreshed_station_id = _pick_station_id(entities_retry, created_phone_id, created_phone_name)
+      if refreshed_station_id:
+        station_id = refreshed_station_id
+    else:
+      assoc_retry_notes.append(f"station refresh failed: {stations_err_retry or 'Unknown error'}")
+
+    time.sleep(1)
 
   association_result = "Created"
   if ok_assoc:
@@ -1376,7 +1406,7 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
         "association_result": association_result,
       }
     else:
-      failure_reason = " | ".join([part for part in [f"PUT {assoc_status} {assoc_err}".strip(), *verification_errors] if part]).strip()
+      failure_reason = " | ".join([part for part in [f"PUT {assoc_status} {assoc_err}".strip(), *assoc_retry_notes, *verification_errors] if part]).strip()
       if not failure_reason:
         failure_reason = "Genesys did not expose the WebRTC station on the user record after assignment."
       return {
