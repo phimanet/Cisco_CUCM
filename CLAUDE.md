@@ -264,6 +264,11 @@ Priority keys:
 - Added offboard action-button prefill fallback between Admin search and Main Offboard panel using sessionStorage handoff (`menu_prefill_panel` / `menu_prefill_target_user`) so selected usernames carry reliably into Separate Employee workflow.
 - Added panel-local Offboard prefill hydration in the Offboard script (URL `target_user` + sessionStorage fallback) to guarantee target user population even when global menu prefill script does not run.
 
+### 2026-07-16
+- Genesys Admin page now includes a bulk start action: **Start Build Missing WebRTC Phones**, which queues all currently listed users missing WebRTC phones and runs one batch build request.
+- Added backend batch route `/genesys/users/build-webrtc-batch` to process up to 100 users per run with a single Genesys token and per-user success/failure output.
+- Genesys user result rows now update in-place after single or batch build runs (WebRTC phone column + action state), and the page displays a batch summary with failed-user details.
+
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
 - Verified LAB parity after pull/restart: `/healthz` now returns `git_commit":"0c59386"` and service is healthy.

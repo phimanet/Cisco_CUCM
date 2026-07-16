@@ -5261,6 +5261,7 @@ def _is_public_path(path: str):
     "/genesys/queues/lookup",
     "/genesys/queues/extract-all",
     "/genesys/users/build-webrtc",
+    "/genesys/users/build-webrtc-batch",
     "/genesys/users/queues-by-id",
     "/healthz",
     "/api/dashboard/stats",
@@ -11050,8 +11051,13 @@ def genesys_admin_placeholder(request: Request):
             </form>
 
             <p id="genesys-user-search-status" style="color:#2c5c8a; min-height:18px;">Ready.</p>
+            <div id="genesys-bulk-build-wrap" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:4px 0 8px 0;">
+              <button type="button" id="genesys-build-missing-btn" style="background:#2d7a43;" disabled>Start Build Missing WebRTC Phones</button>
+              <span id="genesys-build-missing-count" style="font-size:12px; color:#4e6a84;">No build queue loaded.</span>
+            </div>
             <div id="genesys-user-raw-download" style="margin:6px 0 10px 0;"></div>
             <div id="genesys-user-search-results" style="overflow-x:auto;"></div>
+            <div id="genesys-build-summary" style="display:none; margin-top:10px; border:1px solid #c8dbee; border-radius:8px; background:#f8fcff; padding:10px;"></div>
             <div id="genesys-user-debug-wrap" style="display:none; margin-top:10px;">
               <h4 style="margin:0 0 6px 0; color:#0a2f5d;">Debug Output</h4>
               <pre id="genesys-user-debug" style="margin:0; max-height:260px; overflow:auto; background:#f5f9ff; border:1px solid #c8dbee; border-radius:8px; padding:10px; font-size:12px; line-height:1.35;"></pre>
@@ -11079,6 +11085,9 @@ def genesys_admin_placeholder(request: Request):
       (function () {
         const form = document.getElementById("genesys-user-search-form");
         const statusEl = document.getElementById("genesys-user-search-status");
+        const bulkBuildBtn = document.getElementById("genesys-build-missing-btn");
+        const bulkBuildCountEl = document.getElementById("genesys-build-missing-count");
+        const buildSummaryEl = document.getElementById("genesys-build-summary");
         const rawDownloadEl = document.getElementById("genesys-user-raw-download");
         const resultsEl = document.getElementById("genesys-user-search-results");
         const debugWrapEl = document.getElementById("genesys-user-debug-wrap");
@@ -11091,6 +11100,73 @@ def genesys_admin_placeholder(request: Request):
         const queueResultsEl = document.getElementById("genesys-queue-search-results");
         const queueRawDownloadEl = document.getElementById("genesys-queue-raw-download");
         const queueExtractAllBtn = document.getElementById("genesys-queue-extract-all-btn");
+        let lastUserRows = [];
+
+        function _escapeHtml(value) {
+          return String(value || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        function _setBulkBuildState(rows) {
+          const items = Array.isArray(rows) ? rows : [];
+          const pending = items.filter(function (row) {
+            const userId = String((row && row.id) || "").trim();
+            return Boolean(userId) && Boolean(row && row.can_build_webrtc);
+          });
+
+          if (bulkBuildBtn) {
+            bulkBuildBtn.disabled = pending.length === 0;
+          }
+          if (bulkBuildCountEl) {
+            bulkBuildCountEl.textContent = pending.length
+              ? ("Build queue ready: " + pending.length + " user(s) missing WebRTC phones.")
+              : "No users are currently queued for WebRTC build.";
+          }
+        }
+
+        function _setBuildSummary(html, show) {
+          if (!buildSummaryEl) {
+            return;
+          }
+          buildSummaryEl.innerHTML = String(html || "");
+          buildSummaryEl.style.display = show ? "block" : "none";
+        }
+
+        function _markBuildSuccess(btn, buildPayload) {
+          if (!btn) {
+            return;
+          }
+          btn.disabled = true;
+          btn.textContent = "Built";
+          btn.style.background = "#2d7a43";
+          btn.style.color = "#fff";
+
+          const tr = btn.closest("tr");
+          const phoneCell = tr ? tr.querySelector(".genesys-webrtc-phone-cell") : null;
+          if (phoneCell && buildPayload && buildPayload.phone_name) {
+            phoneCell.textContent = String(buildPayload.phone_name || "");
+          }
+        }
+
+        async function _runSingleBuild(userId, userName) {
+          const buildForm = new FormData();
+          buildForm.append("user_id", userId);
+          buildForm.append("user_name", userName);
+
+          const buildResponse = await fetch("/genesys/users/build-webrtc", {
+            method: "POST",
+            body: buildForm,
+          });
+          const buildPayload = await buildResponse.json();
+          if (!buildResponse.ok || !buildPayload.ok) {
+            throw new Error((buildPayload && buildPayload.error) || "Build failed.");
+          }
+          return buildPayload;
+        }
 
         function renderUserDebug(payload) {
           if (!debugWrapEl || !debugEl) {
@@ -11138,6 +11214,9 @@ def genesys_admin_placeholder(request: Request):
             statusEl.textContent = "Running Genesys lookup...";
             rawDownloadEl.innerHTML = "";
             resultsEl.innerHTML = "";
+            _setBuildSummary("", false);
+            lastUserRows = [];
+            _setBulkBuildState([]);
             renderUserDebug(null);
 
             try {
@@ -11179,16 +11258,19 @@ def genesys_admin_placeholder(request: Request):
                 return;
               }
 
+              lastUserRows = rows;
+              _setBulkBuildState(lastUserRows);
+
               let html = "<table><thead><tr>";
               html += "<th>Name</th><th>Username</th><th>Division</th><th>WebRTC Phone</th><th>Action</th><th>Template Source</th><th>Template Phone</th><th>Template Site ID</th><th>Template Base Settings</th><th>Template Lines</th><th>ACD Skills</th><th>Queues</th><th>Queue Source</th><th>State</th>";
               html += "</tr></thead><tbody>";
               rows.forEach(function (row, i) {
                 const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
-                html += "<tr style='background:" + bg + ";'>";
+                html += "<tr style='background:" + bg + ";' data-user-id='" + (row.id || "") + "'>";
                 html += "<td>" + (row.name || "") + "</td>";
                 html += "<td>" + (row.username || "") + "</td>";
                 html += "<td>" + (row.division || "") + "</td>";
-                html += "<td>" + (row.webrtc_phone || "") + "</td>";
+                html += "<td class='genesys-webrtc-phone-cell'>" + (row.webrtc_phone || "") + "</td>";
                 if (row.can_build_webrtc) {
                   html += "<td><button type='button' class='genesys-build-btn' data-user-id='" + (row.id || "") + "' data-user-name='" + (row.name || "") + "'>Build + Associate</button></td>";
                 } else {
@@ -11221,22 +11303,19 @@ def genesys_admin_placeholder(request: Request):
                   statusEl.textContent = "Building WebRTC phone for " + userName + "...";
 
                   try {
-                    const buildForm = new FormData();
-                    buildForm.append("user_id", userId);
-                    buildForm.append("user_name", userName);
-
-                    const buildResponse = await fetch("/genesys/users/build-webrtc", {
-                      method: "POST",
-                      body: buildForm,
+                    const buildPayload = await _runSingleBuild(userId, userName);
+                    _markBuildSuccess(btn, buildPayload);
+                    lastUserRows = lastUserRows.map(function (row) {
+                      if (String((row && row.id) || "") !== userId) {
+                        return row;
+                      }
+                      const copy = Object.assign({}, row);
+                      copy.webrtc_phone = String(buildPayload.phone_name || copy.webrtc_phone || "");
+                      copy.can_build_webrtc = false;
+                      copy.has_webrtc_phone = true;
+                      return copy;
                     });
-                    const buildPayload = await buildResponse.json();
-                    if (!buildResponse.ok || !buildPayload.ok) {
-                      throw new Error((buildPayload && buildPayload.error) || "Build failed.");
-                    }
-
-                    btn.textContent = "Built";
-                    btn.style.background = "#2d7a43";
-                    btn.style.color = "#fff";
+                    _setBulkBuildState(lastUserRows);
                     statusEl.textContent = "Build success for " + userName + ": " + (buildPayload.phone_name || "") + " (" + (buildPayload.association_result || "") + ")";
                   } catch (buildErr) {
                     btn.disabled = false;
@@ -11245,6 +11324,109 @@ def genesys_admin_placeholder(request: Request):
                   }
                 });
               });
+
+              if (bulkBuildBtn) {
+                bulkBuildBtn.onclick = async function () {
+                  const pendingUsers = lastUserRows
+                    .filter(function (row) {
+                      const rowUserId = String((row && row.id) || "").trim();
+                      return Boolean(rowUserId) && Boolean(row && row.can_build_webrtc);
+                    })
+                    .map(function (row) {
+                      return {
+                        user_id: String(row.id || "").trim(),
+                        user_name: String(row.name || "").trim(),
+                      };
+                    });
+
+                  if (!pendingUsers.length) {
+                    statusEl.textContent = "No missing WebRTC users are queued for build.";
+                    return;
+                  }
+
+                  if (!window.confirm("Start WebRTC build for " + pendingUsers.length + " user(s)?")) {
+                    return;
+                  }
+
+                  const originalText = bulkBuildBtn.textContent;
+                  bulkBuildBtn.disabled = true;
+                  bulkBuildBtn.textContent = "Running Build Queue...";
+                  _setBuildSummary("", false);
+                  statusEl.textContent = "Running batch WebRTC build for " + pendingUsers.length + " user(s)...";
+
+                  try {
+                    const batchForm = new FormData();
+                    batchForm.append("users_json", JSON.stringify(pendingUsers));
+
+                    const batchResponse = await fetch("/genesys/users/build-webrtc-batch", {
+                      method: "POST",
+                      body: batchForm,
+                    });
+                    const batchPayload = await batchResponse.json();
+                    if (!batchResponse.ok || !batchPayload.ok) {
+                      throw new Error((batchPayload && batchPayload.error) || "Batch build failed.");
+                    }
+
+                    const results = Array.isArray(batchPayload.results) ? batchPayload.results : [];
+                    const failed = [];
+                    const succeeded = [];
+
+                    results.forEach(function (item) {
+                      const resultUserId = String((item && item.user_id) || "").trim();
+                      if (!resultUserId) {
+                        return;
+                      }
+
+                      const btn = resultsEl.querySelector(".genesys-build-btn[data-user-id='" + resultUserId + "']");
+                      if (item && item.ok) {
+                        if (btn) {
+                          _markBuildSuccess(btn, item);
+                        }
+                        succeeded.push(item);
+                      } else {
+                        failed.push(item || {});
+                      }
+
+                      lastUserRows = lastUserRows.map(function (row) {
+                        if (String((row && row.id) || "") !== resultUserId) {
+                          return row;
+                        }
+                        const copy = Object.assign({}, row);
+                        if (item && item.ok) {
+                          copy.webrtc_phone = String((item && item.phone_name) || copy.webrtc_phone || "");
+                          copy.can_build_webrtc = false;
+                          copy.has_webrtc_phone = true;
+                        }
+                        return copy;
+                      });
+                    });
+
+                    _setBulkBuildState(lastUserRows);
+
+                    const failureList = failed.map(function (item) {
+                      const name = _escapeHtml(String((item && item.user_name) || (item && item.user_id) || "(unknown)"));
+                      const err = _escapeHtml(String((item && item.error) || "Unknown error"));
+                      return "<li><strong>" + name + "</strong>: " + err + "</li>";
+                    });
+
+                    const summaryHtml = [
+                      "<strong>Batch Build Result</strong>",
+                      "<div style='margin-top:6px;'>Requested: " + Number(batchPayload.requested || pendingUsers.length) + " | Built: " + Number(batchPayload.success_count || succeeded.length) + " | Failed: " + Number(batchPayload.failure_count || failed.length) + "</div>",
+                    ];
+                    if (failureList.length) {
+                      summaryHtml.push("<div style='margin-top:8px;'><strong>Failures</strong><ul style='margin:6px 0 0 18px;'>" + failureList.join("") + "</ul></div>");
+                    }
+                    _setBuildSummary(summaryHtml.join(""), true);
+
+                    statusEl.textContent = "Batch build complete: Built " + Number(batchPayload.success_count || succeeded.length) + " of " + Number(batchPayload.requested || pendingUsers.length) + " user(s).";
+                  } catch (batchErr) {
+                    statusEl.textContent = "Batch build failed: " + ((batchErr && batchErr.message) || "Unknown error.");
+                  } finally {
+                    bulkBuildBtn.textContent = originalText;
+                    _setBulkBuildState(lastUserRows);
+                  }
+                };
+              }
             } catch (err) {
               renderUserDebug({
                 ok: false,
@@ -11883,6 +12065,83 @@ def genesys_build_webrtc_route(
     "phone_name": build_result.get("phone_name", ""),
     "create_mode": build_result.get("create_mode", ""),
     "association_result": build_result.get("association_result", ""),
+  })
+
+
+@app.post("/genesys/users/build-webrtc-batch")
+def genesys_build_webrtc_batch_route(users_json: str = Form("")):
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+
+  try:
+    parsed_users = json.loads(users_json or "[]")
+  except Exception:
+    return JSONResponse({"ok": False, "error": "users_json must be valid JSON."}, status_code=400)
+
+  if not isinstance(parsed_users, list) or not parsed_users:
+    return JSONResponse({"ok": False, "error": "At least one user is required."}, status_code=400)
+
+  if len(parsed_users) > 100:
+    return JSONResponse({"ok": False, "error": "Batch limit is 100 users per request."}, status_code=400)
+
+  users = []
+  for entry in parsed_users:
+    if not isinstance(entry, dict):
+      continue
+    clean_user_id = str(entry.get("user_id", "") or "").strip()
+    clean_user_name = str(entry.get("user_name", "") or "").strip()
+    if not clean_user_id:
+      continue
+    users.append({"user_id": clean_user_id, "user_name": clean_user_name})
+
+  if not users:
+    return JSONResponse({"ok": False, "error": "No valid users were provided."}, status_code=400)
+
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": token_result.get("error", "Genesys token request failed."),
+    }, status_code=400)
+
+  region = token_result.get("region", clean_region)
+  access_token = token_result.get("access_token", "")
+  results = []
+  success_count = 0
+
+  for user in users:
+    build_result = _genesys_build_webrtc_phone_for_user(
+      region,
+      access_token,
+      user["user_id"],
+      user["user_name"],
+    )
+    if build_result.get("ok"):
+      success_count += 1
+      results.append({
+        "ok": True,
+        "user_id": user["user_id"],
+        "user_name": user["user_name"],
+        "phone_id": build_result.get("phone_id", ""),
+        "phone_name": build_result.get("phone_name", ""),
+        "create_mode": build_result.get("create_mode", ""),
+        "association_result": build_result.get("association_result", ""),
+      })
+    else:
+      results.append({
+        "ok": False,
+        "user_id": user["user_id"],
+        "user_name": user["user_name"],
+        "error": build_result.get("error", "WebRTC phone build failed."),
+      })
+
+  failure_count = len(results) - success_count
+  return JSONResponse({
+    "ok": True,
+    "region": region,
+    "requested": len(users),
+    "success_count": success_count,
+    "failure_count": failure_count,
+    "results": results,
   })
 
 
