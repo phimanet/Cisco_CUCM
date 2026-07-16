@@ -11416,7 +11416,7 @@ def genesys_admin_placeholder(request: Request):
         <aside class="portal-sidebar">
           <h4>Genesys Menu</h4>
           <button type="button" class="portal-nav-btn active" data-panel-target="genesys-user-panel">Genesys User WebRTC Lookup</button>
-          <button type="button" class="portal-nav-btn" data-panel-target="genesys-bulk-email-panel">Bulk WebRTC build</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-bulk-email-panel" onclick="(function(){var id='genesys-bulk-email-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Bulk WebRTC build</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel">Queue Lookup</button>
         </aside>
 
