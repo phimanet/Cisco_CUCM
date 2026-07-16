@@ -959,8 +959,7 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
   station_id = ""
   station_errors = []
   for _ in range(6):
-    ok_stations, stations_body, stations_err, _ = _genesys_send_json(
-      "GET",
+    ok_stations, stations_body, stations_err = _genesys_get_json(
       api_base,
       access_token,
       "/api/v2/stations",
