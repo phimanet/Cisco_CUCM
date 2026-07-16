@@ -11307,6 +11307,7 @@ def genesys_admin_placeholder(request: Request):
         <aside class="portal-sidebar">
           <h4>Genesys Menu</h4>
           <button type="button" class="portal-nav-btn active" data-panel-target="genesys-user-panel">Genesys User WebRTC Lookup</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-bulk-email-panel">Bulk WebRTC build</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel">Queue Lookup</button>
         </aside>
 
@@ -11337,6 +11338,21 @@ def genesys_admin_placeholder(request: Request):
             <div id="genesys-build-summary" style="display:none; margin-top:10px; border:1px solid #c8dbee; border-radius:8px; background:#f8fcff; padding:10px;"></div>
           </div>
 
+          <div id="genesys-bulk-email-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
+            <h3 style="margin-top:0;">Bulk WebRTC build</h3>
+            <form id="genesys-bulk-email-form">
+              <div class="search-filter-row" style="align-items:flex-start;">
+                <textarea name="email_list" placeholder="Paste 1 or more email addresses here, one per line or comma-separated." style="width:100%; min-height:170px; resize:vertical; padding:10px; border-radius:10px; border:1px solid var(--amn-border);"></textarea>
+              </div>
+              <div class="search-filter-row">
+                <button type="submit" id="genesys-bulk-email-build-btn" style="background:#2d7a43;">Build WebRTC Phones</button>
+                <span id="genesys-bulk-email-count" style="font-size:12px; color:#4e6a84;">Paste email addresses to queue builds.</span>
+              </div>
+            </form>
+            <p id="genesys-bulk-email-status" style="color:#2c5c8a; min-height:18px;">Ready.</p>
+            <div id="genesys-bulk-email-summary" style="display:none; margin-top:10px; border:1px solid #c8dbee; border-radius:8px; background:#f8fcff; padding:10px;"></div>
+          </div>
+
           <div id="genesys-queue-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
             <h3 style="margin-top:0;">Queue Lookup</h3>
             <form id="genesys-queue-search-form">
@@ -11363,6 +11379,11 @@ def genesys_admin_placeholder(request: Request):
         const buildSummaryEl = document.getElementById("genesys-build-summary");
         const rawDownloadEl = document.getElementById("genesys-user-raw-download");
         const resultsEl = document.getElementById("genesys-user-search-results");
+        const bulkEmailForm = document.getElementById("genesys-bulk-email-form");
+        const bulkEmailStatusEl = document.getElementById("genesys-bulk-email-status");
+        const bulkEmailSummaryEl = document.getElementById("genesys-bulk-email-summary");
+        const bulkEmailCountEl = document.getElementById("genesys-bulk-email-count");
+        const bulkEmailBuildBtn = document.getElementById("genesys-bulk-email-build-btn");
         const orgSnapshotBtn = document.getElementById("genesys-org-snapshot-btn");
         const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn[data-panel-target]"));
         const panels = Array.from(document.querySelectorAll(".genesys-panel"));
@@ -11405,6 +11426,23 @@ def genesys_admin_placeholder(request: Request):
           }
           buildSummaryEl.innerHTML = String(html || "");
           buildSummaryEl.style.display = show ? "block" : "none";
+        }
+
+        function _setBulkEmailSummary(html, show) {
+          if (!bulkEmailSummaryEl) {
+            return;
+          }
+          bulkEmailSummaryEl.innerHTML = String(html || "");
+          bulkEmailSummaryEl.style.display = show ? "block" : "none";
+        }
+
+        function _parseEmailList(text) {
+          return String(text || "")
+            .split(/[\n,;\s]+/)
+            .map(function (item) { return String(item || "").trim().toLowerCase(); })
+            .filter(function (item, index, allItems) {
+              return Boolean(item) && allItems.indexOf(item) === index && item.indexOf("@") > 0;
+            });
         }
 
         function _markBuildSuccess(btn, buildPayload) {
@@ -11462,6 +11500,98 @@ def genesys_admin_placeholder(request: Request):
           });
 
           showPanel("genesys-user-panel");
+        }
+
+        if (bulkEmailForm && bulkEmailStatusEl) {
+          bulkEmailForm.addEventListener("input", function () {
+            if (!bulkEmailCountEl) {
+              return;
+            }
+            const emails = _parseEmailList((bulkEmailForm.elements && bulkEmailForm.elements.email_list && bulkEmailForm.elements.email_list.value) || "");
+            bulkEmailCountEl.textContent = emails.length
+              ? (emails.length + " email(s) ready for WebRTC build.")
+              : "Paste email addresses to queue builds.";
+          });
+
+          bulkEmailForm.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            bulkEmailStatusEl.textContent = "Parsing email list...";
+            _setBulkEmailSummary("", false);
+
+            const emails = _parseEmailList((bulkEmailForm.elements && bulkEmailForm.elements.email_list && bulkEmailForm.elements.email_list.value) || "");
+            if (!emails.length) {
+              bulkEmailStatusEl.textContent = "Paste at least one valid email address.";
+              return;
+            }
+
+            if (!window.confirm("Build WebRTC phone(s) for " + emails.length + " email address(es)?")) {
+              return;
+            }
+
+            const pendingUsers = emails.map(function (email) {
+              return {
+                user_email: email,
+                user_id: "",
+                user_name: "",
+              };
+            });
+
+            if (bulkEmailBuildBtn) {
+              bulkEmailBuildBtn.disabled = true;
+              bulkEmailBuildBtn.textContent = "Building...";
+            }
+
+            try {
+              bulkEmailStatusEl.textContent = "Running bulk WebRTC build for " + emails.length + " email address(es)...";
+              const batchForm = new FormData();
+              batchForm.append("users_json", JSON.stringify(pendingUsers));
+
+              const batchResponse = await fetch("/genesys/users/build-webrtc-batch", {
+                method: "POST",
+                body: batchForm,
+              });
+              const batchPayload = await batchResponse.json();
+              if (!batchResponse.ok || !batchPayload.ok) {
+                throw new Error((batchPayload && batchPayload.error) || "Batch build failed.");
+              }
+
+              const results = Array.isArray(batchPayload.results) ? batchPayload.results : [];
+              const failed = [];
+              const succeeded = [];
+
+              results.forEach(function (item) {
+                if (item && item.ok) {
+                  succeeded.push(item);
+                } else {
+                  failed.push(item || {});
+                }
+              });
+
+              const failureList = failed.map(function (item) {
+                const name = _escapeHtml(String((item && item.user_email) || (item && item.user_id) || "(unknown)"));
+                const err = _escapeHtml(String((item && item.error) || "Unknown error"));
+                return "<li><strong>" + name + "</strong>: " + err + "</li>";
+              });
+
+              const summaryHtml = [
+                "<strong>Bulk WebRTC Build Result</strong>",
+                "<div style='margin-top:6px;'>Requested: " + Number(batchPayload.requested || pendingUsers.length) + " | Built: " + Number(batchPayload.success_count || succeeded.length) + " | Failed: " + Number(batchPayload.failure_count || failed.length) + "</div>",
+              ];
+              if (failureList.length) {
+                summaryHtml.push("<div style='margin-top:8px;'><strong>Failures</strong><ul style='margin:6px 0 0 18px;'>" + failureList.join("") + "</ul></div>");
+              }
+              _setBulkEmailSummary(summaryHtml.join(""), true);
+
+              bulkEmailStatusEl.textContent = "Bulk build complete: Built " + Number(batchPayload.success_count || succeeded.length) + " of " + Number(batchPayload.requested || pendingUsers.length) + " email(s).";
+            } catch (err) {
+              bulkEmailStatusEl.textContent = "Bulk build failed: " + ((err && err.message) || "Unknown error.");
+            } finally {
+              if (bulkEmailBuildBtn) {
+                bulkEmailBuildBtn.disabled = false;
+                bulkEmailBuildBtn.textContent = "Build WebRTC Phones";
+              }
+            }
+          });
         }
 
         if (form && statusEl && resultsEl && rawDownloadEl) {

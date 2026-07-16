@@ -265,6 +265,7 @@ Priority keys:
 - Added panel-local Offboard prefill hydration in the Offboard script (URL `target_user` + sessionStorage fallback) to guarantee target user population even when global menu prefill script does not run.
 
 ### 2026-07-16
+- Added a new Genesys Admin sidebar button and panel for **Bulk WebRTC build**, allowing operators to paste one or more email addresses and batch-create/assign WebRTC phones by email.
 - Switched Genesys user lookup to prefer exact CUCM-derived email targets first, then fall back to broader name-based search only when no email match is found.
 - Removed the visible Genesys Admin debug output box and simplified the user lookup renderer so the WebRTC build flow stays focused on phone creation and default-station assignment.
 - Genesys Admin page now includes a bulk start action: **Start Build Missing WebRTC Phones**, which queues all currently listed users missing WebRTC phones and runs one batch build request.
