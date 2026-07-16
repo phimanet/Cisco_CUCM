@@ -861,6 +861,9 @@ def _genesys_search_users_by_email_targets(
       rows.append({
         "id": user_id,
         "name": str(user.get("name", "") or "").strip(),
+        "first_name": str(user.get("firstName", "") or "").strip(),
+        "last_name": str(user.get("lastName", "") or "").strip(),
+        "display_name": str(user.get("displayName", "") or "").strip(),
         "email": str(user.get("email", "") or "").strip(),
         "username": str(user.get("username", "") or "").strip(),
         "state": str(user.get("state", "") or "").strip(),
@@ -955,10 +958,12 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
   base_settings_id = str(fallback_template.get("phone_base_settings_id", "") or "").strip()
   line_base_settings_id = str(fallback_template.get("line_base_settings_id", "") or "").strip()
   standalone = bool(fallback_template.get("standalone", False))
-  display_name = str(user_name or "").strip() or f"WebRTC-{user_id[:8]}"
 
   resolved_user_id = (user_id or "").strip()
   resolved_user_name = (user_name or "").strip()
+  resolved_first_name = ""
+  resolved_last_name = ""
+  resolved_display_name = ""
 
   if not resolved_user_id and clean_user_email:
     lookup_result = _genesys_lookup_user_by_email(clean_region, access_token, clean_user_email)
@@ -970,6 +975,9 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
       }
     resolved_user_id = str(lookup_result.get("user_id", "") or "").strip()
     resolved_user_name = str(lookup_result.get("user_name", "") or resolved_user_name).strip()
+    resolved_first_name = str(lookup_result.get("first_name", "") or "").strip()
+    resolved_last_name = str(lookup_result.get("last_name", "") or "").strip()
+    resolved_display_name = str(lookup_result.get("display_name", "") or "").strip()
 
   if not resolved_user_id:
     return {
@@ -980,6 +988,19 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
 
   if not resolved_user_name and clean_user_email:
     resolved_user_name = clean_user_email.split("@", 1)[0]
+
+  # Build a stable non-empty phone name after user/email resolution.
+  display_name = str(resolved_display_name or "").strip()
+  if not display_name and (resolved_first_name or resolved_last_name):
+    display_name = " ".join([part for part in [resolved_first_name, resolved_last_name] if part]).strip()
+  if not display_name:
+    display_name = str(resolved_user_name or "").strip()
+  if not display_name and clean_user_email:
+    display_name = clean_user_email.split("@", 1)[0].strip()
+  if not display_name and resolved_user_id:
+    display_name = f"WebRTC-{resolved_user_id[:8]}"
+  if not display_name:
+    display_name = f"WebRTC-{int(time.time())}"
 
   def _pick_station_id(entities: list, phone_id: str, phone_name: str) -> str:
     phone_id_l = (phone_id or "").strip().lower()
@@ -2005,14 +2026,45 @@ def _genesys_lookup_user_by_email(region: str, access_token: str, user_email: st
       continue
     row_email = str(row.get("email", "") or "").strip().lower()
     if row_email == clean_email:
-      return {"ok": True, "user_id": str(row.get("id", "") or "").strip(), "user_name": str(row.get("name", "") or "").strip(), "email": row_email}
+      user_name = str(row.get("name", "") or "").strip()
+      first_name = str(row.get("first_name", "") or "").strip()
+      last_name = str(row.get("last_name", "") or "").strip()
+      display_name = str(row.get("display_name", "") or "").strip()
+      if not display_name:
+        display_name = " ".join([part for part in [first_name, last_name] if part]).strip()
+      if not display_name:
+        display_name = user_name
+      if not display_name:
+        display_name = clean_email.split("@", 1)[0]
+      return {
+        "ok": True,
+        "user_id": str(row.get("id", "") or "").strip(),
+        "user_name": user_name,
+        "first_name": first_name,
+        "last_name": last_name,
+        "display_name": display_name,
+        "email": row_email,
+      }
 
   if rows:
     first_row = rows[0] if isinstance(rows[0], dict) else {}
+    user_name = str(first_row.get("name", "") or "").strip()
+    first_name = str(first_row.get("first_name", "") or "").strip()
+    last_name = str(first_row.get("last_name", "") or "").strip()
+    display_name = str(first_row.get("display_name", "") or "").strip()
+    if not display_name:
+      display_name = " ".join([part for part in [first_name, last_name] if part]).strip()
+    if not display_name:
+      display_name = user_name
+    if not display_name:
+      display_name = clean_email.split("@", 1)[0]
     return {
       "ok": True,
       "user_id": str(first_row.get("id", "") or "").strip(),
-      "user_name": str(first_row.get("name", "") or "").strip(),
+      "user_name": user_name,
+      "first_name": first_name,
+      "last_name": last_name,
+      "display_name": display_name,
       "email": str(first_row.get("email", "") or "").strip().lower(),
     }
 
@@ -12742,6 +12794,8 @@ def genesys_extract_users_route(
   clean_last = (last_name or "").strip()
   clean_first = (first_name or "").strip()
   clean_username = (username or "").strip()
+  clean_username_l = clean_username.lower()
+  is_email_lookup = bool(clean_username_l and "@" in clean_username_l)
   clean_cucm_host = (cucm_host or "").strip() or str(session.get("cucm_host", "") or "").strip()
   clean_cucm_user = (cucm_user or "").strip() or str(session.get("username", "") or "").strip()
   clean_cucm_pass = (cucm_pass or "").strip() or _get_cached_secret(session, "cucm_pass")
@@ -12758,7 +12812,7 @@ def genesys_extract_users_route(
     }, status_code=400)
 
   cucm_email_targets = set()
-  if clean_cucm_host and clean_cucm_user and clean_cucm_pass:
+  if not is_email_lookup and clean_cucm_host and clean_cucm_user and clean_cucm_pass:
     try:
       cucm_people = search_persons_by_name(
         clean_cucm_host,
@@ -12776,6 +12830,13 @@ def genesys_extract_users_route(
       pass
 
   search_result = {"ok": False, "rows": []}
+  if is_email_lookup:
+    search_result = _genesys_search_users_by_email_targets(
+      token_result.get("region", clean_region),
+      token_result.get("access_token", ""),
+      {clean_username_l},
+    )
+
   if cucm_email_targets:
     exact_email_result = _genesys_search_users_by_email_targets(
       token_result.get("region", clean_region),
