@@ -981,6 +981,142 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
   if not resolved_user_name and clean_user_email:
     resolved_user_name = clean_user_email.split("@", 1)[0]
 
+  def _pick_station_id(entities: list, phone_id: str, phone_name: str) -> str:
+    phone_id_l = (phone_id or "").strip().lower()
+    phone_name_l = (phone_name or "").strip().lower()
+    best_id = ""
+    best_score = -1
+
+    for item in entities:
+      if not isinstance(item, dict):
+        continue
+
+      candidate_id = str(item.get("id", "") or "").strip()
+      if not candidate_id:
+        continue
+
+      score = 0
+      candidate_name = str(item.get("name", "") or item.get("stationName", "") or "").strip().lower()
+      if candidate_name and phone_name_l and candidate_name == phone_name_l:
+        score += 40
+
+      state_value = str(item.get("state", "") or "").strip().lower()
+      if state_value == "active":
+        score += 10
+
+      phone_obj = item.get("phone") if isinstance(item.get("phone"), dict) else {}
+      phone_obj_id = str(phone_obj.get("id", "") or "").strip().lower()
+      phone_obj_name = str(phone_obj.get("name", "") or "").strip().lower()
+      if phone_obj_id and phone_id_l and phone_obj_id == phone_id_l:
+        score += 100
+      if phone_obj_name and phone_name_l and phone_obj_name == phone_name_l:
+        score += 60
+
+      if score > best_score:
+        best_score = score
+        best_id = candidate_id
+
+    return best_id
+
+  # If a WebRTC phone already exists for this user, verify and enforce default-station tie.
+  ok_user_profile, user_profile_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{resolved_user_id}")
+  if ok_user_profile:
+    ok_routing_profile, routing_profile_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{resolved_user_id}/routingstatus")
+    if not ok_routing_profile:
+      routing_profile_payload = {}
+
+    ok_station_assoc, station_assoc_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{resolved_user_id}/stationassociations")
+    if not ok_station_assoc:
+      station_assoc_payload = {}
+
+    existing_phone_name = _genesys_extract_webrtc_phone(
+      user_profile_payload if isinstance(user_profile_payload, dict) else {},
+      routing_profile_payload if isinstance(routing_profile_payload, dict) else {},
+      station_assoc_payload if isinstance(station_assoc_payload, dict) else {},
+    )
+
+    if existing_phone_name:
+      station_id = ""
+      user_station = user_profile_payload.get("station") if isinstance(user_profile_payload, dict) and isinstance(user_profile_payload.get("station"), dict) else {}
+      routing_station = routing_profile_payload.get("station") if isinstance(routing_profile_payload, dict) and isinstance(routing_profile_payload.get("station"), dict) else {}
+
+      station_id = str(user_station.get("id", "") or "").strip() or str(routing_station.get("id", "") or "").strip()
+
+      if not station_id and isinstance(station_assoc_payload, dict):
+        assoc_entities = station_assoc_payload.get("entities", []) or []
+        for item in assoc_entities:
+          if not isinstance(item, dict):
+            continue
+          assoc_station = item.get("station") if isinstance(item.get("station"), dict) else item
+          station_id = str(assoc_station.get("id", "") or "").strip()
+          if station_id:
+            break
+
+      if not station_id:
+        ok_existing_stations, existing_stations_payload, existing_stations_err = _genesys_get_json(
+          api_base,
+          access_token,
+          "/api/v2/stations",
+          params={"webRtcUserId": resolved_user_id},
+        )
+        if ok_existing_stations:
+          existing_entities = existing_stations_payload.get("entities", []) if isinstance(existing_stations_payload, dict) else []
+          station_id = _pick_station_id(existing_entities, "", existing_phone_name)
+          if not station_id and existing_entities:
+            for item in existing_entities:
+              if not isinstance(item, dict):
+                continue
+              station_id = str(item.get("id", "") or "").strip()
+              if station_id:
+                break
+        else:
+          return {
+            "ok": False,
+            "error": f"Existing WebRTC phone found but could not resolve station list: {existing_stations_err or 'Unknown error'}",
+            "region": clean_region,
+            "phone_name": existing_phone_name,
+            "create_mode": "existing",
+          }
+
+      if not station_id:
+        return {
+          "ok": False,
+          "error": "Existing WebRTC phone found but no station ID could be resolved to verify user tie.",
+          "region": clean_region,
+          "phone_name": existing_phone_name,
+          "create_mode": "existing",
+        }
+
+      ok_assoc_existing, _, assoc_existing_err, assoc_existing_status = _genesys_send_json(
+        "PUT",
+        api_base,
+        access_token,
+        f"/api/v2/users/{resolved_user_id}/station/defaultstation/{station_id}",
+      )
+
+      if not ok_assoc_existing and assoc_existing_status not in {202}:
+        return {
+          "ok": False,
+          "error": f"Existing WebRTC phone found but reassociation failed: PUT {assoc_existing_status} {assoc_existing_err}",
+          "region": clean_region,
+          "phone_name": existing_phone_name,
+          "create_mode": "existing",
+        }
+
+      assoc_existing_text = "Already Present+Associated"
+      if assoc_existing_status == 202:
+        assoc_existing_text = "Already Present (association accepted and pending propagation)"
+
+      return {
+        "ok": True,
+        "region": clean_region,
+        "phone_id": "",
+        "phone_name": existing_phone_name,
+        "create_mode": "existing",
+        "association_result": assoc_existing_text,
+        "already_present": True,
+      }
+
   if not line_base_settings_id and base_settings_id:
     line_lookup_result = _genesys_lookup_webrtc_line_base_settings_id(clean_region, access_token, base_settings_id)
     if not line_lookup_result.get("ok"):
@@ -1046,43 +1182,6 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
 
   created_phone_id = str(created_phone.get("id", "") or "").strip()
   created_phone_name = str(created_phone.get("name", "") or display_name).strip()
-
-  def _pick_station_id(entities: list, phone_id: str, phone_name: str) -> str:
-    phone_id_l = (phone_id or "").strip().lower()
-    phone_name_l = (phone_name or "").strip().lower()
-    best_id = ""
-    best_score = -1
-
-    for item in entities:
-      if not isinstance(item, dict):
-        continue
-
-      candidate_id = str(item.get("id", "") or "").strip()
-      if not candidate_id:
-        continue
-
-      score = 0
-      candidate_name = str(item.get("name", "") or item.get("stationName", "") or "").strip().lower()
-      if candidate_name and phone_name_l and candidate_name == phone_name_l:
-        score += 40
-
-      state_value = str(item.get("state", "") or "").strip().lower()
-      if state_value == "active":
-        score += 10
-
-      phone_obj = item.get("phone") if isinstance(item.get("phone"), dict) else {}
-      phone_obj_id = str(phone_obj.get("id", "") or "").strip().lower()
-      phone_obj_name = str(phone_obj.get("name", "") or "").strip().lower()
-      if phone_obj_id and phone_id_l and phone_obj_id == phone_id_l:
-        score += 100
-      if phone_obj_name and phone_name_l and phone_obj_name == phone_name_l:
-        score += 60
-
-      if score > best_score:
-        best_score = score
-        best_id = candidate_id
-
-    return best_id
 
   if not created_phone_id:
     return {
@@ -1217,6 +1316,7 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
     "create_mode": create_mode,
     "association_result": association_result,
     "verified_station_name": verified_station_name,
+    "already_present": False,
   }
 
 
@@ -11449,17 +11549,21 @@ def genesys_admin_placeholder(request: Request):
 
           <div id="genesys-bulk-email-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
             <h3 style="margin-top:0;">Bulk WebRTC build</h3>
-            <form id="genesys-bulk-email-form">
+            <form id="genesys-bulk-email-form" onsubmit="return window._genesysBulkEmailInlineSubmit ? window._genesysBulkEmailInlineSubmit(event) : false;">
               <div class="search-filter-row" style="align-items:flex-start;">
                 <textarea name="email_list" placeholder="Paste 1 or more email addresses here, one per line or comma-separated." style="width:100%; min-height:170px; resize:vertical; padding:10px; border-radius:10px; border:1px solid var(--amn-border);"></textarea>
               </div>
               <div class="search-filter-row">
-                <button type="submit" id="genesys-bulk-email-build-btn" style="background:#2d7a43;">Build WebRTC Phones</button>
+                <button type="button" id="genesys-bulk-email-build-btn" style="background:#2d7a43;" onclick="if(window._genesysBulkEmailInlineSubmit){window._genesysBulkEmailInlineSubmit(event);}">Build WebRTC Phones</button>
                 <span id="genesys-bulk-email-count" style="font-size:12px; color:#4e6a84;">Paste email addresses to queue builds.</span>
               </div>
             </form>
             <p id="genesys-bulk-email-status" style="color:#2c5c8a; min-height:18px;">Ready.</p>
             <div id="genesys-bulk-email-summary" style="display:none; margin-top:10px; border:1px solid #c8dbee; border-radius:8px; background:#f8fcff; padding:10px;"></div>
+            <details id="genesys-bulk-email-debug-wrap" style="margin-top:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f7fbff; padding:8px 10px;">
+              <summary style="cursor:pointer; font-weight:700; color:#2c5c8a;">Bulk WebRTC Debug Output</summary>
+              <pre id="genesys-bulk-email-debug" style="margin:8px 0 0 0; white-space:pre-wrap; font-size:12px; line-height:1.35; max-height:220px; overflow:auto;"></pre>
+            </details>
           </div>
 
           <div id="genesys-queue-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
@@ -11493,6 +11597,7 @@ def genesys_admin_placeholder(request: Request):
         const bulkEmailSummaryEl = document.getElementById("genesys-bulk-email-summary");
         const bulkEmailCountEl = document.getElementById("genesys-bulk-email-count");
         const bulkEmailBuildBtn = document.getElementById("genesys-bulk-email-build-btn");
+        const bulkEmailDebugEl = document.getElementById("genesys-bulk-email-debug");
         const orgSnapshotBtn = document.getElementById("genesys-org-snapshot-btn");
         const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn[data-panel-target]"));
         const panels = Array.from(document.querySelectorAll(".genesys-panel"));
@@ -11543,6 +11648,22 @@ def genesys_admin_placeholder(request: Request):
           }
           bulkEmailSummaryEl.innerHTML = String(html || "");
           bulkEmailSummaryEl.style.display = show ? "block" : "none";
+        }
+
+        function _appendBulkEmailDebug(line, data) {
+          if (!bulkEmailDebugEl) {
+            return;
+          }
+          const stamp = new Date().toISOString();
+          let text = "[" + stamp + "] " + String(line || "");
+          if (typeof data !== "undefined") {
+            try {
+              text += "\n" + JSON.stringify(data, null, 2);
+            } catch (_jsonErr) {
+              text += "\n" + String(data);
+            }
+          }
+          bulkEmailDebugEl.textContent = (text + "\n\n" + bulkEmailDebugEl.textContent).slice(0, 20000);
         }
 
         function _parseEmailList(text) {
@@ -11622,19 +11743,23 @@ def genesys_admin_placeholder(request: Request):
               : "Paste email addresses to queue builds.";
           });
 
-          bulkEmailForm.addEventListener("submit", async function (event) {
-            event.preventDefault();
+          const _runBulkEmailBuild = async function () {
             bulkEmailStatusEl.textContent = "Parsing email list...";
             _setBulkEmailSummary("", false);
+            _appendBulkEmailDebug("Bulk build submit triggered.");
 
             const emails = _parseEmailList((bulkEmailForm.elements && bulkEmailForm.elements.email_list && bulkEmailForm.elements.email_list.value) || "");
             if (!emails.length) {
               bulkEmailStatusEl.textContent = "Paste at least one valid email address.";
-              return;
+              _appendBulkEmailDebug("No valid emails were parsed from input.");
+              return false;
             }
 
+            _appendBulkEmailDebug("Parsed email targets.", { count: emails.length, emails: emails });
+
             if (!window.confirm("Build WebRTC phone(s) for " + emails.length + " email address(es)?")) {
-              return;
+              _appendBulkEmailDebug("Operator cancelled bulk build confirmation.");
+              return false;
             }
 
             const pendingUsers = emails.map(function (email) {
@@ -11660,6 +11785,11 @@ def genesys_admin_placeholder(request: Request):
                 body: batchForm,
               });
               const batchPayload = await batchResponse.json();
+              _appendBulkEmailDebug("Bulk build HTTP response.", {
+                status: batchResponse.status,
+                ok: batchResponse.ok,
+                payload_ok: Boolean(batchPayload && batchPayload.ok),
+              });
               if (!batchResponse.ok || !batchPayload.ok) {
                 throw new Error((batchPayload && batchPayload.error) || "Batch build failed.");
               }
@@ -11667,10 +11797,14 @@ def genesys_admin_placeholder(request: Request):
               const results = Array.isArray(batchPayload.results) ? batchPayload.results : [];
               const failed = [];
               const succeeded = [];
+              const alreadyPresent = [];
 
               results.forEach(function (item) {
                 if (item && item.ok) {
                   succeeded.push(item);
+                  if (item.already_present) {
+                    alreadyPresent.push(item);
+                  }
                 } else {
                   failed.push(item || {});
                 }
@@ -11684,23 +11818,55 @@ def genesys_admin_placeholder(request: Request):
 
               const summaryHtml = [
                 "<strong>Bulk WebRTC Build Result</strong>",
-                "<div style='margin-top:6px;'>Requested: " + Number(batchPayload.requested || pendingUsers.length) + " | Built: " + Number(batchPayload.success_count || succeeded.length) + " | Failed: " + Number(batchPayload.failure_count || failed.length) + "</div>",
+                "<div style='margin-top:6px;'>Requested: " + Number(batchPayload.requested || pendingUsers.length) + " | Processed: " + Number(batchPayload.success_count || succeeded.length) + " | Already Present: " + Number(alreadyPresent.length) + " | Failed: " + Number(batchPayload.failure_count || failed.length) + "</div>",
               ];
               if (failureList.length) {
                 summaryHtml.push("<div style='margin-top:8px;'><strong>Failures</strong><ul style='margin:6px 0 0 18px;'>" + failureList.join("") + "</ul></div>");
               }
               _setBulkEmailSummary(summaryHtml.join(""), true);
 
-              bulkEmailStatusEl.textContent = "Bulk build complete: Built " + Number(batchPayload.success_count || succeeded.length) + " of " + Number(batchPayload.requested || pendingUsers.length) + " email(s).";
+              bulkEmailStatusEl.textContent = "Bulk build complete: Processed " + Number(batchPayload.success_count || succeeded.length) + " of " + Number(batchPayload.requested || pendingUsers.length) + " email(s). Already present: " + Number(alreadyPresent.length) + ".";
+              _appendBulkEmailDebug("Bulk build completed.", {
+                requested: Number(batchPayload.requested || pendingUsers.length),
+                processed: Number(batchPayload.success_count || succeeded.length),
+                already_present: Number(alreadyPresent.length),
+                failed: Number(batchPayload.failure_count || failed.length),
+              });
             } catch (err) {
               bulkEmailStatusEl.textContent = "Bulk build failed: " + ((err && err.message) || "Unknown error.");
+              _appendBulkEmailDebug("Bulk build exception.", {
+                error: (err && err.message) || "Unknown error",
+              });
             } finally {
               if (bulkEmailBuildBtn) {
                 bulkEmailBuildBtn.disabled = false;
                 bulkEmailBuildBtn.textContent = "Build WebRTC Phones";
               }
             }
+
+            return false;
+          };
+
+          window._genesysBulkEmailInlineSubmit = function (event) {
+            if (event && typeof event.preventDefault === "function") {
+              event.preventDefault();
+            }
+            _runBulkEmailBuild();
+            return false;
+          };
+
+          bulkEmailForm.addEventListener("submit", function (event) {
+            if (event && typeof event.preventDefault === "function") {
+              event.preventDefault();
+            }
+            window._genesysBulkEmailInlineSubmit(event);
           });
+
+          if (bulkEmailBuildBtn) {
+            bulkEmailBuildBtn.addEventListener("click", function (event) {
+              window._genesysBulkEmailInlineSubmit(event);
+            });
+          }
         }
 
         if (form && statusEl && resultsEl && rawDownloadEl) {
@@ -12715,6 +12881,7 @@ def genesys_build_webrtc_route(
     "phone_name": build_result.get("phone_name", ""),
     "create_mode": build_result.get("create_mode", ""),
     "association_result": build_result.get("association_result", ""),
+    "already_present": bool(build_result.get("already_present", False)),
   })
 
 
@@ -12778,6 +12945,7 @@ def genesys_build_webrtc_batch_route(users_json: str = Form("")):
         "phone_name": build_result.get("phone_name", ""),
         "create_mode": build_result.get("create_mode", ""),
         "association_result": build_result.get("association_result", ""),
+        "already_present": bool(build_result.get("already_present", False)),
       })
     else:
       results.append({
