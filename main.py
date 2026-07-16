@@ -11591,12 +11591,12 @@ def genesys_admin_placeholder(request: Request):
                 let text = "[" + stamp + "] " + String(line || "");
                 if (typeof data !== "undefined") {
                   try {
-                    text += "\n" + JSON.stringify(data, null, 2);
+                    text += "\\n" + JSON.stringify(data, null, 2);
                   } catch (_jsonErr) {
-                    text += "\n" + String(data);
+                    text += "\\n" + String(data);
                   }
                 }
-                debugEl.textContent = (text + "\n\n" + debugEl.textContent).slice(0, 20000);
+                debugEl.textContent = (text + "\\n\\n" + debugEl.textContent).slice(0, 20000);
               }
 
               function parseEmails(text) {
@@ -11813,12 +11813,12 @@ def genesys_admin_placeholder(request: Request):
           let text = "[" + stamp + "] " + String(line || "");
           if (typeof data !== "undefined") {
             try {
-              text += "\n" + JSON.stringify(data, null, 2);
+              text += "\\n" + JSON.stringify(data, null, 2);
             } catch (_jsonErr) {
-              text += "\n" + String(data);
+              text += "\\n" + String(data);
             }
           }
-          bulkEmailDebugEl.textContent = (text + "\n\n" + bulkEmailDebugEl.textContent).slice(0, 20000);
+          bulkEmailDebugEl.textContent = (text + "\\n\\n" + bulkEmailDebugEl.textContent).slice(0, 20000);
         }
 
         function _parseEmailList(text) {
