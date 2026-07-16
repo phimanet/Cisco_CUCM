@@ -1047,6 +1047,43 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
   created_phone_id = str(created_phone.get("id", "") or "").strip()
   created_phone_name = str(created_phone.get("name", "") or display_name).strip()
 
+  def _pick_station_id(entities: list, phone_id: str, phone_name: str) -> str:
+    phone_id_l = (phone_id or "").strip().lower()
+    phone_name_l = (phone_name or "").strip().lower()
+    best_id = ""
+    best_score = -1
+
+    for item in entities:
+      if not isinstance(item, dict):
+        continue
+
+      candidate_id = str(item.get("id", "") or "").strip()
+      if not candidate_id:
+        continue
+
+      score = 0
+      candidate_name = str(item.get("name", "") or item.get("stationName", "") or "").strip().lower()
+      if candidate_name and phone_name_l and candidate_name == phone_name_l:
+        score += 40
+
+      state_value = str(item.get("state", "") or "").strip().lower()
+      if state_value == "active":
+        score += 10
+
+      phone_obj = item.get("phone") if isinstance(item.get("phone"), dict) else {}
+      phone_obj_id = str(phone_obj.get("id", "") or "").strip().lower()
+      phone_obj_name = str(phone_obj.get("name", "") or "").strip().lower()
+      if phone_obj_id and phone_id_l and phone_obj_id == phone_id_l:
+        score += 100
+      if phone_obj_name and phone_name_l and phone_obj_name == phone_name_l:
+        score += 60
+
+      if score > best_score:
+        best_score = score
+        best_id = candidate_id
+
+    return best_id
+
   if not created_phone_id:
     return {
       "ok": False,
@@ -1065,12 +1102,14 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
     )
     if ok_stations:
       entities = stations_body.get("entities", []) if isinstance(stations_body, dict) else []
-      for item in entities:
-        if not isinstance(item, dict):
-          continue
-        station_id = str(item.get("id", "") or "").strip()
-        if station_id:
-          break
+      station_id = _pick_station_id(entities, created_phone_id, created_phone_name)
+      if not station_id and entities:
+        for item in entities:
+          if not isinstance(item, dict):
+            continue
+          station_id = str(item.get("id", "") or "").strip()
+          if station_id:
+            break
       if station_id:
         break
       station_errors.append("No station found, retrying")
