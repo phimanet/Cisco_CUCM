@@ -1208,6 +1208,26 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
             f"/api/v2/users/{resolved_user_id}/station/defaultstation/{existing_station_id}",
           )
           if ok_assoc_existing or assoc_existing_status == 202:
+            # Guard against ghost assignments: only succeed when we can resolve
+            # a concrete station/phone name after reassociation.
+            ok_user_verify, user_verify_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{resolved_user_id}")
+            ok_routing_verify, routing_verify_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{resolved_user_id}/routingstatus")
+            ok_assoc_verify, assoc_verify_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{resolved_user_id}/stationassociations")
+
+            verified_existing_name = _genesys_extract_webrtc_phone(
+              user_verify_payload if ok_user_verify and isinstance(user_verify_payload, dict) else {},
+              routing_verify_payload if ok_routing_verify and isinstance(routing_verify_payload, dict) else {},
+              assoc_verify_payload if ok_assoc_verify and isinstance(assoc_verify_payload, dict) else {},
+            )
+
+            if not str(verified_existing_name or "").strip():
+              return {
+                "ok": False,
+                "error": "Genesys reports WebRTC already assigned, but no station/phone name is discoverable (ghost assignment). Clear stale assignment in Genesys and retry.",
+                "region": clean_region,
+                "create_mode": "existing",
+              }
+
             assoc_existing_text = "Already Present+Associated"
             if assoc_existing_status == 202:
               assoc_existing_text = "Already Present (association accepted and pending propagation)"
@@ -1215,7 +1235,7 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
               "ok": True,
               "region": clean_region,
               "phone_id": "",
-              "phone_name": existing_station_name,
+              "phone_name": str(verified_existing_name or existing_station_name or "").strip(),
               "create_mode": "existing",
               "association_result": assoc_existing_text,
               "already_present": True,
