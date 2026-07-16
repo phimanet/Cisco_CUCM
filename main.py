@@ -427,6 +427,7 @@ GENESYS_WEBRTC_TEMPLATE_PATH = os.path.join(
   "toolkit",
   "genesys_webrtc_phone_template.json",
 )
+GENESYS_WEBRTC_LINE_BASE_SETTINGS_CACHE = {}
 STRIKE_MASK_HISTORY_LOCK = threading.Lock()
 STRIKE_MASK_HISTORY_FIELDS = [
   "timestamp",
@@ -881,6 +882,19 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
 
   if not resolved_user_name and clean_user_email:
     resolved_user_name = clean_user_email.split("@", 1)[0]
+
+  if not line_base_settings_id and base_settings_id:
+    line_lookup_result = _genesys_lookup_webrtc_line_base_settings_id(clean_region, access_token, base_settings_id)
+    if not line_lookup_result.get("ok"):
+      return {
+        "ok": False,
+        "error": line_lookup_result.get("error", "Failed to resolve WebRTC line base settings."),
+        "region": clean_region,
+      }
+    line_base_settings_id = str(line_lookup_result.get("line_base_settings_id", "") or "").strip()
+    if line_base_settings_id:
+      GENESYS_WEBRTC_LINE_BASE_SETTINGS_CACHE[base_settings_id] = line_base_settings_id
+      GENESYS_WEBRTC_LINE_BASE_SETTINGS_CACHE[f"{base_settings_id}:line_name"] = str(line_lookup_result.get("line_name", "") or "").strip()
 
   if not site_id or not base_settings_id:
     return {
@@ -1621,6 +1635,69 @@ def _genesys_lookup_user_by_email(region: str, access_token: str, user_email: st
     }
 
   return {"ok": False, "error": f"No Genesys user found for email {clean_email}."}
+
+
+def _genesys_lookup_webrtc_line_base_settings_id(region: str, access_token: str, phone_base_settings_id: str) -> dict:
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+  clean_phone_base_settings_id = (phone_base_settings_id or "").strip()
+  if not clean_phone_base_settings_id:
+    return {"ok": False, "error": "phone_base_settings_id is required."}
+
+  cached_line_id = str(GENESYS_WEBRTC_LINE_BASE_SETTINGS_CACHE.get(clean_phone_base_settings_id, "") or "").strip()
+  if cached_line_id:
+    return {
+      "ok": True,
+      "region": clean_region,
+      "phone_base_settings_id": clean_phone_base_settings_id,
+      "line_base_settings_id": cached_line_id,
+      "line_name": str(GENESYS_WEBRTC_LINE_BASE_SETTINGS_CACHE.get(f"{clean_phone_base_settings_id}:line_name", "") or "").strip(),
+      "source": "cache",
+    }
+
+  ok_base, base_payload, err_base = _genesys_get_json(
+    api_base,
+    access_token,
+    f"/api/v2/telephony/providers/edges/phonebasesettings/{clean_phone_base_settings_id}",
+  )
+  if not ok_base:
+    return {
+      "ok": False,
+      "error": err_base or "Failed to load phone base settings.",
+      "region": clean_region,
+      "phone_base_settings_id": clean_phone_base_settings_id,
+    }
+
+  lines = base_payload.get("lines", []) if isinstance(base_payload, dict) else []
+  if not isinstance(lines, list) or not lines:
+    return {
+      "ok": False,
+      "error": f"Phone base settings {clean_phone_base_settings_id} does not include any lines.",
+      "region": clean_region,
+      "phone_base_settings_id": clean_phone_base_settings_id,
+    }
+
+  first_line = lines[0] if isinstance(lines[0], dict) else {}
+  line_base_settings_id = str(
+    (first_line.get("lineBaseSettings") or {}).get("id", "")
+    or first_line.get("id", "")
+    or ""
+  ).strip()
+  if not line_base_settings_id:
+    return {
+      "ok": False,
+      "error": f"Phone base settings {clean_phone_base_settings_id} returned a line without a lineBaseSettings.id.",
+      "region": clean_region,
+      "phone_base_settings_id": clean_phone_base_settings_id,
+    }
+
+  return {
+    "ok": True,
+    "region": clean_region,
+    "phone_base_settings_id": clean_phone_base_settings_id,
+    "line_base_settings_id": line_base_settings_id,
+    "line_name": str(first_line.get("name", "") or "").strip(),
+    "source": "api",
+  }
 
 
 def _build_phone_template_summary(phone_entity: dict, fallback_template: dict) -> dict:
