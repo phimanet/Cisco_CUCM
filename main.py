@@ -11549,7 +11549,7 @@ def genesys_admin_placeholder(request: Request):
 
           <div id="genesys-bulk-email-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
             <h3 style="margin-top:0;">Bulk WebRTC build</h3>
-            <form id="genesys-bulk-email-form" onsubmit="return false;">
+            <form id="genesys-bulk-email-form" method="post" action="/genesys/users/build-webrtc-emails">
               <div class="search-filter-row" style="align-items:flex-start;">
                 <textarea name="email_list" placeholder="Paste 1 or more email addresses here, one per line or comma-separated." style="width:100%; min-height:170px; resize:vertical; padding:10px; border-radius:10px; border:1px solid var(--amn-border);"></textarea>
               </div>
@@ -11601,7 +11601,7 @@ def genesys_admin_placeholder(request: Request):
 
               function parseEmails(text) {
                 return String(text || "")
-                  .split(/[\n,;\s]+/)
+                  .split(/[\\n,;\\s]+/)
                   .map(function (item) { return String(item || "").trim().toLowerCase(); })
                   .filter(function (item, index, allItems) {
                     return Boolean(item) && allItems.indexOf(item) === index && item.indexOf("@") > 0;
@@ -11823,7 +11823,7 @@ def genesys_admin_placeholder(request: Request):
 
         function _parseEmailList(text) {
           return String(text || "")
-            .split(/[\n,;\s]+/)
+            .split(/[\\n,;\\s]+/)
             .map(function (item) { return String(item || "").trim().toLowerCase(); })
             .filter(function (item, index, allItems) {
               return Boolean(item) && allItems.indexOf(item) === index && item.indexOf("@") > 0;
@@ -13120,6 +13120,49 @@ def genesys_build_webrtc_batch_route(users_json: str = Form("")):
     "failure_count": failure_count,
     "results": results,
   })
+
+
+@app.post("/genesys/users/build-webrtc-emails")
+def genesys_build_webrtc_emails_route(request: Request, email_list: str = Form("")):
+  """Server-side fallback for bulk email build when browser JS is unavailable/broken."""
+  text_value = (email_list or "").strip()
+  if not text_value:
+    return RedirectResponse(url="/genesys-admin", status_code=303)
+
+  # Normalize like the browser path: split on whitespace/comma/semicolon and de-dup.
+  candidates = re.split(r"[\n,;\s]+", text_value)
+  seen = set()
+  users = []
+  for raw in candidates:
+    email = str(raw or "").strip().lower()
+    if not email or "@" not in email or email in seen:
+      continue
+    seen.add(email)
+    users.append({"user_id": "", "user_name": "", "user_email": email})
+
+  if not users:
+    return RedirectResponse(url="/genesys-admin", status_code=303)
+
+  # Reuse existing batch logic directly (single token, same behavior).
+  batch_resp = genesys_build_webrtc_batch_route(users_json=json.dumps(users))
+  payload = {}
+  try:
+    payload = json.loads(batch_resp.body.decode("utf-8")) if getattr(batch_resp, "body", None) else {}
+  except Exception:
+    payload = {}
+
+  # Persist one-line summary for immediate operator feedback in the page.
+  session = _get_auth_session(request) or {}
+  if isinstance(session, dict):
+    if payload.get("ok"):
+      session["genesys_bulk_flash"] = (
+        f"Bulk build complete: Processed {int(payload.get('success_count', 0))} of {int(payload.get('requested', len(users)))} email(s). "
+        f"Failed: {int(payload.get('failure_count', 0))}."
+      )
+    else:
+      session["genesys_bulk_flash"] = str(payload.get("error", "Bulk build failed."))
+
+  return RedirectResponse(url="/genesys-admin", status_code=303)
 
 
 @app.post("/genesys/users/queues-by-id")
