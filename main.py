@@ -1174,6 +1174,66 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
     create_errors.append(f"{mode_name}: {create_err}")
 
   if not created_phone:
+    create_error_text = " | ".join(create_errors).strip().lower()
+    # Genesys may reject create with "already assigned" even when lookup endpoints
+    # do not surface the existing phone name; recover by resolving station directly.
+    if "already been assigned to this user" in create_error_text:
+      ok_existing_stations, existing_stations_payload, existing_stations_err = _genesys_get_json(
+        api_base,
+        access_token,
+        "/api/v2/stations",
+        params={"webRtcUserId": resolved_user_id},
+      )
+      if ok_existing_stations:
+        existing_entities = existing_stations_payload.get("entities", []) if isinstance(existing_stations_payload, dict) else []
+        existing_station_id = _pick_station_id(existing_entities, "", "")
+        existing_station_name = ""
+        if existing_station_id:
+          for item in existing_entities:
+            if not isinstance(item, dict):
+              continue
+            if str(item.get("id", "") or "").strip() == existing_station_id:
+              existing_station_name = str(item.get("name", "") or item.get("stationName", "") or "").strip()
+              break
+        if not existing_station_id and existing_entities:
+          first = existing_entities[0] if isinstance(existing_entities[0], dict) else {}
+          existing_station_id = str(first.get("id", "") or "").strip()
+          existing_station_name = str(first.get("name", "") or first.get("stationName", "") or "").strip()
+
+        if existing_station_id:
+          ok_assoc_existing, _, assoc_existing_err, assoc_existing_status = _genesys_send_json(
+            "PUT",
+            api_base,
+            access_token,
+            f"/api/v2/users/{resolved_user_id}/station/defaultstation/{existing_station_id}",
+          )
+          if ok_assoc_existing or assoc_existing_status == 202:
+            assoc_existing_text = "Already Present+Associated"
+            if assoc_existing_status == 202:
+              assoc_existing_text = "Already Present (association accepted and pending propagation)"
+            return {
+              "ok": True,
+              "region": clean_region,
+              "phone_id": "",
+              "phone_name": existing_station_name,
+              "create_mode": "existing",
+              "association_result": assoc_existing_text,
+              "already_present": True,
+            }
+          return {
+            "ok": False,
+            "error": f"Existing WebRTC phone appears assigned, but reassociation failed: PUT {assoc_existing_status} {assoc_existing_err}",
+            "region": clean_region,
+            "create_mode": "existing",
+          }
+
+      return {
+        "ok": False,
+        "error": "Existing WebRTC phone appears assigned, but station lookup failed: " + (existing_stations_err or "Unknown error"),
+        "region": clean_region,
+        "create_mode": "existing",
+      }
+
     return {
       "ok": False,
       "error": " | ".join(create_errors) if create_errors else "Phone creation failed.",
