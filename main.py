@@ -11832,7 +11832,16 @@ def genesys_admin_placeholder(request: Request):
                     method: "POST",
                     body: formData,
                   });
-                  const payload = await response.json();
+                  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+                  const rawBody = await response.text();
+                  let payload = {};
+                  try {
+                    payload = contentType.indexOf("application/json") >= 0
+                      ? JSON.parse(rawBody || "{}")
+                      : { ok: false, error: rawBody || (response.ok ? "Unexpected non-JSON response." : "Request failed.") };
+                  } catch (_parseErr) {
+                    payload = { ok: false, error: rawBody || "Unable to parse bulk build response." };
+                  }
                   appendDebug("Bulk build HTTP response.", {
                     status: response.status,
                     ok: response.ok,
@@ -11846,7 +11855,7 @@ def genesys_admin_placeholder(request: Request):
                   });
 
                   if (!response.ok || !payload.ok) {
-                    throw new Error((payload && payload.error) || "Batch build failed.");
+                    throw new Error((payload && payload.error) || rawBody || "Batch build failed.");
                   }
 
                   const results = Array.isArray(payload.results) ? payload.results : [];
