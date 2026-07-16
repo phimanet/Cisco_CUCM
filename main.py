@@ -1293,7 +1293,7 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
 
   station_id = ""
   station_errors = []
-  for attempt in range(6):
+  for attempt in range(12):
     ok_stations, stations_body, stations_err = _genesys_get_json(
       api_base,
       access_token,
@@ -1316,8 +1316,8 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
     else:
       station_errors.append(stations_err or "Station lookup failed")
 
-    if attempt < 5:
-      time.sleep(1)
+    if attempt < 11:
+      time.sleep(2)
 
   if not station_id:
     return {
@@ -1373,10 +1373,13 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
   verified_station_name = ""
   verified_station_id = ""
   verification_errors = []
-  for attempt in range(6):
+  for attempt in range(12):
     ok_user, user_payload, err_user = _genesys_get_json(api_base, access_token, f"/api/v2/users/{resolved_user_id}")
+    ok_assoc_verify, assoc_verify_payload, err_assoc_verify = _genesys_get_json(api_base, access_token, f"/api/v2/users/{resolved_user_id}/stationassociations")
     if not ok_user:
       verification_errors.append(err_user or "User verification failed")
+    if not ok_assoc_verify:
+      verification_errors.append(err_assoc_verify or "Station associations verification failed")
     else:
       user_station = user_payload.get("station") if isinstance(user_payload.get("station"), dict) else {}
       verified_station_id = str(user_station.get("id", "") or "").strip()
@@ -1385,9 +1388,17 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
         break
       if verified_station_name and created_phone_name and verified_station_name.lower() == created_phone_name.lower():
         break
+      verified_assoc_name = _genesys_extract_webrtc_phone(
+        user_payload if ok_user and isinstance(user_payload, dict) else {},
+        {},
+        assoc_verify_payload if ok_assoc_verify and isinstance(assoc_verify_payload, dict) else {},
+      )
+      if str(verified_assoc_name or "").strip():
+        verified_station_name = str(verified_assoc_name or "").strip()
+        break
 
-    if attempt < 5:
-      time.sleep(1)
+    if attempt < 11:
+      time.sleep(2)
 
   if not verified_station_name and not verified_station_id:
     if ok_assoc and assoc_status == 202:
