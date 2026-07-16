@@ -11721,6 +11721,7 @@ def genesys_admin_placeholder(request: Request):
                 body: formData,
               });
               let payload = null;
+              try {
                 payload = await response.json();
               } catch (jsonErr) {
                 payload = {
@@ -11729,7 +11730,7 @@ def genesys_admin_placeholder(request: Request):
                   http_status: response.status,
                 };
               }
-              renderUserDebug(payload);
+
               if (!response.ok || !payload.ok) {
                 throw new Error((payload && payload.error) || "Genesys lookup failed.");
               }
@@ -11930,7 +11931,7 @@ def genesys_admin_placeholder(request: Request):
           });
         }
 
-        if (orgSnapshotBtn && statusEl && rawDownloadEl && debugWrapEl && debugEl) {
+        if (orgSnapshotBtn && statusEl && rawDownloadEl) {
           orgSnapshotBtn.addEventListener("click", async function () {
             const originalText = orgSnapshotBtn.textContent;
             orgSnapshotBtn.disabled = true;
@@ -11942,8 +11943,6 @@ def genesys_admin_placeholder(request: Request):
                 method: "POST",
               });
               const payload = await response.json();
-              debugEl.textContent = JSON.stringify(payload, null, 2);
-              debugWrapEl.style.display = "block";
 
               if (!response.ok || !payload.ok) {
                 throw new Error((payload && payload.error) || "Org snapshot failed.");
