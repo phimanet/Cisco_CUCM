@@ -799,6 +799,104 @@ def _genesys_search_users_by_name(
   }
 
 
+def _genesys_search_users_by_email_targets(
+  region: str,
+  access_token: str,
+  email_targets: set[str],
+) -> dict:
+  clean_email_targets = {
+    (item or "").strip().lower()
+    for item in (email_targets or set())
+    if (item or "").strip()
+  }
+  if not clean_email_targets:
+    return {"ok": False, "error": "At least one email is required."}
+
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+  users_url = f"{api_base}/api/v2/users"
+  page_size = max(25, min(GENESYS_USERS_PAGE_SIZE, 200))
+  max_pages = 200
+  headers = {"Authorization": f"Bearer {access_token}"}
+
+  rows = []
+  seen_ids = set()
+  matched_emails = set()
+  page_number = 1
+  pages_scanned = 0
+  users_scanned = 0
+
+  while page_number <= max_pages:
+    try:
+      response = requests.get(
+        users_url,
+        params={
+          "pageSize": page_size,
+          "pageNumber": page_number,
+        },
+        headers=headers,
+        timeout=25,
+      )
+      payload = response.json() if response.text else {}
+    except Exception as exc:
+      return {"ok": False, "error": f"Genesys user lookup failed: {exc}"}
+
+    if response.status_code != 200:
+      message = str(payload.get("message", "") or payload.get("error", "")).strip() or f"HTTP {response.status_code}"
+      return {"ok": False, "error": f"Genesys user lookup failed: {message}"}
+
+    entities = payload.get("entities", []) or []
+    pages_scanned += 1
+    users_scanned += len(entities)
+    for user in entities:
+      email = str(user.get("email", "") or "").strip().lower()
+      if email not in clean_email_targets:
+        continue
+
+      user_id = str(user.get("id", "") or "").strip()
+      if user_id and user_id in seen_ids:
+        continue
+      if user_id:
+        seen_ids.add(user_id)
+
+      rows.append({
+        "id": user_id,
+        "name": str(user.get("name", "") or "").strip(),
+        "email": str(user.get("email", "") or "").strip(),
+        "username": str(user.get("username", "") or "").strip(),
+        "state": str(user.get("state", "") or "").strip(),
+      })
+      matched_emails.add(email)
+
+    next_uri = str(payload.get("nextUri", "") or payload.get("next_uri", "")).strip()
+    page_count_raw = payload.get("pageCount", 0)
+    try:
+      page_count = int(page_count_raw or 0)
+    except Exception:
+      page_count = 0
+
+    if matched_emails >= clean_email_targets:
+      break
+    if next_uri:
+      page_number += 1
+      continue
+    if page_count and page_number < page_count:
+      page_number += 1
+      continue
+    if len(entities) >= page_size:
+      page_number += 1
+      continue
+    break
+
+  rows.sort(key=lambda item: ((item.get("name") or "").lower(), (item.get("email") or "").lower()))
+  return {
+    "ok": True,
+    "region": clean_region,
+    "rows": rows,
+    "pages_scanned": pages_scanned,
+    "users_scanned": users_scanned,
+  }
+
+
 def _genesys_get_json(api_base: str, access_token: str, path: str, params: dict | None = None) -> tuple[bool, dict, str]:
   headers = {"Authorization": f"Bearer {access_token}"}
   url = f"{api_base}{path}"
@@ -1608,14 +1706,7 @@ def _genesys_lookup_user_by_email(region: str, access_token: str, user_email: st
   if not clean_email:
     return {"ok": False, "error": "User email is required."}
 
-  lookup_result = _genesys_search_users_by_name(
-    region,
-    access_token,
-    last_name="",
-    first_name="",
-    username_query=clean_email,
-    email_targets={clean_email},
-  )
+  lookup_result = _genesys_search_users_by_email_targets(region, access_token, {clean_email})
   if not lookup_result.get("ok"):
     return lookup_result
 
@@ -12033,14 +12124,26 @@ def genesys_extract_users_route(
       # Non-blocking: Genesys direct lookup still runs.
       pass
 
-  search_result = _genesys_search_users_by_name(
-    token_result.get("region", clean_region),
-    token_result.get("access_token", ""),
-    clean_last,
-    clean_first,
-    clean_username,
-    cucm_email_targets,
-  )
+  search_result = {"ok": False, "rows": []}
+  if cucm_email_targets:
+    exact_email_result = _genesys_search_users_by_email_targets(
+      token_result.get("region", clean_region),
+      token_result.get("access_token", ""),
+      cucm_email_targets,
+    )
+    if exact_email_result.get("ok") and exact_email_result.get("rows"):
+      search_result = exact_email_result
+    elif not search_result.get("ok"):
+      search_result = exact_email_result
+  if not search_result.get("ok") or not search_result.get("rows"):
+    search_result = _genesys_search_users_by_name(
+      token_result.get("region", clean_region),
+      token_result.get("access_token", ""),
+      clean_last,
+      clean_first,
+      clean_username,
+      cucm_email_targets,
+    )
   if not search_result.get("ok"):
     return JSONResponse({
       "ok": False,
