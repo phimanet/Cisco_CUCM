@@ -847,14 +847,40 @@ def _genesys_send_json(
   return True, body if isinstance(body, dict) else {}, "", response.status_code
 
 
-def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id: str, user_name: str) -> dict:
+def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id: str, user_name: str, user_email: str = "") -> dict:
   clean_region, _, api_base = _genesys_region_to_urls(region)
   fallback_template = _load_genesys_webrtc_template()
 
+  clean_user_email = (user_email or "").strip().lower()
   site_id = str(fallback_template.get("site_id", "") or "").strip()
   base_settings_id = str(fallback_template.get("phone_base_settings_id", "") or "").strip()
+  line_base_settings_id = str(fallback_template.get("line_base_settings_id", "") or "").strip()
   standalone = bool(fallback_template.get("standalone", False))
   display_name = str(user_name or "").strip() or f"WebRTC-{user_id[:8]}"
+
+  resolved_user_id = (user_id or "").strip()
+  resolved_user_name = (user_name or "").strip()
+
+  if not resolved_user_id and clean_user_email:
+    lookup_result = _genesys_lookup_user_by_email(clean_region, access_token, clean_user_email)
+    if not lookup_result.get("ok"):
+      return {
+        "ok": False,
+        "error": lookup_result.get("error", "Could not resolve user by email."),
+        "region": clean_region,
+      }
+    resolved_user_id = str(lookup_result.get("user_id", "") or "").strip()
+    resolved_user_name = str(lookup_result.get("user_name", "") or resolved_user_name).strip()
+
+  if not resolved_user_id:
+    return {
+      "ok": False,
+      "error": "A Genesys user ID or email is required.",
+      "region": clean_region,
+    }
+
+  if not resolved_user_name and clean_user_email:
+    resolved_user_name = clean_user_email.split("@", 1)[0]
 
   if not site_id or not base_settings_id:
     return {
@@ -870,9 +896,15 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
     "standAlone": standalone,
   }
 
+  if line_base_settings_id:
+    base_payload["lines"] = [{
+      "name": "Line 1",
+      "lineBaseSettings": {"id": line_base_settings_id},
+    }]
+
   attempts = [
-    ("webRtcUser", {**base_payload, "webRtcUser": {"id": user_id}}),
-    ("user", {**base_payload, "user": {"id": user_id}}),
+    ("webRtcUser", {**base_payload, "webRtcUser": {"id": resolved_user_id, "name": resolved_user_name}}),
+    ("user", {**base_payload, "user": {"id": resolved_user_id, "name": resolved_user_name}}),
     ("base", base_payload),
   ]
 
@@ -903,19 +935,57 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
   created_phone_id = str(created_phone.get("id", "") or "").strip()
   created_phone_name = str(created_phone.get("name", "") or display_name).strip()
 
-  association_result = "Created"
-  if create_mode == "base" and created_phone_id:
-    ok_assoc, _, assoc_err, assoc_status = _genesys_send_json(
-      "POST",
+  if not created_phone_id:
+    return {
+      "ok": False,
+      "error": "Phone was created but no phone id was returned.",
+      "region": clean_region,
+    }
+
+  station_id = ""
+  station_errors = []
+  for _ in range(6):
+    ok_stations, stations_body, stations_err, _ = _genesys_send_json(
+      "GET",
       api_base,
       access_token,
-      f"/api/v2/users/{user_id}/stationassociations",
-      {"station": {"id": created_phone_id}},
+      "/api/v2/stations",
+      params={"webRtcUserId": resolved_user_id},
     )
-    if ok_assoc:
-      association_result = "Created+Associated"
+    if ok_stations:
+      entities = stations_body.get("entities", []) if isinstance(stations_body, dict) else []
+      for item in entities:
+        if not isinstance(item, dict):
+          continue
+        station_id = str(item.get("id", "") or "").strip()
+        if station_id:
+          break
+      if station_id:
+        break
+      station_errors.append("No station found, retrying")
     else:
-      association_result = f"Created (association pending: {assoc_status} {assoc_err})"
+      station_errors.append(stations_err or "Station lookup failed")
+
+  if not station_id:
+    return {
+      "ok": False,
+      "error": "Could not resolve station for the new WebRTC phone." if not station_errors else "Could not resolve station for the new WebRTC phone: " + " | ".join(station_errors),
+      "region": clean_region,
+      "phone_id": created_phone_id,
+      "phone_name": created_phone_name,
+      "create_mode": create_mode,
+    }
+
+  ok_assoc, _, assoc_err, assoc_status = _genesys_send_json(
+    "PUT",
+    api_base,
+    access_token,
+    f"/api/v2/users/{resolved_user_id}/station/defaultstation/{station_id}",
+  )
+  if ok_assoc:
+    association_result = "Created+Associated"
+  else:
+    association_result = f"Created (default station association pending: {assoc_status} {assoc_err})"
 
   return {
     "ok": True,
@@ -1511,9 +1581,46 @@ def _load_genesys_webrtc_template() -> dict:
     "source_phone_name": "",
     "site_id": "",
     "phone_base_settings_id": "",
+    "line_base_settings_id": "",
     "standalone": False,
     "line_count": 0,
   }
+
+
+def _genesys_lookup_user_by_email(region: str, access_token: str, user_email: str) -> dict:
+  clean_email = (user_email or "").strip().lower()
+  if not clean_email:
+    return {"ok": False, "error": "User email is required."}
+
+  lookup_result = _genesys_search_users_by_name(
+    region,
+    access_token,
+    last_name="",
+    first_name="",
+    username_query=clean_email,
+    email_targets={clean_email},
+  )
+  if not lookup_result.get("ok"):
+    return lookup_result
+
+  rows = lookup_result.get("rows", []) if isinstance(lookup_result, dict) else []
+  for row in rows:
+    if not isinstance(row, dict):
+      continue
+    row_email = str(row.get("email", "") or "").strip().lower()
+    if row_email == clean_email:
+      return {"ok": True, "user_id": str(row.get("id", "") or "").strip(), "user_name": str(row.get("name", "") or "").strip(), "email": row_email}
+
+  if rows:
+    first_row = rows[0] if isinstance(rows[0], dict) else {}
+    return {
+      "ok": True,
+      "user_id": str(first_row.get("id", "") or "").strip(),
+      "user_name": str(first_row.get("name", "") or "").strip(),
+      "email": str(first_row.get("email", "") or "").strip().lower(),
+    }
+
+  return {"ok": False, "error": f"No Genesys user found for email {clean_email}."}
 
 
 def _build_phone_template_summary(phone_entity: dict, fallback_template: dict) -> dict:
@@ -11152,10 +11259,13 @@ def genesys_admin_placeholder(request: Request):
           }
         }
 
-        async function _runSingleBuild(userId, userName) {
+        async function _runSingleBuild(userId, userName, userEmail) {
           const buildForm = new FormData();
           buildForm.append("user_id", userId);
           buildForm.append("user_name", userName);
+          if (userEmail) {
+            buildForm.append("user_email", userEmail);
+          }
 
           const buildResponse = await fetch("/genesys/users/build-webrtc", {
             method: "POST",
@@ -11266,7 +11376,7 @@ def genesys_admin_placeholder(request: Request):
               html += "</tr></thead><tbody>";
               rows.forEach(function (row, i) {
                 const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
-                html += "<tr style='background:" + bg + ";' data-user-id='" + (row.id || "") + "'>";
+                html += "<tr style='background:" + bg + ";' data-user-id='" + (row.id || "") + "' data-user-email='" + _escapeHtml(row.email || "") + "'>";
                 html += "<td>" + (row.name || "") + "</td>";
                 html += "<td>" + (row.username || "") + "</td>";
                 html += "<td>" + (row.division || "") + "</td>";
@@ -11295,6 +11405,8 @@ def genesys_admin_placeholder(request: Request):
                 btn.addEventListener("click", async function () {
                   const userId = String(btn.getAttribute("data-user-id") || "").trim();
                   const userName = String(btn.getAttribute("data-user-name") || "").trim();
+                  const row = btn.closest("tr");
+                  const userEmail = row ? String(row.getAttribute("data-user-email") || "").trim() : "";
                   if (!userId) return;
 
                   btn.disabled = true;
@@ -11303,7 +11415,7 @@ def genesys_admin_placeholder(request: Request):
                   statusEl.textContent = "Building WebRTC phone for " + userName + "...";
 
                   try {
-                    const buildPayload = await _runSingleBuild(userId, userName);
+                    const buildPayload = await _runSingleBuild(userId, userName, userEmail);
                     _markBuildSuccess(btn, buildPayload);
                     lastUserRows = lastUserRows.map(function (row) {
                       if (String((row && row.id) || "") !== userId) {
@@ -11336,6 +11448,7 @@ def genesys_admin_placeholder(request: Request):
                       return {
                         user_id: String(row.id || "").trim(),
                         user_name: String(row.name || "").trim(),
+                        user_email: String(row.email || "").trim(),
                       };
                     });
 
@@ -12031,13 +12144,15 @@ def genesys_extract_all_queues_route():
 def genesys_build_webrtc_route(
   user_id: str = Form(""),
   user_name: str = Form(""),
+  user_email: str = Form(""),
 ):
   clean_user_id = (user_id or "").strip()
   clean_user_name = (user_name or "").strip()
+  clean_user_email = (user_email or "").strip().lower()
   clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
 
-  if not clean_user_id:
-    return JSONResponse({"ok": False, "error": "user_id is required."}, status_code=400)
+  if not clean_user_id and not clean_user_email:
+    return JSONResponse({"ok": False, "error": "user_id or user_email is required."}, status_code=400)
 
   token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
   if not token_result.get("ok"):
@@ -12051,6 +12166,7 @@ def genesys_build_webrtc_route(
     token_result.get("access_token", ""),
     clean_user_id,
     clean_user_name,
+    clean_user_email,
   )
   if not build_result.get("ok"):
     return JSONResponse({
@@ -12089,9 +12205,10 @@ def genesys_build_webrtc_batch_route(users_json: str = Form("")):
       continue
     clean_user_id = str(entry.get("user_id", "") or "").strip()
     clean_user_name = str(entry.get("user_name", "") or "").strip()
-    if not clean_user_id:
+    clean_user_email = str(entry.get("user_email", "") or "").strip().lower()
+    if not clean_user_id and not clean_user_email:
       continue
-    users.append({"user_id": clean_user_id, "user_name": clean_user_name})
+    users.append({"user_id": clean_user_id, "user_name": clean_user_name, "user_email": clean_user_email})
 
   if not users:
     return JSONResponse({"ok": False, "error": "No valid users were provided."}, status_code=400)
@@ -12114,6 +12231,7 @@ def genesys_build_webrtc_batch_route(users_json: str = Form("")):
       access_token,
       user["user_id"],
       user["user_name"],
+      user.get("user_email", ""),
     )
     if build_result.get("ok"):
       success_count += 1
@@ -12121,6 +12239,7 @@ def genesys_build_webrtc_batch_route(users_json: str = Form("")):
         "ok": True,
         "user_id": user["user_id"],
         "user_name": user["user_name"],
+        "user_email": user.get("user_email", ""),
         "phone_id": build_result.get("phone_id", ""),
         "phone_name": build_result.get("phone_name", ""),
         "create_mode": build_result.get("create_mode", ""),
@@ -12131,6 +12250,7 @@ def genesys_build_webrtc_batch_route(users_json: str = Form("")):
         "ok": False,
         "user_id": user["user_id"],
         "user_name": user["user_name"],
+        "user_email": user.get("user_email", ""),
         "error": build_result.get("error", "WebRTC phone build failed."),
       })
 

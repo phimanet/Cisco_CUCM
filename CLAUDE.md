@@ -268,6 +268,7 @@ Priority keys:
 - Genesys Admin page now includes a bulk start action: **Start Build Missing WebRTC Phones**, which queues all currently listed users missing WebRTC phones and runs one batch build request.
 - Added backend batch route `/genesys/users/build-webrtc-batch` to process up to 100 users per run with a single Genesys token and per-user success/failure output.
 - Genesys user result rows now update in-place after single or batch build runs (WebRTC phone column + action state), and the page displays a batch summary with failed-user details.
+- WebRTC build helper now uses the official Genesys default-station flow after phone creation and can resolve the target user by email when that is the available identifier.
 
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
