@@ -1141,35 +1141,58 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
     association_result = "Created+Associated"
 
   verified_station_name = ""
+  verified_station_id = ""
   verification_errors = []
   for attempt in range(6):
     ok_user, user_payload, err_user = _genesys_get_json(api_base, access_token, f"/api/v2/users/{resolved_user_id}")
     if not ok_user:
       verification_errors.append(err_user or "User verification failed")
     else:
-      ok_routing, routing_payload, err_routing = _genesys_get_json(api_base, access_token, f"/api/v2/users/{resolved_user_id}/routingstatus")
-      ok_station_assoc, station_associations_payload, err_station_assoc = _genesys_get_json(
-        api_base,
-        access_token,
-        f"/api/v2/users/{resolved_user_id}/stationassociations",
-      )
-      if not ok_routing and err_routing:
-        verification_errors.append(err_routing)
-      if not ok_station_assoc and err_station_assoc:
-        verification_errors.append(err_station_assoc)
-
-      verified_station_name = _genesys_extract_webrtc_phone(
-        user_payload,
-        routing_payload if ok_routing else {},
-        station_associations_payload if ok_station_assoc else {},
-      )
-      if verified_station_name:
+      user_station = user_payload.get("station") if isinstance(user_payload.get("station"), dict) else {}
+      verified_station_id = str(user_station.get("id", "") or "").strip()
+      verified_station_name = str(user_station.get("name", "") or "").strip()
+      if verified_station_id and station_id and verified_station_id == station_id:
+        break
+      if verified_station_name and created_phone_name and verified_station_name.lower() == created_phone_name.lower():
         break
 
     if attempt < 5:
       time.sleep(1)
 
+  if not verified_station_name and not verified_station_id:
+    if ok_assoc and assoc_status == 202:
+      association_result = "Created (default station assignment accepted and pending propagation)"
+    elif ok_assoc:
+      failure_reason = " | ".join([part for part in verification_errors if part]).strip()
+      if not failure_reason:
+        failure_reason = "Genesys did not expose the WebRTC default station on the user record after assignment."
+      return {
+        "ok": False,
+        "error": f"Phone was created but default station assignment was not reflected on the user record: {failure_reason}",
+        "region": clean_region,
+        "phone_id": created_phone_id,
+        "phone_name": created_phone_name,
+        "create_mode": create_mode,
+        "association_result": association_result,
+      }
+    else:
+      failure_reason = " | ".join([part for part in [f"PUT {assoc_status} {assoc_err}".strip(), *verification_errors] if part]).strip()
+      if not failure_reason:
+        failure_reason = "Genesys did not expose the WebRTC station on the user record after assignment."
+      return {
+        "ok": False,
+        "error": f"Phone was created but default station assignment was not reflected on the user record: {failure_reason}",
+        "region": clean_region,
+        "phone_id": created_phone_id,
+        "phone_name": created_phone_name,
+        "create_mode": create_mode,
+        "association_result": association_result,
+      }
+
   if not verified_station_name:
+    verified_station_name = created_phone_name
+
+  if not ok_assoc and assoc_status not in {202}:
     failure_reason = " | ".join([part for part in [f"PUT {assoc_status} {assoc_err}".strip(), *verification_errors] if part]).strip()
     if not failure_reason:
       failure_reason = "Genesys did not expose the WebRTC station on the user record after assignment."
@@ -1183,7 +1206,7 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
       "association_result": association_result,
     }
 
-  if not ok_assoc:
+  if not ok_assoc and assoc_status == 202:
     association_result = f"Created (default station association pending: {assoc_status} {assoc_err})"
 
   return {
