@@ -12872,12 +12872,24 @@ def genesys_admin_placeholder(request: Request):
             if (updateSingleActionsEl) {
               updateSingleActionsEl.innerHTML = "";
               if (!payload.has_webrtc_phone) {
+                const note = document.createElement("div");
+                note.style.fontSize = "12px";
+                note.style.color = "#4e6a84";
+                note.style.marginBottom = "6px";
+                note.textContent = "WebRTC is critical path and manual-only. It will only be created when you explicitly confirm.";
+                updateSingleActionsEl.appendChild(note);
+
                 const button = document.createElement("button");
                 button.type = "button";
                 button.id = "genesys-update-build-webrtc-btn";
                 button.textContent = "Build + Attach WebRTC Phone";
                 button.style.background = "#2d7a43";
                 button.addEventListener("click", async function () {
+                  if (!window.confirm("Build and attach WebRTC phone now for " + userEmail + "?")) {
+                    updateStatusEl.textContent = "WebRTC build cancelled. No changes made.";
+                    return;
+                  }
+
                   const originalText = button.textContent;
                   button.disabled = true;
                   button.textContent = "Building...";
