@@ -12553,7 +12553,7 @@ def genesys_admin_placeholder(request: Request):
               <h4 style="margin:0 0 8px 0;">Single User Proof</h4>
               <div class="search-filter-row">
                 <input id="genesys-update-single-email" placeholder="User email (e.g. jane.doe@amnhealthcare.com)" style="width:360px;" />
-                <button type="button" id="genesys-update-single-lookup-btn" style="background:#385977;">Lookup User</button>
+                <button type="button" id="genesys-update-single-lookup-btn" style="background:#385977;" onclick="if (window.runGenesysUpdateSingleLookup) { return window.runGenesysUpdateSingleLookup(); } var s=document.getElementById('genesys-update-status'); if (s) { s.textContent='Lookup handler missing (JS did not load).'; } return false;">Lookup User</button>
                 <button type="button" id="genesys-update-single-btn" style="background:#2d7a43;">Update 1 User</button>
               </div>
               <div id="genesys-update-single-profile" style="font-size:12px; color:#4e6a84; margin-top:6px;">No user loaded.</div>
@@ -12763,8 +12763,9 @@ def genesys_admin_placeholder(request: Request):
         }
 
         async function _loadUpdateCatalog() {
+          let loadedOk = false;
           if (!updateStatusEl) {
-            return;
+            return false;
           }
           updateStatusEl.textContent = "Loading Genesys catalog (divisions, skills, queues)...";
           _setUpdateSummary("", false);
@@ -12809,6 +12810,7 @@ def genesys_admin_placeholder(request: Request):
             if (warnings.length) {
               updateStatusEl.textContent += " Warnings: " + warnings.join(" | ");
             }
+            loadedOk = true;
           } catch (err) {
             updateStatusEl.textContent = "Catalog load failed: " + ((err && err.message) || "Unknown error.");
             if (updateCatalogDownloadEl) {
@@ -12820,6 +12822,7 @@ def genesys_admin_placeholder(request: Request):
               updateLoadCatalogBtn.textContent = originalText || "Load Divisions / Skills / Queues";
             }
           }
+          return loadedOk;
         }
 
         async function _lookupSingleUserProfile() {
@@ -12827,8 +12830,14 @@ def genesys_admin_placeholder(request: Request):
             return;
           }
           if (!updateCatalogLoaded) {
-            updateStatusEl.textContent = "Load catalog first.";
-            return;
+            updateStatusEl.textContent = "Catalog not loaded yet. Loading catalog first...";
+            const ready = await _loadUpdateCatalog();
+            if (!ready && !updateCatalogLoaded) {
+              if (updateSingleProfileEl) {
+                updateSingleProfileEl.textContent = "Catalog load failed. Resolve catalog load first, then retry Lookup User.";
+              }
+              return;
+            }
           }
 
           const userEmail = String((updateSingleEmailEl && updateSingleEmailEl.value) || "").trim().toLowerCase();
@@ -13411,6 +13420,11 @@ def genesys_admin_placeholder(request: Request):
             _loadUpdateCatalog();
           });
         }
+
+        window.runGenesysUpdateSingleLookup = function () {
+          _lookupSingleUserProfile();
+          return false;
+        };
 
         if (updateSingleLookupBtn) {
           updateSingleLookupBtn.addEventListener("click", function () {
