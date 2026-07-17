@@ -3032,17 +3032,49 @@ def _genesys_apply_user_search_update(
   if update_division:
     if not clean_division_id:
       return {"ok": False, "error": "Division update requested but no division_id provided."}
-    ok_division, _, division_err, _ = _genesys_send_json(
-      "PATCH",
-      api_base,
-      access_token,
-      f"/api/v2/users/{clean_user_id}",
-      payload={"division": {"id": clean_division_id}},
-    )
-    if ok_division:
-      division_status = "updated"
-    else:
-      return {"ok": False, "error": f"Division update failed: {division_err}"}
+    division_attempts = [
+      ("PATCH", f"/api/v2/users/{clean_user_id}", {"division": {"id": clean_division_id}}),
+      ("PUT", f"/api/v2/users/{clean_user_id}", {"division": {"id": clean_division_id}}),
+      ("PATCH", f"/api/v2/users/{clean_user_id}", {"divisionId": clean_division_id}),
+    ]
+
+    division_ok = False
+    division_errors = []
+    for method, path, payload in division_attempts:
+      ok_division, _, division_err, _ = _genesys_send_json(
+        method,
+        api_base,
+        access_token,
+        path,
+        payload=payload,
+      )
+      if not ok_division:
+        division_errors.append(f"{path}: {division_err}")
+        continue
+
+      ok_verify_user, verify_user_payload, verify_user_err = _genesys_get_json(
+        api_base,
+        access_token,
+        f"/api/v2/users/{clean_user_id}",
+      )
+      if not ok_verify_user:
+        division_errors.append(f"division verify failed: {verify_user_err}")
+        continue
+
+      verify_division = verify_user_payload.get("division") if isinstance(verify_user_payload.get("division"), dict) else {}
+      verify_division_id = str(verify_division.get("id", "") or "").strip()
+      verify_division_name = str(verify_division.get("name", "") or "").strip()
+      if verify_division_id == clean_division_id:
+        division_status = "updated"
+        division_ok = True
+        break
+
+      division_errors.append(
+        f"division verify mismatch: requested {clean_division_id}, current {verify_division_id or '(none)'} ({verify_division_name or 'unknown'})"
+      )
+
+    if not division_ok:
+      return {"ok": False, "error": "Division update failed: " + (" | ".join(division_errors) if division_errors else "unknown")}
 
   if update_skills:
     entities_a = [{"id": skill_id, "proficiency": 5} for skill_id in clean_skill_ids]
