@@ -207,6 +207,17 @@ GENESYS_IMPORTANT_SKILL_NAMES = [
   ).split(",")
   if (item or "").strip()
 ]
+GENESYS_IMPORTANT_QUEUE_NAMES = [
+  (item or "").strip()
+  for item in (
+    os.getenv(
+      "GENESYS_IMPORTANT_QUEUE_NAMES",
+      "Allied-RS,AMNLS Attendance,AMNLS Billing,AMNLS Customer Support,AMNLS DEV Voicemail,AMNLS In-Person Scheduling,AMNLS PROD Voicemail,AMNLS Scheduled Calls,AMNLS Technical Onboarding,AMNLS Technical Support,Avantas SmartSquare,AVA_PLS_Locums_UAT,B4_Health_WHSN,BES_Interim_Lodging,BES_Interim_Payroll,BES_Interim_Specialist,BES_Interim_Timecard,BES_Interim_Travel,CA_Default,Corporate Reception,CS_ExtensionCenter,CS_General,CS_General_SMS,CS_General_UAT,CS_KTA,CS_KTA_UAT,CS_LeaderSupport,CS_Locums,CS_Nursefinders,CS_Payroll,CS_Surveys,CS_Timecard,HR_ServiceCenter,IT_ServiceCenter,Oribit,Shiftwise Support,Strike,Strike-Callback,Strike-Credentialing-Analyst,Strike-Hotel-Transportation,Strike-Payroll-Callback,Strike-Tier1",
+    )
+    or ""
+  ).split(",")
+  if (item or "").strip()
+]
 AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aerialink.net/v5") or "https://apix5.aerialink.net/v5").strip().rstrip("/")
 AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
 AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
@@ -2155,6 +2166,12 @@ def _genesys_load_catalog_options(region: str, access_token: str) -> dict:
     if str(name or "").strip()
   }
   important_skill_name_set = {key for key in important_skill_name_map.keys() if key}
+  important_queue_name_map = {
+    _normalized(name): str(name or "").strip()
+    for name in GENESYS_IMPORTANT_QUEUE_NAMES
+    if str(name or "").strip()
+  }
+  important_queue_name_set = {key for key in important_queue_name_map.keys() if key}
 
   divisions_all, divisions_pages, divisions_err = _genesys_collect_paged_entities(
     api_base,
@@ -2202,7 +2219,7 @@ def _genesys_load_catalog_options(region: str, access_token: str) -> dict:
 
   divisions = _to_options(divisions_all)
   skills = _to_options(skills_all, important_skill_name_set)
-  queues = _to_options(queues_all)
+  queues = _to_options(queues_all, important_queue_name_set)
 
   warnings = []
   if divisions_err:
@@ -2225,6 +2242,19 @@ def _genesys_load_catalog_options(region: str, access_token: str) -> dict:
   if missing_important_skills:
     warnings.append("important skills not found: " + ", ".join(missing_important_skills))
 
+  found_queue_names = {
+    _normalized(item.get("name", ""))
+    for item in queues
+    if isinstance(item, dict)
+  }
+  missing_important_queues = [
+    important_queue_name_map[name]
+    for name in sorted(important_queue_name_set)
+    if name not in found_queue_names
+  ]
+  if missing_important_queues:
+    warnings.append("important queues not found: " + ", ".join(missing_important_queues))
+
   return {
     "ok": not (divisions_err and skills_err and queues_err),
     "region": clean_region,
@@ -2233,6 +2263,8 @@ def _genesys_load_catalog_options(region: str, access_token: str) -> dict:
     "queues": queues,
     "important_skill_count": int(sum(1 for item in skills if item.get("priority"))),
     "important_skill_total": int(len(important_skill_name_set)),
+    "important_queue_count": int(sum(1 for item in queues if item.get("priority"))),
+    "important_queue_total": int(len(important_queue_name_set)),
     "pages_scanned": {
       "divisions": int(divisions_pages or 0),
       "skills": int(skills_pages or 0),
@@ -12576,7 +12608,9 @@ def genesys_admin_placeholder(request: Request):
             if (updateCatalogCountEl) {
               const importantFound = Number(payload.important_skill_count || 0);
               const importantTotal = Number(payload.important_skill_total || 0);
-              updateCatalogCountEl.textContent = "Divisions: " + divisions.length + " | Skills: " + skills.length + " (Priority: " + importantFound + "/" + importantTotal + ") | Queues: " + queues.length;
+              const importantQueueFound = Number(payload.important_queue_count || 0);
+              const importantQueueTotal = Number(payload.important_queue_total || 0);
+              updateCatalogCountEl.textContent = "Divisions: " + divisions.length + " | Skills: " + skills.length + " (Priority: " + importantFound + "/" + importantTotal + ") | Queues: " + queues.length + " (Priority: " + importantQueueFound + "/" + importantQueueTotal + ")";
             }
             if (updateCatalogDownloadEl) {
               if (payload.raw_download_url) {
