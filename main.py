@@ -15315,6 +15315,20 @@ def genesys_user_search_update_route(
       "error": user_lookup.get("error", "Unable to find user by email."),
     }, status_code=400)
 
+  # Enforce WebRTC prerequisite before applying org/routing updates.
+  webrtc_result = _genesys_build_webrtc_phone_for_user(
+    region,
+    access_token,
+    user_lookup.get("user_id", ""),
+    user_lookup.get("user_name", ""),
+    clean_user_email,
+  )
+  if not webrtc_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": "WebRTC prerequisite failed: " + str(webrtc_result.get("error", "Unable to build/associate WebRTC phone.")).strip(),
+    }, status_code=400)
+
   apply_result = _genesys_apply_user_search_update(
     region,
     access_token,
@@ -15337,6 +15351,9 @@ def genesys_user_search_update_route(
     "region": region,
     "user_email": clean_user_email,
     "user_id": str(user_lookup.get("user_id", "") or "").strip(),
+    "webrtc_status": str(webrtc_result.get("association_result", "ready") or "ready"),
+    "webrtc_phone": str(webrtc_result.get("phone_name", "") or "").strip(),
+    "webrtc_create_mode": str(webrtc_result.get("create_mode", "") or "").strip(),
     "division_status": apply_result.get("division_status", ""),
     "skills_status": apply_result.get("skills_status", ""),
     "queues_status": apply_result.get("queues_status", ""),
@@ -15464,6 +15481,20 @@ def genesys_user_search_update_batch_route(
       if not user_lookup.get("ok"):
         return index, {"ok": False, "user_email": email, "error": user_lookup.get("error", "User lookup failed.")}
 
+      webrtc_result = _genesys_build_webrtc_phone_for_user(
+        region,
+        access_token,
+        user_lookup.get("user_id", ""),
+        user_lookup.get("user_name", ""),
+        email,
+      )
+      if not webrtc_result.get("ok"):
+        return index, {
+          "ok": False,
+          "user_email": email,
+          "error": "WebRTC prerequisite failed: " + str(webrtc_result.get("error", "Unable to build/associate WebRTC phone.")).strip(),
+        }
+
       apply_result = _genesys_apply_user_search_update(
         region,
         access_token,
@@ -15482,6 +15513,9 @@ def genesys_user_search_update_batch_route(
         "ok": True,
         "user_email": email,
         "user_id": str(user_lookup.get("user_id", "") or "").strip(),
+        "webrtc_status": str(webrtc_result.get("association_result", "ready") or "ready"),
+        "webrtc_phone": str(webrtc_result.get("phone_name", "") or "").strip(),
+        "webrtc_create_mode": str(webrtc_result.get("create_mode", "") or "").strip(),
         "division_status": apply_result.get("division_status", ""),
         "skills_status": apply_result.get("skills_status", ""),
         "queues_status": apply_result.get("queues_status", ""),
