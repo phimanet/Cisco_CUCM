@@ -13276,7 +13276,7 @@ def home(request: Request):
 
 @app.get("/genesys-login", response_class=HTMLResponse)
 def genesys_login_page(request: Request):
-  return """
+  return f"""
 <html>
   <head>
     <title>Genesys Admin Login</title>
@@ -13354,21 +13354,16 @@ def genesys_login_page(request: Request):
 
     <section class="hero">
       <h1>Genesys Admin Login</h1>
-      <p>Use your CUCM credentials to open the Genesys Admin Page.</p>
+      <p>Sign in to open the Genesys Admin Page.</p>
 
       <form action="/login" method="post">
         <input type="hidden" name="next_url" value="/genesys-admin">
+        <input type="hidden" name="cucm_host" value="{escape(PROD_CUCM_HOST)}">
 
-        Cisco Callmanager Environment:<br>
-        <select name="cucm_host">
-          <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
-          <option value="lascucmpl01.ahs.int">LAB CUCM</option>
-        </select><br><br>
-
-        Cisco Callmanager Username:<br>
+        Username:<br>
         <input name="cucm_user" required><br><br>
 
-        Cisco Callmanager Password:<br>
+        Password:<br>
         <input type="password" name="cucm_pass" required><br><br>
 
         <button type="submit">Log In to Genesys Admin</button>
@@ -20595,7 +20590,7 @@ def menu_page(request: Request):
       <div class="hero-link-grid">
         <a class="hero-link-card" href="/">
           <strong>Landing Page</strong>
-          <span>Return to login and environment selection.</span>
+          <span>Return to login.</span>
         </a>
         <a class="hero-link-card" href="/dashboard">
           <strong>Voice Dashboard</strong>
@@ -21180,7 +21175,7 @@ __ADMIN_CARD__
     <section class="tool-panel" data-panel="build">
 
     <h3>Build Cisco Jabber Laptop and Voicemail - New Hire or New Jabber Laptop/VM Add</h3>
-    <p>Authentication note: Uses cached Cisco Callmanager credentials from your current login session for Unity voicemail and Active Directory actions.</p>
+    <p>Authentication note: Uses cached login credentials from your current session for Unity voicemail and Active Directory actions.</p>
 
     <div class="build-user-layout">
       <form id="build-user-form" class="target-user-form build-user-form" action="javascript:void(0)" method="post" onsubmit="return false;">
@@ -22093,7 +22088,7 @@ __ADMIN_CARD__
     <section class="tool-panel" data-panel="offboard">
 
     <h3 class="offboard-h3">Offboard User - Delete all Jabber and Voicemail Box (Option 10)</h3>
-    <p>Authentication note: Uses cached Cisco Callmanager credentials from your current login session for Unity voicemail and Active Directory actions.</p>
+    <p>Authentication note: Uses cached login credentials from your current session for Unity voicemail and Active Directory actions.</p>
 
     <div class="offboard-layout">
       <form id="offboard-user-form" class="target-user-form offboard-form" action="javascript:void(0)" method="post" onsubmit="return false;">
@@ -22239,7 +22234,7 @@ __ADMIN_CARD__
     <section class="tool-panel" data-panel="ad">
 
     <h3>Update Active Directory Telephone and ipPhone field only (Option 11)</h3>
-    <p>Authentication note: Uses cached Cisco Callmanager credentials from your current login session for Active Directory authentication.</p>
+    <p>Authentication note: Uses cached login credentials from your current session for Active Directory authentication.</p>
 
     <div class="ad-update-layout">
       <form id="ad-update-form" class="target-user-form ad-update-form" action="/update/ad-phone-fields" method="post">
