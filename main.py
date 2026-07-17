@@ -13276,6 +13276,8 @@ def home(request: Request):
 @app.get("/genesys-admin", response_class=HTMLResponse)
 def genesys_admin_placeholder(request: Request):
   session = _get_auth_session(request) or {}
+  if not session or not str(session.get("username", "") or "").strip():
+    return RedirectResponse(url="/", status_code=303)
   now_epoch = time.time()
   auth_cucm_host = str(session.get("cucm_host", "") or "").strip()
   auth_user = str(session.get("username", "") or "").strip()
