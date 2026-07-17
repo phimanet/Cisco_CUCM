@@ -13311,6 +13311,7 @@ def genesys_admin_placeholder(request: Request):
 
               const loadBtn = document.getElementById("genesys-update-load-catalog-btn");
               const lookupBtn = document.getElementById("genesys-update-single-lookup-btn");
+              const updateBtn = document.getElementById("genesys-update-single-btn");
               const statusEl = document.getElementById("genesys-update-status");
               const profileEl = document.getElementById("genesys-update-single-profile");
               const emailEl = document.getElementById("genesys-update-single-email");
@@ -13319,9 +13320,21 @@ def genesys_admin_placeholder(request: Request):
               const divisionSelect = document.getElementById("genesys-update-division-select");
               const skillsSelect = document.getElementById("genesys-update-skills-select");
               const queuesSelect = document.getElementById("genesys-update-queues-select");
+              const applyDivisionEl = document.getElementById("genesys-update-apply-division");
+              const applySkillsEl = document.getElementById("genesys-update-apply-skills");
+              const applyQueuesEl = document.getElementById("genesys-update-apply-queues");
+              const updateSummaryEl = document.getElementById("genesys-update-summary");
+              const useDivisionFilterEl = document.getElementById("genesys-update-use-division-filter");
+              const savedFilterSelectEl = document.getElementById("genesys-update-saved-filter-select");
+              const filterStatusEl = document.getElementById("genesys-update-filter-status");
+              const filterReloadBtn = document.getElementById("genesys-update-filter-reload-btn");
+              const filterApplyBtn = document.getElementById("genesys-update-filter-apply-btn");
+              const filterSaveBtn = document.getElementById("genesys-update-filter-save-btn");
+              const filterDeleteBtn = document.getElementById("genesys-update-filter-delete-btn");
               const updateHistoryStatusEl = document.getElementById("genesys-update-history-status");
               const updateHistoryTableEl = document.getElementById("genesys-update-history-table");
               const updateHistoryRefreshBtn = document.getElementById("genesys-update-history-refresh-btn");
+              const divisionFilterMap = {};
 
               if (!loadBtn || !lookupBtn || !statusEl || !emailEl) {
                 return;
@@ -13385,6 +13398,234 @@ def genesys_admin_placeholder(request: Request):
                   const value = String((opt && opt.value) || "").trim();
                   opt.selected = wanted.has(value);
                 });
+              }
+
+              function selectedValues(selectEl) {
+                if (!selectEl) {
+                  return [];
+                }
+                return Array.from(selectEl.options || [])
+                  .filter(function (opt) { return Boolean(opt && opt.selected); })
+                  .map(function (opt) { return String(opt.value || "").trim(); })
+                  .filter(Boolean);
+              }
+
+              function setSummary(html, show) {
+                if (!updateSummaryEl) {
+                  return;
+                }
+                updateSummaryEl.innerHTML = String(html || "");
+                updateSummaryEl.style.display = show ? "block" : "none";
+              }
+
+              function setFilterStatus(message, isError) {
+                if (!filterStatusEl) {
+                  return;
+                }
+                filterStatusEl.textContent = String(message || "");
+                filterStatusEl.style.color = isError ? "#8a2d2d" : "#2c5c8a";
+              }
+
+              function renderSavedFilters() {
+                if (!savedFilterSelectEl) {
+                  return;
+                }
+                const prior = String(savedFilterSelectEl.value || "").trim();
+                savedFilterSelectEl.innerHTML = "";
+                const keys = Object.keys(divisionFilterMap);
+                if (!keys.length) {
+                  const option = document.createElement("option");
+                  option.value = "";
+                  option.textContent = "No saved filters";
+                  savedFilterSelectEl.appendChild(option);
+                  return;
+                }
+                keys.sort(function (a, b) {
+                  const left = divisionFilterMap[a] || {};
+                  const right = divisionFilterMap[b] || {};
+                  return String(left.division_name || a).localeCompare(String(right.division_name || b));
+                });
+                keys.forEach(function (divisionId) {
+                  const row = divisionFilterMap[divisionId] || {};
+                  const option = document.createElement("option");
+                  option.value = divisionId;
+                  option.textContent = String(row.division_name || divisionId) + " | Skills " + ((row.skill_ids || []).length) + " | Queues " + ((row.queue_ids || []).length);
+                  savedFilterSelectEl.appendChild(option);
+                });
+                if (prior) {
+                  savedFilterSelectEl.value = prior;
+                }
+              }
+
+              async function loadSavedFilters() {
+                try {
+                  const response = await fetch("/genesys/division-filters", { method: "GET" });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || "Unable to load saved division filters.");
+                  }
+                  Object.keys(divisionFilterMap).forEach(function (key) { delete divisionFilterMap[key]; });
+                  (Array.isArray(payload.filters) ? payload.filters : []).forEach(function (row) {
+                    const divisionId = String((row && row.division_id) || "").trim();
+                    if (!divisionId) {
+                      return;
+                    }
+                    divisionFilterMap[divisionId] = {
+                      division_name: String((row && row.division_name) || divisionId).trim(),
+                      skill_ids: Array.isArray(row && row.skill_ids) ? row.skill_ids.map(function (x) { return String(x || "").trim(); }).filter(Boolean) : [],
+                      queue_ids: Array.isArray(row && row.queue_ids) ? row.queue_ids.map(function (x) { return String(x || "").trim(); }).filter(Boolean) : [],
+                    };
+                  });
+                  renderSavedFilters();
+                  setFilterStatus("Loaded " + Object.keys(divisionFilterMap).length + " saved division filter(s).", false);
+                  return true;
+                } catch (err) {
+                  renderSavedFilters();
+                  setFilterStatus("Saved filter load failed: " + ((err && err.message) || "Unknown error."), true);
+                  return false;
+                }
+              }
+
+              async function saveCurrentFilter() {
+                const divisionIds = selectedValues(divisionSelect);
+                if (!divisionIds.length) {
+                  setFilterStatus("Select a Division first, then choose Skills/Queues and save.", true);
+                  return false;
+                }
+                const divisionId = divisionIds[0];
+                const selectedOption = Array.from(divisionSelect.options || []).find(function (opt) { return String(opt.value || "").trim() === divisionId; });
+                const divisionName = String((selectedOption && selectedOption.textContent) || divisionId).replace(/^\[Priority\]\s*/, "").trim();
+                const formData = new FormData();
+                formData.append("division_id", divisionId);
+                formData.append("division_name", divisionName);
+                formData.append("skill_ids_json", JSON.stringify(selectedValues(skillsSelect)));
+                formData.append("queue_ids_json", JSON.stringify(selectedValues(queuesSelect)));
+                formData.append("enabled", "true");
+                try {
+                  const response = await fetch("/genesys/division-filters/save", { method: "POST", body: formData });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || "Unable to save division filter.");
+                  }
+                  setFilterStatus("Saved filter for " + divisionName + ".", false);
+                  await loadSavedFilters();
+                  if (savedFilterSelectEl) {
+                    savedFilterSelectEl.value = divisionId;
+                  }
+                  return true;
+                } catch (err) {
+                  setFilterStatus("Save failed: " + ((err && err.message) || "Unknown error."), true);
+                  return false;
+                }
+              }
+
+              function applySavedFilter() {
+                const divisionId = String((savedFilterSelectEl && savedFilterSelectEl.value) || "").trim();
+                if (!divisionId || !divisionFilterMap[divisionId]) {
+                  setFilterStatus("Select a saved filter first.", true);
+                  return false;
+                }
+                setSelected(divisionSelect, [divisionId]);
+                setSelected(skillsSelect, divisionFilterMap[divisionId].skill_ids || []);
+                setSelected(queuesSelect, divisionFilterMap[divisionId].queue_ids || []);
+                if (useDivisionFilterEl) {
+                  useDivisionFilterEl.checked = true;
+                }
+                setFilterStatus("Applied saved filter for " + String(divisionFilterMap[divisionId].division_name || divisionId) + ".", false);
+                return false;
+              }
+
+              async function deleteSavedFilter() {
+                const divisionId = String((savedFilterSelectEl && savedFilterSelectEl.value) || "").trim();
+                if (!divisionId) {
+                  setFilterStatus("Select a saved filter to delete.", true);
+                  return false;
+                }
+                if (!window.confirm("Delete saved filter for selected division?")) {
+                  return false;
+                }
+                const formData = new FormData();
+                formData.append("division_id", divisionId);
+                try {
+                  const response = await fetch("/genesys/division-filters/delete", { method: "POST", body: formData });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || "Unable to delete division filter.");
+                  }
+                  setFilterStatus("Deleted saved filter for division " + divisionId + ".", false);
+                  await loadSavedFilters();
+                  return true;
+                } catch (err) {
+                  setFilterStatus("Delete failed: " + ((err && err.message) || "Unknown error."), true);
+                  return false;
+                }
+              }
+
+              async function runSingleUserUpdate() {
+                const userEmail = String(emailEl.value || "").trim().toLowerCase();
+                const divisionIds = selectedValues(divisionSelect);
+                const skillIds = selectedValues(skillsSelect);
+                const queueIds = selectedValues(queuesSelect);
+                const applyDivision = Boolean(applyDivisionEl && applyDivisionEl.checked);
+                const applySkills = Boolean(applySkillsEl && applySkillsEl.checked);
+                const applyQueues = Boolean(applyQueuesEl && applyQueuesEl.checked);
+
+                if (!userEmail || userEmail.indexOf("@") < 0) {
+                  statusEl.textContent = "Enter a valid user email for single-user proof.";
+                  return false;
+                }
+                if (!applyDivision && !applySkills && !applyQueues) {
+                  statusEl.textContent = "Choose at least one field to update (Division, Skills, or Queues).";
+                  return false;
+                }
+                if (applyDivision && !divisionIds.length) {
+                  statusEl.textContent = "Division update is checked; select one Division.";
+                  return false;
+                }
+                if (!window.confirm("Update Division/Skills/Queues for " + userEmail + "?")) {
+                  return false;
+                }
+
+                const originalText = updateBtn ? updateBtn.textContent : "Update 1 User";
+                if (updateBtn) {
+                  updateBtn.disabled = true;
+                  updateBtn.textContent = "Updating...";
+                }
+                setSummary("", false);
+                statusEl.textContent = "Applying update for " + userEmail + "...";
+
+                try {
+                  const formData = new FormData();
+                  formData.append("user_email", userEmail);
+                  formData.append("update_division", applyDivision ? "true" : "false");
+                  formData.append("update_skills", applySkills ? "true" : "false");
+                  formData.append("update_queues", applyQueues ? "true" : "false");
+                  formData.append("division_id", applyDivision ? (divisionIds[0] || "") : "");
+                  formData.append("skill_ids_json", JSON.stringify(skillIds));
+                  formData.append("queue_ids_json", JSON.stringify(queueIds));
+                  const response = await fetch("/genesys/users/search-update", { method: "POST", body: formData });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || "Single user update failed.");
+                  }
+                  statusEl.textContent = "Single-user update complete for " + userEmail + ".";
+                  setSummary(
+                    "<strong>Single User Update Result</strong>"
+                    + "<div style='margin-top:6px;'>User: " + esc(String(payload.user_email || userEmail)) + "</div>"
+                    + "<div style='margin-top:6px;'>Division: " + esc(String(payload.division_status || "")) + "</div>"
+                    + "<div style='margin-top:6px;'>Skills: " + esc(String(payload.skills_status || "")) + "</div>"
+                    + "<div style='margin-top:6px;'>Queues: " + esc(String(payload.queues_status || "")) + "</div>",
+                    true,
+                  );
+                } catch (err) {
+                  statusEl.textContent = "Single-user update failed: " + ((err && err.message) || "Unknown error.");
+                } finally {
+                  if (updateBtn) {
+                    updateBtn.disabled = false;
+                    updateBtn.textContent = originalText;
+                  }
+                }
+                return false;
               }
 
               async function loadCatalog() {
@@ -13506,6 +13747,31 @@ def genesys_admin_placeholder(request: Request):
                 return false;
               };
 
+              window.runGenesysUpdateSingleSubmit = function () {
+                runSingleUserUpdate();
+                return false;
+              };
+
+              window.runGenesysDivisionFilterReload = function () {
+                loadSavedFilters();
+                return false;
+              };
+
+              window.runGenesysDivisionFilterSave = function () {
+                saveCurrentFilter();
+                return false;
+              };
+
+              window.runGenesysDivisionFilterApply = function () {
+                applySavedFilter();
+                return false;
+              };
+
+              window.runGenesysDivisionFilterDelete = function () {
+                deleteSavedFilter();
+                return false;
+              };
+
               async function loadUpdateBatchHistoryFallback() {
                 if (!updateHistoryStatusEl || !updateHistoryTableEl) {
                   return;
@@ -13577,6 +13843,42 @@ def genesys_admin_placeholder(request: Request):
                 });
               }
 
+              if (updateBtn && String(updateBtn.dataset.bound || "") !== "1") {
+                updateBtn.dataset.bound = "1";
+                updateBtn.addEventListener("click", function () {
+                  runSingleUserUpdate();
+                });
+              }
+
+              if (filterReloadBtn && String(filterReloadBtn.dataset.bound || "") !== "1") {
+                filterReloadBtn.dataset.bound = "1";
+                filterReloadBtn.addEventListener("click", function () {
+                  loadSavedFilters();
+                });
+              }
+
+              if (filterSaveBtn && String(filterSaveBtn.dataset.bound || "") !== "1") {
+                filterSaveBtn.dataset.bound = "1";
+                filterSaveBtn.addEventListener("click", function () {
+                  saveCurrentFilter();
+                });
+              }
+
+              if (filterApplyBtn && String(filterApplyBtn.dataset.bound || "") !== "1") {
+                filterApplyBtn.dataset.bound = "1";
+                filterApplyBtn.addEventListener("click", function () {
+                  applySavedFilter();
+                });
+              }
+
+              if (filterDeleteBtn && String(filterDeleteBtn.dataset.bound || "") !== "1") {
+                filterDeleteBtn.dataset.bound = "1";
+                filterDeleteBtn.addEventListener("click", function () {
+                  deleteSavedFilter();
+                });
+              }
+
+              loadSavedFilters();
               loadUpdateBatchHistoryFallback();
             })();
           </script>
