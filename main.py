@@ -218,6 +218,18 @@ GENESYS_IMPORTANT_QUEUE_NAMES = [
   ).split(",")
   if (item or "").strip()
 ]
+OPENTEXT_TOKEN_URL = (
+  os.getenv("OPENTEXT_TOKEN_URL", "https://api.us.cloudmessaging.opentext.com/mra/v1/oauth2/token")
+  or "https://api.us.cloudmessaging.opentext.com/mra/v1/oauth2/token"
+).strip()
+OPENTEXT_CLIENT_ID = (os.getenv("OPENTEXT_CLIENT_ID", "") or "").strip()
+OPENTEXT_CLIENT_SECRET = (os.getenv("OPENTEXT_CLIENT_SECRET", "") or "").strip()
+_opentext_base_default = "https://api.us.cloudmessaging.opentext.com/mra/v1"
+if OPENTEXT_TOKEN_URL.lower().endswith("/oauth2/token"):
+  _opentext_base_default = OPENTEXT_TOKEN_URL[: -len("/oauth2/token")]
+OPENTEXT_BASE_URL = (os.getenv("OPENTEXT_BASE_URL", _opentext_base_default) or _opentext_base_default).strip().rstrip("/")
+OPENTEXT_API_TIMEOUT_SECONDS = int((os.getenv("OPENTEXT_API_TIMEOUT_SECONDS", "20") or "20").strip())
+OPENTEXT_MAX_RESULTS = int((os.getenv("OPENTEXT_MAX_RESULTS", "200") or "200").strip())
 AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aerialink.net/v5") or "https://apix5.aerialink.net/v5").strip().rstrip("/")
 AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
 AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
@@ -671,6 +683,196 @@ def _get_cached_secret(session: dict, key: str, now_epoch: float | None = None) 
 
 def _has_valid_cached_secret(session: dict, key: str, now_epoch: float | None = None) -> bool:
   return bool(_get_cached_secret(session, key, now_epoch))
+
+
+def _opentext_get_access_token() -> dict:
+  if not OPENTEXT_CLIENT_ID or not OPENTEXT_CLIENT_SECRET:
+    return {"ok": False, "error": "OpenText client credentials are not configured."}
+
+  try:
+    response = requests.post(
+      OPENTEXT_TOKEN_URL,
+      headers={"Content-Type": "application/x-www-form-urlencoded"},
+      data={
+        "grant_type": "client_credentials",
+        "client_id": OPENTEXT_CLIENT_ID,
+        "client_secret": OPENTEXT_CLIENT_SECRET,
+      },
+      timeout=OPENTEXT_API_TIMEOUT_SECONDS,
+    )
+    payload = response.json() if response.text else {}
+  except Exception as exc:
+    return {"ok": False, "error": f"OpenText token request failed: {exc}"}
+
+  if response.status_code != 200:
+    message = str(payload.get("error_description", "") or payload.get("error", "")).strip() or f"HTTP {response.status_code}"
+    return {"ok": False, "error": f"OpenText token request failed: {message}"}
+
+  token = str(payload.get("access_token", "") or "").strip()
+  if not token:
+    return {"ok": False, "error": "OpenText token response did not include access_token."}
+
+  return {
+    "ok": True,
+    "access_token": token,
+    "expires_in": int(payload.get("expires_in", 0) or 0),
+    "token_type": str(payload.get("token_type", "") or "bearer").strip().lower(),
+  }
+
+
+def _opentext_get_json(access_token: str, path: str, params: dict | None = None) -> tuple[bool, dict, str, int]:
+  clean_path = str(path or "").strip()
+  if not clean_path.startswith("/"):
+    clean_path = "/" + clean_path
+  url = f"{OPENTEXT_BASE_URL}{clean_path}"
+  headers = {
+    "Authorization": f"Bearer {access_token}",
+    "Accept": "application/json",
+  }
+  try:
+    response = requests.get(url, headers=headers, params=params or {}, timeout=OPENTEXT_API_TIMEOUT_SECONDS)
+    payload = response.json() if response.text else {}
+  except Exception as exc:
+    return False, {}, f"OpenText API request failed for {clean_path}: {exc}", 0
+
+  if response.status_code != 200:
+    message = str(payload.get("message", "") or payload.get("error", "") or payload.get("error_description", "")).strip() or f"HTTP {response.status_code}"
+    return False, payload if isinstance(payload, dict) else {}, message, response.status_code
+
+  return True, payload if isinstance(payload, dict) else {}, "", response.status_code
+
+
+def _opentext_normalize_lookup_number(value: str) -> str:
+  digits = re.sub(r"\D", "", str(value or ""))
+  if len(digits) == 10:
+    return "1" + digits
+  return digits
+
+
+def _opentext_extract_number_rows(payload: dict) -> list[dict]:
+  if not isinstance(payload, dict):
+    return []
+
+  candidates = []
+  for key in ["numbers", "items", "entities", "results", "data"]:
+    value = payload.get(key)
+    if isinstance(value, list):
+      candidates.extend([item for item in value if isinstance(item, dict)])
+
+  for key in ["number", "item", "entity", "result", "data"]:
+    value = payload.get(key)
+    if isinstance(value, dict):
+      candidates.append(value)
+
+  if not candidates:
+    payload_keys = {str(k).lower() for k in payload.keys()}
+    if {"number", "id"} & payload_keys:
+      candidates.append(payload)
+
+  rows = []
+  seen = set()
+  for item in candidates:
+    number_value = str(
+      item.get("number", "")
+      or item.get("phoneNumber", "")
+      or item.get("tn", "")
+      or item.get("address", "")
+      or ""
+    ).strip()
+    if not number_value:
+      number_value = str(item.get("id", "") or "").strip()
+    dedupe_key = (number_value.lower(), str(item.get("id", "") or "").strip().lower())
+    if dedupe_key in seen:
+      continue
+    seen.add(dedupe_key)
+    rows.append(item)
+
+  return rows
+
+
+def _opentext_numbers_lookup(number_query: str = "", limit: int = 200) -> dict:
+  token_result = _opentext_get_access_token()
+  if not token_result.get("ok"):
+    return {"ok": False, "error": token_result.get("error", "OpenText token request failed.")}
+
+  access_token = str(token_result.get("access_token", "") or "").strip()
+  safe_limit = max(1, min(int(limit or 200), max(1, OPENTEXT_MAX_RESULTS)))
+  normalized_query = _opentext_normalize_lookup_number(number_query)
+  warnings = []
+  errors = []
+  source_path = ""
+  payload_used = {}
+
+  attempts = []
+  if normalized_query:
+    attempts.extend([
+      {"path": f"/numbers/{normalized_query}", "params": {}},
+      {"path": "/numbers", "params": {"number": normalized_query, "limit": safe_limit}},
+      {"path": "/numbers", "params": {"phoneNumber": normalized_query, "limit": safe_limit}},
+      {"path": "/numbers/search", "params": {"q": normalized_query, "limit": safe_limit}},
+      {"path": "/tns", "params": {"number": normalized_query, "limit": safe_limit}},
+    ])
+  else:
+    attempts.extend([
+      {"path": "/numbers", "params": {"limit": safe_limit}},
+      {"path": "/numbers", "params": {"pageSize": safe_limit}},
+      {"path": "/phone-numbers", "params": {"limit": safe_limit}},
+      {"path": "/tns", "params": {"limit": safe_limit}},
+    ])
+
+  rows = []
+  for attempt in attempts:
+    path = str(attempt.get("path", "") or "").strip()
+    params = dict(attempt.get("params", {}) or {})
+    ok_call, payload, err_call, status_code = _opentext_get_json(access_token, path, params=params)
+    if not ok_call:
+      errors.append(f"{path}: {err_call}")
+      if status_code in {401, 403}:
+        warnings.append(f"OpenText authorization issue on {path}: {err_call}")
+      continue
+
+    extracted = _opentext_extract_number_rows(payload)
+    if extracted:
+      rows = extracted
+      payload_used = payload
+      source_path = path
+      break
+
+    # Keep successful payload diagnostics when no rows are found.
+    payload_used = payload
+    source_path = path
+
+  if rows:
+    return {
+      "ok": True,
+      "query": str(number_query or "").strip(),
+      "normalized_query": normalized_query,
+      "count": len(rows),
+      "source_path": source_path,
+      "rows": rows,
+      "warnings": warnings,
+      "raw": payload_used,
+    }
+
+  if source_path and not errors:
+    return {
+      "ok": True,
+      "query": str(number_query or "").strip(),
+      "normalized_query": normalized_query,
+      "count": 0,
+      "source_path": source_path,
+      "rows": [],
+      "warnings": warnings,
+      "raw": payload_used,
+    }
+
+  return {
+    "ok": False,
+    "error": " | ".join(errors) if errors else "OpenText numbers lookup failed.",
+    "query": str(number_query or "").strip(),
+    "normalized_query": normalized_query,
+    "warnings": warnings,
+  }
 
 
 def _genesys_region_to_urls(region: str) -> tuple[str, str, str]:
@@ -15497,6 +15699,321 @@ def genesys_admin_placeholder(request: Request):
   return HTMLResponse(html)
 
 
+@app.get("/opentext-admin", response_class=HTMLResponse)
+def opentext_admin_page(request: Request):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", "") or "").strip()
+  if not _is_admin_user(session_username):
+    return HTMLResponse(
+      content="<h3>403 Forbidden</h3><p>You are not authorized to access OpenText Admin.</p>",
+      status_code=403,
+    )
+
+  auth_user = escape(session_username)
+  html = """
+<html>
+  <head>
+    <title>OpenText Admin - Voice Operations Portal</title>
+    <style>
+      body {
+        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        margin: 0;
+        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+        color: #12304a;
+      }
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px;
+        background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94));
+        color: #fff;
+      }
+      .topbar a {
+        color: #fff;
+        text-decoration: none;
+        border: 1px solid rgba(255,255,255,0.65);
+        padding: 6px 10px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+      .content {
+        max-width: 1200px;
+        margin: 14px auto;
+        padding: 0 12px 16px 12px;
+      }
+      .shell {
+        display: grid;
+        grid-template-columns: 220px minmax(0, 1fr);
+        gap: 12px;
+      }
+      .sidebar {
+        background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
+        border-radius: 12px;
+        padding: 10px;
+      }
+      .sidebar h4 {
+        margin: 4px 6px 10px 6px;
+        color: #fff;
+        font-size: 13px;
+      }
+      .nav-btn {
+        width: 100%;
+        text-align: left;
+        border-radius: 8px;
+        border: 1px solid rgba(255, 255, 255, 0.85);
+        background: linear-gradient(90deg, #ffffff, #ecf6ff);
+        color: #002f6c;
+        padding: 8px 9px;
+        font-size: 12px;
+        line-height: 1.25;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      .panel {
+        background: #fff;
+        border: 1px solid #c8dbee;
+        border-radius: 12px;
+        padding: 12px;
+        box-shadow: 0 12px 24px rgba(0, 47, 108, 0.1);
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-bottom: 10px;
+      }
+      input, button {
+        border-radius: 10px;
+      }
+      input {
+        min-height: 34px;
+        border: 1px solid #c8dbee;
+        padding: 6px 10px;
+      }
+      button {
+        border: none;
+        background: linear-gradient(180deg, #0c77d8, #005eb8);
+        color: #fff;
+        padding: 8px 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 13px;
+      }
+      th, td {
+        padding: 7px 9px;
+        border-bottom: 1px solid #c8dbee;
+        text-align: left;
+        vertical-align: top;
+      }
+      thead tr {
+        background: #005eb8;
+        color: #fff;
+      }
+      pre {
+        white-space: pre-wrap;
+        font-size: 12px;
+        background: #f7fbff;
+        border: 1px solid #d7e3ee;
+        border-radius: 8px;
+        padding: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <strong>OpenText Admin</strong>
+      <div>
+        <span style="margin-right:10px;font-size:12px;opacity:0.9;">Operator: __AUTH_USER__</span>
+        <a href="/page2">Administrative Items</a>
+      </div>
+    </header>
+    <main class="content">
+      <div class="shell">
+        <aside class="sidebar">
+          <h4>OpenText Menu</h4>
+          <button type="button" class="nav-btn">OpenTxt Numbers List</button>
+        </aside>
+        <section class="panel">
+          <h3 style="margin-top:0;">OpenTxt Numbers List</h3>
+          <p style="margin-top:0;color:#4e6a84;">List numbers from OpenText, or search by 10-digit number (portal auto-prefixes with 1).</p>
+          <form id="opentext-numbers-form">
+            <div class="row">
+              <input id="opentext-number" name="number" placeholder="Optional 10-digit number" style="width:260px;" />
+              <input id="opentext-limit" name="limit" type="number" min="1" max="500" value="100" style="width:110px;" />
+              <button type="button" id="opentext-list-btn" style="background:#455a64;">List Numbers</button>
+              <button type="submit">Lookup Number</button>
+            </div>
+          </form>
+          <p id="opentext-status" style="color:#2c5c8a;min-height:18px;">Ready.</p>
+          <div id="opentext-results" style="overflow-x:auto;"></div>
+          <details style="margin-top:10px;">
+            <summary style="cursor:pointer;font-weight:700;">Raw API Payload</summary>
+            <pre id="opentext-raw"></pre>
+          </details>
+        </section>
+      </div>
+    </main>
+    <script>
+      (function () {
+        const form = document.getElementById("opentext-numbers-form");
+        const listBtn = document.getElementById("opentext-list-btn");
+        const numberEl = document.getElementById("opentext-number");
+        const limitEl = document.getElementById("opentext-limit");
+        const statusEl = document.getElementById("opentext-status");
+        const resultsEl = document.getElementById("opentext-results");
+        const rawEl = document.getElementById("opentext-raw");
+
+        if (!form || !statusEl || !resultsEl) {
+          return;
+        }
+
+        function esc(value) {
+          return String(value || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        async function runLookup(isListMode) {
+          statusEl.textContent = isListMode ? "Listing numbers from OpenText..." : "Looking up number in OpenText...";
+          resultsEl.innerHTML = "";
+          if (rawEl) {
+            rawEl.textContent = "";
+          }
+
+          try {
+            const formData = new FormData();
+            formData.append("number", isListMode ? "" : String((numberEl && numberEl.value) || "").trim());
+            formData.append("limit", String((limitEl && limitEl.value) || "100"));
+
+            const response = await fetch("/opentext/numbers/list", {
+              method: "POST",
+              body: formData,
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "OpenText request failed.");
+            }
+
+            const rows = Array.isArray(payload.rows) ? payload.rows : [];
+            const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+            const normalized = String(payload.normalized_query || "").trim();
+            statusEl.textContent = "Source: " + String(payload.source_path || "") + " | Rows: " + rows.length + (normalized ? (" | Normalized: " + normalized) : "") + (warnings.length ? (" | Warnings: " + warnings.join(" | ")) : "");
+
+            if (!rows.length) {
+              resultsEl.innerHTML = "<p style='color:#4e6a84;'>No numbers returned.</p>";
+              if (rawEl) {
+                rawEl.textContent = JSON.stringify(payload.raw || {}, null, 2);
+              }
+              return;
+            }
+
+            let html = "<table><thead><tr>";
+            html += "<th>Number</th><th>ID</th><th>Name</th><th>Status</th><th>Details</th>";
+            html += "</tr></thead><tbody>";
+            rows.forEach(function (row, idx) {
+              const bg = idx % 2 === 0 ? "#f7fbff" : "#ffffff";
+              html += "<tr style='background:" + bg + ";'>";
+              html += "<td>" + esc(row.number) + "</td>";
+              html += "<td style='font-family:Consolas,monospace;'>" + esc(row.id) + "</td>";
+              html += "<td>" + esc(row.name) + "</td>";
+              html += "<td>" + esc(row.status) + "</td>";
+              html += "<td><details><summary style='cursor:pointer;'>View</summary><pre>" + esc(row.raw_json) + "</pre></details></td>";
+              html += "</tr>";
+            });
+            html += "</tbody></table>";
+            resultsEl.innerHTML = html;
+
+            if (rawEl) {
+              rawEl.textContent = JSON.stringify(payload.raw || {}, null, 2);
+            }
+          } catch (err) {
+            statusEl.textContent = "OpenText request failed: " + ((err && err.message) || "Unknown error.");
+          }
+        }
+
+        form.addEventListener("submit", function (event) {
+          if (event && typeof event.preventDefault === "function") {
+            event.preventDefault();
+          }
+          runLookup(false);
+        });
+
+        if (listBtn) {
+          listBtn.addEventListener("click", function () {
+            runLookup(true);
+          });
+        }
+      })();
+    </script>
+  </body>
+</html>
+"""
+  html = html.replace("__AUTH_USER__", auth_user)
+  return HTMLResponse(html)
+
+
+@app.post("/opentext/numbers/list")
+def opentext_numbers_list_route(request: Request, number: str = Form(""), limit: int = Form(100)):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", "") or "").strip()
+  if not session_username:
+    return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+  if not _is_admin_user(session_username):
+    return JSONResponse({"ok": False, "error": "Not authorized for OpenText Admin"}, status_code=403)
+
+  lookup_result = _opentext_numbers_lookup(number_query=(number or "").strip(), limit=limit)
+  if not lookup_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": lookup_result.get("error", "OpenText numbers lookup failed."),
+      "warnings": lookup_result.get("warnings", []),
+      "normalized_query": lookup_result.get("normalized_query", ""),
+    }, status_code=400)
+
+  rows = []
+  for item in (lookup_result.get("rows", []) or []):
+    if not isinstance(item, dict):
+      continue
+    number_value = str(
+      item.get("number", "")
+      or item.get("phoneNumber", "")
+      or item.get("tn", "")
+      or item.get("address", "")
+      or ""
+    ).strip()
+    row_id = str(item.get("id", "") or item.get("uuid", "") or item.get("uid", "") or "").strip()
+    row_name = str(item.get("name", "") or item.get("description", "") or item.get("label", "") or "").strip()
+    row_status = str(item.get("status", "") or item.get("state", "") or item.get("enabled", "") or "").strip()
+    rows.append({
+      "number": number_value,
+      "id": row_id,
+      "name": row_name,
+      "status": row_status,
+      "raw_json": json.dumps(item, indent=2, ensure_ascii=False),
+    })
+
+  return JSONResponse({
+    "ok": True,
+    "query": lookup_result.get("query", ""),
+    "normalized_query": lookup_result.get("normalized_query", ""),
+    "source_path": lookup_result.get("source_path", ""),
+    "count": len(rows),
+    "rows": rows,
+    "warnings": lookup_result.get("warnings", []),
+    "raw": lookup_result.get("raw", {}),
+  })
+
+
 @app.post("/genesys/users/extract")
 def genesys_extract_users_route(
   request: Request,
@@ -23331,6 +23848,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/opentext-admin'">OpenText Admin</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">SMS Item Menu (Page 3)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
