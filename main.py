@@ -17931,6 +17931,15 @@ def genesys_division_filters_save_route(
   if not isinstance(queue_ids, list):
     queue_ids = []
 
+  # Defensive server-side inference: if selections are present, treat as selected
+  # even if the checkbox flag was not posted correctly.
+  if not apply_division and clean_division_id:
+    apply_division = True
+  if not apply_skills and any(str(item or "").strip() for item in skill_ids):
+    apply_skills = True
+  if not apply_queues and any(str(item or "").strip() for item in queue_ids):
+    apply_queues = True
+
   clean_skill_ids = []
   clean_queue_ids = []
   for value in skill_ids:
@@ -18040,6 +18049,14 @@ def genesys_user_search_update_route(
     skill_ids = []
   if not isinstance(queue_ids, list):
     queue_ids = []
+
+  # Defensive server-side inference for batch flow.
+  if not apply_division and clean_division_id:
+    apply_division = True
+  if not apply_skills and any(str(item or "").strip() for item in skill_ids):
+    apply_skills = True
+  if not apply_queues and any(str(item or "").strip() for item in queue_ids):
+    apply_queues = True
 
   token_result = _genesys_get_queue_access_token(clean_region)
   if not token_result.get("ok"):
