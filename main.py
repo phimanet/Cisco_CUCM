@@ -2485,16 +2485,19 @@ def _genesys_add_user_to_queue(api_base: str, access_token: str, user_id: str, q
     return False, "User ID and queue ID are required."
 
   attempts = [
+    ("PUT", f"/api/v2/routing/queues/{clean_queue_id}/members", [{"id": clean_user_id}]),
+    ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", [{"id": clean_user_id}]),
+    ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", {"id": clean_user_id}),
+    ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", {"member": {"id": clean_user_id}}),
+    ("POST", f"/api/v2/routing/queues/{clean_queue_id}/users", {"id": clean_user_id}),
     ("POST", f"/api/v2/users/{clean_user_id}/queues", {"id": clean_queue_id}),
     ("POST", f"/api/v2/users/{clean_user_id}/queues", {"queue": {"id": clean_queue_id}}),
-    ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", {"id": clean_user_id}),
-    ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", [{"id": clean_user_id}]),
-    ("POST", f"/api/v2/routing/queues/{clean_queue_id}/users", {"id": clean_user_id}),
   ]
 
   errors = []
+  permission_errors = []
   for method, path, payload in attempts:
-    ok, _, err, _ = _genesys_send_json(method, api_base, access_token, path, payload=payload)
+    ok, _, err, status_code = _genesys_send_json(method, api_base, access_token, path, payload=payload)
     if ok:
       return True, "added"
 
@@ -2504,6 +2507,15 @@ def _genesys_add_user_to_queue(api_base: str, access_token: str, user_id: str, q
       lower_err = err_text.lower()
       if "already" in lower_err and ("member" in lower_err or "exist" in lower_err):
         return True, "already_member"
+      if "insufficient permissions assigned" in lower_err or "permission" in lower_err and "queue" in lower_err:
+        permission_errors.append(f"{path}: {err_text}")
+      if "malformed syntax" in lower_err:
+        continue
+      if int(status_code or 0) == 405:
+        continue
+
+  if permission_errors:
+    return False, permission_errors[0]
 
   return False, " | ".join(errors) if errors else "Queue membership update failed."
 
@@ -2515,14 +2527,15 @@ def _genesys_remove_user_from_queue(api_base: str, access_token: str, user_id: s
     return False, "User ID and queue ID are required."
 
   attempts = [
-    ("DELETE", f"/api/v2/users/{clean_user_id}/queues/{clean_queue_id}", None),
     ("DELETE", f"/api/v2/routing/queues/{clean_queue_id}/members/{clean_user_id}", None),
     ("DELETE", f"/api/v2/routing/queues/{clean_queue_id}/users/{clean_user_id}", None),
+    ("DELETE", f"/api/v2/users/{clean_user_id}/queues/{clean_queue_id}", None),
   ]
 
   errors = []
+  permission_errors = []
   for method, path, payload in attempts:
-    ok, _, err, _ = _genesys_send_json(method, api_base, access_token, path, payload=payload)
+    ok, _, err, status_code = _genesys_send_json(method, api_base, access_token, path, payload=payload)
     if ok:
       return True, "removed"
 
@@ -2532,8 +2545,44 @@ def _genesys_remove_user_from_queue(api_base: str, access_token: str, user_id: s
       lower_err = err_text.lower()
       if "not found" in lower_err or "does not exist" in lower_err:
         return True, "not_member"
+      if "insufficient permissions assigned" in lower_err or "permission" in lower_err and "queue" in lower_err:
+        permission_errors.append(f"{path}: {err_text}")
+      if int(status_code or 0) == 405:
+        continue
+
+  if permission_errors:
+    return False, permission_errors[0]
 
   return False, " | ".join(errors) if errors else "Queue membership remove failed."
+
+
+def _genesys_collect_queue_membership_clients(clean_region: str) -> tuple[list[dict], str]:
+  clients = []
+  seen_sources = set()
+
+  primary = _genesys_get_queue_access_token(clean_region)
+  if primary.get("ok"):
+    source = str(primary.get("token_source", "") or "default-client").strip() or "default-client"
+    clients.append({
+      "region": primary.get("region", clean_region),
+      "access_token": primary.get("access_token", ""),
+      "token_source": source,
+    })
+    seen_sources.add(source)
+  else:
+    return [], str(primary.get("error", "Genesys token request failed.") or "Genesys token request failed.")
+
+  has_default_creds = bool((GENESYS_CLIENT_ID or "").strip()) and bool((GENESYS_CLIENT_SECRET or "").strip())
+  if has_default_creds and "default-client" not in seen_sources:
+    default_token = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+    if default_token.get("ok"):
+      clients.append({
+        "region": default_token.get("region", clean_region),
+        "access_token": default_token.get("access_token", ""),
+        "token_source": "default-client",
+      })
+
+  return clients, ""
 
 
 def _genesys_get_user_skill_ids(api_base: str, access_token: str, user_id: str) -> tuple[list[str], str]:
@@ -15906,36 +15955,47 @@ def genesys_queue_member_add_route(
   if not clean_queue_id:
     return JSONResponse({"ok": False, "error": "queue_id is required."}, status_code=400)
 
-  token_result = _genesys_get_queue_access_token(clean_region)
-  if not token_result.get("ok"):
-    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  clients, clients_err = _genesys_collect_queue_membership_clients(clean_region)
+  if clients_err:
+    return JSONResponse({"ok": False, "error": clients_err}, status_code=400)
 
-  region = token_result.get("region", clean_region)
-  _, _, api_base = _genesys_region_to_urls(region)
-  access_token = token_result.get("access_token", "")
+  failures = []
+  for client in clients:
+    region = str(client.get("region", clean_region) or clean_region).strip() or clean_region
+    token_source = str(client.get("token_source", "") or "default-client").strip() or "default-client"
+    _, _, api_base = _genesys_region_to_urls(region)
+    access_token = str(client.get("access_token", "") or "").strip()
+    if not access_token:
+      failures.append(f"[{token_source}] missing access token")
+      continue
 
-  user_resolved = _genesys_resolve_queue_action_user(region, access_token, user_id, user_email)
-  if not user_resolved.get("ok"):
-    return JSONResponse({"ok": False, "error": user_resolved.get("error", "Unable to resolve user.")}, status_code=400)
+    user_resolved = _genesys_resolve_queue_action_user(region, access_token, user_id, user_email)
+    if not user_resolved.get("ok"):
+      failures.append(f"[{token_source}] {user_resolved.get('error', 'Unable to resolve user.')}")
+      continue
 
-  resolved_user_id = str(user_resolved.get("user_id", "") or "").strip()
-  if not resolved_user_id:
-    return JSONResponse({"ok": False, "error": "Resolved user id is empty."}, status_code=400)
+    resolved_user_id = str(user_resolved.get("user_id", "") or "").strip()
+    if not resolved_user_id:
+      failures.append(f"[{token_source}] Resolved user id is empty.")
+      continue
 
-  ok_add, add_state = _genesys_add_user_to_queue(api_base, access_token, resolved_user_id, clean_queue_id)
-  if not ok_add:
-    return JSONResponse({"ok": False, "error": str(add_state or "Queue member add failed.")}, status_code=400)
+    ok_add, add_state = _genesys_add_user_to_queue(api_base, access_token, resolved_user_id, clean_queue_id)
+    if ok_add:
+      return JSONResponse({
+        "ok": True,
+        "region": region,
+        "token_source": token_source,
+        "queue_id": clean_queue_id,
+        "queue_name": _genesys_get_queue_name(api_base, access_token, clean_queue_id),
+        "user_id": resolved_user_id,
+        "user_email": str(user_resolved.get("user_email", "") or "").strip().lower(),
+        "user_name": str(user_resolved.get("user_name", "") or "").strip(),
+        "result": str(add_state or "added"),
+      })
 
-  return JSONResponse({
-    "ok": True,
-    "region": region,
-    "queue_id": clean_queue_id,
-    "queue_name": _genesys_get_queue_name(api_base, access_token, clean_queue_id),
-    "user_id": resolved_user_id,
-    "user_email": str(user_resolved.get("user_email", "") or "").strip().lower(),
-    "user_name": str(user_resolved.get("user_name", "") or "").strip(),
-    "result": str(add_state or "added"),
-  })
+    failures.append(f"[{token_source}] {str(add_state or 'Queue member add failed.')}")
+
+  return JSONResponse({"ok": False, "error": " | ".join(failures) if failures else "Queue member add failed."}, status_code=400)
 
 
 @app.post("/genesys/queues/member-remove")
@@ -15949,36 +16009,47 @@ def genesys_queue_member_remove_route(
   if not clean_queue_id:
     return JSONResponse({"ok": False, "error": "queue_id is required."}, status_code=400)
 
-  token_result = _genesys_get_queue_access_token(clean_region)
-  if not token_result.get("ok"):
-    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  clients, clients_err = _genesys_collect_queue_membership_clients(clean_region)
+  if clients_err:
+    return JSONResponse({"ok": False, "error": clients_err}, status_code=400)
 
-  region = token_result.get("region", clean_region)
-  _, _, api_base = _genesys_region_to_urls(region)
-  access_token = token_result.get("access_token", "")
+  failures = []
+  for client in clients:
+    region = str(client.get("region", clean_region) or clean_region).strip() or clean_region
+    token_source = str(client.get("token_source", "") or "default-client").strip() or "default-client"
+    _, _, api_base = _genesys_region_to_urls(region)
+    access_token = str(client.get("access_token", "") or "").strip()
+    if not access_token:
+      failures.append(f"[{token_source}] missing access token")
+      continue
 
-  user_resolved = _genesys_resolve_queue_action_user(region, access_token, user_id, user_email)
-  if not user_resolved.get("ok"):
-    return JSONResponse({"ok": False, "error": user_resolved.get("error", "Unable to resolve user.")}, status_code=400)
+    user_resolved = _genesys_resolve_queue_action_user(region, access_token, user_id, user_email)
+    if not user_resolved.get("ok"):
+      failures.append(f"[{token_source}] {user_resolved.get('error', 'Unable to resolve user.')}")
+      continue
 
-  resolved_user_id = str(user_resolved.get("user_id", "") or "").strip()
-  if not resolved_user_id:
-    return JSONResponse({"ok": False, "error": "Resolved user id is empty."}, status_code=400)
+    resolved_user_id = str(user_resolved.get("user_id", "") or "").strip()
+    if not resolved_user_id:
+      failures.append(f"[{token_source}] Resolved user id is empty.")
+      continue
 
-  ok_remove, remove_state = _genesys_remove_user_from_queue(api_base, access_token, resolved_user_id, clean_queue_id)
-  if not ok_remove:
-    return JSONResponse({"ok": False, "error": str(remove_state or "Queue member remove failed.")}, status_code=400)
+    ok_remove, remove_state = _genesys_remove_user_from_queue(api_base, access_token, resolved_user_id, clean_queue_id)
+    if ok_remove:
+      return JSONResponse({
+        "ok": True,
+        "region": region,
+        "token_source": token_source,
+        "queue_id": clean_queue_id,
+        "queue_name": _genesys_get_queue_name(api_base, access_token, clean_queue_id),
+        "user_id": resolved_user_id,
+        "user_email": str(user_resolved.get("user_email", "") or "").strip().lower(),
+        "user_name": str(user_resolved.get("user_name", "") or "").strip(),
+        "result": str(remove_state or "removed"),
+      })
 
-  return JSONResponse({
-    "ok": True,
-    "region": region,
-    "queue_id": clean_queue_id,
-    "queue_name": _genesys_get_queue_name(api_base, access_token, clean_queue_id),
-    "user_id": resolved_user_id,
-    "user_email": str(user_resolved.get("user_email", "") or "").strip().lower(),
-    "user_name": str(user_resolved.get("user_name", "") or "").strip(),
-    "result": str(remove_state or "removed"),
-  })
+    failures.append(f"[{token_source}] {str(remove_state or 'Queue member remove failed.')}")
+
+  return JSONResponse({"ok": False, "error": " | ".join(failures) if failures else "Queue member remove failed."}, status_code=400)
 
 
 @app.post("/genesys/users/build-webrtc")
