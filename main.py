@@ -13846,6 +13846,9 @@ def genesys_admin_placeholder(request: Request):
               const updateHistoryStatusEl = document.getElementById("genesys-update-history-status");
               const updateHistoryTableEl = document.getElementById("genesys-update-history-table");
               const updateHistoryRefreshBtn = document.getElementById("genesys-update-history-refresh-btn");
+              const updateBatchEmailsEl = document.getElementById("genesys-update-batch-emails");
+              const updateBatchBtn = document.getElementById("genesys-update-batch-btn");
+              const updateBatchCountEl = document.getElementById("genesys-update-batch-count");
               const nameLastEl = document.getElementById("genesys-update-name-last");
               const nameFirstEl = document.getElementById("genesys-update-name-first");
               const nameSearchBtn = document.getElementById("genesys-update-name-search-btn");
@@ -13887,6 +13890,15 @@ def genesys_admin_placeholder(request: Request):
                     return String((opt && opt.textContent) || "").replace(/^\[Priority\]\s*/, "").trim();
                   })
                   .filter(Boolean);
+              }
+
+              function parseEmailList(text) {
+                return String(text || "")
+                  .split(/[\n,;\s]+/)
+                  .map(function (item) { return String(item || "").trim().toLowerCase(); })
+                  .filter(function (item, index, allItems) {
+                    return Boolean(item) && allItems.indexOf(item) === index && item.indexOf("@") > 0;
+                  });
               }
 
               function renderCucmNameSearchResults(rows) {
@@ -14276,6 +14288,90 @@ def genesys_admin_placeholder(request: Request):
                 return false;
               }
 
+              async function runBatchUserUpdate() {
+                if (!statusEl) {
+                  return false;
+                }
+                const emails = parseEmailList((updateBatchEmailsEl && updateBatchEmailsEl.value) || "");
+                const divisionIds = selectedValues(divisionSelect);
+                const skillIds = selectedValues(skillsSelect);
+                const queueIds = selectedValues(queuesSelect);
+                const applyDivision = Boolean(applyDivisionEl && applyDivisionEl.checked);
+                const applySkills = Boolean(applySkillsEl && applySkillsEl.checked);
+                const applyQueues = Boolean(applyQueuesEl && applyQueuesEl.checked);
+
+                if (!emails.length) {
+                  statusEl.textContent = "Paste at least one valid email for batch update.";
+                  return false;
+                }
+                if (!applyDivision && !applySkills && !applyQueues) {
+                  statusEl.textContent = "Choose at least one field to update (Division, Skills, or Queues).";
+                  return false;
+                }
+                if (applyDivision && !divisionIds.length) {
+                  statusEl.textContent = "Division is checked; select one Division target.";
+                  return false;
+                }
+                if (!window.confirm("Run batch user update for " + emails.length + " user(s)?")) {
+                  return false;
+                }
+
+                const originalText = updateBatchBtn ? updateBatchBtn.textContent : "Run Batch User Update";
+                if (updateBatchBtn) {
+                  updateBatchBtn.disabled = true;
+                  updateBatchBtn.textContent = "Running...";
+                }
+                setSummary("", false);
+                statusEl.textContent = "Running batch user update for " + emails.length + " user(s)...";
+
+                try {
+                  const formData = new FormData();
+                  formData.append("users_json", JSON.stringify(emails.map(function (email) { return { user_email: email }; })));
+                  formData.append("update_division", applyDivision ? "true" : "false");
+                  formData.append("update_skills", applySkills ? "true" : "false");
+                  formData.append("update_queues", applyQueues ? "true" : "false");
+                  formData.append("division_id", applyDivision ? (divisionIds[0] || "") : "");
+                  formData.append("skill_ids_json", JSON.stringify(skillIds));
+                  formData.append("queue_ids_json", JSON.stringify(queueIds));
+
+                  const response = await fetch("/genesys/users/search-update-batch", { method: "POST", body: formData });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || "Batch user update failed.");
+                  }
+
+                  const failed = Array.isArray(payload.results)
+                    ? payload.results.filter(function (row) { return !(row && row.ok); })
+                    : [];
+                  const failedList = failed.map(function (row) {
+                    const email = esc(String((row && row.user_email) || "(unknown)"));
+                    const err = esc(String((row && row.error) || "Unknown error"));
+                    return "<li><strong>" + email + "</strong>: " + err + "</li>";
+                  });
+
+                  statusEl.textContent = "Batch user update complete: Updated " + Number(payload.success_count || 0) + " of " + Number(payload.requested || emails.length) + " user(s).";
+                  let summaryHtml = "<strong>Batch User Update Result</strong>"
+                    + "<div style='margin-top:6px;'>Requested: " + Number(payload.requested || emails.length)
+                    + " | Updated: " + Number(payload.success_count || 0)
+                    + " | Failed: " + Number(payload.failure_count || failed.length)
+                    + "</div>";
+                  if (failedList.length) {
+                    summaryHtml += "<div style='margin-top:8px;'><strong>Failures</strong><ul style='margin:6px 0 0 18px;'>" + failedList.join("") + "</ul></div>";
+                  }
+                  setSummary(summaryHtml, true);
+                  loadUpdateBatchHistoryFallback();
+                  return true;
+                } catch (err) {
+                  statusEl.textContent = "Batch user update failed: " + ((err && err.message) || "Unknown error.");
+                  return false;
+                } finally {
+                  if (updateBatchBtn) {
+                    updateBatchBtn.disabled = false;
+                    updateBatchBtn.textContent = originalText;
+                  }
+                }
+              }
+
               async function loadCatalog() {
                 const original = loadBtn.textContent;
                 loadBtn.disabled = true;
@@ -14417,6 +14513,11 @@ def genesys_admin_placeholder(request: Request):
                 return false;
               };
 
+              window.runGenesysUpdateBatchSubmit = function () {
+                runBatchUserUpdate();
+                return false;
+              };
+
               window.runGenesysDivisionFilterReload = function () {
                 loadSavedFilters();
                 return false;
@@ -14505,6 +14606,21 @@ def genesys_admin_placeholder(request: Request):
               if (updateHistoryRefreshBtn) {
                 updateHistoryRefreshBtn.addEventListener("click", function () {
                   loadUpdateBatchHistoryFallback();
+                });
+              }
+
+              if (updateBatchEmailsEl && updateBatchCountEl && String(updateBatchEmailsEl.dataset.bound || "") !== "1") {
+                updateBatchEmailsEl.dataset.bound = "1";
+                updateBatchEmailsEl.addEventListener("input", function () {
+                  const emails = parseEmailList(updateBatchEmailsEl.value || "");
+                  updateBatchCountEl.textContent = emails.length ? (emails.length + " user(s) ready.") : "No users queued.";
+                });
+              }
+
+              if (updateBatchBtn && String(updateBatchBtn.dataset.bound || "") !== "1") {
+                updateBatchBtn.dataset.bound = "1";
+                updateBatchBtn.addEventListener("click", function () {
+                  runBatchUserUpdate();
                 });
               }
 
