@@ -12286,6 +12286,7 @@ def genesys_admin_placeholder(request: Request):
               <button type="button" id="genesys-update-load-catalog-btn" style="background:#385977;">Load Divisions / Skills / Queues</button>
               <span id="genesys-update-catalog-count" style="font-size:12px; color:#4e6a84;">Catalog not loaded yet.</span>
             </div>
+            <div id="genesys-update-catalog-download" style="margin:4px 0 8px 0;"></div>
 
             <div class="search-filter-row" style="align-items:flex-start;">
               <div style="min-width:260px; max-width:340px; flex:1 1 280px;">
@@ -12370,6 +12371,7 @@ def genesys_admin_placeholder(request: Request):
         const queueExtractAllBtn = document.getElementById("genesys-queue-extract-all-btn");
         const updateLoadCatalogBtn = document.getElementById("genesys-update-load-catalog-btn");
         const updateCatalogCountEl = document.getElementById("genesys-update-catalog-count");
+        const updateCatalogDownloadEl = document.getElementById("genesys-update-catalog-download");
         const updateDivisionSelect = document.getElementById("genesys-update-division-select");
         const updateSkillsSelect = document.getElementById("genesys-update-skills-select");
         const updateQueuesSelect = document.getElementById("genesys-update-queues-select");
@@ -12523,9 +12525,24 @@ def genesys_admin_placeholder(request: Request):
             if (updateCatalogCountEl) {
               updateCatalogCountEl.textContent = "Divisions: " + divisions.length + " | Skills: " + skills.length + " | Queues: " + queues.length;
             }
+            if (updateCatalogDownloadEl) {
+              if (payload.raw_download_url) {
+                const rawName = String(payload.raw_filename || "genesys_catalog_options.json");
+                updateCatalogDownloadEl.innerHTML = "<a href='" + _escapeHtml(String(payload.raw_download_url || "")) + "' style='display:inline-block;padding:7px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Catalog JSON (" + _escapeHtml(rawName) + ")</a>";
+              } else {
+                updateCatalogDownloadEl.innerHTML = "";
+              }
+            }
             updateStatusEl.textContent = "Catalog loaded. Select one Division and one or more Skills/Queues, then run single-user proof.";
+            const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
+            if (warnings.length) {
+              updateStatusEl.textContent += " Warnings: " + warnings.join(" | ");
+            }
           } catch (err) {
             updateStatusEl.textContent = "Catalog load failed: " + ((err && err.message) || "Unknown error.");
+            if (updateCatalogDownloadEl) {
+              updateCatalogDownloadEl.innerHTML = "";
+            }
           } finally {
             if (updateLoadCatalogBtn) {
               updateLoadCatalogBtn.disabled = false;
@@ -14361,6 +14378,23 @@ def genesys_catalog_options_route():
       "error": "Unable to load catalog options from Genesys.",
       "warnings": catalog_result.get("warnings", []),
     }, status_code=400)
+
+  raw_payload = {
+    "region": catalog_result.get("region", clean_region),
+    "pages_scanned": catalog_result.get("pages_scanned", {}),
+    "warnings": catalog_result.get("warnings", []),
+    "divisions": catalog_result.get("divisions", []),
+    "skills": catalog_result.get("skills", []),
+    "queues": catalog_result.get("queues", []),
+  }
+  raw_filename = f"genesys_catalog_options_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+  raw_job_id = _store_job_output(
+    json.dumps(raw_payload, indent=2).encode("utf-8"),
+    raw_filename,
+    "application/json",
+  )
+  catalog_result["raw_download_url"] = f"/download/job-output/{raw_job_id}"
+  catalog_result["raw_filename"] = raw_filename
 
   return JSONResponse(catalog_result)
 
