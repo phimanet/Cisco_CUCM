@@ -13337,8 +13337,8 @@ def genesys_admin_placeholder(request: Request):
 
             <div class="search-filter-row" style="align-items:flex-start;">
               <div style="min-width:260px; max-width:340px; flex:1 1 280px;">
-                <label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Division (single)</label>
-                <label style="display:block; font-size:12px; color:#4e6a84; margin-bottom:4px;"><input type="checkbox" id="genesys-update-apply-division" checked> Apply Division</label>
+                <label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Division Access (single)</label>
+                <label style="display:block; font-size:12px; color:#4e6a84; margin-bottom:4px;"><input type="checkbox" id="genesys-update-apply-division"> Grant selected Division Access via current role(s)</label>
                 <select id="genesys-update-division-select" size="8" style="width:100%; min-height:220px;"></select>
               </div>
               <div style="min-width:260px; max-width:340px; flex:1 1 280px;">
@@ -13355,7 +13355,7 @@ def genesys_admin_placeholder(request: Request):
 
             <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f4f9ff;">
               <h4 style="margin:0 0 8px 0;">Division Filter Builder (Persistent)</h4>
-              <p style="margin:0 0 8px 0; color:#4e6a84; font-size:12px;">Choose a Division, select Skills/Queues to show, then save. Filters are stored outside code and survive service restarts.</p>
+              <p style="margin:0 0 8px 0; color:#4e6a84; font-size:12px;">Choose a Division Access filter, select Skills/Queues to show, then save. Filters are stored outside code and survive service restarts.</p>
               <div class="search-filter-row" style="align-items:center; gap:8px; flex-wrap:wrap;">
                 <label style="font-size:12px; color:#4e6a84;"><input type="checkbox" id="genesys-update-use-division-filter"> Apply saved division filter to Skills/Queues view</label>
                 <button type="button" id="genesys-update-filter-reload-btn" style="background:#385977;" onclick="if (window.runGenesysDivisionFilterReload) { return window.runGenesysDivisionFilterReload(); } return false;">Reload Saved Filters</button>
@@ -13470,11 +13470,20 @@ def genesys_admin_placeholder(request: Request):
                   return;
                 }
                 selectEl.innerHTML = "";
+                const isDivisionSelect = String(selectEl.id || "") === "genesys-update-division-select";
+                if (isDivisionSelect) {
+                  const emptyOption = document.createElement("option");
+                  emptyOption.value = "";
+                  emptyOption.textContent = "-- Select Division --";
+                  selectEl.appendChild(emptyOption);
+                }
                 if (!Array.isArray(rows) || !rows.length) {
-                  const option = document.createElement("option");
-                  option.value = "";
-                  option.textContent = placeholder || "(none)";
-                  selectEl.appendChild(option);
+                  if (!isDivisionSelect) {
+                    const option = document.createElement("option");
+                    option.value = "";
+                    option.textContent = placeholder || "(none)";
+                    selectEl.appendChild(option);
+                  }
                   return;
                 }
                 rows.forEach(function (row) {
@@ -13505,6 +13514,9 @@ def genesys_admin_placeholder(request: Request):
                   const value = String((opt && opt.value) || "").trim();
                   opt.selected = wanted.has(value);
                 });
+                if (!wanted.size && String(selectEl.id || "") === "genesys-update-division-select" && selectEl.options && selectEl.options.length) {
+                  selectEl.options[0].selected = true;
+                }
               }
 
               function selectedValues(selectEl) {
@@ -13686,7 +13698,7 @@ def genesys_admin_placeholder(request: Request):
                   return false;
                 }
                 if (applyDivision && !divisionIds.length) {
-                  statusEl.textContent = "Division update is checked; select one Division.";
+                  statusEl.textContent = "Division access is checked; select one Division Access target.";
                   return false;
                 }
                 if (!window.confirm("Update Division/Skills/Queues for " + userEmail + "?")) {
@@ -13719,7 +13731,7 @@ def genesys_admin_placeholder(request: Request):
                   setSummary(
                     "<strong>Single User Update Result</strong>"
                     + "<div style='margin-top:6px;'>User: " + esc(String(payload.user_email || userEmail)) + "</div>"
-                    + "<div style='margin-top:6px;'>Division: " + esc(String(payload.division_status || "")) + "</div>"
+                    + "<div style='margin-top:6px;'>Division Access: " + esc(String(payload.division_status || "")) + "</div>"
                     + "<div style='margin-top:6px;'>Skills: " + esc(String(payload.skills_status || "")) + "</div>"
                     + "<div style='margin-top:6px;'>Queues: " + esc(String(payload.queues_status || "")) + "</div>",
                     true,
@@ -13773,7 +13785,7 @@ def genesys_admin_placeholder(request: Request):
                       : "";
                   }
 
-                  statusEl.textContent = "Catalog loaded. Select one Division and one or more Skills/Queues, then run single-user proof.";
+                  statusEl.textContent = "Catalog loaded. Select one Division Access target and one or more Skills/Queues, then run single-user proof.";
                   const warnings = Array.isArray(payload && payload.warnings) ? payload.warnings : [];
                   if (warnings.length) {
                     statusEl.textContent += " Warnings: " + warnings.join(" | ");
@@ -13822,18 +13834,21 @@ def genesys_admin_placeholder(request: Request):
                     throw new Error((payload && payload.error) || "User lookup failed.");
                   }
 
-                  setSelected(divisionSelect, payload.division_id ? [payload.division_id] : []);
+                  setSelected(divisionSelect, []);
+                  if (applyDivisionEl) {
+                    applyDivisionEl.checked = false;
+                  }
                   setSelected(skillsSelect, Array.isArray(payload.skill_ids) ? payload.skill_ids : []);
                   setSelected(queuesSelect, Array.isArray(payload.queue_ids) ? payload.queue_ids : []);
 
                   if (profileEl) {
                     const webrtcText = String(payload.webrtc_phone || "").trim();
-                    profileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Division=" + esc(String(payload.division_name || payload.division_id || "(none)"))
+                    profileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Profile Division=" + esc(String(payload.division_name || payload.division_id || "(none)"))
                       + " | Skills=" + Number((payload.skill_ids || []).length || 0)
                       + " | Queues=" + Number((payload.queue_ids || []).length || 0)
                       + " | WebRTC=" + esc(webrtcText || "(missing)") + "</strong>";
                   }
-                  statusEl.textContent = "Current profile loaded for " + userEmail + ". Adjust selections, then run update.";
+                  statusEl.textContent = "Current profile loaded for " + userEmail + ". Select a Division Access target explicitly if you want to grant additional role-based access, then run update.";
                   return true;
                 } catch (err) {
                   statusEl.textContent = "User lookup failed: " + ((err && err.message) || "Unknown error.");
@@ -14702,7 +14717,7 @@ def genesys_admin_placeholder(request: Request):
                 updateCatalogDownloadEl.innerHTML = "";
               }
             }
-            updateStatusEl.textContent = "Catalog loaded. Select one Division and one or more Skills/Queues, then run single-user proof.";
+            updateStatusEl.textContent = "Catalog loaded. Select one Division Access target and one or more Skills/Queues, then run single-user proof.";
             const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
             if (warnings.length) {
               updateStatusEl.textContent += " Warnings: " + warnings.join(" | ");
@@ -14772,7 +14787,7 @@ def genesys_admin_placeholder(request: Request):
 
             if (updateSingleProfileEl) {
               const webrtcText = String(payload.webrtc_phone || "").trim();
-              updateSingleProfileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Division=" + _escapeHtml(String(payload.division_name || payload.division_id || "(none)"))
+              updateSingleProfileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Profile Division=" + _escapeHtml(String(payload.division_name || payload.division_id || "(none)"))
                 + " | Skills=" + Number((payload.skill_ids || []).length || 0)
                 + " | Queues=" + Number((payload.queue_ids || []).length || 0)
                 + " | WebRTC=" + _escapeHtml(webrtcText || "(missing)") + "</strong>";
@@ -14830,7 +14845,7 @@ def genesys_admin_placeholder(request: Request):
                 updateSingleActionsEl.appendChild(button);
               }
             }
-            updateStatusEl.textContent = "Current profile loaded for " + userEmail + ". Adjust selections, then run update.";
+            updateStatusEl.textContent = "Current profile loaded for " + userEmail + ". Adjust Skills/Queues, and only select Division Access if you want to grant additional role-based access.";
           } catch (err) {
             updateStatusEl.textContent = "User lookup failed: " + ((err && err.message) || "Unknown error.");
             if (updateSingleActionsEl) {
@@ -14870,7 +14885,7 @@ def genesys_admin_placeholder(request: Request):
             return;
           }
           if (applyDivision && !divisionIds.length) {
-            updateStatusEl.textContent = "Division update is checked; select one Division.";
+            updateStatusEl.textContent = "Division access is checked; select one Division Access target.";
             return;
           }
 
@@ -14909,7 +14924,7 @@ def genesys_admin_placeholder(request: Request):
             _setUpdateSummary(
               "<strong>Single User Update Result</strong>"
               + "<div style='margin-top:6px;'>User: " + _escapeHtml(String(payload.user_email || userEmail)) + "</div>"
-              + "<div style='margin-top:6px;'>Division: " + _escapeHtml(String(payload.division_status || "")) + "</div>"
+              + "<div style='margin-top:6px;'>Division Access: " + _escapeHtml(String(payload.division_status || "")) + "</div>"
               + "<div style='margin-top:6px;'>Skills: " + _escapeHtml(String(payload.skills_status || "")) + "</div>"
               + "<div style='margin-top:6px;'>Queues: " + _escapeHtml(String(payload.queues_status || "")) + "</div>",
               true,
@@ -14950,7 +14965,7 @@ def genesys_admin_placeholder(request: Request):
             return;
           }
           if (applyDivision && !divisionIds.length) {
-            updateStatusEl.textContent = "Division update is checked; select one Division.";
+            updateStatusEl.textContent = "Division access is checked; select one Division Access target.";
             return;
           }
 
