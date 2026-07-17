@@ -12827,9 +12827,10 @@ def genesys_admin_placeholder(request: Request):
                 rows.forEach(function (row) {
                   const optionId = String((row && row.id) || "").trim();
                   const optionName = String((row && row.name) || optionId || "").trim();
+                  const isMissingMarker = optionName.toLowerCase().indexOf("(missing in api catalog)") >= 0;
                   const isMissing = Boolean(row && row.missing);
                   const selectable = (row && typeof row.selectable !== "undefined") ? Boolean(row.selectable) : !isMissing;
-                  if (!optionName) {
+                  if (!optionName || !optionId || isMissingMarker) {
                     return;
                   }
                   const option = document.createElement("option");
@@ -13224,10 +13225,11 @@ def genesys_admin_placeholder(request: Request):
           rows.forEach(function (row) {
             const id = String((row && row.id) || "").trim();
             const name = String((row && row.name) || id || "").trim();
+            const isMissingMarker = name.toLowerCase().indexOf("(missing in api catalog)") >= 0;
             const isMissing = Boolean(row && row.missing);
             const selectable = (row && typeof row.selectable !== "undefined") ? Boolean(row.selectable) : !isMissing;
             const priority = Boolean(row && row.priority);
-            if (!name) {
+            if (!name || !id || isMissingMarker) {
               return;
             }
             const option = document.createElement("option");
@@ -15671,6 +15673,25 @@ def genesys_catalog_options_route():
 
     return merged
 
+  def _sanitize_options(rows: list[dict]) -> list[dict]:
+    cleaned = []
+    seen = set()
+    for row in (rows or []):
+      if not isinstance(row, dict):
+        continue
+      row_id = str(row.get("id", "") or "").strip()
+      row_name = str(row.get("name", "") or "").strip()
+      if not row_id:
+        continue
+      if "(missing in api catalog)" in row_name.lower():
+        continue
+      dedupe_key = (row_id.lower(), row_name.lower())
+      if dedupe_key in seen:
+        continue
+      seen.add(dedupe_key)
+      cleaned.append(dict(row))
+    return cleaned
+
   def _recompute_priority_counts(catalog: dict):
     queues = catalog.get("queues", []) if isinstance(catalog.get("queues"), list) else []
     skills = catalog.get("skills", []) if isinstance(catalog.get("skills"), list) else []
@@ -15774,6 +15795,9 @@ def genesys_catalog_options_route():
           best_catalog.get("queues", []) if isinstance(best_catalog.get("queues"), list) else [],
           default_catalog.get("queues", []) if isinstance(default_catalog.get("queues"), list) else [],
         )
+        merged_catalog["divisions"] = _sanitize_options(merged_catalog.get("divisions", []))
+        merged_catalog["skills"] = _sanitize_options(merged_catalog.get("skills", []))
+        merged_catalog["queues"] = _sanitize_options(merged_catalog.get("queues", []))
 
         primary_pages = best_catalog.get("pages_scanned", {}) if isinstance(best_catalog.get("pages_scanned"), dict) else {}
         default_pages = default_catalog.get("pages_scanned", {}) if isinstance(default_catalog.get("pages_scanned"), dict) else {}
@@ -15801,6 +15825,12 @@ def genesys_catalog_options_route():
       "error": "Unable to load catalog options from Genesys.",
       "warnings": best_catalog.get("warnings", []),
     }, status_code=400)
+
+  best_catalog["divisions"] = _sanitize_options(best_catalog.get("divisions", []))
+  best_catalog["skills"] = _sanitize_options(best_catalog.get("skills", []))
+  best_catalog["queues"] = _sanitize_options(best_catalog.get("queues", []))
+  _recompute_priority_counts(best_catalog)
+  _recompute_missing(best_catalog)
 
   best_catalog["token_source"] = best_source
 
