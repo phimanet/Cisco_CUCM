@@ -14679,6 +14679,24 @@ def genesys_admin_placeholder(request: Request):
               if (selectedCount(divisionSelect) === 0 && selectedCount(skillsSelect) === 0 && selectedCount(queuesSelect) === 0) {
                 loadCatalog();
               }
+              let fallbackCatalogAutoloadAttempts = 0;
+              const fallbackCatalogAutoloadMax = 3;
+              const scheduleFallbackCatalogAutoload = function () {
+                if (selectedCount(divisionSelect) > 0 || selectedCount(skillsSelect) > 0 || selectedCount(queuesSelect) > 0) {
+                  return;
+                }
+                if (fallbackCatalogAutoloadAttempts >= fallbackCatalogAutoloadMax) {
+                  return;
+                }
+                fallbackCatalogAutoloadAttempts += 1;
+                window.setTimeout(function () {
+                  if (selectedCount(divisionSelect) === 0 && selectedCount(skillsSelect) === 0 && selectedCount(queuesSelect) === 0) {
+                    loadCatalog();
+                    scheduleFallbackCatalogAutoload();
+                  }
+                }, 700);
+              };
+              scheduleFallbackCatalogAutoload();
             })();
           </script>
 
@@ -16071,6 +16089,22 @@ def genesys_admin_placeholder(request: Request):
           }
         }
 
+        let primaryCatalogAutoloadAttempts = 0;
+        const primaryCatalogAutoloadMax = 3;
+        const schedulePrimaryCatalogAutoload = function () {
+          if (updateCatalogLoaded || primaryCatalogAutoloadAttempts >= primaryCatalogAutoloadMax) {
+            return;
+          }
+          primaryCatalogAutoloadAttempts += 1;
+          window.setTimeout(function () {
+            if (!updateCatalogLoaded) {
+              _loadUpdateCatalog();
+              schedulePrimaryCatalogAutoload();
+            }
+          }, 700);
+        };
+        schedulePrimaryCatalogAutoload();
+
         if (bulkEmailForm && bulkEmailStatusEl) {
           bulkEmailForm.addEventListener("input", function () {
             if (!bulkEmailCountEl) {
@@ -17125,7 +17159,14 @@ def genesys_admin_placeholder(request: Request):
   html = html.replace("__ENV_CLASS__", env_css_class)
   html = html.replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false")
   html = html.replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
-  return HTMLResponse(html)
+  return HTMLResponse(
+    html,
+    headers={
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    },
+  )
 
 
 @app.get("/opentext-admin", response_class=HTMLResponse)
