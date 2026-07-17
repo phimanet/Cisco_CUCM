@@ -20493,7 +20493,7 @@ __ADMIN_CARD__
           <span>Review recent portal actions and download the audit CSV.</span>
         </a>
         <a class="hero-link-card" href="/genesys-admin">
-          <strong>Genesys Placeholder</strong>
+          <strong>Genesys Admin Page</strong>
           <span>Reserved path for the separate Genesys administration workflow.</span>
         </a>
       </div>
