@@ -12705,7 +12705,7 @@ def genesys_admin_placeholder(request: Request):
               if (!rows.length) {
                 let noRowsHtml = "<p style='color:#4e6a84;'>No queue members found for this query.</p>";
                 if (diagnostics.length) {
-                  noRowsHtml += "<div style='margin-top:8px;padding:8px;border:1px solid #d7e3ee;border-radius:6px;background:#f9fcff;'><strong>Diagnostics</strong><pre style='white-space:pre-wrap;margin:6px 0 0 0;font-size:12px;line-height:1.35;'>" + diagnostics.join("\n") + "</pre></div>";
+                  noRowsHtml += "<div style='margin-top:8px;padding:8px;border:1px solid #d7e3ee;border-radius:6px;background:#f9fcff;'><strong>Diagnostics</strong><pre style='white-space:pre-wrap;margin:6px 0 0 0;font-size:12px;line-height:1.35;'>" + diagnostics.join("\\n") + "</pre></div>";
                 }
                 queueResultsEl.innerHTML = noRowsHtml;
                 return;
@@ -12727,7 +12727,7 @@ def genesys_admin_placeholder(request: Request):
               });
               html += "</tbody></table>";
               if (diagnostics.length) {
-                html += "<div style='margin-top:8px;padding:8px;border:1px solid #d7e3ee;border-radius:6px;background:#f9fcff;'><strong>Diagnostics</strong><pre style='white-space:pre-wrap;margin:6px 0 0 0;font-size:12px;line-height:1.35;'>" + diagnostics.join("\n") + "</pre></div>";
+                html += "<div style='margin-top:8px;padding:8px;border:1px solid #d7e3ee;border-radius:6px;background:#f9fcff;'><strong>Diagnostics</strong><pre style='white-space:pre-wrap;margin:6px 0 0 0;font-size:12px;line-height:1.35;'>" + diagnostics.join("\\n") + "</pre></div>";
               }
               queueResultsEl.innerHTML = html;
             } catch (err) {
