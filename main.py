@@ -14292,6 +14292,14 @@ def genesys_admin_placeholder(request: Request):
                 if (!statusEl) {
                   return false;
                 }
+                if (selectedCount(divisionSelect) === 0 && selectedCount(skillsSelect) === 0 && selectedCount(queuesSelect) === 0) {
+                  statusEl.textContent = "Catalog not loaded yet. Loading catalog first...";
+                  const ready = await loadCatalog();
+                  if (!ready) {
+                    statusEl.textContent = "Catalog load failed. Please retry Load Divisions / Skills / Queues.";
+                    return false;
+                  }
+                }
                 const emails = parseEmailList((updateBatchEmailsEl && updateBatchEmailsEl.value) || "");
                 const divisionIds = selectedValues(divisionSelect);
                 const skillIds = selectedValues(skillsSelect);
@@ -14668,6 +14676,9 @@ def genesys_admin_placeholder(request: Request):
 
               loadSavedFilters();
               loadUpdateBatchHistoryFallback();
+              if (selectedCount(divisionSelect) === 0 && selectedCount(skillsSelect) === 0 && selectedCount(queuesSelect) === 0) {
+                loadCatalog();
+              }
             })();
           </script>
 
@@ -15788,8 +15799,12 @@ def genesys_admin_placeholder(request: Request):
             return;
           }
           if (!updateCatalogLoaded) {
-            updateStatusEl.textContent = "Load catalog first.";
-            return;
+            updateStatusEl.textContent = "Catalog not loaded yet. Loading catalog first...";
+            const ready = await _loadUpdateCatalog();
+            if (!ready && !updateCatalogLoaded) {
+              updateStatusEl.textContent = "Catalog load failed. Please retry Load Divisions / Skills / Queues.";
+              return;
+            }
           }
 
           const emails = _parseEmailList((updateBatchEmailsEl && updateBatchEmailsEl.value) || "");
@@ -16032,6 +16047,9 @@ def genesys_admin_placeholder(request: Request):
             navButtons.forEach(function (btn) {
               btn.classList.toggle("active", btn.getAttribute("data-panel-target") === panelId);
             });
+            if (panelId === "genesys-user-update-panel" && !updateCatalogLoaded) {
+              _loadUpdateCatalog();
+            }
           };
 
           navButtons.forEach(function (btn) {
@@ -16044,6 +16062,13 @@ def genesys_admin_placeholder(request: Request):
           });
 
           showPanel("genesys-user-update-panel");
+        }
+
+        if (!updateCatalogLoaded && updateDivisionSelect && updateSkillsSelect && updateQueuesSelect) {
+          const hasAnyOption = _selectedValues(updateDivisionSelect).length || _selectedValues(updateSkillsSelect).length || _selectedValues(updateQueuesSelect).length;
+          if (!hasAnyOption) {
+            _loadUpdateCatalog();
+          }
         }
 
         if (bulkEmailForm && bulkEmailStatusEl) {
