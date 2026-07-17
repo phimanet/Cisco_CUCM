@@ -3401,64 +3401,68 @@ def _genesys_apply_user_search_update(
     division_status = str(division_message or "updated").strip()
 
   if update_skills:
-    skill_posts = [{"id": skill_id, "proficiency": 5.0} for skill_id in clean_skill_ids]
-    skill_attempts = [
-      ("PUT", f"/api/v2/users/{clean_user_id}/routingskills/bulk", skill_posts),
-      ("PATCH", f"/api/v2/users/{clean_user_id}/routingskills/bulk", skill_posts),
-    ]
-
-    skill_errors = []
-    skill_ok = False
-    for method, path, payload in skill_attempts:
-      ok_skills, _, skills_err, _ = _genesys_send_json(method, api_base, access_token, path, payload=payload)
-      if ok_skills:
-        skill_ok = True
-        break
-      skill_errors.append(f"{path}: {skills_err}")
-
-    if not skill_ok and skill_posts:
-      current_skill_ids, _current_skill_err = _genesys_get_user_skill_ids(api_base, access_token, clean_user_id)
-      current_skill_set = set(current_skill_ids)
-      desired_skill_set = set(clean_skill_ids)
-      skill_add_errors = []
-      skill_remove_errors = []
-      skill_add_count = 0
-      skill_remove_count = 0
-      for skill_id in sorted(desired_skill_set - current_skill_set):
-        ok_add_skill, _, add_skill_err, _ = _genesys_send_json(
-          "POST",
-          api_base,
-          access_token,
-          f"/api/v2/users/{clean_user_id}/routingskills",
-          payload={"id": skill_id, "proficiency": 5.0},
-        )
-        if ok_add_skill:
-          skill_add_count += 1
-        else:
-          skill_add_errors.append(f"add {skill_id}: {add_skill_err}")
-      for skill_id in sorted(current_skill_set - desired_skill_set):
-        ok_remove_skill, _, remove_skill_err, _ = _genesys_send_json(
-          "DELETE",
-          api_base,
-          access_token,
-          f"/api/v2/users/{clean_user_id}/routingskills/{skill_id}",
-          payload=None,
-        )
-        if ok_remove_skill:
-          skill_remove_count += 1
-        else:
-          skill_remove_errors.append(f"remove {skill_id}: {remove_skill_err}")
-      if not skill_add_errors and not skill_remove_errors:
-        skill_ok = True
-        skills_status = f"updated (added={skill_add_count}, removed={skill_remove_count}, target={len(clean_skill_ids)})"
-      else:
-        skill_errors.extend(skill_add_errors + skill_remove_errors)
-
-    if skill_ok:
-      if skills_status == "skipped":
-        skills_status = f"updated (count={len(clean_skill_ids)})"
+    if not clean_skill_ids:
+      # Genesys /routingskills/bulk rejects empty payloads; treat empty target as no-op.
+      skills_status = "skipped (none selected)"
     else:
-      return {"ok": False, "error": "Skills update failed: " + (" | ".join(skill_errors) if skill_errors else "unknown")}
+      skill_posts = [{"id": skill_id, "proficiency": 5.0} for skill_id in clean_skill_ids]
+      skill_attempts = [
+        ("PUT", f"/api/v2/users/{clean_user_id}/routingskills/bulk", skill_posts),
+        ("PATCH", f"/api/v2/users/{clean_user_id}/routingskills/bulk", skill_posts),
+      ]
+
+      skill_errors = []
+      skill_ok = False
+      for method, path, payload in skill_attempts:
+        ok_skills, _, skills_err, _ = _genesys_send_json(method, api_base, access_token, path, payload=payload)
+        if ok_skills:
+          skill_ok = True
+          break
+        skill_errors.append(f"{path}: {skills_err}")
+
+      if not skill_ok and skill_posts:
+        current_skill_ids, _current_skill_err = _genesys_get_user_skill_ids(api_base, access_token, clean_user_id)
+        current_skill_set = set(current_skill_ids)
+        desired_skill_set = set(clean_skill_ids)
+        skill_add_errors = []
+        skill_remove_errors = []
+        skill_add_count = 0
+        skill_remove_count = 0
+        for skill_id in sorted(desired_skill_set - current_skill_set):
+          ok_add_skill, _, add_skill_err, _ = _genesys_send_json(
+            "POST",
+            api_base,
+            access_token,
+            f"/api/v2/users/{clean_user_id}/routingskills",
+            payload={"id": skill_id, "proficiency": 5.0},
+          )
+          if ok_add_skill:
+            skill_add_count += 1
+          else:
+            skill_add_errors.append(f"add {skill_id}: {add_skill_err}")
+        for skill_id in sorted(current_skill_set - desired_skill_set):
+          ok_remove_skill, _, remove_skill_err, _ = _genesys_send_json(
+            "DELETE",
+            api_base,
+            access_token,
+            f"/api/v2/users/{clean_user_id}/routingskills/{skill_id}",
+            payload=None,
+          )
+          if ok_remove_skill:
+            skill_remove_count += 1
+          else:
+            skill_remove_errors.append(f"remove {skill_id}: {remove_skill_err}")
+        if not skill_add_errors and not skill_remove_errors:
+          skill_ok = True
+          skills_status = f"updated (added={skill_add_count}, removed={skill_remove_count}, target={len(clean_skill_ids)})"
+        else:
+          skill_errors.extend(skill_add_errors + skill_remove_errors)
+
+      if skill_ok:
+        if skills_status.startswith("skipped"):
+          skills_status = f"updated (count={len(clean_skill_ids)})"
+      else:
+        return {"ok": False, "error": "Skills update failed: " + (" | ".join(skill_errors) if skill_errors else "unknown")}
 
   if update_queues:
     current_queue_ids, current_queue_err = _genesys_get_user_queue_ids(api_base, access_token, clean_user_id)
