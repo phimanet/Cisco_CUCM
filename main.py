@@ -3015,7 +3015,15 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
   if not clean_user_id:
     return {"ok": False, "error": "User ID is required."}
 
-  ok_user, user_payload, err_user = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}")
+  ok_user, user_payload, err_user = _genesys_get_json(
+    api_base,
+    access_token,
+    f"/api/v2/users/{clean_user_id}",
+    params={"expand": "station"},
+  )
+  if not ok_user:
+    # Backward-compatible fallback for tenants that reject expand.
+    ok_user, user_payload, err_user = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}")
   if not ok_user:
     return {"ok": False, "error": f"User profile lookup failed: {err_user}"}
 
@@ -3231,7 +3239,14 @@ def _genesys_update_user_division_profile(api_base: str, access_token: str, user
   if not update_ok:
     return False, " | ".join(errors) if errors else "Division update API failed."
 
-  ok_user_verify, user_verify_payload, err_verify = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}")
+  ok_user_verify, user_verify_payload, err_verify = _genesys_get_json(
+    api_base,
+    access_token,
+    f"/api/v2/users/{clean_user_id}",
+    params={"expand": "station"},
+  )
+  if not ok_user_verify:
+    ok_user_verify, user_verify_payload, err_verify = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}")
   if not ok_user_verify:
     return False, f"Division write accepted but verification read failed: {err_verify}"
 
