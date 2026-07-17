@@ -13276,7 +13276,7 @@ def home(request: Request):
 
 @app.get("/genesys-login", response_class=HTMLResponse)
 def genesys_login_page(request: Request):
-  return f"""
+  return """
 <html>
   <head>
     <title>Genesys Admin Login</title>
@@ -13358,7 +13358,7 @@ def genesys_login_page(request: Request):
 
       <form action="/login" method="post">
         <input type="hidden" name="next_url" value="/genesys-admin">
-        <input type="hidden" name="cucm_host" value="{escape(PROD_CUCM_HOST)}">
+        <input type="hidden" name="cucm_host" value="__PROD_CUCM_HOST__">
 
         Username:<br>
         <input name="cucm_user" required><br><br>
@@ -13371,7 +13371,7 @@ def genesys_login_page(request: Request):
     </section>
   </body>
 </html>
-"""
+""".replace("__PROD_CUCM_HOST__", escape(PROD_CUCM_HOST))
 
 
 @app.get("/genesys-admin", response_class=HTMLResponse)
