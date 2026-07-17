@@ -3033,8 +3033,15 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
   division_id = str(division_obj.get("id", "") or "").strip()
   division_name = str(division_obj.get("name", "") or "").strip()
 
-  # Show only what is set on the user profile section.
-  associated_webrtc_phone = _genesys_user_section_phone(user_payload if isinstance(user_payload, dict) else {})
+  # Keep both values: strict user-profile phone field and broader associated phone view.
+  user_section_webrtc_phone = _genesys_user_section_phone(user_payload if isinstance(user_payload, dict) else {})
+  ok_routing, routing_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}/routingstatus")
+  ok_station_assoc, station_assoc_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}/stationassociations")
+  associated_webrtc_phone = _genesys_extract_webrtc_phone(
+    user_payload if isinstance(user_payload, dict) else {},
+    routing_payload if ok_routing and isinstance(routing_payload, dict) else {},
+    station_assoc_payload if ok_station_assoc and isinstance(station_assoc_payload, dict) else {},
+  )
 
   inventory_webrtc_phone = ""
   if not associated_webrtc_phone:
@@ -3065,6 +3072,7 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
     "division_id": division_id,
     "division_name": division_name,
     "webrtc_phone": str(associated_webrtc_phone or "").strip(),
+    "webrtc_user_phone": str(user_section_webrtc_phone or "").strip(),
     "webrtc_associated_phone": str(associated_webrtc_phone or "").strip(),
     "webrtc_inventory_phone": str(inventory_webrtc_phone or "").strip(),
     "has_webrtc_phone": bool(str(associated_webrtc_phone or "").strip()),
@@ -14047,10 +14055,12 @@ def genesys_admin_placeholder(request: Request):
 
                   if (profileEl) {
                     const associatedWebrtc = String(payload.webrtc_associated_phone || payload.webrtc_phone || "").trim();
+                    const userWebrtc = String(payload.webrtc_user_phone || "").trim();
                     profileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Profile Division=" + esc(String(payload.division_name || payload.division_id || "(none)"))
                       + " | Skills=" + Number((payload.skill_ids || []).length || 0)
                       + " | Queues=" + Number((payload.queue_ids || []).length || 0)
-                      + " | User Phone=" + esc(associatedWebrtc || "(none)")
+                      + " | User Phone=" + esc(userWebrtc || "(none)")
+                      + " | Associated Phone=" + esc(associatedWebrtc || "(none)")
                       + "</strong>";
                   }
                   statusEl.textContent = "Current profile loaded for " + userEmail + ". Select a Division target if you want to update the user's profile division, then run update.";
@@ -14987,10 +14997,12 @@ def genesys_admin_placeholder(request: Request):
 
             if (updateSingleProfileEl) {
               const associatedWebrtc = String(payload.webrtc_associated_phone || payload.webrtc_phone || "").trim();
+              const userWebrtc = String(payload.webrtc_user_phone || "").trim();
               updateSingleProfileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Profile Division=" + _escapeHtml(String(payload.division_name || payload.division_id || "(none)"))
                 + " | Skills=" + Number((payload.skill_ids || []).length || 0)
                 + " | Queues=" + Number((payload.queue_ids || []).length || 0)
-                + " | User Phone=" + _escapeHtml(associatedWebrtc || "(none)")
+                + " | User Phone=" + _escapeHtml(userWebrtc || "(none)")
+                + " | Associated Phone=" + _escapeHtml(associatedWebrtc || "(none)")
                 + "</strong>";
             }
 
