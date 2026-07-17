@@ -3107,6 +3107,54 @@ def _genesys_ensure_update_webrtc_prerequisite(region: str, access_token: str, u
   )
 
   if not build_result.get("ok"):
+    # Repair pass for ghost-assignment edge case:
+    # Genesys can report "already assigned" but expose no discoverable station.
+    error_text = str(build_result.get("error", "") or "").lower()
+    is_ghost_case = (
+      "ghost assignment" in error_text
+      or "already assigned" in error_text
+      or "already been assigned" in error_text
+    )
+    if is_ghost_case:
+      clean_region, _, api_base = _genesys_region_to_urls(region)
+      # Best-effort clear of stale default station pointer before one retry.
+      _genesys_send_json(
+        "DELETE",
+        api_base,
+        access_token,
+        f"/api/v2/users/{str(user_id or '').strip()}/station/defaultstation",
+        payload=None,
+      )
+      retry_result = _genesys_build_webrtc_phone_for_user(
+        region,
+        access_token,
+        user_id,
+        str(profile_result.get("user_name", "") or "").strip(),
+        str(profile_result.get("user_email", "") or user_email or "").strip().lower(),
+      )
+      if retry_result.get("ok"):
+        resolved_phone_retry = str(
+          retry_result.get("verified_station_name", "")
+          or retry_result.get("phone_name", "")
+          or ""
+        ).strip()
+        if not resolved_phone_retry:
+          verify_profile_retry = _genesys_get_user_search_profile(region, access_token, user_id, user_email)
+          if verify_profile_retry.get("ok"):
+            resolved_phone_retry = str(
+              verify_profile_retry.get("webrtc_associated_phone", "")
+              or verify_profile_retry.get("webrtc_phone", "")
+              or ""
+            ).strip()
+        return {
+          "ok": bool(resolved_phone_retry),
+          "error": "" if resolved_phone_retry else "WebRTC auto-repair completed but user phone is still blank in profile.",
+          "webrtc_phone": resolved_phone_retry,
+          "inventory_phone": inventory_phone,
+          "webrtc_status": str(retry_result.get("association_result", "") or "associated_after_repair").strip(),
+          "webrtc_create_mode": str(retry_result.get("create_mode", "") or "").strip(),
+        }
+
     error_message = str(build_result.get("error", "Unable to auto-create/associate WebRTC phone.") or "").strip()
     if inventory_phone:
       error_message += f" Inventory match found ({inventory_phone}) but association failed."
@@ -13862,6 +13910,7 @@ def genesys_admin_placeholder(request: Request):
                   setSummary(
                     "<strong>Single User Update Result</strong>"
                     + "<div style='margin-top:6px;'>User: " + esc(String(payload.user_email || userEmail)) + "</div>"
+                    + "<div style='margin-top:6px;'>WebRTC: " + esc(String(payload.webrtc_status || "")) + " (mode=" + esc(String(payload.webrtc_create_mode || "")) + ", phone=" + esc(String(payload.webrtc_phone || "")) + ")</div>"
                     + "<div style='margin-top:6px;'>Division: " + esc(String(payload.division_status || "")) + "</div>"
                     + "<div style='margin-top:6px;'>Skills: " + esc(String(payload.skills_status || "")) + "</div>"
                     + "<div style='margin-top:6px;'>Queues: " + esc(String(payload.queues_status || "")) + "</div>",
@@ -15048,6 +15097,7 @@ def genesys_admin_placeholder(request: Request):
             _setUpdateSummary(
               "<strong>Single User Update Result</strong>"
               + "<div style='margin-top:6px;'>User: " + _escapeHtml(String(payload.user_email || userEmail)) + "</div>"
+              + "<div style='margin-top:6px;'>WebRTC: " + _escapeHtml(String(payload.webrtc_status || "")) + " (mode=" + _escapeHtml(String(payload.webrtc_create_mode || "")) + ", phone=" + _escapeHtml(String(payload.webrtc_phone || "")) + ")</div>"
               + "<div style='margin-top:6px;'>Division: " + _escapeHtml(String(payload.division_status || "")) + "</div>"
               + "<div style='margin-top:6px;'>Skills: " + _escapeHtml(String(payload.skills_status || "")) + "</div>"
               + "<div style='margin-top:6px;'>Queues: " + _escapeHtml(String(payload.queues_status || "")) + "</div>",
