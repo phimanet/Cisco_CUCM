@@ -13265,8 +13265,117 @@ def home(request: Request):
       <h3>Other Admin Portals</h3>
       <p>
         Need Genesys tools? Open the separate placeholder page here:
-        <a href="/genesys-admin">Genesys Admin</a>
+        <a href="/genesys-login">Genesys Admin</a>
       </p>
+    </section>
+  </body>
+</html>
+"""
+
+
+@app.get("/genesys-login", response_class=HTMLResponse)
+def genesys_login_page(request: Request):
+  session = _get_auth_session(request) or {}
+  if session and str(session.get("username", "") or "").strip():
+    return RedirectResponse(url="/genesys-admin", status_code=303)
+
+  return """
+<html>
+  <head>
+    <title>Genesys Admin Login</title>
+    <style>
+      :root {
+        --amn-blue: #005eb8;
+        --amn-navy: #002f6c;
+        --amn-text: #12304a;
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        margin: 0;
+        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+        color: var(--amn-text);
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 24px;
+        background: linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
+        color: #fff;
+      }
+
+      .brand-fallback {
+        font-weight: 700;
+        letter-spacing: 0.2px;
+      }
+
+      .hero {
+        max-width: 900px;
+        margin: 48px auto;
+        background: #fff;
+        border: 1px solid #c8dbee;
+        border-radius: 14px;
+        padding: 28px;
+        box-shadow: 0 8px 20px rgba(0, 47, 108, 0.08);
+      }
+
+      input,
+      select,
+      button {
+        border-radius: 8px;
+        border: 1px solid #c8dbee;
+      }
+
+      input,
+      select {
+        min-height: 34px;
+        padding: 6px 8px;
+        width: min(520px, 100%);
+      }
+
+      button {
+        background: var(--amn-blue);
+        color: #fff;
+        border: none;
+        padding: 10px 14px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      button:hover {
+        background: #004f9e;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <span class="brand-fallback">AMN Healthcare</span>
+      <strong>Voice Operations Portal</strong>
+    </header>
+
+    <section class="hero">
+      <h1>Genesys Admin Login</h1>
+      <p>Use your CUCM credentials to open the Genesys Admin Page.</p>
+
+      <form action="/login" method="post">
+        <input type="hidden" name="next_url" value="/genesys-admin">
+
+        Cisco Callmanager Environment:<br>
+        <select name="cucm_host">
+          <option value="lascucmpp01.ahs.int" selected>PRODUCTION CUCM</option>
+          <option value="lascucmpl01.ahs.int">LAB CUCM</option>
+        </select><br><br>
+
+        Cisco Callmanager Username:<br>
+        <input name="cucm_user" required><br><br>
+
+        Cisco Callmanager Password:<br>
+        <input type="password" name="cucm_pass" required><br><br>
+
+        <button type="submit">Log In to Genesys Admin</button>
+      </form>
     </section>
   </body>
 </html>
@@ -13277,7 +13386,7 @@ def home(request: Request):
 def genesys_admin_placeholder(request: Request):
   session = _get_auth_session(request) or {}
   if not session or not str(session.get("username", "") or "").strip():
-    return RedirectResponse(url="/", status_code=303)
+    return RedirectResponse(url="/genesys-login", status_code=303)
   now_epoch = time.time()
   auth_cucm_host = str(session.get("cucm_host", "") or "").strip()
   auth_user = str(session.get("username", "") or "").strip()
@@ -19583,23 +19692,30 @@ def login(
   cucm_host: str = Form(...),
   cucm_user: str = Form(...),
   cucm_pass: str = Form(...),
+  next_url: str = Form(""),
 ):
+  requested_next = str(next_url or "").strip()
+  safe_next = "/menu"
+  if requested_next.startswith("/") and not requested_next.startswith("//") and "\n" not in requested_next and "\r" not in requested_next:
+    safe_next = requested_next
+
   ok, message = _validate_cucm_login(cucm_host.strip(), cucm_user.strip(), cucm_pass)
   if not ok:
     safe = escape(message)
+    back_login_url = "/genesys-login" if safe_next == "/genesys-admin" else "/"
     return HTMLResponse(
       f"""
 <html><body style=\"font-family:Segoe UI,Arial,sans-serif;padding:24px;\">
   <h3>Login Failed</h3>
   <p>{safe}</p>
-  <p><a href=\"/\">Back to Login</a></p>
+  <p><a href=\"{back_login_url}\">Back to Login</a></p>
 </body></html>
 """,
       status_code=401,
     )
 
   session_id = _create_auth_session(cucm_host, cucm_user, cucm_pass)
-  response = RedirectResponse(url="/menu", status_code=303)
+  response = RedirectResponse(url=safe_next, status_code=303)
   response.set_cookie(
     key=SESSION_COOKIE_NAME,
     value=session_id,
