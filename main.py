@@ -491,6 +491,14 @@ GENESYS_UPDATE_BATCH_HISTORY_PATH = os.path.join(
   "genesys_user_update_batch_history.csv",
 )
 GENESYS_UPDATE_BATCH_HISTORY_MAX_ROWS = int((os.getenv("GENESYS_UPDATE_BATCH_HISTORY_MAX_ROWS", "200") or "200").strip())
+_genesys_default_filter_path = (os.getenv("GENESYS_DIVISION_FILTERS_PATH", "") or "").strip()
+if not _genesys_default_filter_path:
+  if os.name == "nt":
+    _genesys_default_filter_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs", "genesys_division_filters.json")
+  else:
+    _genesys_default_filter_path = "/opt/cucm-web-data/genesys_division_filters.json"
+GENESYS_DIVISION_FILTERS_PATH = _genesys_default_filter_path
+GENESYS_DIVISION_FILTERS_LOCK = threading.Lock()
 STRIKE_MASK_HISTORY_LOCK = threading.Lock()
 STRIKE_MASK_HISTORY_FIELDS = [
   "timestamp",
@@ -2179,7 +2187,8 @@ def _genesys_load_catalog_options(region: str, access_token: str) -> dict:
   clean_region, _, api_base = _genesys_region_to_urls(region)
 
   def _normalized(value: str) -> str:
-    return " ".join(str(value or "").strip().lower().split())
+    compact = " ".join(str(value or "").strip().lower().split())
+    return re.sub(r"[^a-z0-9]+", "", compact)
 
   important_skill_name_map = {
     _normalized(name): str(name or "").strip()
@@ -2276,25 +2285,12 @@ def _genesys_load_catalog_options(region: str, access_token: str) -> dict:
   if missing_important_queues:
     warnings.append("important queues not found: " + ", ".join(missing_important_queues))
 
-  # Keep preferred queue names visible to operators even when API visibility is limited.
-  queue_missing_placeholders = [
-    {
-      "id": "",
-      "name": f"{queue_name} (missing in API catalog)",
-      "priority": True,
-      "missing": True,
-      "selectable": False,
-    }
-    for queue_name in missing_important_queues
-  ]
-  queue_options_display = queue_missing_placeholders + queues
-
   return {
     "ok": not (divisions_err and skills_err and queues_err),
     "region": clean_region,
     "divisions": divisions,
     "skills": skills,
-    "queues": queue_options_display,
+    "queues": queues,
     "missing_important_skills": missing_important_skills,
     "missing_important_queues": missing_important_queues,
     "important_skill_count": int(sum(1 for item in skills if item.get("priority"))),
@@ -3005,6 +3001,64 @@ def _save_settings(settings: dict):
   except Exception as e:
     print(f"Error saving settings: {e}")
     return False
+
+
+def _load_genesys_division_filters() -> dict:
+  """Load persisted Genesys division filters from external JSON path."""
+  with GENESYS_DIVISION_FILTERS_LOCK:
+    try:
+      if not os.path.exists(GENESYS_DIVISION_FILTERS_PATH):
+        return {"version": 1, "filters": {}}
+      with open(GENESYS_DIVISION_FILTERS_PATH, "r", encoding="utf-8") as f:
+        payload = json.load(f)
+      if not isinstance(payload, dict):
+        return {"version": 1, "filters": {}}
+      filters = payload.get("filters", {})
+      if not isinstance(filters, dict):
+        filters = {}
+      cleaned = {}
+      for division_id, item in filters.items():
+        clean_division_id = str(division_id or "").strip()
+        if not clean_division_id:
+          continue
+        if not isinstance(item, dict):
+          continue
+        skill_ids = []
+        queue_ids = []
+        for sid in (item.get("skill_ids", []) if isinstance(item.get("skill_ids"), list) else []):
+          value = str(sid or "").strip()
+          if value and value not in skill_ids:
+            skill_ids.append(value)
+        for qid in (item.get("queue_ids", []) if isinstance(item.get("queue_ids"), list) else []):
+          value = str(qid or "").strip()
+          if value and value not in queue_ids:
+            queue_ids.append(value)
+        cleaned[clean_division_id] = {
+          "division_id": clean_division_id,
+          "division_name": str(item.get("division_name", "") or "").strip(),
+          "skill_ids": skill_ids,
+          "queue_ids": queue_ids,
+          "enabled": bool(item.get("enabled", True)),
+          "updated_at": str(item.get("updated_at", "") or "").strip(),
+        }
+      return {"version": 1, "filters": cleaned}
+    except Exception:
+      return {"version": 1, "filters": {}}
+
+
+def _save_genesys_division_filters(filters_payload: dict) -> bool:
+  """Persist Genesys division filters to external JSON path."""
+  with GENESYS_DIVISION_FILTERS_LOCK:
+    try:
+      parent = os.path.dirname(GENESYS_DIVISION_FILTERS_PATH)
+      if parent:
+        os.makedirs(parent, exist_ok=True)
+      with open(GENESYS_DIVISION_FILTERS_PATH, "w", encoding="utf-8") as f:
+        json.dump(filters_payload, f, indent=2)
+      return True
+    except Exception as e:
+      print(f"Error saving genesys division filters: {e}")
+      return False
 
 
 def _get_dn_mapping():
@@ -12659,6 +12713,27 @@ def genesys_admin_placeholder(request: Request):
               </div>
             </div>
 
+            <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f4f9ff;">
+              <h4 style="margin:0 0 8px 0;">Division Filter Builder (Persistent)</h4>
+              <p style="margin:0 0 8px 0; color:#4e6a84; font-size:12px;">Choose a Division, select Skills/Queues to show, then save. Filters are stored outside code and survive service restarts.</p>
+              <div class="search-filter-row" style="align-items:center; gap:8px; flex-wrap:wrap;">
+                <label style="font-size:12px; color:#4e6a84;"><input type="checkbox" id="genesys-update-use-division-filter"> Apply saved division filter to Skills/Queues view</label>
+                <button type="button" id="genesys-update-filter-reload-btn" style="background:#385977;" onclick="if (window.runGenesysDivisionFilterReload) { return window.runGenesysDivisionFilterReload(); } return false;">Reload Saved Filters</button>
+              </div>
+              <div class="search-filter-row" style="align-items:flex-end; gap:8px; flex-wrap:wrap; margin-top:6px;">
+                <div style="min-width:340px; flex:1 1 360px;">
+                  <label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Saved Division Filters</label>
+                  <select id="genesys-update-saved-filter-select" size="5" style="width:100%; min-height:120px;"></select>
+                </div>
+                <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                  <button type="button" id="genesys-update-filter-apply-btn" style="background:#2d7a43;" onclick="if (window.runGenesysDivisionFilterApply) { return window.runGenesysDivisionFilterApply(); } return false;">Apply Saved Filter</button>
+                  <button type="button" id="genesys-update-filter-save-btn" style="background:#385977;" onclick="if (window.runGenesysDivisionFilterSave) { return window.runGenesysDivisionFilterSave(); } return false;">Save Current Selection</button>
+                  <button type="button" id="genesys-update-filter-delete-btn" style="background:#8a2d2d;" onclick="if (window.runGenesysDivisionFilterDelete) { return window.runGenesysDivisionFilterDelete(); } return false;">Delete Saved Filter</button>
+                </div>
+              </div>
+              <p id="genesys-update-filter-status" style="margin:8px 0 0 0; color:#2c5c8a; min-height:18px;">Saved filters not loaded yet.</p>
+            </div>
+
             <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f8fcff;">
               <h4 style="margin:0 0 8px 0;">Single User Proof</h4>
               <div class="search-filter-row">
@@ -12711,6 +12786,9 @@ def genesys_admin_placeholder(request: Request):
               const divisionSelect = document.getElementById("genesys-update-division-select");
               const skillsSelect = document.getElementById("genesys-update-skills-select");
               const queuesSelect = document.getElementById("genesys-update-queues-select");
+              const updateHistoryStatusEl = document.getElementById("genesys-update-history-status");
+              const updateHistoryTableEl = document.getElementById("genesys-update-history-table");
+              const updateHistoryRefreshBtn = document.getElementById("genesys-update-history-refresh-btn");
 
               if (!loadBtn || !lookupBtn || !statusEl || !emailEl) {
                 return;
@@ -12893,6 +12971,79 @@ def genesys_admin_placeholder(request: Request):
                 lookupUser();
                 return false;
               };
+
+              async function loadUpdateBatchHistoryFallback() {
+                if (!updateHistoryStatusEl || !updateHistoryTableEl) {
+                  return;
+                }
+                updateHistoryStatusEl.textContent = "Loading latest user update batch logs...";
+                updateHistoryTableEl.innerHTML = "";
+                try {
+                  const response = await fetch("/genesys/users/search-update-history?limit=20", { method: "GET" });
+                  const contentType = String(response.headers.get("content-type") || "").toLowerCase();
+                  const bodyText = await response.text();
+                  let payload = {};
+                  if (contentType.indexOf("application/json") >= 0) {
+                    try {
+                      payload = JSON.parse(bodyText || "{}");
+                    } catch (_jsonErr) {
+                      payload = { ok: false, error: "Invalid JSON from user update batch history endpoint." };
+                    }
+                  } else {
+                    payload = {
+                      ok: false,
+                      error: bodyText && bodyText.indexOf("Authentication required") >= 0
+                        ? "Session expired. Please log in again."
+                        : "Non-JSON response from user update batch history endpoint.",
+                    };
+                  }
+
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || ("HTTP " + response.status));
+                  }
+
+                  const rows = Array.isArray(payload.rows) ? payload.rows : [];
+                  if (!rows.length) {
+                    updateHistoryStatusEl.textContent = "No user update batch logs yet.";
+                    return;
+                  }
+
+                  updateHistoryStatusEl.textContent = "Showing " + rows.length + " most recent user update batch log(s).";
+                  let html = "<table><thead><tr>";
+                  html += "<th>Timestamp</th><th>Status</th><th>Applied</th><th>Requested</th><th>Updated</th><th>Failed</th><th>Duration(s)</th><th>Original Input</th><th>Failed Rerun</th>";
+                  html += "</tr></thead><tbody>";
+
+                  rows.forEach(function (row, i) {
+                    const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                    const originalUrl = esc(String((row && row.original_download_url) || ""));
+                    const failedUrl = esc(String((row && row.failed_download_url) || ""));
+                    html += "<tr style='background:" + bg + ";'>";
+                    html += "<td>" + esc(String((row && row.timestamp) || "")) + "</td>";
+                    html += "<td>" + esc(String((row && row.status) || "")) + "</td>";
+                    html += "<td>" + esc(String((row && row.applied_summary) || "")) + "</td>";
+                    html += "<td>" + esc(String((row && row.requested) || "0")) + "</td>";
+                    html += "<td>" + esc(String((row && row.success_count) || "0")) + "</td>";
+                    html += "<td>" + esc(String((row && row.failure_count) || "0")) + "</td>";
+                    html += "<td>" + esc(String((row && row.duration_seconds) || "0")) + "</td>";
+                    html += "<td>" + (originalUrl ? ("<a href='" + originalUrl + "'>Download</a>") : "-") + "</td>";
+                    html += "<td>" + (failedUrl ? ("<a href='" + failedUrl + "'>Download</a>") : "-") + "</td>";
+                    html += "</tr>";
+                  });
+
+                  html += "</tbody></table>";
+                  updateHistoryTableEl.innerHTML = html;
+                } catch (err) {
+                  updateHistoryStatusEl.textContent = "User update batch log load failed: " + ((err && err.message) || "Unknown error.");
+                }
+              }
+
+              if (updateHistoryRefreshBtn) {
+                updateHistoryRefreshBtn.addEventListener("click", function () {
+                  loadUpdateBatchHistoryFallback();
+                });
+              }
+
+              loadUpdateBatchHistoryFallback();
             })();
           </script>
 
@@ -12961,8 +13112,17 @@ def genesys_admin_placeholder(request: Request):
         const updateHistoryStatusEl = document.getElementById("genesys-update-history-status");
         const updateHistoryTableEl = document.getElementById("genesys-update-history-table");
         const updateHistoryRefreshBtn = document.getElementById("genesys-update-history-refresh-btn");
+        const updateUseDivisionFilterEl = document.getElementById("genesys-update-use-division-filter");
+        const updateSavedFilterSelectEl = document.getElementById("genesys-update-saved-filter-select");
+        const updateFilterStatusEl = document.getElementById("genesys-update-filter-status");
+        const updateFilterReloadBtn = document.getElementById("genesys-update-filter-reload-btn");
+        const updateFilterApplyBtn = document.getElementById("genesys-update-filter-apply-btn");
+        const updateFilterSaveBtn = document.getElementById("genesys-update-filter-save-btn");
+        const updateFilterDeleteBtn = document.getElementById("genesys-update-filter-delete-btn");
         let lastUserRows = [];
         let updateCatalogLoaded = false;
+        let updateCatalogCache = { divisions: [], skills: [], queues: [] };
+        let divisionFilterMap = {};
 
         function _escapeHtml(value) {
           return String(value || "")
@@ -13089,6 +13249,223 @@ def genesys_admin_placeholder(request: Request):
           });
         }
 
+        function _setDivisionFilterStatus(message, isError) {
+          if (!updateFilterStatusEl) {
+            return;
+          }
+          updateFilterStatusEl.textContent = String(message || "");
+          updateFilterStatusEl.style.color = isError ? "#8a2d2d" : "#2c5c8a";
+        }
+
+        function _getSelectedDivisionId() {
+          const selected = _selectedValues(updateDivisionSelect);
+          return selected.length ? String(selected[0] || "").trim() : "";
+        }
+
+        function _findDivisionNameById(divisionId) {
+          const target = String(divisionId || "").trim();
+          if (!target) {
+            return "";
+          }
+          const row = (updateCatalogCache.divisions || []).find(function (item) {
+            return String((item && item.id) || "").trim() === target;
+          });
+          return row ? String((row && row.name) || "").trim() : "";
+        }
+
+        function _renderSavedDivisionFilterOptions() {
+          if (!updateSavedFilterSelectEl) {
+            return;
+          }
+          const previous = String((updateSavedFilterSelectEl.value) || "").trim();
+          updateSavedFilterSelectEl.innerHTML = "";
+          const keys = Object.keys(divisionFilterMap || {});
+          if (!keys.length) {
+            const option = document.createElement("option");
+            option.value = "";
+            option.textContent = "No saved filters";
+            updateSavedFilterSelectEl.appendChild(option);
+            return;
+          }
+          keys.sort(function (a, b) {
+            const left = divisionFilterMap[a] || {};
+            const right = divisionFilterMap[b] || {};
+            const leftName = String(left.division_name || a || "").toLowerCase();
+            const rightName = String(right.division_name || b || "").toLowerCase();
+            if (leftName < rightName) return -1;
+            if (leftName > rightName) return 1;
+            return 0;
+          });
+          keys.forEach(function (divisionId) {
+            const row = divisionFilterMap[divisionId] || {};
+            const option = document.createElement("option");
+            option.value = divisionId;
+            const divisionName = String(row.division_name || divisionId || "").trim();
+            const skillCount = Array.isArray(row.skill_ids) ? row.skill_ids.length : 0;
+            const queueCount = Array.isArray(row.queue_ids) ? row.queue_ids.length : 0;
+            option.textContent = divisionName + " | Skills " + skillCount + " | Queues " + queueCount;
+            updateSavedFilterSelectEl.appendChild(option);
+          });
+          if (previous) {
+            updateSavedFilterSelectEl.value = previous;
+          }
+          if (!String(updateSavedFilterSelectEl.value || "").trim()) {
+            updateSavedFilterSelectEl.selectedIndex = 0;
+          }
+        }
+
+        function _applyDivisionScopeToSelections() {
+          const selectedDivisionId = _getSelectedDivisionId();
+          const useSavedFilter = Boolean(updateUseDivisionFilterEl && updateUseDivisionFilterEl.checked);
+          const selectedSkillIds = _selectedValues(updateSkillsSelect);
+          const selectedQueueIds = _selectedValues(updateQueuesSelect);
+
+          let skills = Array.isArray(updateCatalogCache.skills) ? updateCatalogCache.skills.slice() : [];
+          let queues = Array.isArray(updateCatalogCache.queues) ? updateCatalogCache.queues.slice() : [];
+
+          if (useSavedFilter && selectedDivisionId) {
+            const filter = divisionFilterMap[selectedDivisionId];
+            if (filter && filter.enabled !== false) {
+              const allowedSkill = new Set((Array.isArray(filter.skill_ids) ? filter.skill_ids : []).map(function (id) { return String(id || "").trim(); }));
+              const allowedQueue = new Set((Array.isArray(filter.queue_ids) ? filter.queue_ids : []).map(function (id) { return String(id || "").trim(); }));
+              skills = skills.filter(function (row) {
+                const id = String((row && row.id) || "").trim();
+                return id && allowedSkill.has(id);
+              });
+              queues = queues.filter(function (row) {
+                const id = String((row && row.id) || "").trim();
+                return id && allowedQueue.has(id);
+              });
+              _setDivisionFilterStatus("Saved filter applied for division " + (filter.division_name || selectedDivisionId) + ".", false);
+            } else {
+              skills = [];
+              queues = [];
+              _setDivisionFilterStatus("No saved filter found for selected division. Save one to scope Skills/Queues.", true);
+            }
+          }
+
+          _populateSelect(updateSkillsSelect, skills, useSavedFilter ? "No skills in saved filter" : "No skills found");
+          _populateSelect(updateQueuesSelect, queues, useSavedFilter ? "No queues in saved filter" : "No queues found");
+          _setSelectedOptions(updateSkillsSelect, selectedSkillIds);
+          _setSelectedOptions(updateQueuesSelect, selectedQueueIds);
+        }
+
+        async function _loadDivisionFilters() {
+          try {
+            const response = await fetch("/genesys/division-filters", { method: "GET" });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Unable to load saved division filters.");
+            }
+            const rows = Array.isArray(payload.filters) ? payload.filters : [];
+            divisionFilterMap = {};
+            rows.forEach(function (row) {
+              const divisionId = String((row && row.division_id) || "").trim();
+              if (!divisionId) {
+                return;
+              }
+              divisionFilterMap[divisionId] = {
+                division_id: divisionId,
+                division_name: String((row && row.division_name) || "").trim(),
+                skill_ids: Array.isArray(row && row.skill_ids) ? row.skill_ids.map(function (id) { return String(id || "").trim(); }).filter(Boolean) : [],
+                queue_ids: Array.isArray(row && row.queue_ids) ? row.queue_ids.map(function (id) { return String(id || "").trim(); }).filter(Boolean) : [],
+                enabled: (row && typeof row.enabled !== "undefined") ? Boolean(row.enabled) : true,
+              };
+            });
+            _renderSavedDivisionFilterOptions();
+            const count = Object.keys(divisionFilterMap).length;
+            _setDivisionFilterStatus("Loaded " + count + " saved division filter(s).", false);
+            _applyDivisionScopeToSelections();
+            return true;
+          } catch (err) {
+            divisionFilterMap = {};
+            _renderSavedDivisionFilterOptions();
+            _setDivisionFilterStatus("Saved filter load failed: " + ((err && err.message) || "Unknown error."), true);
+            return false;
+          }
+        }
+
+        async function _saveCurrentDivisionFilter() {
+          const divisionId = _getSelectedDivisionId();
+          if (!divisionId) {
+            _setDivisionFilterStatus("Select a Division first, then choose Skills/Queues and save.", true);
+            return;
+          }
+          const divisionName = _findDivisionNameById(divisionId) || divisionId;
+          const skillIds = _selectedValues(updateSkillsSelect);
+          const queueIds = _selectedValues(updateQueuesSelect);
+
+          const formData = new FormData();
+          formData.append("division_id", divisionId);
+          formData.append("division_name", divisionName);
+          formData.append("skill_ids_json", JSON.stringify(skillIds));
+          formData.append("queue_ids_json", JSON.stringify(queueIds));
+          formData.append("enabled", "true");
+
+          try {
+            const response = await fetch("/genesys/division-filters/save", {
+              method: "POST",
+              body: formData,
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Unable to save division filter.");
+            }
+            _setDivisionFilterStatus("Saved filter for " + divisionName + " (Skills " + skillIds.length + ", Queues " + queueIds.length + ").", false);
+            await _loadDivisionFilters();
+            if (updateSavedFilterSelectEl) {
+              updateSavedFilterSelectEl.value = divisionId;
+            }
+          } catch (err) {
+            _setDivisionFilterStatus("Save failed: " + ((err && err.message) || "Unknown error."), true);
+          }
+        }
+
+        async function _deleteSelectedDivisionFilter() {
+          const selected = String((updateSavedFilterSelectEl && updateSavedFilterSelectEl.value) || "").trim();
+          if (!selected) {
+            _setDivisionFilterStatus("Select a saved filter to delete.", true);
+            return;
+          }
+          if (!window.confirm("Delete saved filter for selected division?")) {
+            return;
+          }
+          const formData = new FormData();
+          formData.append("division_id", selected);
+          try {
+            const response = await fetch("/genesys/division-filters/delete", {
+              method: "POST",
+              body: formData,
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Unable to delete division filter.");
+            }
+            _setDivisionFilterStatus("Deleted saved filter for division " + selected + ".", false);
+            await _loadDivisionFilters();
+          } catch (err) {
+            _setDivisionFilterStatus("Delete failed: " + ((err && err.message) || "Unknown error."), true);
+          }
+        }
+
+        function _applySelectedSavedDivisionFilter() {
+          const selected = String((updateSavedFilterSelectEl && updateSavedFilterSelectEl.value) || "").trim();
+          if (!selected) {
+            _setDivisionFilterStatus("Select a saved filter first.", true);
+            return;
+          }
+          if (updateDivisionSelect) {
+            Array.from(updateDivisionSelect.options || []).forEach(function (opt) {
+              const value = String((opt && opt.value) || "").trim();
+              opt.selected = value === selected;
+            });
+          }
+          if (updateUseDivisionFilterEl) {
+            updateUseDivisionFilterEl.checked = true;
+          }
+          _applyDivisionScopeToSelections();
+        }
+
         async function _loadUpdateCatalog() {
           let loadedOk = false;
           if (!updateStatusEl) {
@@ -13111,6 +13488,12 @@ def genesys_admin_placeholder(request: Request):
             const divisions = Array.isArray(payload.divisions) ? payload.divisions : [];
             const skills = Array.isArray(payload.skills) ? payload.skills : [];
             const queues = Array.isArray(payload.queues) ? payload.queues : [];
+
+            updateCatalogCache = {
+              divisions: divisions.slice(),
+              skills: skills.slice(),
+              queues: queues.slice(),
+            };
 
             _populateSelect(updateDivisionSelect, divisions, "No divisions found");
             _populateSelect(updateSkillsSelect, skills, "No skills found");
@@ -13139,6 +13522,8 @@ def genesys_admin_placeholder(request: Request):
             if (warnings.length) {
               updateStatusEl.textContent += " Warnings: " + warnings.join(" | ");
             }
+            await _loadDivisionFilters();
+            _applyDivisionScopeToSelections();
             loadedOk = true;
           } catch (err) {
             updateStatusEl.textContent = "Catalog load failed: " + ((err && err.message) || "Unknown error.");
@@ -13196,6 +13581,7 @@ def genesys_admin_placeholder(request: Request):
             }
 
             _setSelectedOptions(updateDivisionSelect, payload.division_id ? [payload.division_id] : []);
+            _applyDivisionScopeToSelections();
             _setSelectedOptions(updateSkillsSelect, Array.isArray(payload.skill_ids) ? payload.skill_ids : []);
             _setSelectedOptions(updateQueuesSelect, Array.isArray(payload.queue_ids) ? payload.queue_ids : []);
 
@@ -13797,6 +14183,31 @@ def genesys_admin_placeholder(request: Request):
           });
         }
 
+        window.runGenesysUpdateLoadCatalog = function () {
+          _loadUpdateCatalog();
+          return false;
+        };
+
+        window.runGenesysDivisionFilterReload = function () {
+          _loadDivisionFilters();
+          return false;
+        };
+
+        window.runGenesysDivisionFilterApply = function () {
+          _applySelectedSavedDivisionFilter();
+          return false;
+        };
+
+        window.runGenesysDivisionFilterSave = function () {
+          _saveCurrentDivisionFilter();
+          return false;
+        };
+
+        window.runGenesysDivisionFilterDelete = function () {
+          _deleteSelectedDivisionFilter();
+          return false;
+        };
+
         window.runGenesysUpdateSingleLookup = function () {
           _lookupSingleUserProfile();
           return false;
@@ -13826,8 +14237,55 @@ def genesys_admin_placeholder(request: Request):
           });
         }
 
+        if (updateDivisionSelect) {
+          updateDivisionSelect.addEventListener("change", function () {
+            _applyDivisionScopeToSelections();
+          });
+        }
+
+        if (updateUseDivisionFilterEl) {
+          updateUseDivisionFilterEl.addEventListener("change", function () {
+            _applyDivisionScopeToSelections();
+          });
+        }
+
+        if (updateFilterReloadBtn) {
+          updateFilterReloadBtn.addEventListener("click", function () {
+            _loadDivisionFilters();
+          });
+        }
+
+        if (updateFilterSaveBtn) {
+          updateFilterSaveBtn.addEventListener("click", function () {
+            _saveCurrentDivisionFilter();
+          });
+        }
+
+        if (updateFilterDeleteBtn) {
+          updateFilterDeleteBtn.addEventListener("click", function () {
+            _deleteSelectedDivisionFilter();
+          });
+        }
+
+        if (updateFilterApplyBtn) {
+          updateFilterApplyBtn.addEventListener("click", function () {
+            _applySelectedSavedDivisionFilter();
+          });
+        }
+
+        if (updateSavedFilterSelectEl) {
+          updateSavedFilterSelectEl.addEventListener("change", function () {
+            const selected = String((updateSavedFilterSelectEl && updateSavedFilterSelectEl.value) || "").trim();
+            if (!selected) {
+              return;
+            }
+            _setDivisionFilterStatus("Selected saved filter for division " + selected + ". Click Apply Saved Filter to scope lists.", false);
+          });
+        }
+
         _loadBulkHistory();
         _loadUpdateBatchHistory();
+        _loadDivisionFilters();
 
         if (form && statusEl && resultsEl && rawDownloadEl) {
           form.dataset.jsBound = "1";
@@ -15183,6 +15641,86 @@ def genesys_catalog_options_route():
   best_catalog = primary_catalog
   best_source = str(token_result.get("token_source", "") or "default-client")
 
+  def _norm_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "", " ".join(str(value or "").strip().lower().split()))
+
+  def _merge_options(base_rows: list[dict], extra_rows: list[dict]) -> list[dict]:
+    merged = []
+    seen = set()
+
+    def _key(row: dict) -> str:
+      if not isinstance(row, dict):
+        return ""
+      row_id = str(row.get("id", "") or "").strip().lower()
+      row_name = _norm_name(str(row.get("name", "") or ""))
+      if row_id:
+        return "id:" + row_id
+      if row_name:
+        return "name:" + row_name
+      return ""
+
+    for rows in [base_rows, extra_rows]:
+      for row in (rows or []):
+        if not isinstance(row, dict):
+          continue
+        k = _key(row)
+        if not k or k in seen:
+          continue
+        seen.add(k)
+        merged.append(dict(row))
+
+    return merged
+
+  def _recompute_priority_counts(catalog: dict):
+    queues = catalog.get("queues", []) if isinstance(catalog.get("queues"), list) else []
+    skills = catalog.get("skills", []) if isinstance(catalog.get("skills"), list) else []
+    catalog["important_queue_count"] = int(sum(1 for item in queues if isinstance(item, dict) and item.get("priority")))
+    catalog["important_skill_count"] = int(sum(1 for item in skills if isinstance(item, dict) and item.get("priority")))
+
+  def _recompute_missing(catalog: dict):
+    skill_targets = {
+      _norm_name(name): str(name or "").strip()
+      for name in GENESYS_IMPORTANT_SKILL_NAMES
+      if str(name or "").strip()
+    }
+    queue_targets = {
+      _norm_name(name): str(name or "").strip()
+      for name in GENESYS_IMPORTANT_QUEUE_NAMES
+      if str(name or "").strip()
+    }
+
+    found_skills = {
+      _norm_name(str(item.get("name", "") or ""))
+      for item in (catalog.get("skills", []) if isinstance(catalog.get("skills"), list) else [])
+      if isinstance(item, dict)
+    }
+    found_queues = {
+      _norm_name(str(item.get("name", "") or ""))
+      for item in (catalog.get("queues", []) if isinstance(catalog.get("queues"), list) else [])
+      if isinstance(item, dict)
+    }
+
+    missing_skills = [
+      skill_targets[key]
+      for key in sorted(skill_targets.keys())
+      if key and key not in found_skills
+    ]
+    missing_queues = [
+      queue_targets[key]
+      for key in sorted(queue_targets.keys())
+      if key and key not in found_queues
+    ]
+    catalog["missing_important_skills"] = missing_skills
+    catalog["missing_important_queues"] = missing_queues
+
+    warnings = list(catalog.get("warnings", []) if isinstance(catalog.get("warnings"), list) else [])
+    warnings = [w for w in warnings if "important skills not found:" not in str(w) and "important queues not found:" not in str(w)]
+    if missing_skills:
+      warnings.append("important skills not found: " + ", ".join(missing_skills))
+    if missing_queues:
+      warnings.append("important queues not found: " + ", ".join(missing_queues))
+    catalog["warnings"] = warnings
+
   # If queue-client is used, compare against default client and keep whichever
   # yields broader queue/skill visibility.
   has_default_creds = bool((GENESYS_CLIENT_ID or "").strip()) and bool((GENESYS_CLIENT_SECRET or "").strip())
@@ -15222,6 +15760,41 @@ def genesys_catalog_options_route():
           )
           best_catalog["warnings"] = warns
 
+        # Merge both source catalogs so we keep the broadest visible set.
+        merged_catalog = dict(best_catalog)
+        merged_catalog["divisions"] = _merge_options(
+          best_catalog.get("divisions", []) if isinstance(best_catalog.get("divisions"), list) else [],
+          default_catalog.get("divisions", []) if isinstance(default_catalog.get("divisions"), list) else [],
+        )
+        merged_catalog["skills"] = _merge_options(
+          best_catalog.get("skills", []) if isinstance(best_catalog.get("skills"), list) else [],
+          default_catalog.get("skills", []) if isinstance(default_catalog.get("skills"), list) else [],
+        )
+        merged_catalog["queues"] = _merge_options(
+          best_catalog.get("queues", []) if isinstance(best_catalog.get("queues"), list) else [],
+          default_catalog.get("queues", []) if isinstance(default_catalog.get("queues"), list) else [],
+        )
+
+        primary_pages = best_catalog.get("pages_scanned", {}) if isinstance(best_catalog.get("pages_scanned"), dict) else {}
+        default_pages = default_catalog.get("pages_scanned", {}) if isinstance(default_catalog.get("pages_scanned"), dict) else {}
+        merged_catalog["pages_scanned"] = {
+          "divisions": int(primary_pages.get("divisions", 0) or 0) + int(default_pages.get("divisions", 0) or 0),
+          "skills": int(primary_pages.get("skills", 0) or 0) + int(default_pages.get("skills", 0) or 0),
+          "queues": int(primary_pages.get("queues", 0) or 0) + int(default_pages.get("queues", 0) or 0),
+        }
+
+        _recompute_priority_counts(merged_catalog)
+        _recompute_missing(merged_catalog)
+
+        merged_warnings = list(merged_catalog.get("warnings", []) if isinstance(merged_catalog.get("warnings"), list) else [])
+        merged_warnings.append(
+          "Catalog merged across queue-client and default-client visibility for broader queue/skill coverage."
+        )
+        merged_catalog["warnings"] = merged_warnings
+
+        best_catalog = merged_catalog
+        best_source = "merged:queue-client+default-client"
+
   if not best_catalog.get("ok"):
     return JSONResponse({
       "ok": False,
@@ -15252,6 +15825,125 @@ def genesys_catalog_options_route():
   best_catalog["raw_filename"] = raw_filename
 
   return JSONResponse(best_catalog)
+
+
+@app.get("/genesys/division-filters")
+def genesys_division_filters_route():
+  payload = _load_genesys_division_filters()
+  filters = payload.get("filters", {}) if isinstance(payload, dict) else {}
+  rows = []
+  for division_id, item in (filters.items() if isinstance(filters, dict) else []):
+    if not isinstance(item, dict):
+      continue
+    rows.append({
+      "division_id": str(division_id or "").strip(),
+      "division_name": str(item.get("division_name", "") or "").strip(),
+      "skill_ids": list(item.get("skill_ids", []) if isinstance(item.get("skill_ids"), list) else []),
+      "queue_ids": list(item.get("queue_ids", []) if isinstance(item.get("queue_ids"), list) else []),
+      "enabled": bool(item.get("enabled", True)),
+      "updated_at": str(item.get("updated_at", "") or "").strip(),
+    })
+  rows.sort(key=lambda row: (str(row.get("division_name", "") or "").lower(), str(row.get("division_id", "") or "").lower()))
+  return JSONResponse({
+    "ok": True,
+    "filters": rows,
+    "path": GENESYS_DIVISION_FILTERS_PATH,
+  })
+
+
+@app.post("/genesys/division-filters/save")
+def genesys_division_filters_save_route(
+  division_id: str = Form(""),
+  division_name: str = Form(""),
+  skill_ids_json: str = Form("[]"),
+  queue_ids_json: str = Form("[]"),
+  enabled: str = Form("true"),
+):
+  clean_division_id = str(division_id or "").strip()
+  clean_division_name = str(division_name or "").strip()
+  if not clean_division_id:
+    return JSONResponse({"ok": False, "error": "division_id is required."}, status_code=400)
+
+  try:
+    skill_ids = json.loads(skill_ids_json or "[]")
+  except Exception:
+    skill_ids = []
+  try:
+    queue_ids = json.loads(queue_ids_json or "[]")
+  except Exception:
+    queue_ids = []
+
+  if not isinstance(skill_ids, list):
+    skill_ids = []
+  if not isinstance(queue_ids, list):
+    queue_ids = []
+
+  clean_skill_ids = []
+  clean_queue_ids = []
+  for value in skill_ids:
+    token = str(value or "").strip()
+    if token and token not in clean_skill_ids:
+      clean_skill_ids.append(token)
+  for value in queue_ids:
+    token = str(value or "").strip()
+    if token and token not in clean_queue_ids:
+      clean_queue_ids.append(token)
+
+  enabled_value = str(enabled or "").strip().lower() in {"1", "true", "yes", "on"}
+  payload = _load_genesys_division_filters()
+  filters = payload.setdefault("filters", {}) if isinstance(payload, dict) else {}
+  if not isinstance(filters, dict):
+    filters = {}
+    payload["filters"] = filters
+  filters[clean_division_id] = {
+    "division_id": clean_division_id,
+    "division_name": clean_division_name,
+    "skill_ids": clean_skill_ids,
+    "queue_ids": clean_queue_ids,
+    "enabled": enabled_value,
+    "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+  }
+
+  if not _save_genesys_division_filters(payload):
+    return JSONResponse({"ok": False, "error": "Unable to save division filter."}, status_code=500)
+
+  return JSONResponse({
+    "ok": True,
+    "division_id": clean_division_id,
+    "division_name": clean_division_name,
+    "skill_ids": clean_skill_ids,
+    "queue_ids": clean_queue_ids,
+    "enabled": enabled_value,
+    "path": GENESYS_DIVISION_FILTERS_PATH,
+  })
+
+
+@app.post("/genesys/division-filters/delete")
+def genesys_division_filters_delete_route(
+  division_id: str = Form(""),
+):
+  clean_division_id = str(division_id or "").strip()
+  if not clean_division_id:
+    return JSONResponse({"ok": False, "error": "division_id is required."}, status_code=400)
+
+  payload = _load_genesys_division_filters()
+  filters = payload.get("filters", {}) if isinstance(payload, dict) else {}
+  if not isinstance(filters, dict):
+    filters = {}
+    payload["filters"] = filters
+
+  if clean_division_id not in filters:
+    return JSONResponse({"ok": False, "error": "Division filter not found."}, status_code=404)
+
+  filters.pop(clean_division_id, None)
+  if not _save_genesys_division_filters(payload):
+    return JSONResponse({"ok": False, "error": "Unable to delete division filter."}, status_code=500)
+
+  return JSONResponse({
+    "ok": True,
+    "division_id": clean_division_id,
+    "path": GENESYS_DIVISION_FILTERS_PATH,
+  })
 
 
 @app.post("/genesys/users/search-update")
