@@ -7485,6 +7485,7 @@ def _is_public_path(path: str):
   return path in {
     "/",
     "/login",
+    "/genesys-login",
     "/genesys-admin",
     "/genesys/users/extract",
     "/genesys/users/extract-org-snapshot",
