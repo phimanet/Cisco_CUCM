@@ -516,6 +516,11 @@ if not _genesys_default_filter_path:
   else:
     _genesys_default_filter_path = "/opt/cucm-web-data/genesys_division_filters.json"
 GENESYS_DIVISION_FILTERS_PATH = _genesys_default_filter_path
+GENESYS_DIVISION_FILTERS_FALLBACK_PATH = os.path.join(
+  os.path.dirname(os.path.abspath(__file__)),
+  "logs",
+  "genesys_division_filters.json",
+)
 GENESYS_DIVISION_FILTERS_LOCK = threading.Lock()
 STRIKE_MASK_HISTORY_LOCK = threading.Lock()
 STRIKE_MASK_HISTORY_FIELDS = [
@@ -3062,6 +3067,83 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
   }
 
 
+def _genesys_ensure_update_webrtc_prerequisite(region: str, access_token: str, user_id: str, user_email: str = "") -> dict:
+  """Ensure User-section phone association before Division/Skills/Queues updates."""
+  profile_result = _genesys_get_user_search_profile(region, access_token, user_id, user_email)
+  if not profile_result.get("ok"):
+    return {
+      "ok": False,
+      "error": profile_result.get("error", "Profile lookup failed while ensuring WebRTC prerequisite."),
+      "webrtc_phone": "",
+      "inventory_phone": "",
+      "webrtc_status": "error",
+      "webrtc_create_mode": "",
+    }
+
+  user_phone = str(
+    profile_result.get("webrtc_associated_phone", "")
+    or profile_result.get("webrtc_phone", "")
+    or ""
+  ).strip()
+  inventory_phone = str(profile_result.get("webrtc_inventory_phone", "") or "").strip()
+
+  if user_phone:
+    return {
+      "ok": True,
+      "webrtc_phone": user_phone,
+      "inventory_phone": inventory_phone,
+      "webrtc_status": "already_associated",
+      "webrtc_create_mode": "existing",
+      "error": "",
+    }
+
+  # User phone is blank, so auto-heal by creating/associating or associating existing inventory.
+  build_result = _genesys_build_webrtc_phone_for_user(
+    region,
+    access_token,
+    user_id,
+    str(profile_result.get("user_name", "") or "").strip(),
+    str(profile_result.get("user_email", "") or user_email or "").strip().lower(),
+  )
+
+  if not build_result.get("ok"):
+    error_message = str(build_result.get("error", "Unable to auto-create/associate WebRTC phone.") or "").strip()
+    if inventory_phone:
+      error_message += f" Inventory match found ({inventory_phone}) but association failed."
+    return {
+      "ok": False,
+      "error": error_message,
+      "webrtc_phone": "",
+      "inventory_phone": inventory_phone,
+      "webrtc_status": "error",
+      "webrtc_create_mode": str(build_result.get("create_mode", "") or "").strip(),
+    }
+
+  resolved_phone = str(
+    build_result.get("verified_station_name", "")
+    or build_result.get("phone_name", "")
+    or ""
+  ).strip()
+  if not resolved_phone:
+    # Final strict verification against User section.
+    verify_profile = _genesys_get_user_search_profile(region, access_token, user_id, user_email)
+    if verify_profile.get("ok"):
+      resolved_phone = str(
+        verify_profile.get("webrtc_associated_phone", "")
+        or verify_profile.get("webrtc_phone", "")
+        or ""
+      ).strip()
+
+  return {
+    "ok": bool(resolved_phone),
+    "error": "" if resolved_phone else "WebRTC auto-heal completed but user phone is still blank in profile.",
+    "webrtc_phone": resolved_phone,
+    "inventory_phone": inventory_phone,
+    "webrtc_status": str(build_result.get("association_result", "") or "associated").strip(),
+    "webrtc_create_mode": str(build_result.get("create_mode", "") or "").strip(),
+  }
+
+
 def _genesys_apply_user_search_update(
   region: str,
   access_token: str,
@@ -3623,10 +3705,23 @@ def _load_genesys_division_filters() -> dict:
   """Load persisted Genesys division filters from external JSON path."""
   with GENESYS_DIVISION_FILTERS_LOCK:
     try:
-      if not os.path.exists(GENESYS_DIVISION_FILTERS_PATH):
+      candidate_paths = []
+      for path in [GENESYS_DIVISION_FILTERS_PATH, GENESYS_DIVISION_FILTERS_FALLBACK_PATH]:
+        clean_path = str(path or "").strip()
+        if clean_path and clean_path not in candidate_paths:
+          candidate_paths.append(clean_path)
+
+      payload = None
+      for candidate in candidate_paths:
+        if not os.path.exists(candidate):
+          continue
+        with open(candidate, "r", encoding="utf-8") as f:
+          payload = json.load(f)
+        break
+
+      if payload is None:
         return {"version": 1, "filters": {}}
-      with open(GENESYS_DIVISION_FILTERS_PATH, "r", encoding="utf-8") as f:
-        payload = json.load(f)
+
       if not isinstance(payload, dict):
         return {"version": 1, "filters": {}}
       filters = payload.get("filters", {})
@@ -3665,16 +3760,26 @@ def _load_genesys_division_filters() -> dict:
 def _save_genesys_division_filters(filters_payload: dict) -> bool:
   """Persist Genesys division filters to external JSON path."""
   with GENESYS_DIVISION_FILTERS_LOCK:
-    try:
-      parent = os.path.dirname(GENESYS_DIVISION_FILTERS_PATH)
-      if parent:
-        os.makedirs(parent, exist_ok=True)
-      with open(GENESYS_DIVISION_FILTERS_PATH, "w", encoding="utf-8") as f:
-        json.dump(filters_payload, f, indent=2)
-      return True
-    except Exception as e:
-      print(f"Error saving genesys division filters: {e}")
-      return False
+    save_errors = []
+    candidate_paths = []
+    for path in [GENESYS_DIVISION_FILTERS_PATH, GENESYS_DIVISION_FILTERS_FALLBACK_PATH]:
+      clean_path = str(path or "").strip()
+      if clean_path and clean_path not in candidate_paths:
+        candidate_paths.append(clean_path)
+
+    for candidate in candidate_paths:
+      try:
+        parent = os.path.dirname(candidate)
+        if parent:
+          os.makedirs(parent, exist_ok=True)
+        with open(candidate, "w", encoding="utf-8") as f:
+          json.dump(filters_payload, f, indent=2)
+        return True
+      except Exception as e:
+        save_errors.append(f"{candidate}: {e}")
+
+    print("Error saving genesys division filters: " + " | ".join(save_errors))
+    return False
 
 
 def _get_dn_mapping():
@@ -13303,13 +13408,11 @@ def genesys_admin_placeholder(request: Request):
 
           <div id="genesys-user-update-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
             <h3 style="margin-top:0;">Genesys User Search and Update</h3>
-            <p style="margin-top:0; color:#4e6a84;">Proof mode: update one user first, then apply the same Division/Skills/Queues to a batch of emails.</p>
 
             <div class="search-filter-row">
               <button type="button" id="genesys-update-load-catalog-btn" style="background:#385977;" onclick="if (window.runGenesysUpdateLoadCatalog) { return window.runGenesysUpdateLoadCatalog(); } var s=document.getElementById('genesys-update-status'); if (s) { s.textContent='Catalog handler missing (JS did not load).'; } return false;">Load Divisions / Skills / Queues</button>
               <span id="genesys-update-catalog-count" style="font-size:12px; color:#4e6a84;">Catalog not loaded yet.</span>
             </div>
-            <div id="genesys-update-catalog-download" style="margin:4px 0 8px 0;"></div>
 
             <div class="search-filter-row" style="align-items:flex-start;">
               <div style="min-width:260px; max-width:340px; flex:1 1 280px;">
@@ -13754,11 +13857,7 @@ def genesys_admin_placeholder(request: Request):
                   }
 
                   if (catalogDownloadEl) {
-                    const rawUrl = String((payload && payload.raw_download_url) || "").trim();
-                    const rawName = String((payload && payload.raw_filename) || "genesys_catalog_options.json").trim();
-                    catalogDownloadEl.innerHTML = rawUrl
-                      ? "<a href='" + esc(rawUrl) + "' style='display:inline-block;padding:7px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Catalog JSON (" + esc(rawName) + ")</a>"
-                      : "";
+                    catalogDownloadEl.innerHTML = "";
                   }
 
                   statusEl.textContent = "Catalog loaded. Select one Division Access target and one or more Skills/Queues, then run single-user proof.";
@@ -14687,12 +14786,7 @@ def genesys_admin_placeholder(request: Request):
               updateCatalogCountEl.textContent = "Divisions: " + divisions.length + " | Skills: " + skills.length + " (Priority: " + importantFound + "/" + importantTotal + ") | Queues: " + queues.length + " (Priority: " + importantQueueFound + "/" + importantQueueTotal + ")" + sourceText;
             }
             if (updateCatalogDownloadEl) {
-              if (payload.raw_download_url) {
-                const rawName = String(payload.raw_filename || "genesys_catalog_options.json");
-                updateCatalogDownloadEl.innerHTML = "<a href='" + _escapeHtml(String(payload.raw_download_url || "")) + "' style='display:inline-block;padding:7px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Catalog JSON (" + _escapeHtml(rawName) + ")</a>";
-              } else {
-                updateCatalogDownloadEl.innerHTML = "";
-              }
+              updateCatalogDownloadEl.innerHTML = "";
             }
             updateStatusEl.textContent = "Catalog loaded. Select one Division Access target and one or more Skills/Queues, then run single-user proof.";
             const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
@@ -17848,6 +17942,22 @@ def genesys_user_search_update_route(
       "error": user_lookup.get("error", "Unable to find user by email."),
     }, status_code=400)
 
+  prereq_result = _genesys_ensure_update_webrtc_prerequisite(
+    region,
+    access_token,
+    user_lookup.get("user_id", ""),
+    clean_user_email,
+  )
+  if not prereq_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": prereq_result.get("error", "WebRTC prerequisite auto-heal failed."),
+      "webrtc_phone": str(prereq_result.get("webrtc_phone", "") or "").strip(),
+      "inventory_phone": str(prereq_result.get("inventory_phone", "") or "").strip(),
+      "webrtc_status": str(prereq_result.get("webrtc_status", "") or "").strip(),
+      "webrtc_create_mode": str(prereq_result.get("webrtc_create_mode", "") or "").strip(),
+    }, status_code=400)
+
   apply_result = _genesys_apply_user_search_update(
     region,
     access_token,
@@ -17870,9 +17980,9 @@ def genesys_user_search_update_route(
     "region": region,
     "user_email": clean_user_email,
     "user_id": str(user_lookup.get("user_id", "") or "").strip(),
-    "webrtc_status": "skipped",
-    "webrtc_phone": "",
-    "webrtc_create_mode": "",
+    "webrtc_status": str(prereq_result.get("webrtc_status", "already_associated") or "already_associated").strip(),
+    "webrtc_phone": str(prereq_result.get("webrtc_phone", "") or "").strip(),
+    "webrtc_create_mode": str(prereq_result.get("webrtc_create_mode", "existing") or "existing").strip(),
     "division_status": apply_result.get("division_status", ""),
     "skills_status": apply_result.get("skills_status", ""),
     "queues_status": apply_result.get("queues_status", ""),
@@ -17998,6 +18108,23 @@ def genesys_user_search_update_batch_route(
       if not user_lookup.get("ok"):
         return index, {"ok": False, "user_email": email, "error": user_lookup.get("error", "User lookup failed.")}
 
+      prereq_result = _genesys_ensure_update_webrtc_prerequisite(
+        region,
+        access_token,
+        user_lookup.get("user_id", ""),
+        email,
+      )
+      if not prereq_result.get("ok"):
+        return index, {
+          "ok": False,
+          "user_email": email,
+          "error": prereq_result.get("error", "WebRTC prerequisite auto-heal failed."),
+          "webrtc_phone": str(prereq_result.get("webrtc_phone", "") or "").strip(),
+          "inventory_phone": str(prereq_result.get("inventory_phone", "") or "").strip(),
+          "webrtc_status": str(prereq_result.get("webrtc_status", "") or "").strip(),
+          "webrtc_create_mode": str(prereq_result.get("webrtc_create_mode", "") or "").strip(),
+        }
+
       apply_result = _genesys_apply_user_search_update(
         region,
         access_token,
@@ -18016,9 +18143,9 @@ def genesys_user_search_update_batch_route(
         "ok": True,
         "user_email": email,
         "user_id": str(user_lookup.get("user_id", "") or "").strip(),
-        "webrtc_status": "skipped",
-        "webrtc_phone": "",
-        "webrtc_create_mode": "",
+        "webrtc_status": str(prereq_result.get("webrtc_status", "already_associated") or "already_associated").strip(),
+        "webrtc_phone": str(prereq_result.get("webrtc_phone", "") or "").strip(),
+        "webrtc_create_mode": str(prereq_result.get("webrtc_create_mode", "existing") or "existing").strip(),
         "division_status": apply_result.get("division_status", ""),
         "skills_status": apply_result.get("skills_status", ""),
         "queues_status": apply_result.get("queues_status", ""),
