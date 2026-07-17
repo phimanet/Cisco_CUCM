@@ -509,6 +509,7 @@ GENESYS_UPDATE_BATCH_HISTORY_PATH = os.path.join(
   "genesys_user_update_batch_history.csv",
 )
 GENESYS_UPDATE_BATCH_HISTORY_MAX_ROWS = int((os.getenv("GENESYS_UPDATE_BATCH_HISTORY_MAX_ROWS", "200") or "200").strip())
+GENESYS_UPDATE_BATCH_MAX_WORKERS = int((os.getenv("GENESYS_UPDATE_BATCH_MAX_WORKERS", "3") or "3").strip())
 GENESYS_UPDATE_BATCH_JOBS = {}
 GENESYS_UPDATE_BATCH_JOBS_LOCK = threading.Lock()
 GENESYS_UPDATE_BATCH_JOBS_MAX = int((os.getenv("GENESYS_UPDATE_BATCH_JOBS_MAX", "100") or "100").strip())
@@ -7863,6 +7864,8 @@ def _genesys_update_batch_job_status_payload(job: dict) -> dict:
     "success_count": int(clean_job.get("success_count", 0) or 0),
     "failure_count": int(clean_job.get("failure_count", 0) or 0),
     "workers": int(clean_job.get("workers", 0) or 0),
+    "active_workers": int(clean_job.get("active_workers", 0) or 0),
+    "max_active_workers": int(clean_job.get("max_active_workers", 0) or 0),
     "applied_summary": str(clean_job.get("applied_summary", "") or "").strip(),
     "created_at": str(clean_job.get("created_at", "") or "").strip(),
     "started_at": str(clean_job.get("started_at", "") or "").strip(),
@@ -14471,7 +14474,11 @@ def genesys_admin_placeholder(request: Request):
                     const requested = Number(statusPayload.requested || emails.length);
                     const succeeded = Number(statusPayload.success_count || 0);
                     const failedCount = Number(statusPayload.failure_count || 0);
-                    statusEl.textContent = "Batch job " + jobId + " is " + String(statusPayload.status || "running") + " (" + processed + "/" + requested + ", success=" + succeeded + ", failed=" + failedCount + ").";
+                    const activeWorkers = Number(statusPayload.active_workers || 0);
+                    const maxActiveWorkers = Number(statusPayload.max_active_workers || 0);
+                    statusEl.textContent = "Batch job " + jobId + " is " + String(statusPayload.status || "running")
+                      + " (" + processed + "/" + requested + ", success=" + succeeded + ", failed=" + failedCount
+                      + ", active workers=" + activeWorkers + ", peak=" + maxActiveWorkers + ").";
 
                     if (!statusPayload.queued) {
                       const summaryHtml = buildFinalSummary(statusPayload);
@@ -16052,7 +16059,11 @@ def genesys_admin_placeholder(request: Request):
               const requested = Number(statusPayload.requested || emails.length);
               const succeeded = Number(statusPayload.success_count || 0);
               const failedCount = Number(statusPayload.failure_count || 0);
-              updateStatusEl.textContent = "Batch job " + jobId + " is " + String(statusPayload.status || "running") + " (" + processed + "/" + requested + ", success=" + succeeded + ", failed=" + failedCount + ").";
+              const activeWorkers = Number(statusPayload.active_workers || 0);
+              const maxActiveWorkers = Number(statusPayload.max_active_workers || 0);
+              updateStatusEl.textContent = "Batch job " + jobId + " is " + String(statusPayload.status || "running")
+                + " (" + processed + "/" + requested + ", success=" + succeeded + ", failed=" + failedCount
+                + ", active workers=" + activeWorkers + ", peak=" + maxActiveWorkers + ").";
 
               if (!statusPayload.queued) {
                 _setUpdateSummary(_buildFinalSummary(statusPayload), true);
@@ -18299,7 +18310,8 @@ def genesys_build_webrtc_batch_route(users_json: str = Form("")):
 
   region = token_result.get("region", clean_region)
   access_token = token_result.get("access_token", "")
-  max_workers = 3
+  configured_workers = max(1, min(int(GENESYS_UPDATE_BATCH_MAX_WORKERS or 3), 10))
+  max_workers = max(1, min(configured_workers, len(users)))
 
   def _build_one(index: int, user: dict) -> tuple[int, dict]:
     try:
@@ -19182,7 +19194,24 @@ def genesys_user_search_update_batch_route(
     applied_parts.append(f"Queues({len(queue_ids)})")
   applied_summary = ", ".join(applied_parts) if applied_parts else "(none)"
 
+  active_state = {"current": 0, "max": 0}
+  active_state_lock = threading.Lock()
+  job_context = {"job_id": ""}
+
   def _run_one(index: int, email: str) -> tuple[int, dict]:
+    job_id = str(job_context.get("job_id", "") or "").strip()
+    with active_state_lock:
+      active_state["current"] += 1
+      if active_state["current"] > active_state["max"]:
+        active_state["max"] = active_state["current"]
+      current_workers = active_state["current"]
+      max_workers_seen = active_state["max"]
+    if job_id:
+      _genesys_update_batch_set_job(job_id, {
+        "active_workers": current_workers,
+        "max_active_workers": max_workers_seen,
+      })
+
     try:
       user_lookup = _genesys_lookup_user_by_email(region, access_token, email)
       if not user_lookup.get("ok"):
@@ -19233,6 +19262,16 @@ def genesys_user_search_update_batch_route(
       }
     except Exception as exc:
       return index, {"ok": False, "user_email": email, "error": f"Unhandled batch update error: {exc}"}
+    finally:
+      with active_state_lock:
+        active_state["current"] = max(0, active_state["current"] - 1)
+        current_workers = active_state["current"]
+        max_workers_seen = active_state["max"]
+      if job_id:
+        _genesys_update_batch_set_job(job_id, {
+          "active_workers": current_workers,
+          "max_active_workers": max_workers_seen,
+        })
 
   def _finish_batch_job(job_id: str):
     started_at = time.time()
@@ -19353,6 +19392,8 @@ def genesys_user_search_update_batch_route(
       "success_count": 0,
       "failure_count": 0,
       "workers": max_workers,
+      "active_workers": 0,
+      "max_active_workers": 0,
       "applied_summary": applied_summary,
       "duration_seconds": 0.0,
       "region": region,
@@ -19363,6 +19404,7 @@ def genesys_user_search_update_batch_route(
       "failed_emails_download_url": "",
       "results": [],
     }
+    job_context["job_id"] = job_id
     _genesys_update_batch_prune_jobs_locked()
 
   worker = threading.Thread(
