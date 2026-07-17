@@ -3255,9 +3255,9 @@ def _genesys_apply_user_search_update(
   clean_skill_ids = [str(item or "").strip() for item in (skill_ids or []) if str(item or "").strip()]
   clean_queue_ids = [str(item or "").strip() for item in (queue_ids or []) if str(item or "").strip()]
 
-  division_status = "skipped"
-  skills_status = "skipped"
-  queues_status = "skipped"
+  division_status = "skipped (not selected)"
+  skills_status = "skipped (not selected)"
+  queues_status = "skipped (not selected)"
 
   if update_division:
     if not clean_division_id:
