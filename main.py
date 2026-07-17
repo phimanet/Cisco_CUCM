@@ -1630,6 +1630,36 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
 
     return best_id
 
+  def _resolve_station_id_by_name(station_name: str) -> str:
+    clean_station_name = str(station_name or "").strip()
+    if not clean_station_name:
+      return ""
+
+    attempts = [
+      {"name": clean_station_name, "pageSize": 100, "pageNumber": 1},
+      {"stationName": clean_station_name, "pageSize": 100, "pageNumber": 1},
+      {"q": clean_station_name, "pageSize": 100, "pageNumber": 1},
+    ]
+    for params in attempts:
+      ok_stations, stations_payload, _ = _genesys_get_json(api_base, access_token, "/api/v2/stations", params=params)
+      if not ok_stations:
+        continue
+      entities = stations_payload.get("entities", []) if isinstance(stations_payload, dict) else []
+      if not isinstance(entities, list):
+        continue
+      target = clean_station_name.lower()
+      for item in entities:
+        if not isinstance(item, dict):
+          continue
+        station_id = str(item.get("id", "") or "").strip()
+        station_label = str(item.get("name", "") or item.get("stationName", "") or "").strip().lower()
+        if station_id and station_label and station_label == target:
+          return station_id
+      fallback_id = _pick_station_id(entities, "", clean_station_name)
+      if fallback_id:
+        return fallback_id
+    return ""
+
   # If a WebRTC phone already exists for this user, verify and enforce default-station tie.
   ok_user_profile, user_profile_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{resolved_user_id}")
   if ok_user_profile:
@@ -1726,6 +1756,58 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
         "association_result": assoc_existing_text,
         "already_present": True,
       }
+
+  # Guard: if Phone Management already has a WebRTC phone for this user/name,
+  # do not create another one. Prefer associate existing station when possible.
+  phone_management_name, matched_phone, _phone_inventory_payload, _phone_inventory_err = _genesys_lookup_phone_management_name(
+    api_base,
+    access_token,
+    resolved_user_id,
+    resolved_user_name,
+    clean_user_email,
+  )
+  if phone_management_name:
+    existing_station_id = ""
+    if isinstance(matched_phone, dict):
+      existing_station_id = str(
+        matched_phone.get("stationId", "")
+        or matched_phone.get("station_id", "")
+        or ""
+      ).strip()
+    if not existing_station_id:
+      existing_station_id = _resolve_station_id_by_name(phone_management_name)
+
+    if existing_station_id:
+      ok_assoc_existing, _, assoc_existing_err, assoc_existing_status = _genesys_send_json(
+        "PUT",
+        api_base,
+        access_token,
+        f"/api/v2/users/{resolved_user_id}/station/defaultstation/{existing_station_id}",
+      )
+      if ok_assoc_existing or assoc_existing_status == 202:
+        assoc_existing_text = "Already Present+Associated"
+        if assoc_existing_status == 202:
+          assoc_existing_text = "Already Present (association accepted and pending propagation)"
+        return {
+          "ok": True,
+          "region": clean_region,
+          "phone_id": str((matched_phone or {}).get("id", "") or "").strip(),
+          "phone_name": phone_management_name,
+          "create_mode": "existing_inventory",
+          "association_result": assoc_existing_text,
+          "already_present": True,
+        }
+
+    # Keep no-duplicate guarantee even if association endpoint cannot resolve yet.
+    return {
+      "ok": True,
+      "region": clean_region,
+      "phone_id": str((matched_phone or {}).get("id", "") or "").strip(),
+      "phone_name": phone_management_name,
+      "create_mode": "existing_inventory",
+      "association_result": "Already Present (inventory match; association pending manual verify)",
+      "already_present": True,
+    }
 
   if not line_base_settings_id and base_settings_id:
     line_lookup_result = _genesys_lookup_webrtc_line_base_settings_id(clean_region, access_token, base_settings_id)
@@ -14263,11 +14345,30 @@ def genesys_admin_placeholder(request: Request):
                   setFilterStatus("Select a saved filter first.", true);
                   return false;
                 }
-                setSelected(divisionSelect, [divisionFilterMap[filterId].division_id || ""]);
+                const targetDivisionId = String(divisionFilterMap[filterId].division_id || "").trim();
+                const targetDivisionName = String(divisionFilterMap[filterId].division_name || "").trim().toLowerCase();
+                setSelected(divisionSelect, [targetDivisionId]);
+                if (selectedValues(divisionSelect).indexOf(targetDivisionId) < 0) {
+                  Array.from(divisionSelect && divisionSelect.options ? divisionSelect.options : []).forEach(function (opt) {
+                    if (!opt) {
+                      return;
+                    }
+                    const optionName = String(opt.textContent || "").replace(/^\[Priority\]\s*/, "").trim().toLowerCase();
+                    opt.selected = Boolean(targetDivisionName) && optionName === targetDivisionName;
+                  });
+                }
                 setSelected(skillsSelect, divisionFilterMap[filterId].skill_ids || []);
                 setSelected(queuesSelect, divisionFilterMap[filterId].queue_ids || []);
+                if (applyDivisionEl) {
+                  applyDivisionEl.checked = true;
+                }
                 if (useDivisionFilterEl) {
                   useDivisionFilterEl.checked = true;
+                }
+                const selectedDivision = selectedValues(divisionSelect);
+                if (!selectedDivision.length) {
+                  setFilterStatus("Applied filter skills/queues, but Division target could not be selected from current catalog. Click Load Catalog Now and re-apply.", true);
+                  return false;
                 }
                 setFilterStatus("Applied saved filter '" + String(divisionFilterMap[filterId].filter_name || divisionFilterMap[filterId].division_name || filterId) + "'.", false);
                 return false;
@@ -15647,14 +15748,27 @@ def genesys_admin_placeholder(request: Request):
             _setDivisionFilterStatus("Saved filter selection is no longer available.", true);
             return;
           }
-          if (updateDivisionSelect) {
+          const targetDivisionId = String(filter.division_id || "").trim();
+          const targetDivisionName = String(filter.division_name || "").trim().toLowerCase();
+          _setSelectedOptions(updateDivisionSelect, targetDivisionId ? [targetDivisionId] : []);
+          if (_getSelectedDivisionId() !== targetDivisionId && updateDivisionSelect) {
             Array.from(updateDivisionSelect.options || []).forEach(function (opt) {
-              const value = String((opt && opt.value) || "").trim();
-              opt.selected = value === String(filter.division_id || "").trim();
+              if (!opt) {
+                return;
+              }
+              const text = String(opt.textContent || "").replace(/^\[Priority\]\s*/, "").trim().toLowerCase();
+              opt.selected = Boolean(targetDivisionName) && text === targetDivisionName;
             });
+          }
+          if (updateApplyDivisionEl) {
+            updateApplyDivisionEl.checked = true;
           }
           if (updateUseDivisionFilterEl) {
             updateUseDivisionFilterEl.checked = true;
+          }
+          if (!_getSelectedDivisionId()) {
+            _setDivisionFilterStatus("Applied filter skills/queues, but Division target could not be selected from current catalog. Click Load Catalog Now and re-apply.", true);
+            return;
           }
           _applyDivisionScopeToSelections({ preserveSelections: true });
         }
