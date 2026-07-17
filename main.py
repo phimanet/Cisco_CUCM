@@ -3076,43 +3076,8 @@ def _genesys_apply_user_search_update(
   queues_status = "skipped"
 
   if update_division:
-    if not clean_division_id:
-      return {"ok": False, "error": "Division update requested but no division_id provided."}
-    role_ids, role_err = _genesys_get_user_role_ids(api_base, access_token, clean_user_id)
-    if role_err:
-      return {"ok": False, "error": "Division access update failed: unable to load user roles: " + role_err}
-    if not role_ids:
-      return {"ok": False, "error": "Division access update failed: user has no roles to grant in the selected division."}
-
-    division_errors = []
-    granted_count = 0
-    existing_count = 0
-    for role_id in role_ids:
-      has_grant, _grant_msg = _genesys_subject_has_division_role_grant(api_base, access_token, clean_user_id, clean_division_id, role_id)
-      if has_grant:
-        existing_count += 1
-        continue
-
-      ok_grant, _, grant_err, _ = _genesys_send_json(
-        "POST",
-        api_base,
-        access_token,
-        f"/api/v2/authorization/subjects/{clean_user_id}/divisions/{clean_division_id}/roles/{role_id}",
-        payload=None,
-      )
-      if not ok_grant:
-        division_errors.append(f"role {role_id}: {grant_err}")
-        continue
-
-      verify_ok, verify_err = _genesys_subject_has_division_role_grant(api_base, access_token, clean_user_id, clean_division_id, role_id)
-      if verify_ok:
-        granted_count += 1
-      else:
-        division_errors.append(f"role {role_id}: grant verification failed ({verify_err})")
-
-    if division_errors:
-      return {"ok": False, "error": "Division access update failed: " + " | ".join(division_errors)}
-    division_status = f"division access updated (roles_granted={granted_count}, already={existing_count}, target_roles={len(role_ids)})"
+    # Safety lock: never write division grants under Roles from this workflow.
+    division_status = "skipped (division updates disabled; Roles unchanged)"
 
   if update_skills:
     skill_posts = [{"id": skill_id, "proficiency": 5.0} for skill_id in clean_skill_ids]
@@ -17838,8 +17803,6 @@ def genesys_user_search_update_route(
     return JSONResponse({"ok": False, "error": "A valid user email is required."}, status_code=400)
   if not apply_division and not apply_skills and not apply_queues:
     return JSONResponse({"ok": False, "error": "At least one field update must be selected."}, status_code=400)
-  if apply_division and not clean_division_id:
-    return JSONResponse({"ok": False, "error": "Division update selected but no division_id provided."}, status_code=400)
 
   try:
     skill_ids = json.loads(skill_ids_json or "[]")
@@ -17963,8 +17926,6 @@ def genesys_user_search_update_batch_route(
   apply_queues = _to_bool(update_queues, True)
   if not apply_division and not apply_skills and not apply_queues:
     return JSONResponse({"ok": False, "error": "At least one field update must be selected."}, status_code=400)
-  if apply_division and not clean_division_id:
-    return JSONResponse({"ok": False, "error": "Division update selected but no division_id provided."}, status_code=400)
 
   try:
     parsed_users = json.loads(users_json or "[]")
@@ -18096,7 +18057,7 @@ def genesys_user_search_update_batch_route(
 
   applied_parts = []
   if apply_division:
-    applied_parts.append("Division")
+    applied_parts.append("Division(skipped)")
   if apply_skills:
     applied_parts.append(f"Skills({len(skill_ids)})")
   if apply_queues:
