@@ -13637,6 +13637,18 @@ def genesys_admin_placeholder(request: Request):
           <div id="genesys-user-update-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
             <h3 style="margin-top:0;">Genesys User Search and Update</h3>
 
+            <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f4f9ff;">
+              <h4 style="margin:0 0 8px 0;">Find Person in CUCM (Optional)</h4>
+              <p style="margin:0 0 8px 0; color:#4e6a84; font-size:12px;">Search CUCM by last name (optional first name), then choose the person to auto-fill Single User Proof email for Genesys lookup.</p>
+              <div class="search-filter-row">
+                <input id="genesys-update-name-last" placeholder="Last Name *" style="width:220px;" />
+                <input id="genesys-update-name-first" placeholder="First Name (optional)" style="width:220px;" />
+                <button type="button" id="genesys-update-name-search-btn" style="background:#385977;">Search CUCM</button>
+              </div>
+              <p id="genesys-update-name-search-status" style="margin:8px 0 6px 0; color:#2c5c8a; min-height:18px;">Optional helper: search and choose a person to prefill email.</p>
+              <div id="genesys-update-name-search-results" style="overflow-x:auto;"></div>
+            </div>
+
             <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f8fcff;">
               <h4 style="margin:0 0 8px 0;">Single User Proof</h4>
               <div class="search-filter-row">
@@ -13748,6 +13760,11 @@ def genesys_admin_placeholder(request: Request):
               const updateHistoryStatusEl = document.getElementById("genesys-update-history-status");
               const updateHistoryTableEl = document.getElementById("genesys-update-history-table");
               const updateHistoryRefreshBtn = document.getElementById("genesys-update-history-refresh-btn");
+              const nameLastEl = document.getElementById("genesys-update-name-last");
+              const nameFirstEl = document.getElementById("genesys-update-name-first");
+              const nameSearchBtn = document.getElementById("genesys-update-name-search-btn");
+              const nameSearchStatusEl = document.getElementById("genesys-update-name-search-status");
+              const nameSearchResultsEl = document.getElementById("genesys-update-name-search-results");
               const divisionFilterMap = {};
 
               if (!loadBtn || !lookupBtn || !statusEl || !emailEl) {
@@ -13784,6 +13801,103 @@ def genesys_admin_placeholder(request: Request):
                     return String((opt && opt.textContent) || "").replace(/^\[Priority\]\s*/, "").trim();
                   })
                   .filter(Boolean);
+              }
+
+              function renderCucmNameSearchResults(rows) {
+                if (!nameSearchResultsEl) {
+                  return;
+                }
+                const items = Array.isArray(rows) ? rows : [];
+                if (!items.length) {
+                  nameSearchResultsEl.innerHTML = "";
+                  return;
+                }
+                let html = "<table style='width:100%; border-collapse:collapse; font-size:12px;'><thead><tr style='background:#385977; color:#fff;'>";
+                html += "<th style='padding:6px 8px; text-align:left;'>Name</th>";
+                html += "<th style='padding:6px 8px; text-align:left;'>User ID</th>";
+                html += "<th style='padding:6px 8px; text-align:left;'>Email</th>";
+                html += "<th style='padding:6px 8px; text-align:left;'>Extension</th>";
+                html += "<th style='padding:6px 8px; text-align:left;'>Action</th>";
+                html += "</tr></thead><tbody>";
+                items.forEach(function (row, index) {
+                  const bg = index % 2 === 0 ? "#f7fbff" : "#ffffff";
+                  const displayName = String((row && row.display_name) || "").trim() || [String((row && row.first_name) || "").trim(), String((row && row.last_name) || "").trim()].filter(Boolean).join(" ") || String((row && row.userid) || "").trim();
+                  const email = String((row && row.email) || "").trim();
+                  const userId = String((row && row.userid) || "").trim();
+                  const ext = String((row && row.primary_extension) || "").trim();
+                  html += "<tr style='background:" + bg + ";'>";
+                  html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5;'>" + esc(displayName || "-") + "</td>";
+                  html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5;'>" + esc(userId || "-") + "</td>";
+                  html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5;'>" + esc(email || "-") + "</td>";
+                  html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5;'>" + esc(ext || "-") + "</td>";
+                  html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5; white-space:nowrap;'>";
+                  html += email
+                    ? ("<button type='button' data-prefill-email='" + esc(email) + "' style='background:#2d7a43;color:#fff;border:none;border-radius:6px;padding:4px 8px;font-weight:700;cursor:pointer;'>Use Email</button>")
+                    : "<span style='color:#8a2d2d;'>No email</span>";
+                  html += "</td></tr>";
+                });
+                html += "</tbody></table>";
+                nameSearchResultsEl.innerHTML = html;
+                Array.from(nameSearchResultsEl.querySelectorAll("button[data-prefill-email]") || []).forEach(function (btn) {
+                  btn.addEventListener("click", function () {
+                    const selectedEmail = String(btn.getAttribute("data-prefill-email") || "").trim().toLowerCase();
+                    if (!selectedEmail) {
+                      return;
+                    }
+                    if (emailEl) {
+                      emailEl.value = selectedEmail;
+                    }
+                    if (nameSearchStatusEl) {
+                      nameSearchStatusEl.textContent = "Selected " + selectedEmail + " for Single User Proof.";
+                    }
+                  });
+                });
+              }
+
+              async function runCucmNameSearch() {
+                if (!nameSearchStatusEl) {
+                  return false;
+                }
+                const lastName = String((nameLastEl && nameLastEl.value) || "").trim();
+                const firstName = String((nameFirstEl && nameFirstEl.value) || "").trim();
+                if (!lastName) {
+                  nameSearchStatusEl.textContent = "Last Name is required for CUCM search.";
+                  return false;
+                }
+                const originalText = nameSearchBtn ? nameSearchBtn.textContent : "Search CUCM";
+                if (nameSearchBtn) {
+                  nameSearchBtn.disabled = true;
+                  nameSearchBtn.textContent = "Searching...";
+                }
+                nameSearchStatusEl.textContent = "Searching CUCM for " + lastName + (firstName ? (", " + firstName) : "") + "...";
+                try {
+                  const formData = new FormData();
+                  formData.append("last_name", lastName);
+                  formData.append("first_name", firstName);
+                  const response = await fetch("/lookup/person", { method: "POST", body: formData, credentials: "same-origin" });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error && payload.error.message) || (payload && payload.error) || "CUCM person search failed.");
+                  }
+                  const rows = Array.isArray(payload.results) ? payload.results : [];
+                  if (!rows.length) {
+                    nameSearchStatusEl.textContent = "No CUCM users found for that name.";
+                    renderCucmNameSearchResults([]);
+                    return true;
+                  }
+                  nameSearchStatusEl.textContent = "Found " + rows.length + " CUCM user(s). Choose one to prefill email.";
+                  renderCucmNameSearchResults(rows);
+                  return true;
+                } catch (err) {
+                  nameSearchStatusEl.textContent = "CUCM person search failed: " + ((err && err.message) || "Unknown error.");
+                  renderCucmNameSearchResults([]);
+                  return false;
+                } finally {
+                  if (nameSearchBtn) {
+                    nameSearchBtn.disabled = false;
+                    nameSearchBtn.textContent = originalText;
+                  }
+                }
               }
 
               function populateSelect(selectEl, rows, placeholder) {
@@ -14202,6 +14316,11 @@ def genesys_admin_placeholder(request: Request):
                 return false;
               };
 
+              window.runGenesysUpdateNameSearch = function () {
+                runCucmNameSearch();
+                return false;
+              };
+
               window.runGenesysDivisionFilterReload = function () {
                 loadSavedFilters();
                 return false;
@@ -14297,6 +14416,13 @@ def genesys_admin_placeholder(request: Request):
                 updateBtn.dataset.bound = "1";
                 updateBtn.addEventListener("click", function () {
                   runSingleUserUpdate();
+                });
+              }
+
+              if (nameSearchBtn && String(nameSearchBtn.dataset.bound || "") !== "1") {
+                nameSearchBtn.dataset.bound = "1";
+                nameSearchBtn.addEventListener("click", function () {
+                  runCucmNameSearch();
                 });
               }
 
@@ -14639,6 +14765,11 @@ def genesys_admin_placeholder(request: Request):
         const updateHistoryStatusEl = document.getElementById("genesys-update-history-status");
         const updateHistoryTableEl = document.getElementById("genesys-update-history-table");
         const updateHistoryRefreshBtn = document.getElementById("genesys-update-history-refresh-btn");
+        const updateNameLastEl = document.getElementById("genesys-update-name-last");
+        const updateNameFirstEl = document.getElementById("genesys-update-name-first");
+        const updateNameSearchBtn = document.getElementById("genesys-update-name-search-btn");
+        const updateNameSearchStatusEl = document.getElementById("genesys-update-name-search-status");
+        const updateNameSearchResultsEl = document.getElementById("genesys-update-name-search-results");
         const updateUseDivisionFilterEl = document.getElementById("genesys-update-use-division-filter");
         const updateSavedFilterSelectEl = document.getElementById("genesys-update-saved-filter-select");
         const updateFilterStatusEl = document.getElementById("genesys-update-filter-status");
@@ -14795,6 +14926,103 @@ def genesys_admin_placeholder(request: Request):
           }
           updateFilterStatusEl.textContent = String(message || "");
           updateFilterStatusEl.style.color = isError ? "#8a2d2d" : "#2c5c8a";
+        }
+
+        function _renderCucmNameSearchResults(rows) {
+          if (!updateNameSearchResultsEl) {
+            return;
+          }
+          const items = Array.isArray(rows) ? rows : [];
+          if (!items.length) {
+            updateNameSearchResultsEl.innerHTML = "";
+            return;
+          }
+          let html = "<table style='width:100%; border-collapse:collapse; font-size:12px;'><thead><tr style='background:#385977; color:#fff;'>";
+          html += "<th style='padding:6px 8px; text-align:left;'>Name</th>";
+          html += "<th style='padding:6px 8px; text-align:left;'>User ID</th>";
+          html += "<th style='padding:6px 8px; text-align:left;'>Email</th>";
+          html += "<th style='padding:6px 8px; text-align:left;'>Extension</th>";
+          html += "<th style='padding:6px 8px; text-align:left;'>Action</th>";
+          html += "</tr></thead><tbody>";
+          items.forEach(function (row, index) {
+            const bg = index % 2 === 0 ? "#f7fbff" : "#ffffff";
+            const displayName = String((row && row.display_name) || "").trim() || [String((row && row.first_name) || "").trim(), String((row && row.last_name) || "").trim()].filter(Boolean).join(" ") || String((row && row.userid) || "").trim();
+            const email = String((row && row.email) || "").trim();
+            const userId = String((row && row.userid) || "").trim();
+            const ext = String((row && row.primary_extension) || "").trim();
+            html += "<tr style='background:" + bg + ";'>";
+            html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5;'>" + _escapeHtml(displayName || "-") + "</td>";
+            html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5;'>" + _escapeHtml(userId || "-") + "</td>";
+            html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5;'>" + _escapeHtml(email || "-") + "</td>";
+            html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5;'>" + _escapeHtml(ext || "-") + "</td>";
+            html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5; white-space:nowrap;'>";
+            html += email
+              ? ("<button type='button' data-prefill-email='" + _escapeHtml(email) + "' style='background:#2d7a43;color:#fff;border:none;border-radius:6px;padding:4px 8px;font-weight:700;cursor:pointer;'>Use Email</button>")
+              : "<span style='color:#8a2d2d;'>No email</span>";
+            html += "</td></tr>";
+          });
+          html += "</tbody></table>";
+          updateNameSearchResultsEl.innerHTML = html;
+          Array.from(updateNameSearchResultsEl.querySelectorAll("button[data-prefill-email]") || []).forEach(function (btn) {
+            btn.addEventListener("click", function () {
+              const selectedEmail = String(btn.getAttribute("data-prefill-email") || "").trim().toLowerCase();
+              if (!selectedEmail) {
+                return;
+              }
+              if (updateSingleEmailEl) {
+                updateSingleEmailEl.value = selectedEmail;
+              }
+              if (updateNameSearchStatusEl) {
+                updateNameSearchStatusEl.textContent = "Selected " + selectedEmail + " for Single User Proof.";
+              }
+            });
+          });
+        }
+
+        async function _runCucmNameSearch() {
+          if (!updateNameSearchStatusEl) {
+            return false;
+          }
+          const lastName = String((updateNameLastEl && updateNameLastEl.value) || "").trim();
+          const firstName = String((updateNameFirstEl && updateNameFirstEl.value) || "").trim();
+          if (!lastName) {
+            updateNameSearchStatusEl.textContent = "Last Name is required for CUCM search.";
+            return false;
+          }
+          const originalText = updateNameSearchBtn ? updateNameSearchBtn.textContent : "Search CUCM";
+          if (updateNameSearchBtn) {
+            updateNameSearchBtn.disabled = true;
+            updateNameSearchBtn.textContent = "Searching...";
+          }
+          updateNameSearchStatusEl.textContent = "Searching CUCM for " + lastName + (firstName ? (", " + firstName) : "") + "...";
+          try {
+            const formData = new FormData();
+            formData.append("last_name", lastName);
+            formData.append("first_name", firstName);
+            const response = await fetch("/lookup/person", { method: "POST", body: formData, credentials: "same-origin" });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error && payload.error.message) || (payload && payload.error) || "CUCM person search failed.");
+            }
+            const rows = Array.isArray(payload.results) ? payload.results : [];
+            if (!rows.length) {
+              updateNameSearchStatusEl.textContent = "No CUCM users found for that name.";
+              _renderCucmNameSearchResults([]);
+              return true;
+            }
+            updateNameSearchStatusEl.textContent = "Found " + rows.length + " CUCM user(s). Choose one to prefill email.";
+            _renderCucmNameSearchResults(rows);
+            return true;
+          } catch (err) {
+            updateNameSearchStatusEl.textContent = "CUCM person search failed: " + ((err && err.message) || "Unknown error.");
+            _renderCucmNameSearchResults([]);
+            return false;
+          } finally {
+            if (updateNameSearchBtn) {
+              updateNameSearchBtn.disabled = false;
+              updateNameSearchBtn.textContent = originalText;
+            }
+          }
         }
 
         function _getSelectedDivisionId() {
@@ -15759,9 +15987,20 @@ def genesys_admin_placeholder(request: Request):
           return false;
         };
 
+        window.runGenesysUpdateNameSearch = function () {
+          _runCucmNameSearch();
+          return false;
+        };
+
         if (updateSingleLookupBtn) {
           updateSingleLookupBtn.addEventListener("click", function () {
             _lookupSingleUserProfile();
+          });
+        }
+
+        if (updateNameSearchBtn) {
+          updateNameSearchBtn.addEventListener("click", function () {
+            _runCucmNameSearch();
           });
         }
 
