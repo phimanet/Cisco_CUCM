@@ -2132,6 +2132,180 @@ def _genesys_lookup_user_by_email(region: str, access_token: str, user_email: st
   return {"ok": False, "error": f"No Genesys user found for email {clean_email}."}
 
 
+def _genesys_load_catalog_options(region: str, access_token: str) -> dict:
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+
+  divisions_all, divisions_pages, divisions_err = _genesys_collect_paged_entities(
+    api_base,
+    access_token,
+    "/api/v2/authorization/divisions",
+    100,
+    200,
+  )
+  skills_all, skills_pages, skills_err = _genesys_collect_paged_entities(
+    api_base,
+    access_token,
+    "/api/v2/routing/skills",
+    100,
+    200,
+  )
+  queues_all, queues_pages, queues_err = _genesys_collect_paged_entities(
+    api_base,
+    access_token,
+    "/api/v2/routing/queues",
+    100,
+    max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 200)),
+  )
+
+  def _to_options(rows: list[dict]) -> list[dict]:
+    options = []
+    for row in rows:
+      if not isinstance(row, dict):
+        continue
+      option_id = str(row.get("id", "") or "").strip()
+      option_name = str(row.get("name", "") or option_id).strip()
+      if not option_id:
+        continue
+      options.append({"id": option_id, "name": option_name})
+    return sorted(options, key=lambda item: (item.get("name", "").lower(), item.get("id", "").lower()))
+
+  warnings = []
+  if divisions_err:
+    warnings.append(f"divisions: {divisions_err}")
+  if skills_err:
+    warnings.append(f"skills: {skills_err}")
+  if queues_err:
+    warnings.append(f"queues: {queues_err}")
+
+  return {
+    "ok": not (divisions_err and skills_err and queues_err),
+    "region": clean_region,
+    "divisions": _to_options(divisions_all),
+    "skills": _to_options(skills_all),
+    "queues": _to_options(queues_all),
+    "pages_scanned": {
+      "divisions": int(divisions_pages or 0),
+      "skills": int(skills_pages or 0),
+      "queues": int(queues_pages or 0),
+    },
+    "warnings": warnings,
+  }
+
+
+def _genesys_add_user_to_queue(api_base: str, access_token: str, user_id: str, queue_id: str) -> tuple[bool, str]:
+  clean_user_id = str(user_id or "").strip()
+  clean_queue_id = str(queue_id or "").strip()
+  if not clean_user_id or not clean_queue_id:
+    return False, "User ID and queue ID are required."
+
+  attempts = [
+    ("POST", f"/api/v2/users/{clean_user_id}/queues", {"id": clean_queue_id}),
+    ("POST", f"/api/v2/users/{clean_user_id}/queues", {"queue": {"id": clean_queue_id}}),
+    ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", {"id": clean_user_id}),
+    ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", [{"id": clean_user_id}]),
+    ("POST", f"/api/v2/routing/queues/{clean_queue_id}/users", {"id": clean_user_id}),
+  ]
+
+  errors = []
+  for method, path, payload in attempts:
+    ok, _, err, _ = _genesys_send_json(method, api_base, access_token, path, payload=payload)
+    if ok:
+      return True, "added"
+
+    err_text = str(err or "").strip()
+    if err_text:
+      errors.append(f"{path}: {err_text}")
+      lower_err = err_text.lower()
+      if "already" in lower_err and ("member" in lower_err or "exist" in lower_err):
+        return True, "already_member"
+
+  return False, " | ".join(errors) if errors else "Queue membership update failed."
+
+
+def _genesys_apply_user_search_update(
+  region: str,
+  access_token: str,
+  user_id: str,
+  division_id: str,
+  skill_ids: list[str],
+  queue_ids: list[str],
+) -> dict:
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+  clean_user_id = str(user_id or "").strip()
+  if not clean_user_id:
+    return {"ok": False, "error": "User ID is required."}
+
+  clean_division_id = str(division_id or "").strip()
+  clean_skill_ids = [str(item or "").strip() for item in (skill_ids or []) if str(item or "").strip()]
+  clean_queue_ids = [str(item or "").strip() for item in (queue_ids or []) if str(item or "").strip()]
+
+  division_status = "skipped"
+  skills_status = "skipped"
+  queues_status = "skipped"
+
+  if clean_division_id:
+    ok_division, _, division_err, _ = _genesys_send_json(
+      "PATCH",
+      api_base,
+      access_token,
+      f"/api/v2/users/{clean_user_id}",
+      payload={"division": {"id": clean_division_id}},
+    )
+    if ok_division:
+      division_status = "updated"
+    else:
+      return {"ok": False, "error": f"Division update failed: {division_err}"}
+
+  if clean_skill_ids:
+    entities_a = [{"id": skill_id, "proficiency": 5} for skill_id in clean_skill_ids]
+    entities_b = [{"routingSkill": {"id": skill_id}, "proficiency": 5} for skill_id in clean_skill_ids]
+    skill_attempts = [
+      ("PUT", f"/api/v2/users/{clean_user_id}/routingskills", {"entities": entities_b}),
+      ("PUT", f"/api/v2/users/{clean_user_id}/routingskills/bulk", {"entities": entities_a}),
+      ("POST", f"/api/v2/users/{clean_user_id}/routingskills/bulk", {"entities": entities_a}),
+    ]
+
+    skill_errors = []
+    skill_ok = False
+    for method, path, payload in skill_attempts:
+      ok_skills, _, skills_err, _ = _genesys_send_json(method, api_base, access_token, path, payload=payload)
+      if ok_skills:
+        skill_ok = True
+        break
+      skill_errors.append(f"{path}: {skills_err}")
+
+    if skill_ok:
+      skills_status = "updated"
+    else:
+      return {"ok": False, "error": "Skills update failed: " + (" | ".join(skill_errors) if skill_errors else "unknown")}
+
+  if clean_queue_ids:
+    queue_errors = []
+    queue_success_count = 0
+    queue_existing_count = 0
+    for queue_id in clean_queue_ids:
+      ok_queue, queue_state = _genesys_add_user_to_queue(api_base, access_token, clean_user_id, queue_id)
+      if ok_queue:
+        if queue_state == "already_member":
+          queue_existing_count += 1
+        else:
+          queue_success_count += 1
+      else:
+        queue_errors.append(str(queue_state or "unknown error"))
+
+    if queue_errors:
+      return {"ok": False, "error": "Queue update failed: " + " | ".join(queue_errors)}
+    queues_status = f"updated (added={queue_success_count}, already={queue_existing_count})"
+
+  return {
+    "ok": True,
+    "region": clean_region,
+    "division_status": division_status,
+    "skills_status": skills_status,
+    "queues_status": queues_status,
+  }
+
+
 def _genesys_lookup_webrtc_line_base_settings_id(region: str, access_token: str, phone_base_settings_id: str) -> dict:
   clean_region, _, api_base = _genesys_region_to_urls(region)
   clean_phone_base_settings_id = (phone_base_settings_id or "").strip()
@@ -11782,6 +11956,7 @@ def genesys_admin_placeholder(request: Request):
           <h4>Genesys Menu</h4>
           <button type="button" class="portal-nav-btn active" data-panel-target="genesys-user-panel" onclick="(function(){var id='genesys-user-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User WebRTC Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-bulk-email-panel" onclick="(function(){var id='genesys-bulk-email-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Bulk WebRTC build</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-update-panel" onclick="(function(){var id='genesys-user-update-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Search and Update</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel" onclick="(function(){var id='genesys-queue-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Lookup</button>
         </aside>
 
@@ -12103,6 +12278,53 @@ def genesys_admin_placeholder(request: Request):
             })();
           </script>
 
+          <div id="genesys-user-update-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
+            <h3 style="margin-top:0;">Genesys User Search and Update</h3>
+            <p style="margin-top:0; color:#4e6a84;">Proof mode: update one user first, then apply the same Division/Skills/Queues to a batch of emails.</p>
+
+            <div class="search-filter-row">
+              <button type="button" id="genesys-update-load-catalog-btn" style="background:#385977;">Load Divisions / Skills / Queues</button>
+              <span id="genesys-update-catalog-count" style="font-size:12px; color:#4e6a84;">Catalog not loaded yet.</span>
+            </div>
+
+            <div class="search-filter-row" style="align-items:flex-start;">
+              <div style="min-width:260px; max-width:340px; flex:1 1 280px;">
+                <label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Division (single)</label>
+                <select id="genesys-update-division-select" size="8" style="width:100%; min-height:220px;"></select>
+              </div>
+              <div style="min-width:260px; max-width:340px; flex:1 1 280px;">
+                <label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Skills (multiple)</label>
+                <select id="genesys-update-skills-select" multiple size="8" style="width:100%; min-height:220px;"></select>
+              </div>
+              <div style="min-width:260px; max-width:340px; flex:1 1 280px;">
+                <label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Queues (multiple)</label>
+                <select id="genesys-update-queues-select" multiple size="8" style="width:100%; min-height:220px;"></select>
+              </div>
+            </div>
+
+            <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f8fcff;">
+              <h4 style="margin:0 0 8px 0;">Single User Proof</h4>
+              <div class="search-filter-row">
+                <input id="genesys-update-single-email" placeholder="User email (e.g. jane.doe@amnhealthcare.com)" style="width:360px;" />
+                <button type="button" id="genesys-update-single-btn" style="background:#2d7a43;">Update 1 User</button>
+              </div>
+            </div>
+
+            <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f8fcff;">
+              <h4 style="margin:0 0 8px 0;">Batch Update (same Division/Skills/Queues)</h4>
+              <div class="search-filter-row" style="align-items:flex-start;">
+                <textarea id="genesys-update-batch-emails" placeholder="Paste one or more emails (one per line, comma, or space separated)." style="width:100%; min-height:110px; resize:vertical; padding:10px; border-radius:10px; border:1px solid var(--amn-border);"></textarea>
+              </div>
+              <div class="search-filter-row">
+                <button type="button" id="genesys-update-batch-btn" style="background:#2d7a43;">Run Batch User Update</button>
+                <span id="genesys-update-batch-count" style="font-size:12px; color:#4e6a84;">No users queued.</span>
+              </div>
+            </div>
+
+            <p id="genesys-update-status" style="color:#2c5c8a; min-height:18px; margin-top:10px;">Ready.</p>
+            <div id="genesys-update-summary" style="display:none; margin-top:10px; border:1px solid #c8dbee; border-radius:8px; background:#f8fcff; padding:10px;"></div>
+          </div>
+
           <div id="genesys-queue-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
             <h3 style="margin-top:0;">Queue Lookup</h3>
             <form id="genesys-queue-search-form">
@@ -12146,7 +12368,20 @@ def genesys_admin_placeholder(request: Request):
         const queueResultsEl = document.getElementById("genesys-queue-search-results");
         const queueRawDownloadEl = document.getElementById("genesys-queue-raw-download");
         const queueExtractAllBtn = document.getElementById("genesys-queue-extract-all-btn");
+        const updateLoadCatalogBtn = document.getElementById("genesys-update-load-catalog-btn");
+        const updateCatalogCountEl = document.getElementById("genesys-update-catalog-count");
+        const updateDivisionSelect = document.getElementById("genesys-update-division-select");
+        const updateSkillsSelect = document.getElementById("genesys-update-skills-select");
+        const updateQueuesSelect = document.getElementById("genesys-update-queues-select");
+        const updateSingleEmailEl = document.getElementById("genesys-update-single-email");
+        const updateSingleBtn = document.getElementById("genesys-update-single-btn");
+        const updateBatchEmailsEl = document.getElementById("genesys-update-batch-emails");
+        const updateBatchBtn = document.getElementById("genesys-update-batch-btn");
+        const updateBatchCountEl = document.getElementById("genesys-update-batch-count");
+        const updateStatusEl = document.getElementById("genesys-update-status");
+        const updateSummaryEl = document.getElementById("genesys-update-summary");
         let lastUserRows = [];
+        let updateCatalogLoaded = false;
 
         function _escapeHtml(value) {
           return String(value || "")
@@ -12213,6 +12448,240 @@ def genesys_admin_placeholder(request: Request):
             .filter(function (item, index, allItems) {
               return Boolean(item) && allItems.indexOf(item) === index && item.indexOf("@") > 0;
             });
+        }
+
+        function _setUpdateSummary(html, show) {
+          if (!updateSummaryEl) {
+            return;
+          }
+          updateSummaryEl.innerHTML = String(html || "");
+          updateSummaryEl.style.display = show ? "block" : "none";
+        }
+
+        function _selectedValues(selectEl) {
+          if (!selectEl) {
+            return [];
+          }
+          return Array.from(selectEl.options || [])
+            .filter(function (opt) { return Boolean(opt && opt.selected); })
+            .map(function (opt) { return String(opt.value || "").trim(); })
+            .filter(Boolean);
+        }
+
+        function _populateSelect(selectEl, rows, placeholder) {
+          if (!selectEl) {
+            return;
+          }
+          selectEl.innerHTML = "";
+          if (!Array.isArray(rows) || !rows.length) {
+            const option = document.createElement("option");
+            option.value = "";
+            option.textContent = placeholder || "(none)";
+            selectEl.appendChild(option);
+            return;
+          }
+          rows.forEach(function (row) {
+            const id = String((row && row.id) || "").trim();
+            const name = String((row && row.name) || id || "").trim();
+            if (!id) {
+              return;
+            }
+            const option = document.createElement("option");
+            option.value = id;
+            option.textContent = name;
+            selectEl.appendChild(option);
+          });
+        }
+
+        async function _loadUpdateCatalog() {
+          if (!updateStatusEl) {
+            return;
+          }
+          updateStatusEl.textContent = "Loading Genesys catalog (divisions, skills, queues)...";
+          _setUpdateSummary("", false);
+          const originalText = updateLoadCatalogBtn ? updateLoadCatalogBtn.textContent : "";
+          if (updateLoadCatalogBtn) {
+            updateLoadCatalogBtn.disabled = true;
+            updateLoadCatalogBtn.textContent = "Loading...";
+          }
+          try {
+            const response = await fetch("/genesys/catalog/options", { method: "GET" });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Catalog load failed.");
+            }
+
+            const divisions = Array.isArray(payload.divisions) ? payload.divisions : [];
+            const skills = Array.isArray(payload.skills) ? payload.skills : [];
+            const queues = Array.isArray(payload.queues) ? payload.queues : [];
+
+            _populateSelect(updateDivisionSelect, divisions, "No divisions found");
+            _populateSelect(updateSkillsSelect, skills, "No skills found");
+            _populateSelect(updateQueuesSelect, queues, "No queues found");
+
+            updateCatalogLoaded = true;
+            if (updateCatalogCountEl) {
+              updateCatalogCountEl.textContent = "Divisions: " + divisions.length + " | Skills: " + skills.length + " | Queues: " + queues.length;
+            }
+            updateStatusEl.textContent = "Catalog loaded. Select one Division and one or more Skills/Queues, then run single-user proof.";
+          } catch (err) {
+            updateStatusEl.textContent = "Catalog load failed: " + ((err && err.message) || "Unknown error.");
+          } finally {
+            if (updateLoadCatalogBtn) {
+              updateLoadCatalogBtn.disabled = false;
+              updateLoadCatalogBtn.textContent = originalText || "Load Divisions / Skills / Queues";
+            }
+          }
+        }
+
+        async function _runSingleUserUpdate() {
+          if (!updateStatusEl) {
+            return;
+          }
+          if (!updateCatalogLoaded) {
+            updateStatusEl.textContent = "Load catalog first.";
+            return;
+          }
+
+          const userEmail = String((updateSingleEmailEl && updateSingleEmailEl.value) || "").trim().toLowerCase();
+          const divisionIds = _selectedValues(updateDivisionSelect);
+          const skillIds = _selectedValues(updateSkillsSelect);
+          const queueIds = _selectedValues(updateQueuesSelect);
+
+          if (!userEmail || userEmail.indexOf("@") < 0) {
+            updateStatusEl.textContent = "Enter a valid user email for single-user proof.";
+            return;
+          }
+          if (!divisionIds.length) {
+            updateStatusEl.textContent = "Select one Division.";
+            return;
+          }
+
+          if (!window.confirm("Update Division/Skills/Queues for " + userEmail + "?")) {
+            return;
+          }
+
+          const originalText = updateSingleBtn ? updateSingleBtn.textContent : "";
+          if (updateSingleBtn) {
+            updateSingleBtn.disabled = true;
+            updateSingleBtn.textContent = "Updating...";
+          }
+          _setUpdateSummary("", false);
+          updateStatusEl.textContent = "Applying update for " + userEmail + "...";
+
+          try {
+            const formData = new FormData();
+            formData.append("user_email", userEmail);
+            formData.append("division_id", divisionIds[0]);
+            formData.append("skill_ids_json", JSON.stringify(skillIds));
+            formData.append("queue_ids_json", JSON.stringify(queueIds));
+
+            const response = await fetch("/genesys/users/search-update", {
+              method: "POST",
+              body: formData,
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Single user update failed.");
+            }
+
+            updateStatusEl.textContent = "Single-user update complete for " + userEmail + ".";
+            _setUpdateSummary(
+              "<strong>Single User Update Result</strong>"
+              + "<div style='margin-top:6px;'>User: " + _escapeHtml(String(payload.user_email || userEmail)) + "</div>"
+              + "<div style='margin-top:6px;'>Division: " + _escapeHtml(String(payload.division_status || "")) + "</div>"
+              + "<div style='margin-top:6px;'>Skills: " + _escapeHtml(String(payload.skills_status || "")) + "</div>"
+              + "<div style='margin-top:6px;'>Queues: " + _escapeHtml(String(payload.queues_status || "")) + "</div>",
+              true,
+            );
+          } catch (err) {
+            updateStatusEl.textContent = "Single-user update failed: " + ((err && err.message) || "Unknown error.");
+          } finally {
+            if (updateSingleBtn) {
+              updateSingleBtn.disabled = false;
+              updateSingleBtn.textContent = originalText || "Update 1 User";
+            }
+          }
+        }
+
+        async function _runBatchUserUpdate() {
+          if (!updateStatusEl) {
+            return;
+          }
+          if (!updateCatalogLoaded) {
+            updateStatusEl.textContent = "Load catalog first.";
+            return;
+          }
+
+          const emails = _parseEmailList((updateBatchEmailsEl && updateBatchEmailsEl.value) || "");
+          const divisionIds = _selectedValues(updateDivisionSelect);
+          const skillIds = _selectedValues(updateSkillsSelect);
+          const queueIds = _selectedValues(updateQueuesSelect);
+
+          if (!emails.length) {
+            updateStatusEl.textContent = "Paste at least one valid email for batch update.";
+            return;
+          }
+          if (!divisionIds.length) {
+            updateStatusEl.textContent = "Select one Division.";
+            return;
+          }
+
+          if (!window.confirm("Run batch user update for " + emails.length + " user(s)?")) {
+            return;
+          }
+
+          const originalText = updateBatchBtn ? updateBatchBtn.textContent : "";
+          if (updateBatchBtn) {
+            updateBatchBtn.disabled = true;
+            updateBatchBtn.textContent = "Running...";
+          }
+          _setUpdateSummary("", false);
+          updateStatusEl.textContent = "Running batch user update for " + emails.length + " user(s)...";
+
+          try {
+            const formData = new FormData();
+            formData.append("users_json", JSON.stringify(emails.map(function (email) { return { user_email: email }; })));
+            formData.append("division_id", divisionIds[0]);
+            formData.append("skill_ids_json", JSON.stringify(skillIds));
+            formData.append("queue_ids_json", JSON.stringify(queueIds));
+
+            const response = await fetch("/genesys/users/search-update-batch", {
+              method: "POST",
+              body: formData,
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Batch user update failed.");
+            }
+
+            const failed = Array.isArray(payload.results)
+              ? payload.results.filter(function (row) { return !(row && row.ok); })
+              : [];
+            const failedList = failed.map(function (row) {
+              const email = _escapeHtml(String((row && row.user_email) || "(unknown)"));
+              const err = _escapeHtml(String((row && row.error) || "Unknown error"));
+              return "<li><strong>" + email + "</strong>: " + err + "</li>";
+            });
+
+            updateStatusEl.textContent = "Batch user update complete: Updated " + Number(payload.success_count || 0) + " of " + Number(payload.requested || emails.length) + " user(s).";
+            let summaryHtml = "<strong>Batch User Update Result</strong>"
+              + "<div style='margin-top:6px;'>Requested: " + Number(payload.requested || emails.length)
+              + " | Updated: " + Number(payload.success_count || 0)
+              + " | Failed: " + Number(payload.failure_count || failed.length)
+              + "</div>";
+            if (failedList.length) {
+              summaryHtml += "<div style='margin-top:8px;'><strong>Failures</strong><ul style='margin:6px 0 0 18px;'>" + failedList.join("") + "</ul></div>";
+            }
+            _setUpdateSummary(summaryHtml, true);
+          } catch (err) {
+            updateStatusEl.textContent = "Batch user update failed: " + ((err && err.message) || "Unknown error.");
+          } finally {
+            if (updateBatchBtn) {
+              updateBatchBtn.disabled = false;
+              updateBatchBtn.textContent = originalText || "Run Batch User Update";
+            }
+          }
         }
 
         function _copyTextToClipboard(text) {
@@ -12506,6 +12975,31 @@ def genesys_admin_placeholder(request: Request):
         if (bulkHistoryRefreshBtn) {
           bulkHistoryRefreshBtn.addEventListener("click", function () {
             _loadBulkHistory();
+          });
+        }
+
+        if (updateBatchEmailsEl && updateBatchCountEl) {
+          updateBatchEmailsEl.addEventListener("input", function () {
+            const emails = _parseEmailList(updateBatchEmailsEl.value || "");
+            updateBatchCountEl.textContent = emails.length ? (emails.length + " user(s) ready.") : "No users queued.";
+          });
+        }
+
+        if (updateLoadCatalogBtn) {
+          updateLoadCatalogBtn.addEventListener("click", function () {
+            _loadUpdateCatalog();
+          });
+        }
+
+        if (updateSingleBtn) {
+          updateSingleBtn.addEventListener("click", function () {
+            _runSingleUserUpdate();
+          });
+        }
+
+        if (updateBatchBtn) {
+          updateBatchBtn.addEventListener("click", function () {
+            _runBatchUserUpdate();
           });
         }
 
@@ -13844,6 +14338,215 @@ def genesys_user_queues_by_id_route(
     "queue_resolution_source": queue_resolution_source,
     "queue_diagnostics": fallback_queue_diag if isinstance(locals().get("fallback_queue_diag"), dict) else {},
     "warnings": warnings,
+  })
+
+
+@app.get("/genesys/catalog/options")
+def genesys_catalog_options_route():
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  token_result = _genesys_get_queue_access_token(clean_region)
+  if not token_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": token_result.get("error", "Genesys token request failed."),
+    }, status_code=400)
+
+  catalog_result = _genesys_load_catalog_options(
+    token_result.get("region", clean_region),
+    token_result.get("access_token", ""),
+  )
+  if not catalog_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": "Unable to load catalog options from Genesys.",
+      "warnings": catalog_result.get("warnings", []),
+    }, status_code=400)
+
+  return JSONResponse(catalog_result)
+
+
+@app.post("/genesys/users/search-update")
+def genesys_user_search_update_route(
+  user_email: str = Form(""),
+  division_id: str = Form(""),
+  skill_ids_json: str = Form("[]"),
+  queue_ids_json: str = Form("[]"),
+):
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  clean_user_email = str(user_email or "").strip().lower()
+  clean_division_id = str(division_id or "").strip()
+
+  if not clean_user_email or "@" not in clean_user_email:
+    return JSONResponse({"ok": False, "error": "A valid user email is required."}, status_code=400)
+  if not clean_division_id:
+    return JSONResponse({"ok": False, "error": "Division selection is required."}, status_code=400)
+
+  try:
+    skill_ids = json.loads(skill_ids_json or "[]")
+  except Exception:
+    skill_ids = []
+  try:
+    queue_ids = json.loads(queue_ids_json or "[]")
+  except Exception:
+    queue_ids = []
+
+  if not isinstance(skill_ids, list):
+    skill_ids = []
+  if not isinstance(queue_ids, list):
+    queue_ids = []
+
+  token_result = _genesys_get_queue_access_token(clean_region)
+  if not token_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": token_result.get("error", "Genesys token request failed."),
+    }, status_code=400)
+
+  region = token_result.get("region", clean_region)
+  access_token = token_result.get("access_token", "")
+
+  user_lookup = _genesys_lookup_user_by_email(region, access_token, clean_user_email)
+  if not user_lookup.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": user_lookup.get("error", "Unable to find user by email."),
+    }, status_code=400)
+
+  apply_result = _genesys_apply_user_search_update(
+    region,
+    access_token,
+    user_lookup.get("user_id", ""),
+    clean_division_id,
+    skill_ids,
+    queue_ids,
+  )
+  if not apply_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": apply_result.get("error", "Update failed."),
+    }, status_code=400)
+
+  return JSONResponse({
+    "ok": True,
+    "region": region,
+    "user_email": clean_user_email,
+    "user_id": str(user_lookup.get("user_id", "") or "").strip(),
+    "division_status": apply_result.get("division_status", ""),
+    "skills_status": apply_result.get("skills_status", ""),
+    "queues_status": apply_result.get("queues_status", ""),
+  })
+
+
+@app.post("/genesys/users/search-update-batch")
+def genesys_user_search_update_batch_route(
+  users_json: str = Form("[]"),
+  division_id: str = Form(""),
+  skill_ids_json: str = Form("[]"),
+  queue_ids_json: str = Form("[]"),
+):
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  clean_division_id = str(division_id or "").strip()
+  if not clean_division_id:
+    return JSONResponse({"ok": False, "error": "Division selection is required."}, status_code=400)
+
+  try:
+    parsed_users = json.loads(users_json or "[]")
+  except Exception:
+    return JSONResponse({"ok": False, "error": "users_json must be valid JSON."}, status_code=400)
+
+  try:
+    skill_ids = json.loads(skill_ids_json or "[]")
+  except Exception:
+    skill_ids = []
+  try:
+    queue_ids = json.loads(queue_ids_json or "[]")
+  except Exception:
+    queue_ids = []
+
+  if not isinstance(skill_ids, list):
+    skill_ids = []
+  if not isinstance(queue_ids, list):
+    queue_ids = []
+
+  if not isinstance(parsed_users, list) or not parsed_users:
+    return JSONResponse({"ok": False, "error": "At least one user is required."}, status_code=400)
+
+  users = []
+  seen = set()
+  for row in parsed_users:
+    if isinstance(row, dict):
+      email = str(row.get("user_email", "") or "").strip().lower()
+    else:
+      email = str(row or "").strip().lower()
+    if not email or "@" not in email or email in seen:
+      continue
+    seen.add(email)
+    users.append(email)
+
+  if not users:
+    return JSONResponse({"ok": False, "error": "No valid user emails were provided."}, status_code=400)
+
+  if len(users) > 100:
+    return JSONResponse({"ok": False, "error": "Batch limit is 100 users per request."}, status_code=400)
+
+  token_result = _genesys_get_queue_access_token(clean_region)
+  if not token_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": token_result.get("error", "Genesys token request failed."),
+    }, status_code=400)
+
+  region = token_result.get("region", clean_region)
+  access_token = token_result.get("access_token", "")
+  max_workers = 3
+
+  def _run_one(index: int, email: str) -> tuple[int, dict]:
+    try:
+      user_lookup = _genesys_lookup_user_by_email(region, access_token, email)
+      if not user_lookup.get("ok"):
+        return index, {"ok": False, "user_email": email, "error": user_lookup.get("error", "User lookup failed.")}
+
+      apply_result = _genesys_apply_user_search_update(
+        region,
+        access_token,
+        user_lookup.get("user_id", ""),
+        clean_division_id,
+        skill_ids,
+        queue_ids,
+      )
+      if not apply_result.get("ok"):
+        return index, {"ok": False, "user_email": email, "error": apply_result.get("error", "Update failed.")}
+
+      return index, {
+        "ok": True,
+        "user_email": email,
+        "user_id": str(user_lookup.get("user_id", "") or "").strip(),
+        "division_status": apply_result.get("division_status", ""),
+        "skills_status": apply_result.get("skills_status", ""),
+        "queues_status": apply_result.get("queues_status", ""),
+      }
+    except Exception as exc:
+      return index, {"ok": False, "user_email": email, "error": f"Unhandled batch update error: {exc}"}
+
+  indexed_results = [None] * len(users)
+  with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    future_map = {executor.submit(_run_one, idx, email): idx for idx, email in enumerate(users)}
+    for future in concurrent.futures.as_completed(future_map):
+      idx, result = future.result()
+      indexed_results[idx] = result
+
+  results = [row for row in indexed_results if isinstance(row, dict)]
+  success_count = sum(1 for row in results if row.get("ok"))
+  failure_count = len(results) - success_count
+
+  return JSONResponse({
+    "ok": True,
+    "region": region,
+    "requested": len(users),
+    "workers": max_workers,
+    "success_count": success_count,
+    "failure_count": failure_count,
+    "results": results,
   })
 
 
