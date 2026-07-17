@@ -12340,7 +12340,7 @@ def genesys_admin_placeholder(request: Request):
                 "<div style='margin-top:6px;'>Requested: " + Number(batchPayload.requested || pendingUsers.length) + " | Processed: " + Number(batchPayload.success_count || succeeded.length) + " | Already Present: " + Number(alreadyPresent.length) + " | Failed: " + Number(batchPayload.failure_count || failed.length) + "</div>",
               ];
               const failedEmails = Array.isArray(batchPayload.failed_emails) ? batchPayload.failed_emails : [];
-              const failedEmailText = failedEmails.join("\n");
+              const failedEmailText = failedEmails.join("\\n");
               const originalUrl = String(batchPayload.original_emails_download_url || "");
               const failedUrl = String(batchPayload.failed_emails_download_url || "");
               summaryHtml.push("<div style='margin-top:8px;'><strong>Downloads</strong><div style='margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;'><a href='" + _escapeHtml(originalUrl) + "' style='display:inline-block;padding:6px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Original Input</a><a href='" + _escapeHtml(failedUrl) + "' style='display:inline-block;padding:6px 10px;background:#8a5a2c;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Failed Emails</a></div></div>");
