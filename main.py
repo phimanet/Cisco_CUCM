@@ -1632,10 +1632,8 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
     if not ok_station_assoc:
       station_assoc_payload = {}
 
-    existing_phone_name = _genesys_extract_webrtc_phone(
-      user_profile_payload if isinstance(user_profile_payload, dict) else {},
-      routing_profile_payload if isinstance(routing_profile_payload, dict) else {},
-      station_assoc_payload if isinstance(station_assoc_payload, dict) else {},
+    existing_phone_name = _genesys_user_section_phone(
+      user_profile_payload if isinstance(user_profile_payload, dict) else {}
     )
 
     if existing_phone_name:
@@ -2072,6 +2070,19 @@ def _genesys_extract_webrtc_phone(user_payload: dict, routing_payload: dict, sta
     if station_id:
       return station_id
 
+  return ""
+
+
+def _genesys_user_section_phone(user_payload: dict) -> str:
+  """Return only the phone/station value shown in the Genesys User profile section."""
+  user_station = user_payload.get("station") if isinstance(user_payload, dict) else {}
+  if isinstance(user_station, dict):
+    user_station_name = str(user_station.get("name", "") or "").strip()
+    if user_station_name:
+      return user_station_name
+    user_station_id = str(user_station.get("id", "") or "").strip()
+    if user_station_id:
+      return user_station_id
   return ""
 
 
@@ -3010,12 +3021,7 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
   division_name = str(division_obj.get("name", "") or "").strip()
 
   # Show only what is set on the user profile section.
-  user_station_obj = user_payload.get("station") if isinstance(user_payload.get("station"), dict) else {}
-  associated_webrtc_phone = str(
-    user_station_obj.get("name", "")
-    or user_station_obj.get("id", "")
-    or ""
-  ).strip()
+  associated_webrtc_phone = _genesys_user_section_phone(user_payload if isinstance(user_payload, dict) else {})
 
   inventory_webrtc_phone = ""
   if not associated_webrtc_phone:
