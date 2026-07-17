@@ -8794,6 +8794,111 @@ def _derive_admin_audit_email(username: str) -> str:
   return f"{clean_user}@{AUDIT_LOG_EMAIL_DOMAIN}"
 
 
+def _genesys_send_update_completion_email(
+  operation: str,
+  status: str,
+  requested: int,
+  success_count: int,
+  failure_count: int,
+  request: Request | None = None,
+  operator_username: str = "",
+  region: str = "",
+  duration_seconds: float = 0.0,
+  failures: list[str] | None = None,
+  details: list[str] | None = None,
+  original_download_url: str = "",
+  failed_download_url: str = "",
+):
+  """Send a completion summary email for Genesys update actions."""
+  operator = (operator_username or "").strip()
+  if not operator and request is not None:
+    session = _get_auth_session(request) or {}
+    if isinstance(session, dict):
+      operator = str(session.get("username", "") or "").strip()
+
+  recipient = _derive_admin_audit_email(operator)
+  if not recipient:
+    return
+
+  clean_status = str(status or "").strip().lower()
+  if clean_status in {"completed", "success"} and int(failure_count or 0) == 0:
+    status_label = "SUCCESS"
+  elif clean_status == "failed":
+    status_label = "FAILED"
+  else:
+    status_label = "COMPLETED WITH FAILURES"
+
+  clean_failures = [str(item or "").strip() for item in (failures or []) if str(item or "").strip()]
+  clean_details = [str(item or "").strip() for item in (details or []) if str(item or "").strip()]
+  finished_at = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+
+  subject = f"[CUCM][Genesys] {operation} - {status_label}"
+  body_lines = [
+    f"Genesys operation completed: {operation}",
+    f"Status: {status_label}",
+    f"Finished at: {finished_at}",
+    f"Operator: {operator or 'unknown'}",
+    f"Region: {region or 'n/a'}",
+    f"Requested: {int(requested or 0)}",
+    f"Success: {int(success_count or 0)}",
+    f"Failed: {int(failure_count or 0)}",
+    f"Duration (s): {float(duration_seconds or 0):.2f}",
+  ]
+  if clean_details:
+    body_lines += ["", "Details:"] + [f"- {item}" for item in clean_details]
+  if original_download_url:
+    body_lines.append(f"Original input: {original_download_url}")
+  if failed_download_url:
+    body_lines.append(f"Failed rerun list: {failed_download_url}")
+  if clean_failures:
+    body_lines += ["", "Failure details:"] + [f"- {item}" for item in clean_failures[:50]]
+    if len(clean_failures) > 50:
+      body_lines.append(f"- ...and {len(clean_failures) - 50} more")
+  plain_body = "\n".join(body_lines)
+
+  details_html = "".join(f"<li>{escape(item)}</li>" for item in clean_details)
+  failures_html = "".join(f"<li>{escape(item)}</li>" for item in clean_failures[:50])
+  links_html = ""
+  if original_download_url:
+    links_html += f"<li>Original input: <a href=\"{escape(original_download_url)}\">{escape(original_download_url)}</a></li>"
+  if failed_download_url:
+    links_html += f"<li>Failed rerun list: <a href=\"{escape(failed_download_url)}\">{escape(failed_download_url)}</a></li>"
+  html_body = f"""
+<html>
+  <body style="font-family:Segoe UI,Arial,sans-serif;color:#12304a;">
+    <h3 style="margin-bottom:8px;">Genesys Operation Completion</h3>
+    <p style="margin-top:0;"><strong>{escape(operation)}</strong></p>
+    <table style="border-collapse:collapse;font-size:14px;">
+      <tr><td style="padding:4px 10px 4px 0;"><strong>Status</strong></td><td>{escape(status_label)}</td></tr>
+      <tr><td style="padding:4px 10px 4px 0;"><strong>Finished at</strong></td><td>{escape(finished_at)}</td></tr>
+      <tr><td style="padding:4px 10px 4px 0;"><strong>Operator</strong></td><td>{escape(operator or 'unknown')}</td></tr>
+      <tr><td style="padding:4px 10px 4px 0;"><strong>Region</strong></td><td>{escape(region or 'n/a')}</td></tr>
+      <tr><td style="padding:4px 10px 4px 0;"><strong>Requested</strong></td><td>{int(requested or 0)}</td></tr>
+      <tr><td style="padding:4px 10px 4px 0;"><strong>Success</strong></td><td>{int(success_count or 0)}</td></tr>
+      <tr><td style="padding:4px 10px 4px 0;"><strong>Failed</strong></td><td>{int(failure_count or 0)}</td></tr>
+      <tr><td style="padding:4px 10px 4px 0;"><strong>Duration (s)</strong></td><td>{float(duration_seconds or 0):.2f}</td></tr>
+    </table>
+    {f'<h4 style="margin-bottom:6px;">Details</h4><ul>{details_html}</ul>' if details_html else ''}
+    {f'<h4 style="margin-bottom:6px;">Downloads</h4><ul>{links_html}</ul>' if links_html else ''}
+    {f'<h4 style="margin-bottom:6px;">Failure details</h4><ul>{failures_html}</ul>' if failures_html else ''}
+  </body>
+</html>
+"""
+
+  try:
+    _send_smtp_email(
+      sender="noreply@amnhealthcare.com",
+      recipients=[recipient],
+      subject=subject,
+      body=plain_body,
+      html_body=html_body,
+      smtp_port=SMTP_PORT,
+      use_starttls=SMTP_USE_STARTTLS,
+    )
+  except Exception as exc:
+    logger.warning("genesys completion email failed for %s: %s", operation, exc)
+
+
 def _normalize_phone_to_e164(phone_number: str) -> str:
   raw = (phone_number or "").strip()
   if not raw:
@@ -18337,6 +18442,7 @@ def _genesys_resolve_queue_action_user(region: str, access_token: str, user_id: 
 
 @app.post("/genesys/queues/member-add")
 def genesys_queue_member_add_route(
+  request: Request,
   queue_id: str = Form(""),
   user_id: str = Form(""),
   user_email: str = Form(""),
@@ -18372,12 +18478,27 @@ def genesys_queue_member_add_route(
 
     ok_add, add_state = _genesys_add_user_to_queue(api_base, access_token, resolved_user_id, clean_queue_id)
     if ok_add:
+      queue_name = _genesys_get_queue_name(api_base, access_token, clean_queue_id)
+      _genesys_send_update_completion_email(
+        operation="Genesys Queue Member Add",
+        status="completed",
+        requested=1,
+        success_count=1,
+        failure_count=0,
+        request=request,
+        region=region,
+        details=[
+          f"Queue: {queue_name} ({clean_queue_id})",
+          f"User: {str(user_resolved.get('user_email', '') or '').strip().lower() or resolved_user_id}",
+          f"Result: {str(add_state or 'added')}",
+        ],
+      )
       return JSONResponse({
         "ok": True,
         "region": region,
         "token_source": token_source,
         "queue_id": clean_queue_id,
-        "queue_name": _genesys_get_queue_name(api_base, access_token, clean_queue_id),
+        "queue_name": queue_name,
         "user_id": resolved_user_id,
         "user_email": str(user_resolved.get("user_email", "") or "").strip().lower(),
         "user_name": str(user_resolved.get("user_name", "") or "").strip(),
@@ -18386,11 +18507,24 @@ def genesys_queue_member_add_route(
 
     failures.append(f"[{token_source}] {str(add_state or 'Queue member add failed.')}")
 
-  return JSONResponse({"ok": False, "error": " | ".join(failures) if failures else "Queue member add failed."}, status_code=400)
+  final_error = " | ".join(failures) if failures else "Queue member add failed."
+  _genesys_send_update_completion_email(
+    operation="Genesys Queue Member Add",
+    status="failed",
+    requested=1,
+    success_count=0,
+    failure_count=1,
+    request=request,
+    region=clean_region,
+    failures=[final_error],
+    details=[f"Queue ID: {clean_queue_id}", f"User input: {(str(user_email or '').strip().lower() or str(user_id or '').strip())}"],
+  )
+  return JSONResponse({"ok": False, "error": final_error}, status_code=400)
 
 
 @app.post("/genesys/queues/member-remove")
 def genesys_queue_member_remove_route(
+  request: Request,
   queue_id: str = Form(""),
   user_id: str = Form(""),
   user_email: str = Form(""),
@@ -18426,12 +18560,27 @@ def genesys_queue_member_remove_route(
 
     ok_remove, remove_state = _genesys_remove_user_from_queue(api_base, access_token, resolved_user_id, clean_queue_id)
     if ok_remove:
+      queue_name = _genesys_get_queue_name(api_base, access_token, clean_queue_id)
+      _genesys_send_update_completion_email(
+        operation="Genesys Queue Member Remove",
+        status="completed",
+        requested=1,
+        success_count=1,
+        failure_count=0,
+        request=request,
+        region=region,
+        details=[
+          f"Queue: {queue_name} ({clean_queue_id})",
+          f"User: {str(user_resolved.get('user_email', '') or '').strip().lower() or resolved_user_id}",
+          f"Result: {str(remove_state or 'removed')}",
+        ],
+      )
       return JSONResponse({
         "ok": True,
         "region": region,
         "token_source": token_source,
         "queue_id": clean_queue_id,
-        "queue_name": _genesys_get_queue_name(api_base, access_token, clean_queue_id),
+        "queue_name": queue_name,
         "user_id": resolved_user_id,
         "user_email": str(user_resolved.get("user_email", "") or "").strip().lower(),
         "user_name": str(user_resolved.get("user_name", "") or "").strip(),
@@ -18440,11 +18589,24 @@ def genesys_queue_member_remove_route(
 
     failures.append(f"[{token_source}] {str(remove_state or 'Queue member remove failed.')}")
 
-  return JSONResponse({"ok": False, "error": " | ".join(failures) if failures else "Queue member remove failed."}, status_code=400)
+  final_error = " | ".join(failures) if failures else "Queue member remove failed."
+  _genesys_send_update_completion_email(
+    operation="Genesys Queue Member Remove",
+    status="failed",
+    requested=1,
+    success_count=0,
+    failure_count=1,
+    request=request,
+    region=clean_region,
+    failures=[final_error],
+    details=[f"Queue ID: {clean_queue_id}", f"User input: {(str(user_email or '').strip().lower() or str(user_id or '').strip())}"],
+  )
+  return JSONResponse({"ok": False, "error": final_error}, status_code=400)
 
 
 @app.post("/genesys/users/build-webrtc")
 def genesys_build_webrtc_route(
+  request: Request,
   user_id: str = Form(""),
   user_name: str = Form(""),
   user_email: str = Form(""),
@@ -18459,9 +18621,21 @@ def genesys_build_webrtc_route(
 
   token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
   if not token_result.get("ok"):
+    err_text = token_result.get("error", "Genesys token request failed.")
+    _genesys_send_update_completion_email(
+      operation="Genesys WebRTC Build (Single)",
+      status="failed",
+      requested=1,
+      success_count=0,
+      failure_count=1,
+      request=request,
+      region=clean_region,
+      failures=[str(err_text or "Genesys token request failed.")],
+      details=[f"User input: {clean_user_email or clean_user_id or '(none)'}"],
+    )
     return JSONResponse({
       "ok": False,
-      "error": token_result.get("error", "Genesys token request failed."),
+      "error": err_text,
     }, status_code=400)
 
   build_result = _genesys_build_webrtc_phone_for_user(
@@ -18472,10 +18646,38 @@ def genesys_build_webrtc_route(
     clean_user_email,
   )
   if not build_result.get("ok"):
+    err_text = build_result.get("error", "WebRTC phone build failed.")
+    _genesys_send_update_completion_email(
+      operation="Genesys WebRTC Build (Single)",
+      status="failed",
+      requested=1,
+      success_count=0,
+      failure_count=1,
+      request=request,
+      region=str(token_result.get("region", clean_region) or clean_region).strip(),
+      failures=[str(err_text or "WebRTC phone build failed.")],
+      details=[f"User input: {clean_user_email or clean_user_id or '(none)'}"],
+    )
     return JSONResponse({
       "ok": False,
-      "error": build_result.get("error", "WebRTC phone build failed."),
+      "error": err_text,
     }, status_code=400)
+
+  _genesys_send_update_completion_email(
+    operation="Genesys WebRTC Build (Single)",
+    status="completed",
+    requested=1,
+    success_count=1,
+    failure_count=0,
+    request=request,
+    region=str(build_result.get("region", clean_region) or clean_region).strip(),
+    details=[
+      f"User: {clean_user_email or clean_user_id or '(unknown)'}",
+      f"Phone: {str(build_result.get('phone_name', '') or '').strip() or '(not returned)'}",
+      f"Create mode: {str(build_result.get('create_mode', '') or '').strip() or '(not returned)'}",
+      f"Association: {str(build_result.get('association_result', '') or '').strip() or '(not returned)'}",
+    ],
+  )
 
   return JSONResponse({
     "ok": True,
@@ -18489,7 +18691,7 @@ def genesys_build_webrtc_route(
 
 
 @app.post("/genesys/users/build-webrtc-batch")
-def genesys_build_webrtc_batch_route(users_json: str = Form("")):
+def genesys_build_webrtc_batch_route(request: Request, users_json: str = Form("")):
   started_at = time.time()
   clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
 
@@ -18635,6 +18837,28 @@ def genesys_build_webrtc_batch_route(users_json: str = Form("")):
     failed_download_url=failed_download_url,
   )
 
+  failure_details = []
+  for row in results:
+    if row.get("ok"):
+      continue
+    user_ref = str(row.get("user_email", "") or row.get("user_id", "") or "unknown").strip()
+    err_text = str(row.get("error", "WebRTC phone build failed.") or "WebRTC phone build failed.").strip()
+    failure_details.append(f"{user_ref}: {err_text}")
+  _genesys_send_update_completion_email(
+    operation="Genesys Bulk WebRTC Build",
+    status=status,
+    requested=requested,
+    success_count=success_count,
+    failure_count=failure_count,
+    request=request,
+    region=region,
+    duration_seconds=duration_seconds,
+    failures=failure_details,
+    details=[f"Workers: {max_workers}"],
+    original_download_url=original_download_url,
+    failed_download_url=failed_download_url,
+  )
+
   return JSONResponse({
     "ok": True,
     "region": region,
@@ -18680,7 +18904,7 @@ def genesys_build_webrtc_emails_route(request: Request, email_list: str = Form("
     return RedirectResponse(url="/genesys-admin", status_code=303)
 
   # Reuse existing batch logic directly (single token, same behavior).
-  batch_resp = genesys_build_webrtc_batch_route(users_json=json.dumps(users))
+  batch_resp = genesys_build_webrtc_batch_route(request=request, users_json=json.dumps(users))
   payload = {}
   try:
     payload = json.loads(batch_resp.body.decode("utf-8")) if getattr(batch_resp, "body", None) else {}
@@ -19184,6 +19408,7 @@ def genesys_division_filters_delete_route(
 
 @app.post("/genesys/users/search-update")
 def genesys_user_search_update_route(
+  request: Request,
   user_email: str = Form(""),
   division_id: str = Form(""),
   skill_ids_json: str = Form("[]"),
@@ -19224,11 +19449,32 @@ def genesys_user_search_update_route(
   if not isinstance(queue_ids, list):
     queue_ids = []
 
+  applied_parts = []
+  if apply_division:
+    applied_parts.append("Division")
+  if apply_skills:
+    applied_parts.append(f"Skills({len(skill_ids)})")
+  if apply_queues:
+    applied_parts.append(f"Queues({len(queue_ids)})")
+  applied_summary = ", ".join(applied_parts) if applied_parts else "(none)"
+
   token_result = _genesys_get_queue_access_token(clean_region)
   if not token_result.get("ok"):
+    err_text = token_result.get("error", "Genesys token request failed.")
+    _genesys_send_update_completion_email(
+      operation="Genesys User Search Update (Single)",
+      status="failed",
+      requested=1,
+      success_count=0,
+      failure_count=1,
+      request=request,
+      region=clean_region,
+      failures=[str(err_text or "Genesys token request failed.")],
+      details=[f"User: {clean_user_email or '(none)'}", f"Applied: {applied_summary}"],
+    )
     return JSONResponse({
       "ok": False,
-      "error": token_result.get("error", "Genesys token request failed."),
+      "error": err_text,
     }, status_code=400)
 
   region = token_result.get("region", clean_region)
@@ -19236,9 +19482,21 @@ def genesys_user_search_update_route(
 
   user_lookup = _genesys_lookup_user_by_email(region, access_token, clean_user_email)
   if not user_lookup.get("ok"):
+    err_text = user_lookup.get("error", "Unable to find user by email.")
+    _genesys_send_update_completion_email(
+      operation="Genesys User Search Update (Single)",
+      status="failed",
+      requested=1,
+      success_count=0,
+      failure_count=1,
+      request=request,
+      region=region,
+      failures=[str(err_text or "Unable to find user by email.")],
+      details=[f"User: {clean_user_email or '(none)'}", f"Applied: {applied_summary}"],
+    )
     return JSONResponse({
       "ok": False,
-      "error": user_lookup.get("error", "Unable to find user by email."),
+      "error": err_text,
     }, status_code=400)
 
   prereq_result = _genesys_ensure_update_webrtc_prerequisite(
@@ -19248,9 +19506,21 @@ def genesys_user_search_update_route(
     clean_user_email,
   )
   if not prereq_result.get("ok"):
+    err_text = prereq_result.get("error", "WebRTC prerequisite auto-heal failed.")
+    _genesys_send_update_completion_email(
+      operation="Genesys User Search Update (Single)",
+      status="failed",
+      requested=1,
+      success_count=0,
+      failure_count=1,
+      request=request,
+      region=region,
+      failures=[str(err_text or "WebRTC prerequisite auto-heal failed.")],
+      details=[f"User: {clean_user_email or '(none)'}", f"Applied: {applied_summary}"],
+    )
     return JSONResponse({
       "ok": False,
-      "error": prereq_result.get("error", "WebRTC prerequisite auto-heal failed."),
+      "error": err_text,
       "webrtc_phone": str(prereq_result.get("webrtc_phone", "") or "").strip(),
       "inventory_phone": str(prereq_result.get("inventory_phone", "") or "").strip(),
       "webrtc_status": str(prereq_result.get("webrtc_status", "") or "").strip(),
@@ -19269,10 +19539,39 @@ def genesys_user_search_update_route(
     update_queues=apply_queues,
   )
   if not apply_result.get("ok"):
+    err_text = apply_result.get("error", "Update failed.")
+    _genesys_send_update_completion_email(
+      operation="Genesys User Search Update (Single)",
+      status="failed",
+      requested=1,
+      success_count=0,
+      failure_count=1,
+      request=request,
+      region=region,
+      failures=[str(err_text or "Update failed.")],
+      details=[f"User: {clean_user_email or '(none)'}", f"Applied: {applied_summary}"],
+    )
     return JSONResponse({
       "ok": False,
-      "error": apply_result.get("error", "Update failed."),
+      "error": err_text,
     }, status_code=400)
+
+  _genesys_send_update_completion_email(
+    operation="Genesys User Search Update (Single)",
+    status="completed",
+    requested=1,
+    success_count=1,
+    failure_count=0,
+    request=request,
+    region=region,
+    details=[
+      f"User: {clean_user_email}",
+      f"Applied: {applied_summary}",
+      f"Division status: {str(apply_result.get('division_status', '') or '').strip() or 'n/a'}",
+      f"Skills status: {str(apply_result.get('skills_status', '') or '').strip() or 'n/a'}",
+      f"Queues status: {str(apply_result.get('queues_status', '') or '').strip() or 'n/a'}",
+    ],
+  )
 
   return JSONResponse({
     "ok": True,
@@ -19328,6 +19627,7 @@ def genesys_user_search_profile_route(user_email: str = Form("")):
 
 @app.post("/genesys/users/search-update-batch")
 def genesys_user_search_update_batch_route(
+  request: Request,
   users_json: str = Form("[]"),
   division_id: str = Form(""),
   skill_ids_json: str = Form("[]"),
@@ -19415,6 +19715,8 @@ def genesys_user_search_update_batch_route(
   active_state = {"current": 0, "max": 0}
   active_state_lock = threading.Lock()
   job_context = {"job_id": ""}
+  notify_session = _get_auth_session(request) or {}
+  notify_operator = str(notify_session.get("username", "") or "").strip() if isinstance(notify_session, dict) else ""
 
   def _run_one(index: int, email: str) -> tuple[int, dict]:
     job_id = str(job_context.get("job_id", "") or "").strip()
@@ -19581,15 +19883,50 @@ def genesys_user_search_update_batch_route(
         "failed_emails_download_url": failed_download_url,
         "results": results,
       })
+
+      failure_details = []
+      for row in results:
+        if row.get("ok"):
+          continue
+        user_ref = str(row.get("user_email", "") or row.get("user_id", "") or "unknown").strip()
+        err_text = str(row.get("error", "Update failed.") or "Update failed.").strip()
+        failure_details.append(f"{user_ref}: {err_text}")
+      _genesys_send_update_completion_email(
+        operation="Genesys User Search Update Batch",
+        status=final_status,
+        requested=requested,
+        success_count=success_count,
+        failure_count=failure_count,
+        operator_username=notify_operator,
+        region=region,
+        duration_seconds=duration_seconds,
+        failures=failure_details,
+        details=[f"Applied: {applied_summary}", f"Workers: {max_workers}"],
+        original_download_url=original_download_url,
+        failed_download_url=failed_download_url,
+      )
     except Exception as exc:
       duration_seconds = max(0.0, time.time() - started_at)
+      error_text = f"Unhandled batch update worker error: {exc}"
       _genesys_update_batch_set_job(job_id, {
         "status": "failed",
-        "error": f"Unhandled batch update worker error: {exc}",
+        "error": error_text,
         "duration_seconds": round(duration_seconds, 2),
         "finished_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
         "finished_epoch": time.time(),
       })
+      _genesys_send_update_completion_email(
+        operation="Genesys User Search Update Batch",
+        status="failed",
+        requested=len(users),
+        success_count=0,
+        failure_count=len(users),
+        operator_username=notify_operator,
+        region=region,
+        duration_seconds=duration_seconds,
+        failures=[error_text],
+        details=[f"Applied: {applied_summary}", f"Workers: {max_workers}"],
+      )
 
   created_epoch = time.time()
   created_label = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
