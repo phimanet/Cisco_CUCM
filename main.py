@@ -720,6 +720,23 @@ def _opentext_get_access_token() -> dict:
   }
 
 
+def _opentext_get_token_claims(access_token: str) -> dict:
+  token = str(access_token or "").strip()
+  if not token or "." not in token:
+    return {}
+  parts = token.split(".")
+  if len(parts) < 2:
+    return {}
+  try:
+    payload_b64 = parts[1]
+    payload_b64 += "=" * ((4 - (len(payload_b64) % 4)) % 4)
+    decoded = base64.urlsafe_b64decode(payload_b64.encode("utf-8")).decode("utf-8")
+    claims = json.loads(decoded)
+    return claims if isinstance(claims, dict) else {}
+  except Exception:
+    return {}
+
+
 def _opentext_get_json(access_token: str, path: str, params: dict | None = None) -> tuple[bool, dict, str, int]:
   clean_path = str(path or "").strip()
   if not clean_path.startswith("/"):
@@ -731,12 +748,40 @@ def _opentext_get_json(access_token: str, path: str, params: dict | None = None)
   }
   try:
     response = requests.get(url, headers=headers, params=params or {}, timeout=OPENTEXT_API_TIMEOUT_SECONDS)
-    payload = response.json() if response.text else {}
   except Exception as exc:
     return False, {}, f"OpenText API request failed for {clean_path}: {exc}", 0
 
+  payload = {}
+  body_text = response.text or ""
+  body_snippet = body_text[:300].replace("\n", " ").replace("\r", " ").strip()
+  content_type = (response.headers.get("content-type", "") or "").lower()
+
+  if body_text:
+    if "application/json" in content_type:
+      try:
+        parsed = response.json()
+        if isinstance(parsed, dict):
+          payload = parsed
+        else:
+          payload = {"data": parsed}
+      except Exception:
+        payload = {"raw": body_snippet}
+    else:
+      try:
+        parsed = response.json()
+        if isinstance(parsed, dict):
+          payload = parsed
+        else:
+          payload = {"data": parsed}
+      except Exception:
+        payload = {"raw": body_snippet}
+
   if response.status_code != 200:
-    message = str(payload.get("message", "") or payload.get("error", "") or payload.get("error_description", "")).strip() or f"HTTP {response.status_code}"
+    message = str(payload.get("message", "") or payload.get("error", "") or payload.get("error_description", "")).strip()
+    if not message:
+      message = f"HTTP {response.status_code}"
+      if body_snippet:
+        message += f" | body: {body_snippet}"
     return False, payload if isinstance(payload, dict) else {}, message, response.status_code
 
   return True, payload if isinstance(payload, dict) else {}, "", response.status_code
@@ -796,6 +841,8 @@ def _opentext_numbers_lookup(number_query: str = "", limit: int = 200) -> dict:
     return {"ok": False, "error": token_result.get("error", "OpenText token request failed.")}
 
   access_token = str(token_result.get("access_token", "") or "").strip()
+  token_claims = _opentext_get_token_claims(access_token)
+  xcan = str(token_claims.get("xcan", "") or "").strip()
   safe_limit = max(1, min(int(limit or 200), max(1, OPENTEXT_MAX_RESULTS)))
   normalized_query = _opentext_normalize_lookup_number(number_query)
   warnings = []
@@ -812,6 +859,13 @@ def _opentext_numbers_lookup(number_query: str = "", limit: int = 200) -> dict:
       {"path": "/numbers/search", "params": {"q": normalized_query, "limit": safe_limit}},
       {"path": "/tns", "params": {"number": normalized_query, "limit": safe_limit}},
     ])
+    if xcan:
+      attempts.extend([
+        {"path": f"/accounts/{xcan}/numbers/{normalized_query}", "params": {}},
+        {"path": f"/accounts/{xcan}/numbers", "params": {"number": normalized_query, "limit": safe_limit}},
+        {"path": f"/accounts/{xcan}/tns", "params": {"number": normalized_query, "limit": safe_limit}},
+        {"path": f"/xcan/{xcan}/numbers", "params": {"number": normalized_query, "limit": safe_limit}},
+      ])
   else:
     attempts.extend([
       {"path": "/numbers", "params": {"limit": safe_limit}},
@@ -819,6 +873,12 @@ def _opentext_numbers_lookup(number_query: str = "", limit: int = 200) -> dict:
       {"path": "/phone-numbers", "params": {"limit": safe_limit}},
       {"path": "/tns", "params": {"limit": safe_limit}},
     ])
+    if xcan:
+      attempts.extend([
+        {"path": f"/accounts/{xcan}/numbers", "params": {"limit": safe_limit}},
+        {"path": f"/accounts/{xcan}/tns", "params": {"limit": safe_limit}},
+        {"path": f"/xcan/{xcan}/numbers", "params": {"limit": safe_limit}},
+      ])
 
   rows = []
   for attempt in attempts:
