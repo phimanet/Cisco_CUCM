@@ -2060,15 +2060,9 @@ def _genesys_extract_webrtc_phone(user_payload: dict, routing_payload: dict, sta
         return text
     return ""
 
-  if isinstance(routing_payload, dict):
-    for key in ["station", "defaultStation", "phone", "defaultPhone"]:
-      label = _station_label(routing_payload.get(key))
-      if label:
-        return label
-
-  # Fall back to user profile station fields.
+  # Strict source: user default phone fields only (not live station fields).
   if isinstance(user_payload, dict):
-    for key in ["station", "defaultStation", "phone", "defaultPhone"]:
+    for key in ["defaultStation", "defaultPhone", "phone"]:
       label = _station_label(user_payload.get(key))
       if label:
         return label
@@ -2100,7 +2094,7 @@ def _genesys_extract_webrtc_phone(user_payload: dict, routing_payload: dict, sta
 def _genesys_user_section_phone(user_payload: dict) -> str:
   """Return only the phone/station value shown in the Genesys User profile section."""
   if isinstance(user_payload, dict):
-    for key in ["station", "defaultStation", "phone", "defaultPhone"]:
+    for key in ["defaultStation", "defaultPhone", "phone"]:
       value = user_payload.get(key)
       if isinstance(value, dict):
         for nested_key in ["name", "stationName", "phoneName", "displayName", "id"]:
@@ -3081,26 +3075,12 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
 
   # Keep both values: strict user-profile phone field and broader associated phone view.
   user_section_webrtc_phone = _genesys_user_section_phone(user_payload if isinstance(user_payload, dict) else {})
-  ok_routing, routing_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}/routingstatus")
   ok_station_assoc, station_assoc_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}/stationassociations")
   associated_webrtc_phone = _genesys_extract_webrtc_phone(
     user_payload if isinstance(user_payload, dict) else {},
-    routing_payload if ok_routing and isinstance(routing_payload, dict) else {},
+    {},
     station_assoc_payload if ok_station_assoc and isinstance(station_assoc_payload, dict) else {},
   )
-
-  if not associated_webrtc_phone:
-    ok_station_direct, station_direct_payload, _ = _genesys_get_json(
-      api_base,
-      access_token,
-      f"/api/v2/users/{clean_user_id}/station",
-    )
-    if ok_station_direct and isinstance(station_direct_payload, dict):
-      associated_webrtc_phone = _genesys_extract_webrtc_phone(
-        user_payload if isinstance(user_payload, dict) else {},
-        {"station": station_direct_payload},
-        {},
-      )
 
   inventory_webrtc_phone = ""
   if not associated_webrtc_phone:
@@ -3136,25 +3116,15 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
             f"/api/v2/users/{clean_user_id}",
           )
 
-        ok_routing_default, routing_payload_default, _ = _genesys_get_json(
-          api_base,
-          default_access_token,
-          f"/api/v2/users/{clean_user_id}/routingstatus",
-        )
         ok_station_default, station_assoc_payload_default, _ = _genesys_get_json(
           api_base,
           default_access_token,
           f"/api/v2/users/{clean_user_id}/stationassociations",
         )
-        ok_station_direct_default, station_direct_payload_default, _ = _genesys_get_json(
-          api_base,
-          default_access_token,
-          f"/api/v2/users/{clean_user_id}/station",
-        )
 
         associated_webrtc_phone_default = _genesys_extract_webrtc_phone(
           user_payload_default if ok_user_default and isinstance(user_payload_default, dict) else {},
-          routing_payload_default if ok_routing_default and isinstance(routing_payload_default, dict) else {},
+          {},
           station_assoc_payload_default if ok_station_default and isinstance(station_assoc_payload_default, dict) else {},
         )
         user_section_webrtc_phone_default = _genesys_user_section_phone(
@@ -3163,12 +3133,6 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
 
         if associated_webrtc_phone_default:
           associated_webrtc_phone = str(associated_webrtc_phone_default or "").strip()
-        elif ok_station_direct_default and isinstance(station_direct_payload_default, dict):
-          associated_webrtc_phone = _genesys_extract_webrtc_phone(
-            user_payload_default if ok_user_default and isinstance(user_payload_default, dict) else {},
-            {"station": station_direct_payload_default},
-            {},
-          )
         if not user_section_webrtc_phone and user_section_webrtc_phone_default:
           user_section_webrtc_phone = str(user_section_webrtc_phone_default or "").strip()
 
