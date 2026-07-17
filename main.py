@@ -3009,13 +3009,13 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
   division_id = str(division_obj.get("id", "") or "").strip()
   division_name = str(division_obj.get("name", "") or "").strip()
 
-  ok_routing, routing_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}/routingstatus")
-  ok_station_assoc, station_assoc_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}/stationassociations")
-  associated_webrtc_phone = _genesys_extract_webrtc_phone(
-    user_payload if ok_user else {},
-    routing_payload if ok_routing else {},
-    station_assoc_payload if ok_station_assoc else {},
-  )
+  # Show only what is set on the user profile section.
+  user_station_obj = user_payload.get("station") if isinstance(user_payload.get("station"), dict) else {}
+  associated_webrtc_phone = str(
+    user_station_obj.get("name", "")
+    or user_station_obj.get("id", "")
+    or ""
+  ).strip()
 
   inventory_webrtc_phone = ""
   if not associated_webrtc_phone:
@@ -13813,13 +13813,10 @@ def genesys_admin_placeholder(request: Request):
 
                   if (profileEl) {
                     const associatedWebrtc = String(payload.webrtc_associated_phone || payload.webrtc_phone || "").trim();
-                    const inventoryWebrtc = String(payload.webrtc_inventory_phone || "").trim();
-                    const inventoryHint = (!associatedWebrtc && inventoryWebrtc) ? (" | Inventory Match=" + esc(inventoryWebrtc)) : "";
                     profileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Profile Division=" + esc(String(payload.division_name || payload.division_id || "(none)"))
                       + " | Skills=" + Number((payload.skill_ids || []).length || 0)
                       + " | Queues=" + Number((payload.queue_ids || []).length || 0)
-                      + " | WebRTC Associated=" + esc(associatedWebrtc || "(none)")
-                      + inventoryHint
+                      + " | User Phone=" + esc(associatedWebrtc || "(none)")
                       + "</strong>";
                   }
                   statusEl.textContent = "Current profile loaded for " + userEmail + ". Select a Division Access target explicitly if you want to grant additional role-based access, then run update.";
@@ -14761,13 +14758,10 @@ def genesys_admin_placeholder(request: Request):
 
             if (updateSingleProfileEl) {
               const associatedWebrtc = String(payload.webrtc_associated_phone || payload.webrtc_phone || "").trim();
-              const inventoryWebrtc = String(payload.webrtc_inventory_phone || "").trim();
-              const inventoryHint = (!associatedWebrtc && inventoryWebrtc) ? (" | Inventory Match=" + _escapeHtml(inventoryWebrtc)) : "";
               updateSingleProfileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Profile Division=" + _escapeHtml(String(payload.division_name || payload.division_id || "(none)"))
                 + " | Skills=" + Number((payload.skill_ids || []).length || 0)
                 + " | Queues=" + Number((payload.queue_ids || []).length || 0)
-                + " | WebRTC Associated=" + _escapeHtml(associatedWebrtc || "(none)")
-                + inventoryHint
+                + " | User Phone=" + _escapeHtml(associatedWebrtc || "(none)")
                 + "</strong>";
             }
 
@@ -14823,13 +14817,7 @@ def genesys_admin_placeholder(request: Request):
                 updateSingleActionsEl.appendChild(button);
               }
             }
-            const hasAssoc = !!String(payload.webrtc_associated_phone || payload.webrtc_phone || "").trim();
-            const hasInventoryOnly = !hasAssoc && !!String(payload.webrtc_inventory_phone || "").trim();
-            if (hasInventoryOnly) {
-              updateStatusEl.textContent = "Current profile loaded for " + userEmail + ". WebRTC inventory exists but is not associated to the user profile. Skills/Queues can still be updated.";
-            } else {
-              updateStatusEl.textContent = "Current profile loaded for " + userEmail + ". Adjust Skills/Queues, and only select Division Access if you want to grant additional role-based access.";
-            }
+            updateStatusEl.textContent = "Current profile loaded for " + userEmail + ". User Phone reflects the value currently shown in the Genesys user profile section. Adjust Skills/Queues as needed.";
           } catch (err) {
             updateStatusEl.textContent = "User lookup failed: " + ((err && err.message) || "Unknown error.");
             if (updateSingleActionsEl) {
