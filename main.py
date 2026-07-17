@@ -13791,6 +13791,10 @@ def genesys_admin_placeholder(request: Request):
 
             <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f8fcff;">
               <h4 style="margin:0 0 8px 0;">Batch Update (same Division/Skills/Queues)</h4>
+              <div class="search-filter-row" style="margin-bottom:6px;">
+                <button type="button" id="genesys-update-load-catalog-btn-batch" style="background:#385977;" onclick="if (window.runGenesysUpdateLoadCatalog) { return window.runGenesysUpdateLoadCatalog(); } var s=document.getElementById('genesys-update-status'); if (s) { s.textContent='Catalog handler missing (JS did not load).'; } return false;">Load Catalog Now</button>
+                <span style="font-size:12px; color:#4e6a84;">Use this first if Division/Skills/Queues are blank.</span>
+              </div>
               <div class="search-filter-row" style="align-items:flex-start;">
                 <textarea id="genesys-update-batch-emails" placeholder="Paste one or more emails (one per line, comma, or space separated)." style="width:100%; min-height:110px; resize:vertical; padding:10px; border-radius:10px; border:1px solid var(--amn-border);"></textarea>
               </div>
@@ -13821,6 +13825,7 @@ def genesys_admin_placeholder(request: Request):
               window._genesysUpdateFallbackBound = true;
 
               const loadBtn = document.getElementById("genesys-update-load-catalog-btn");
+              const loadBtnBatch = document.getElementById("genesys-update-load-catalog-btn-batch");
               const lookupBtn = document.getElementById("genesys-update-single-lookup-btn");
               const updateBtn = document.getElementById("genesys-update-single-btn");
               const statusEl = document.getElementById("genesys-update-status");
@@ -14617,6 +14622,13 @@ def genesys_admin_placeholder(request: Request):
                 });
               }
 
+              if (loadBtnBatch && String(loadBtnBatch.dataset.bound || "") !== "1") {
+                loadBtnBatch.dataset.bound = "1";
+                loadBtnBatch.addEventListener("click", function () {
+                  loadCatalog();
+                });
+              }
+
               if (updateBatchEmailsEl && updateBatchCountEl && String(updateBatchEmailsEl.dataset.bound || "") !== "1") {
                 updateBatchEmailsEl.dataset.bound = "1";
                 updateBatchEmailsEl.addEventListener("input", function () {
@@ -14985,6 +14997,7 @@ def genesys_admin_placeholder(request: Request):
         const queueAddMemberBtn = document.getElementById("genesys-queue-add-member-btn");
         const queueRemoveMemberBtn = document.getElementById("genesys-queue-remove-member-btn");
         const updateLoadCatalogBtn = document.getElementById("genesys-update-load-catalog-btn");
+        const updateLoadCatalogBtnBatch = document.getElementById("genesys-update-load-catalog-btn-batch");
         const updateCatalogCountEl = document.getElementById("genesys-update-catalog-count");
         const updateCatalogDownloadEl = document.getElementById("genesys-update-catalog-download");
         const updateApplyDivisionEl = document.getElementById("genesys-update-apply-division");
@@ -16284,6 +16297,12 @@ def genesys_admin_placeholder(request: Request):
 
         if (updateLoadCatalogBtn) {
           updateLoadCatalogBtn.addEventListener("click", function () {
+            _loadUpdateCatalog();
+          });
+        }
+
+        if (updateLoadCatalogBtnBatch) {
+          updateLoadCatalogBtnBatch.addEventListener("click", function () {
             _loadUpdateCatalog();
           });
         }
