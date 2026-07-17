@@ -2304,6 +2304,121 @@ def _genesys_add_user_to_queue(api_base: str, access_token: str, user_id: str, q
   return False, " | ".join(errors) if errors else "Queue membership update failed."
 
 
+def _genesys_remove_user_from_queue(api_base: str, access_token: str, user_id: str, queue_id: str) -> tuple[bool, str]:
+  clean_user_id = str(user_id or "").strip()
+  clean_queue_id = str(queue_id or "").strip()
+  if not clean_user_id or not clean_queue_id:
+    return False, "User ID and queue ID are required."
+
+  attempts = [
+    ("DELETE", f"/api/v2/users/{clean_user_id}/queues/{clean_queue_id}", None),
+    ("DELETE", f"/api/v2/routing/queues/{clean_queue_id}/members/{clean_user_id}", None),
+    ("DELETE", f"/api/v2/routing/queues/{clean_queue_id}/users/{clean_user_id}", None),
+  ]
+
+  errors = []
+  for method, path, payload in attempts:
+    ok, _, err, _ = _genesys_send_json(method, api_base, access_token, path, payload=payload)
+    if ok:
+      return True, "removed"
+
+    err_text = str(err or "").strip()
+    if err_text:
+      errors.append(f"{path}: {err_text}")
+      lower_err = err_text.lower()
+      if "not found" in lower_err or "does not exist" in lower_err:
+        return True, "not_member"
+
+  return False, " | ".join(errors) if errors else "Queue membership remove failed."
+
+
+def _genesys_get_user_skill_ids(api_base: str, access_token: str, user_id: str) -> tuple[list[str], str]:
+  clean_user_id = str(user_id or "").strip()
+  if not clean_user_id:
+    return [], "User ID is required."
+
+  ok_skills, payload, err_skills = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}/routingskills")
+  if not ok_skills:
+    return [], err_skills
+
+  entities = payload.get("entities", []) if isinstance(payload, dict) else []
+  skill_ids = []
+  for entity in entities:
+    if not isinstance(entity, dict):
+      continue
+    skill_obj = entity.get("skill") if isinstance(entity.get("skill"), dict) else {}
+    routing_skill_obj = entity.get("routingSkill") if isinstance(entity.get("routingSkill"), dict) else {}
+    skill_id = str(
+      entity.get("id", "")
+      or entity.get("routingSkillId", "")
+      or skill_obj.get("id", "")
+      or routing_skill_obj.get("id", "")
+      or ""
+    ).strip()
+    if skill_id:
+      skill_ids.append(skill_id)
+
+  return sorted(set(skill_ids)), ""
+
+
+def _genesys_get_user_queue_ids(api_base: str, access_token: str, user_id: str) -> tuple[list[str], str]:
+  queue_entities, err_queues, _ = _genesys_get_user_queues_paged(api_base, access_token, user_id)
+  if err_queues:
+    return [], err_queues
+
+  queue_ids = []
+  for entity in queue_entities:
+    if not isinstance(entity, dict):
+      continue
+    queue_obj = entity.get("queue") if isinstance(entity.get("queue"), dict) else {}
+    queue_id = str(
+      entity.get("id", "")
+      or entity.get("queueId", "")
+      or queue_obj.get("id", "")
+      or ""
+    ).strip()
+    if queue_id:
+      queue_ids.append(queue_id)
+  return sorted(set(queue_ids)), ""
+
+
+def _genesys_get_user_search_profile(region: str, access_token: str, user_id: str, user_email: str = "") -> dict:
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+  clean_user_id = str(user_id or "").strip()
+  if not clean_user_id:
+    return {"ok": False, "error": "User ID is required."}
+
+  ok_user, user_payload, err_user = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}")
+  if not ok_user:
+    return {"ok": False, "error": f"User profile lookup failed: {err_user}"}
+
+  user_name = str(user_payload.get("name", "") or "").strip()
+  email = str(user_payload.get("email", "") or user_email or "").strip().lower()
+  division_obj = user_payload.get("division") if isinstance(user_payload.get("division"), dict) else {}
+  division_id = str(division_obj.get("id", "") or "").strip()
+  division_name = str(division_obj.get("name", "") or "").strip()
+
+  skill_ids, skills_err = _genesys_get_user_skill_ids(api_base, access_token, clean_user_id)
+  if skills_err:
+    return {"ok": False, "error": f"Skill lookup failed: {skills_err}"}
+
+  queue_ids, queues_err = _genesys_get_user_queue_ids(api_base, access_token, clean_user_id)
+  if queues_err:
+    return {"ok": False, "error": f"Queue lookup failed: {queues_err}"}
+
+  return {
+    "ok": True,
+    "region": clean_region,
+    "user_id": clean_user_id,
+    "user_name": user_name,
+    "user_email": email,
+    "division_id": division_id,
+    "division_name": division_name,
+    "skill_ids": skill_ids,
+    "queue_ids": queue_ids,
+  }
+
+
 def _genesys_apply_user_search_update(
   region: str,
   access_token: str,
@@ -2311,6 +2426,9 @@ def _genesys_apply_user_search_update(
   division_id: str,
   skill_ids: list[str],
   queue_ids: list[str],
+  update_division: bool = True,
+  update_skills: bool = True,
+  update_queues: bool = True,
 ) -> dict:
   clean_region, _, api_base = _genesys_region_to_urls(region)
   clean_user_id = str(user_id or "").strip()
@@ -2325,7 +2443,9 @@ def _genesys_apply_user_search_update(
   skills_status = "skipped"
   queues_status = "skipped"
 
-  if clean_division_id:
+  if update_division:
+    if not clean_division_id:
+      return {"ok": False, "error": "Division update requested but no division_id provided."}
     ok_division, _, division_err, _ = _genesys_send_json(
       "PATCH",
       api_base,
@@ -2338,7 +2458,7 @@ def _genesys_apply_user_search_update(
     else:
       return {"ok": False, "error": f"Division update failed: {division_err}"}
 
-  if clean_skill_ids:
+  if update_skills:
     entities_a = [{"id": skill_id, "proficiency": 5} for skill_id in clean_skill_ids]
     entities_b = [{"routingSkill": {"id": skill_id}, "proficiency": 5} for skill_id in clean_skill_ids]
     skill_attempts = [
@@ -2357,27 +2477,47 @@ def _genesys_apply_user_search_update(
       skill_errors.append(f"{path}: {skills_err}")
 
     if skill_ok:
-      skills_status = "updated"
+      skills_status = f"updated (count={len(clean_skill_ids)})"
     else:
       return {"ok": False, "error": "Skills update failed: " + (" | ".join(skill_errors) if skill_errors else "unknown")}
 
-  if clean_queue_ids:
+  if update_queues:
+    current_queue_ids, current_queue_err = _genesys_get_user_queue_ids(api_base, access_token, clean_user_id)
+    if current_queue_err:
+      return {"ok": False, "error": f"Queue current-state lookup failed: {current_queue_err}"}
+
+    desired_queue_ids = sorted(set(clean_queue_ids))
+    current_set = set(current_queue_ids)
+    desired_set = set(desired_queue_ids)
+    queue_to_add = sorted(desired_set - current_set)
+    queue_to_remove = sorted(current_set - desired_set)
+
     queue_errors = []
-    queue_success_count = 0
+    queue_add_count = 0
     queue_existing_count = 0
-    for queue_id in clean_queue_ids:
+    queue_remove_count = 0
+
+    for queue_id in queue_to_add:
       ok_queue, queue_state = _genesys_add_user_to_queue(api_base, access_token, clean_user_id, queue_id)
       if ok_queue:
         if queue_state == "already_member":
           queue_existing_count += 1
         else:
-          queue_success_count += 1
+          queue_add_count += 1
+      else:
+        queue_errors.append(str(queue_state or "unknown error"))
+
+    for queue_id in queue_to_remove:
+      ok_queue, queue_state = _genesys_remove_user_from_queue(api_base, access_token, clean_user_id, queue_id)
+      if ok_queue:
+        if queue_state == "removed":
+          queue_remove_count += 1
       else:
         queue_errors.append(str(queue_state or "unknown error"))
 
     if queue_errors:
       return {"ok": False, "error": "Queue update failed: " + " | ".join(queue_errors)}
-    queues_status = f"updated (added={queue_success_count}, already={queue_existing_count})"
+    queues_status = f"updated (added={queue_add_count}, removed={queue_remove_count}, already={queue_existing_count}, target={len(desired_queue_ids)})"
 
   return {
     "ok": True,
@@ -12373,14 +12513,17 @@ def genesys_admin_placeholder(request: Request):
             <div class="search-filter-row" style="align-items:flex-start;">
               <div style="min-width:260px; max-width:340px; flex:1 1 280px;">
                 <label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Division (single)</label>
+                <label style="display:block; font-size:12px; color:#4e6a84; margin-bottom:4px;"><input type="checkbox" id="genesys-update-apply-division" checked> Apply Division</label>
                 <select id="genesys-update-division-select" size="8" style="width:100%; min-height:220px;"></select>
               </div>
               <div style="min-width:260px; max-width:340px; flex:1 1 280px;">
                 <label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Skills (multiple)</label>
+                <label style="display:block; font-size:12px; color:#4e6a84; margin-bottom:4px;"><input type="checkbox" id="genesys-update-apply-skills" checked> Apply Skills (replace selected set)</label>
                 <select id="genesys-update-skills-select" multiple size="8" style="width:100%; min-height:220px;"></select>
               </div>
               <div style="min-width:260px; max-width:340px; flex:1 1 280px;">
                 <label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Queues (multiple)</label>
+                <label style="display:block; font-size:12px; color:#4e6a84; margin-bottom:4px;"><input type="checkbox" id="genesys-update-apply-queues" checked> Apply Queues (replace selected set)</label>
                 <select id="genesys-update-queues-select" multiple size="8" style="width:100%; min-height:220px;"></select>
               </div>
             </div>
@@ -12389,8 +12532,10 @@ def genesys_admin_placeholder(request: Request):
               <h4 style="margin:0 0 8px 0;">Single User Proof</h4>
               <div class="search-filter-row">
                 <input id="genesys-update-single-email" placeholder="User email (e.g. jane.doe@amnhealthcare.com)" style="width:360px;" />
+                <button type="button" id="genesys-update-single-lookup-btn" style="background:#385977;">Lookup User</button>
                 <button type="button" id="genesys-update-single-btn" style="background:#2d7a43;">Update 1 User</button>
               </div>
+              <div id="genesys-update-single-profile" style="font-size:12px; color:#4e6a84; margin-top:6px;">No user loaded.</div>
             </div>
 
             <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f8fcff;">
@@ -12454,11 +12599,16 @@ def genesys_admin_placeholder(request: Request):
         const updateLoadCatalogBtn = document.getElementById("genesys-update-load-catalog-btn");
         const updateCatalogCountEl = document.getElementById("genesys-update-catalog-count");
         const updateCatalogDownloadEl = document.getElementById("genesys-update-catalog-download");
+        const updateApplyDivisionEl = document.getElementById("genesys-update-apply-division");
+        const updateApplySkillsEl = document.getElementById("genesys-update-apply-skills");
+        const updateApplyQueuesEl = document.getElementById("genesys-update-apply-queues");
         const updateDivisionSelect = document.getElementById("genesys-update-division-select");
         const updateSkillsSelect = document.getElementById("genesys-update-skills-select");
         const updateQueuesSelect = document.getElementById("genesys-update-queues-select");
         const updateSingleEmailEl = document.getElementById("genesys-update-single-email");
+        const updateSingleLookupBtn = document.getElementById("genesys-update-single-lookup-btn");
         const updateSingleBtn = document.getElementById("genesys-update-single-btn");
+        const updateSingleProfileEl = document.getElementById("genesys-update-single-profile");
         const updateBatchEmailsEl = document.getElementById("genesys-update-batch-emails");
         const updateBatchBtn = document.getElementById("genesys-update-batch-btn");
         const updateBatchCountEl = document.getElementById("genesys-update-batch-count");
@@ -12578,6 +12728,17 @@ def genesys_admin_placeholder(request: Request):
           });
         }
 
+        function _setSelectedOptions(selectEl, ids) {
+          if (!selectEl) {
+            return;
+          }
+          const wanted = new Set((Array.isArray(ids) ? ids : []).map(function (item) { return String(item || "").trim(); }));
+          Array.from(selectEl.options || []).forEach(function (opt) {
+            const value = String((opt && opt.value) || "").trim();
+            opt.selected = wanted.has(value);
+          });
+        }
+
         async function _loadUpdateCatalog() {
           if (!updateStatusEl) {
             return;
@@ -12638,6 +12799,61 @@ def genesys_admin_placeholder(request: Request):
           }
         }
 
+        async function _lookupSingleUserProfile() {
+          if (!updateStatusEl) {
+            return;
+          }
+          if (!updateCatalogLoaded) {
+            updateStatusEl.textContent = "Load catalog first.";
+            return;
+          }
+
+          const userEmail = String((updateSingleEmailEl && updateSingleEmailEl.value) || "").trim().toLowerCase();
+          if (!userEmail || userEmail.indexOf("@") < 0) {
+            updateStatusEl.textContent = "Enter a valid user email first.";
+            return;
+          }
+
+          const originalText = updateSingleLookupBtn ? updateSingleLookupBtn.textContent : "";
+          if (updateSingleLookupBtn) {
+            updateSingleLookupBtn.disabled = true;
+            updateSingleLookupBtn.textContent = "Looking...";
+          }
+
+          updateStatusEl.textContent = "Looking up current profile for " + userEmail + "...";
+          try {
+            const formData = new FormData();
+            formData.append("user_email", userEmail);
+
+            const response = await fetch("/genesys/users/search-profile", {
+              method: "POST",
+              body: formData,
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "User lookup failed.");
+            }
+
+            _setSelectedOptions(updateDivisionSelect, payload.division_id ? [payload.division_id] : []);
+            _setSelectedOptions(updateSkillsSelect, Array.isArray(payload.skill_ids) ? payload.skill_ids : []);
+            _setSelectedOptions(updateQueuesSelect, Array.isArray(payload.queue_ids) ? payload.queue_ids : []);
+
+            if (updateSingleProfileEl) {
+              updateSingleProfileEl.innerHTML = "Current profile loaded: Division=" + _escapeHtml(String(payload.division_name || payload.division_id || "(none)"))
+                + " | Skills=" + Number((payload.skill_ids || []).length || 0)
+                + " | Queues=" + Number((payload.queue_ids || []).length || 0);
+            }
+            updateStatusEl.textContent = "Current profile loaded for " + userEmail + ". Adjust selections, then run update.";
+          } catch (err) {
+            updateStatusEl.textContent = "User lookup failed: " + ((err && err.message) || "Unknown error.");
+          } finally {
+            if (updateSingleLookupBtn) {
+              updateSingleLookupBtn.disabled = false;
+              updateSingleLookupBtn.textContent = originalText || "Lookup User";
+            }
+          }
+        }
+
         async function _runSingleUserUpdate() {
           if (!updateStatusEl) {
             return;
@@ -12651,13 +12867,20 @@ def genesys_admin_placeholder(request: Request):
           const divisionIds = _selectedValues(updateDivisionSelect);
           const skillIds = _selectedValues(updateSkillsSelect);
           const queueIds = _selectedValues(updateQueuesSelect);
+          const applyDivision = Boolean(updateApplyDivisionEl && updateApplyDivisionEl.checked);
+          const applySkills = Boolean(updateApplySkillsEl && updateApplySkillsEl.checked);
+          const applyQueues = Boolean(updateApplyQueuesEl && updateApplyQueuesEl.checked);
 
           if (!userEmail || userEmail.indexOf("@") < 0) {
             updateStatusEl.textContent = "Enter a valid user email for single-user proof.";
             return;
           }
-          if (!divisionIds.length) {
-            updateStatusEl.textContent = "Select one Division.";
+          if (!applyDivision && !applySkills && !applyQueues) {
+            updateStatusEl.textContent = "Choose at least one field to update (Division, Skills, or Queues).";
+            return;
+          }
+          if (applyDivision && !divisionIds.length) {
+            updateStatusEl.textContent = "Division update is checked; select one Division.";
             return;
           }
 
@@ -12676,7 +12899,10 @@ def genesys_admin_placeholder(request: Request):
           try {
             const formData = new FormData();
             formData.append("user_email", userEmail);
-            formData.append("division_id", divisionIds[0]);
+            formData.append("update_division", applyDivision ? "true" : "false");
+            formData.append("update_skills", applySkills ? "true" : "false");
+            formData.append("update_queues", applyQueues ? "true" : "false");
+            formData.append("division_id", applyDivision ? (divisionIds[0] || "") : "");
             formData.append("skill_ids_json", JSON.stringify(skillIds));
             formData.append("queue_ids_json", JSON.stringify(queueIds));
 
@@ -12721,13 +12947,20 @@ def genesys_admin_placeholder(request: Request):
           const divisionIds = _selectedValues(updateDivisionSelect);
           const skillIds = _selectedValues(updateSkillsSelect);
           const queueIds = _selectedValues(updateQueuesSelect);
+          const applyDivision = Boolean(updateApplyDivisionEl && updateApplyDivisionEl.checked);
+          const applySkills = Boolean(updateApplySkillsEl && updateApplySkillsEl.checked);
+          const applyQueues = Boolean(updateApplyQueuesEl && updateApplyQueuesEl.checked);
 
           if (!emails.length) {
             updateStatusEl.textContent = "Paste at least one valid email for batch update.";
             return;
           }
-          if (!divisionIds.length) {
-            updateStatusEl.textContent = "Select one Division.";
+          if (!applyDivision && !applySkills && !applyQueues) {
+            updateStatusEl.textContent = "Choose at least one field to update (Division, Skills, or Queues).";
+            return;
+          }
+          if (applyDivision && !divisionIds.length) {
+            updateStatusEl.textContent = "Division update is checked; select one Division.";
             return;
           }
 
@@ -12746,7 +12979,10 @@ def genesys_admin_placeholder(request: Request):
           try {
             const formData = new FormData();
             formData.append("users_json", JSON.stringify(emails.map(function (email) { return { user_email: email }; })));
-            formData.append("division_id", divisionIds[0]);
+            formData.append("update_division", applyDivision ? "true" : "false");
+            formData.append("update_skills", applySkills ? "true" : "false");
+            formData.append("update_queues", applyQueues ? "true" : "false");
+            formData.append("division_id", applyDivision ? (divisionIds[0] || "") : "");
             formData.append("skill_ids_json", JSON.stringify(skillIds));
             formData.append("queue_ids_json", JSON.stringify(queueIds));
 
@@ -13092,6 +13328,12 @@ def genesys_admin_placeholder(request: Request):
         if (updateLoadCatalogBtn) {
           updateLoadCatalogBtn.addEventListener("click", function () {
             _loadUpdateCatalog();
+          });
+        }
+
+        if (updateSingleLookupBtn) {
+          updateSingleLookupBtn.addEventListener("click", function () {
+            _lookupSingleUserProfile();
           });
         }
 
@@ -14492,15 +14734,29 @@ def genesys_user_search_update_route(
   division_id: str = Form(""),
   skill_ids_json: str = Form("[]"),
   queue_ids_json: str = Form("[]"),
+  update_division: str = Form("true"),
+  update_skills: str = Form("true"),
+  update_queues: str = Form("true"),
 ):
+  def _to_bool(value: str, default: bool = False) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+      return default
+    return text in {"1", "true", "yes", "on"}
+
   clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
   clean_user_email = str(user_email or "").strip().lower()
   clean_division_id = str(division_id or "").strip()
+  apply_division = _to_bool(update_division, True)
+  apply_skills = _to_bool(update_skills, True)
+  apply_queues = _to_bool(update_queues, True)
 
   if not clean_user_email or "@" not in clean_user_email:
     return JSONResponse({"ok": False, "error": "A valid user email is required."}, status_code=400)
-  if not clean_division_id:
-    return JSONResponse({"ok": False, "error": "Division selection is required."}, status_code=400)
+  if not apply_division and not apply_skills and not apply_queues:
+    return JSONResponse({"ok": False, "error": "At least one field update must be selected."}, status_code=400)
+  if apply_division and not clean_division_id:
+    return JSONResponse({"ok": False, "error": "Division update selected but no division_id provided."}, status_code=400)
 
   try:
     skill_ids = json.loads(skill_ids_json or "[]")
@@ -14540,6 +14796,9 @@ def genesys_user_search_update_route(
     clean_division_id,
     skill_ids,
     queue_ids,
+    update_division=apply_division,
+    update_skills=apply_skills,
+    update_queues=apply_queues,
   )
   if not apply_result.get("ok"):
     return JSONResponse({
@@ -14558,17 +14817,66 @@ def genesys_user_search_update_route(
   })
 
 
+@app.post("/genesys/users/search-profile")
+def genesys_user_search_profile_route(user_email: str = Form("")):
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  clean_user_email = str(user_email or "").strip().lower()
+  if not clean_user_email or "@" not in clean_user_email:
+    return JSONResponse({"ok": False, "error": "A valid user email is required."}, status_code=400)
+
+  token_result = _genesys_get_queue_access_token(clean_region)
+  if not token_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": token_result.get("error", "Genesys token request failed."),
+    }, status_code=400)
+
+  region = token_result.get("region", clean_region)
+  access_token = token_result.get("access_token", "")
+  user_lookup = _genesys_lookup_user_by_email(region, access_token, clean_user_email)
+  if not user_lookup.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": user_lookup.get("error", "Unable to find user by email."),
+    }, status_code=400)
+
+  profile_result = _genesys_get_user_search_profile(
+    region,
+    access_token,
+    user_lookup.get("user_id", ""),
+    clean_user_email,
+  )
+  if not profile_result.get("ok"):
+    return JSONResponse({"ok": False, "error": profile_result.get("error", "Profile lookup failed.")}, status_code=400)
+
+  return JSONResponse(profile_result)
+
+
 @app.post("/genesys/users/search-update-batch")
 def genesys_user_search_update_batch_route(
   users_json: str = Form("[]"),
   division_id: str = Form(""),
   skill_ids_json: str = Form("[]"),
   queue_ids_json: str = Form("[]"),
+  update_division: str = Form("true"),
+  update_skills: str = Form("true"),
+  update_queues: str = Form("true"),
 ):
+  def _to_bool(value: str, default: bool = False) -> bool:
+    text = str(value or "").strip().lower()
+    if not text:
+      return default
+    return text in {"1", "true", "yes", "on"}
+
   clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
   clean_division_id = str(division_id or "").strip()
-  if not clean_division_id:
-    return JSONResponse({"ok": False, "error": "Division selection is required."}, status_code=400)
+  apply_division = _to_bool(update_division, True)
+  apply_skills = _to_bool(update_skills, True)
+  apply_queues = _to_bool(update_queues, True)
+  if not apply_division and not apply_skills and not apply_queues:
+    return JSONResponse({"ok": False, "error": "At least one field update must be selected."}, status_code=400)
+  if apply_division and not clean_division_id:
+    return JSONResponse({"ok": False, "error": "Division update selected but no division_id provided."}, status_code=400)
 
   try:
     parsed_users = json.loads(users_json or "[]")
@@ -14634,6 +14942,9 @@ def genesys_user_search_update_batch_route(
         clean_division_id,
         skill_ids,
         queue_ids,
+        update_division=apply_division,
+        update_skills=apply_skills,
+        update_queues=apply_queues,
       )
       if not apply_result.get("ok"):
         return index, {"ok": False, "user_email": email, "error": apply_result.get("error", "Update failed.")}
