@@ -13119,8 +13119,17 @@ def home(request: Request):
 @app.get("/genesys-admin", response_class=HTMLResponse)
 def genesys_admin_placeholder(request: Request):
   session = _get_auth_session(request) or {}
+  now_epoch = time.time()
   auth_cucm_host = str(session.get("cucm_host", "") or "").strip()
   auth_user = str(session.get("username", "") or "").strip()
+  has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
+  if not has_cached_cucm_pass:
+    _genesys_sid = request.cookies.get(SESSION_COOKIE_NAME, "")
+    if _genesys_sid:
+      has_cached_cucm_pass = bool((AUTH_SESSION_SECRETS.get(_genesys_sid, {}).get("cucm_pass", "") or "").strip())
+  credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
+  credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
+  env_text, env_css_class = _get_environment_label(auth_cucm_host)
   html = """
 <html>
   <head>
@@ -13159,55 +13168,102 @@ def genesys_admin_placeholder(request: Request):
         gap: 12px;
       }
 
-      .topbar-btn {
-        display: inline-block;
-        padding: 7px 12px;
+      .brand-fallback {
+        font-size: 12px;
+        font-weight: 900;
+        letter-spacing: 0.9px;
+      }
+
+      .topbar-status {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        flex: 1;
+        min-width: 0;
+      }
+
+      .topbar-auth-pill,
+      .env-banner,
+      .session-timer {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 6px 10px;
         border-radius: 10px;
         font-size: 12px;
         font-weight: 700;
-        text-decoration: none;
-        border: 1px solid rgba(255, 255, 255, 0.65);
+        border: 1px solid rgba(255, 255, 255, 0.35);
         color: #fff;
+        background: rgba(255, 255, 255, 0.08);
+      }
+
+      .env-banner.env-banner-prod {
+        background: rgba(11, 98, 180, 0.45);
+      }
+
+      .env-banner.env-banner-lab {
+        color: #ffd39a;
+        background: rgba(153, 74, 0, 0.45);
+        border-color: rgba(255, 211, 154, 0.45);
+      }
+
+      .session-timer {
+        display: none;
+      }
+
+      .session-timer .timer-label {
+        opacity: 0.9;
+      }
+
+      .session-timer .timer-value {
+        font-weight: 900;
+        letter-spacing: 0.3px;
+      }
+
+      .topbar-actions {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .topbar-btn {
+        display: inline-block;
+        padding: 7px 14px;
+        border-radius: 10px;
+        font-size: 12px;
+        font-weight: 800;
+        text-decoration: none;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        color: #fff;
+        white-space: nowrap;
+      }
+
+      .topbar-btn.topbar-btn-login {
+        background: linear-gradient(180deg, #1b79d6, #0b61b4);
+      }
+
+      .topbar-btn.topbar-btn-logout {
+        background: linear-gradient(180deg, #cb4022, #a12f19);
       }
 
       .content {
         max-width: 1400px;
-        margin: 8px auto 14px auto;
-        padding: 0 12px 12px 12px;
-      }
-
-      .page-hero {
-        padding: 12px 14px;
-        margin-bottom: 10px;
-        border-radius: 12px;
-        background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95));
-        border: 1px solid rgba(0, 47, 108, 0.1);
-        box-shadow: var(--amn-shadow);
-      }
-
-      .page-title {
-        margin: 0;
-        color: var(--amn-navy);
-        font-size: 22px;
-      }
-
-      .page-subtitle {
-        margin: 6px 0 0 0;
-        color: var(--amn-text-soft);
-        font-size: 13px;
+        margin: 6px auto 10px auto;
+        padding: 0 10px 10px 10px;
       }
 
       .portal-shell {
         display: grid;
         grid-template-columns: 244px minmax(0, 1fr);
-        gap: 10px;
+        gap: 8px;
         align-items: start;
-        margin-top: 8px;
+        margin-top: 4px;
       }
 
       .portal-sidebar {
         position: sticky;
-        top: 54px;
+        top: 50px;
         background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
         border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 12px;
@@ -13243,7 +13299,7 @@ def genesys_admin_placeholder(request: Request):
         background: #fff;
         border: 1px solid var(--amn-border);
         border-radius: 12px;
-        padding: 14px;
+        padding: 12px;
         box-shadow: var(--amn-shadow);
       }
 
@@ -13252,7 +13308,7 @@ def genesys_admin_placeholder(request: Request):
         gap: 8px;
         align-items: center;
         flex-wrap: wrap;
-        margin-bottom: 8px;
+        margin-bottom: 6px;
       }
 
       input,
@@ -13294,35 +13350,55 @@ def genesys_admin_placeholder(request: Request):
         background: #005eb8;
         color: #fff;
       }
+
+      @media (max-width: 1200px) {
+        .topbar {
+          flex-wrap: wrap;
+          row-gap: 8px;
+        }
+
+        .topbar-status {
+          order: 3;
+          width: 100%;
+          justify-content: flex-start;
+          flex-wrap: wrap;
+        }
+      }
     </style>
   </head>
   <body>
     <header class="topbar">
       <div class="topbar-brand">
+        <span class="brand-fallback">AMN HEALTHCARE</span>
         <strong>Voice Operations Portal</strong>
+        <strong>Genesys Admin</strong>
       </div>
-      <div>
-        <a class="topbar-btn" href="/">Back to Login</a>
+      <div class="topbar-status">
+        <span class="topbar-auth-pill">Authenticated Operator: __AUTH_USER__</span>
+        <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
+        <div id="session-timer-banner" class="session-timer" aria-live="polite">
+          <span class="timer-label">Auto logout in:</span>
+          <span id="session-timer-remaining" class="timer-value"></span>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <a class="topbar-btn topbar-btn-login" href="/">Log In</a>
+        <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
       </div>
     </header>
 
     <main class="content">
-      <section class="page-hero">
-        <h2 class="page-title">Genesys Admin</h2>
-        <p class="page-subtitle">Starter workflow: extract Genesys Cloud users by last name/first name or username.</p>
-      </section>
-
       <div class="portal-shell">
         <aside class="portal-sidebar">
           <h4>Genesys Menu</h4>
-          <button type="button" class="portal-nav-btn active" data-panel-target="genesys-user-panel" onclick="(function(){var id='genesys-user-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User WebRTC Lookup</button>
+          <button type="button" class="portal-nav-btn active" data-panel-target="genesys-user-update-panel" onclick="(function(){var id='genesys-user-update-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Search and Update</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-panel" onclick="(function(){var id='genesys-user-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User WebRTC Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-bulk-email-panel" onclick="(function(){var id='genesys-bulk-email-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Bulk WebRTC build</button>
-          <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-update-panel" onclick="(function(){var id='genesys-user-update-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Search and Update</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel" onclick="(function(){var id='genesys-queue-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Info</button>
         </aside>
 
         <section class="portal-main">
-          <div id="genesys-user-panel" class="panel genesys-panel">
+          <div id="genesys-user-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Genesys User WebRTC Lookup</h3>
 
             <form id="genesys-user-search-form">
@@ -13639,7 +13715,7 @@ def genesys_admin_placeholder(request: Request):
             })();
           </script>
 
-          <div id="genesys-user-update-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
+          <div id="genesys-user-update-panel" class="panel genesys-panel" style="display:block; margin-top:0;">
             <h3 style="margin-top:0;">Genesys User Search and Update</h3>
 
             <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f4f9ff;">
@@ -14798,10 +14874,45 @@ def genesys_admin_placeholder(request: Request):
         const updateFilterSaveBtn = document.getElementById("genesys-update-filter-save-btn");
         const updateFilterDeleteBtn = document.getElementById("genesys-update-filter-delete-btn");
         const updateFilterNameEl = document.getElementById("genesys-update-filter-name");
+        const hasCachedCucmPassword = __HAS_CACHED_CUCM_PASS__;
+        const credentialExpiresAtMs = __CREDENTIAL_EXPIRES_AT_MS__;
+        const sessionTimerBanner = document.getElementById("session-timer-banner");
+        const sessionTimerRemaining = document.getElementById("session-timer-remaining");
         let lastUserRows = [];
         let updateCatalogLoaded = false;
         let updateCatalogCache = { divisions: [], skills: [], queues: [] };
         let divisionFilterMap = {};
+
+        function formatTimerValue(totalSeconds) {
+          const safe = Math.max(0, Math.floor(totalSeconds));
+          const hours = Math.floor(safe / 3600);
+          const minutes = Math.floor((safe % 3600) / 60);
+          const seconds = safe % 60;
+          return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+        }
+
+        function startCredentialTimer() {
+          if (!hasCachedCucmPassword || !sessionTimerBanner || !sessionTimerRemaining || !credentialExpiresAtMs) {
+            return;
+          }
+
+          sessionTimerBanner.style.display = "inline-flex";
+
+          const updateTimer = () => {
+            const remainingMs = credentialExpiresAtMs - Date.now();
+            if (remainingMs <= 0) {
+              sessionTimerRemaining.textContent = "Expired";
+              window.location.href = "/logout";
+              return;
+            }
+            sessionTimerRemaining.textContent = formatTimerValue(remainingMs / 1000);
+          };
+
+          updateTimer();
+          window.setInterval(updateTimer, 1000);
+        }
+
+        startCredentialTimer();
 
         function _escapeHtml(value) {
           return String(value || "")
@@ -15808,7 +15919,7 @@ def genesys_admin_placeholder(request: Request):
             });
           });
 
-          showPanel("genesys-user-panel");
+          showPanel("genesys-user-update-panel");
         }
 
         if (bulkEmailForm && bulkEmailStatusEl) {
@@ -16852,6 +16963,10 @@ def genesys_admin_placeholder(request: Request):
 """
   html = html.replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host))
   html = html.replace("__AUTH_USER__", escape(auth_user))
+  html = html.replace("__ENV_TEXT__", escape(env_text))
+  html = html.replace("__ENV_CLASS__", env_css_class)
+  html = html.replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false")
+  html = html.replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms))
   return HTMLResponse(html)
 
 
