@@ -470,6 +470,27 @@ GENESYS_BULK_HISTORY_PATH = os.path.join(
   "genesys_bulk_history.csv",
 )
 GENESYS_BULK_HISTORY_MAX_ROWS = int((os.getenv("GENESYS_BULK_HISTORY_MAX_ROWS", "200") or "200").strip())
+GENESYS_UPDATE_BATCH_HISTORY_LOCK = threading.Lock()
+GENESYS_UPDATE_BATCH_HISTORY_FIELDS = [
+  "timestamp",
+  "status",
+  "requested",
+  "success_count",
+  "failure_count",
+  "workers",
+  "duration_seconds",
+  "applied_summary",
+  "original_emails",
+  "failed_emails",
+  "original_download_url",
+  "failed_download_url",
+]
+GENESYS_UPDATE_BATCH_HISTORY_PATH = os.path.join(
+  os.path.dirname(os.path.abspath(__file__)),
+  "logs",
+  "genesys_user_update_batch_history.csv",
+)
+GENESYS_UPDATE_BATCH_HISTORY_MAX_ROWS = int((os.getenv("GENESYS_UPDATE_BATCH_HISTORY_MAX_ROWS", "200") or "200").strip())
 STRIKE_MASK_HISTORY_LOCK = threading.Lock()
 STRIKE_MASK_HISTORY_FIELDS = [
   "timestamp",
@@ -6693,6 +6714,80 @@ def _read_genesys_bulk_history(limit: int = 20) -> list[dict]:
   return rows
 
 
+def _ensure_genesys_update_batch_history_log():
+  os.makedirs(os.path.dirname(GENESYS_UPDATE_BATCH_HISTORY_PATH), exist_ok=True)
+  if os.path.exists(GENESYS_UPDATE_BATCH_HISTORY_PATH):
+    return
+
+  with open(GENESYS_UPDATE_BATCH_HISTORY_PATH, "w", newline="", encoding="utf-8") as handle:
+    writer = csv.writer(handle)
+    writer.writerow(GENESYS_UPDATE_BATCH_HISTORY_FIELDS)
+
+
+def _prune_genesys_update_batch_history_locked():
+  _ensure_genesys_update_batch_history_log()
+  with open(GENESYS_UPDATE_BATCH_HISTORY_PATH, "r", newline="", encoding="utf-8") as handle:
+    rows = list(csv.DictReader(handle))
+
+  if len(rows) <= GENESYS_UPDATE_BATCH_HISTORY_MAX_ROWS:
+    return
+
+  kept_rows = rows[-GENESYS_UPDATE_BATCH_HISTORY_MAX_ROWS:]
+  with open(GENESYS_UPDATE_BATCH_HISTORY_PATH, "w", newline="", encoding="utf-8") as handle:
+    writer = csv.DictWriter(handle, fieldnames=GENESYS_UPDATE_BATCH_HISTORY_FIELDS)
+    writer.writeheader()
+    for row in kept_rows:
+      writer.writerow({field: row.get(field, "") for field in GENESYS_UPDATE_BATCH_HISTORY_FIELDS})
+
+
+def _append_genesys_update_batch_history_event(
+  status: str,
+  requested: int,
+  success_count: int,
+  failure_count: int,
+  workers: int,
+  duration_seconds: float,
+  applied_summary: str,
+  original_emails: list[str],
+  failed_emails: list[str],
+  original_download_url: str,
+  failed_download_url: str,
+):
+  row = [
+    _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+    str(status or "").strip(),
+    str(int(requested or 0)),
+    str(int(success_count or 0)),
+    str(int(failure_count or 0)),
+    str(int(workers or 0)),
+    f"{float(duration_seconds or 0):.2f}",
+    str(applied_summary or "").strip(),
+    "\n".join([str(item or "").strip() for item in (original_emails or []) if str(item or "").strip()]),
+    "\n".join([str(item or "").strip() for item in (failed_emails or []) if str(item or "").strip()]),
+    str(original_download_url or "").strip(),
+    str(failed_download_url or "").strip(),
+  ]
+
+  with GENESYS_UPDATE_BATCH_HISTORY_LOCK:
+    _ensure_genesys_update_batch_history_log()
+    _prune_genesys_update_batch_history_locked()
+    with open(GENESYS_UPDATE_BATCH_HISTORY_PATH, "a", newline="", encoding="utf-8") as handle:
+      writer = csv.writer(handle)
+      writer.writerow(row)
+
+
+def _read_genesys_update_batch_history(limit: int = 20) -> list[dict]:
+  clean_limit = max(1, min(int(limit or 20), 100))
+  with GENESYS_UPDATE_BATCH_HISTORY_LOCK:
+    _ensure_genesys_update_batch_history_log()
+    with open(GENESYS_UPDATE_BATCH_HISTORY_PATH, "r", newline="", encoding="utf-8") as handle:
+      rows = list(csv.DictReader(handle))
+
+  rows = rows[-clean_limit:]
+  rows.reverse()
+  return rows
+
+
 # ---------------------------------------------------------------------------
 # Separation SMS Report - scheduled email for offboarded employees
 # ---------------------------------------------------------------------------
@@ -12573,6 +12668,15 @@ def genesys_admin_placeholder(request: Request):
 
             <p id="genesys-update-status" style="color:#2c5c8a; min-height:18px; margin-top:10px;">Ready.</p>
             <div id="genesys-update-summary" style="display:none; margin-top:10px; border:1px solid #c8dbee; border-radius:8px; background:#f8fcff; padding:10px;"></div>
+
+            <div id="genesys-update-history-wrap" style="margin-top:12px; border:1px solid #d7e3ee; border-radius:8px; background:#f7fbff; padding:10px;">
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+                <strong style="color:#2c5c8a;">Batch User Update Logs (Last 20)</strong>
+                <button type="button" id="genesys-update-history-refresh-btn" style="background:#385977; color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Refresh</button>
+              </div>
+              <p id="genesys-update-history-status" style="margin:8px 0 8px 0; color:#4e6a84; min-height:18px;">Loading...</p>
+              <div id="genesys-update-history-table" style="overflow-x:auto;"></div>
+            </div>
           </div>
 
           <script>
@@ -12830,6 +12934,9 @@ def genesys_admin_placeholder(request: Request):
         const updateBatchCountEl = document.getElementById("genesys-update-batch-count");
         const updateStatusEl = document.getElementById("genesys-update-status");
         const updateSummaryEl = document.getElementById("genesys-update-summary");
+        const updateHistoryStatusEl = document.getElementById("genesys-update-history-status");
+        const updateHistoryTableEl = document.getElementById("genesys-update-history-table");
+        const updateHistoryRefreshBtn = document.getElementById("genesys-update-history-refresh-btn");
         let lastUserRows = [];
         let updateCatalogLoaded = false;
 
@@ -13297,6 +13404,7 @@ def genesys_admin_placeholder(request: Request):
               summaryHtml += "<div style='margin-top:8px;'><strong>Failures</strong><ul style='margin:6px 0 0 18px;'>" + failedList.join("") + "</ul></div>";
             }
             _setUpdateSummary(summaryHtml, true);
+            _loadUpdateBatchHistory();
           } catch (err) {
             updateStatusEl.textContent = "Batch user update failed: " + ((err && err.message) || "Unknown error.");
           } finally {
@@ -13371,6 +13479,52 @@ def genesys_admin_placeholder(request: Request):
             bulkHistoryTableEl.innerHTML = html;
           } catch (err) {
             bulkHistoryStatusEl.textContent = "Bulk log load failed: " + ((err && err.message) || "Unknown error.");
+          }
+        }
+
+        async function _loadUpdateBatchHistory() {
+          if (!updateHistoryStatusEl || !updateHistoryTableEl) {
+            return;
+          }
+          updateHistoryStatusEl.textContent = "Loading latest user update batch logs...";
+          updateHistoryTableEl.innerHTML = "";
+          try {
+            const response = await fetch("/genesys/users/search-update-history?limit=20", { method: "GET" });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Unable to load user update batch logs.");
+            }
+
+            const rows = Array.isArray(payload.rows) ? payload.rows : [];
+            if (!rows.length) {
+              updateHistoryStatusEl.textContent = "No user update batch logs yet.";
+              return;
+            }
+
+            updateHistoryStatusEl.textContent = "Showing " + rows.length + " most recent user update batch log(s).";
+            let html = "<table><thead><tr>";
+            html += "<th>Timestamp</th><th>Status</th><th>Applied</th><th>Requested</th><th>Updated</th><th>Failed</th><th>Duration(s)</th><th>Original Input</th><th>Failed Rerun</th>";
+            html += "</tr></thead><tbody>";
+            rows.forEach(function (row, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const originalUrl = _escapeHtml(String((row && row.original_download_url) || ""));
+              const failedUrl = _escapeHtml(String((row && row.failed_download_url) || ""));
+              html += "<tr style='background:" + bg + ";'>";
+              html += "<td>" + _escapeHtml(String((row && row.timestamp) || "")) + "</td>";
+              html += "<td>" + _escapeHtml(String((row && row.status) || "")) + "</td>";
+              html += "<td>" + _escapeHtml(String((row && row.applied_summary) || "")) + "</td>";
+              html += "<td>" + _escapeHtml(String((row && row.requested) || "0")) + "</td>";
+              html += "<td>" + _escapeHtml(String((row && row.success_count) || "0")) + "</td>";
+              html += "<td>" + _escapeHtml(String((row && row.failure_count) || "0")) + "</td>";
+              html += "<td>" + _escapeHtml(String((row && row.duration_seconds) || "0")) + "</td>";
+              html += "<td>" + (originalUrl ? ("<a href='" + originalUrl + "'>Download</a>") : "-") + "</td>";
+              html += "<td>" + (failedUrl ? ("<a href='" + failedUrl + "'>Download</a>") : "-") + "</td>";
+              html += "</tr>";
+            });
+            html += "</tbody></table>";
+            updateHistoryTableEl.innerHTML = html;
+          } catch (err) {
+            updateHistoryStatusEl.textContent = "User update batch log load failed: " + ((err && err.message) || "Unknown error.");
           }
         }
 
@@ -13637,7 +13791,14 @@ def genesys_admin_placeholder(request: Request):
           });
         }
 
+        if (updateHistoryRefreshBtn) {
+          updateHistoryRefreshBtn.addEventListener("click", function () {
+            _loadUpdateBatchHistory();
+          });
+        }
+
         _loadBulkHistory();
+        _loadUpdateBatchHistory();
 
         if (form && statusEl && resultsEl && rawDownloadEl) {
           form.dataset.jsBound = "1";
@@ -15218,6 +15379,7 @@ def genesys_user_search_update_batch_route(
   region = token_result.get("region", clean_region)
   access_token = token_result.get("access_token", "")
   max_workers = 3
+  started_at = time.time()
 
   def _run_one(index: int, email: str) -> tuple[int, dict]:
     try:
@@ -15260,16 +15422,83 @@ def genesys_user_search_update_batch_route(
   results = [row for row in indexed_results if isinstance(row, dict)]
   success_count = sum(1 for row in results if row.get("ok"))
   failure_count = len(results) - success_count
+  requested = len(users)
+  status = "completed" if failure_count == 0 else "completed_with_failures"
+
+  failed_emails = []
+  seen_failed = set()
+  for row in results:
+    if row.get("ok"):
+      continue
+    email = str(row.get("user_email", "") or "").strip().lower()
+    if not email or email in seen_failed:
+      continue
+    seen_failed.add(email)
+    failed_emails.append(email)
+
+  original_emails = list(users)
+  timestamp_token = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+  original_text = "\n".join(original_emails) + ("\n" if original_emails else "")
+  failed_text = "\n".join(failed_emails) + ("\n" if failed_emails else "")
+
+  original_job_id = _store_job_output(
+    original_text.encode("utf-8"),
+    f"genesys_user_update_batch_original_{timestamp_token}.txt",
+    "text/plain",
+  )
+  failed_job_id = _store_job_output(
+    failed_text.encode("utf-8"),
+    f"genesys_user_update_batch_failed_{timestamp_token}.txt",
+    "text/plain",
+  )
+  original_download_url = f"/download/job-output/{original_job_id}"
+  failed_download_url = f"/download/job-output/{failed_job_id}"
+
+  applied_parts = []
+  if apply_division:
+    applied_parts.append("Division")
+  if apply_skills:
+    applied_parts.append(f"Skills({len(skill_ids)})")
+  if apply_queues:
+    applied_parts.append(f"Queues({len(queue_ids)})")
+  applied_summary = ", ".join(applied_parts) if applied_parts else "(none)"
+
+  duration_seconds = max(0.0, time.time() - started_at)
+  _append_genesys_update_batch_history_event(
+    status=status,
+    requested=requested,
+    success_count=success_count,
+    failure_count=failure_count,
+    workers=max_workers,
+    duration_seconds=duration_seconds,
+    applied_summary=applied_summary,
+    original_emails=original_emails,
+    failed_emails=failed_emails,
+    original_download_url=original_download_url,
+    failed_download_url=failed_download_url,
+  )
 
   return JSONResponse({
     "ok": True,
     "region": region,
-    "requested": len(users),
+    "requested": requested,
     "workers": max_workers,
+    "status": status,
+    "duration_seconds": round(duration_seconds, 2),
     "success_count": success_count,
     "failure_count": failure_count,
+    "original_emails": original_emails,
+    "failed_emails": failed_emails,
+    "original_emails_download_url": original_download_url,
+    "failed_emails_download_url": failed_download_url,
     "results": results,
   })
+
+
+@app.get("/genesys/users/search-update-history")
+def genesys_user_search_update_history_route(limit: int = 20):
+  rows = _read_genesys_update_batch_history(limit)
+  return JSONResponse({"ok": True, "rows": rows})
 
 
 @app.post("/login")
