@@ -15758,6 +15758,7 @@ def genesys_extract_all_queues_route():
   region = token_result.get("region", clean_region)
   _, _, api_base = _genesys_region_to_urls(region)
   access_token = token_result.get("access_token", "")
+  token_source = str(token_result.get("token_source", "") or "default-client").strip() or "default-client"
 
   queue_entities, pages_scanned, queue_err, queue_source = _genesys_list_queues(
     api_base,
@@ -15766,6 +15767,52 @@ def genesys_extract_all_queues_route():
   )
   if queue_err:
     return JSONResponse({"ok": False, "error": queue_err}, status_code=400)
+
+  warnings = []
+
+  # If queue-client credentials are active, compare with default-client visibility
+  # and merge whichever queues are discoverable from either token.
+  has_default_creds = bool((GENESYS_CLIENT_ID or "").strip()) and bool((GENESYS_CLIENT_SECRET or "").strip())
+  if has_default_creds and token_source == "queue-client":
+    default_token = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+    if default_token.get("ok"):
+      default_region = default_token.get("region", clean_region)
+      _, _, default_api_base = _genesys_region_to_urls(default_region)
+      default_entities, default_pages_scanned, default_err, default_source = _genesys_list_queues(
+        default_api_base,
+        default_token.get("access_token", ""),
+        max_pages=max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 500)),
+      )
+      if not default_err:
+        merged = []
+        seen = set()
+        for item in (queue_entities or []) + (default_entities or []):
+          if not isinstance(item, dict):
+            continue
+          normalized = _genesys_normalize_queue_entity(item)
+          key = (
+            str(normalized.get("id", "") or "").strip().lower(),
+            str(normalized.get("name", "") or "").strip().lower(),
+          )
+          if key in seen:
+            continue
+          seen.add(key)
+          merged.append(item)
+
+        primary_count = len(queue_entities or [])
+        default_count = len(default_entities or [])
+        merged_count = len(merged)
+
+        queue_entities = merged
+        pages_scanned = int(pages_scanned or 0) + int(default_pages_scanned or 0)
+        queue_source = "merged:queue-client+default-client"
+        warnings.append(
+          f"Merged queue visibility across credentials (queue-client={primary_count}, default-client={default_count}, merged={merged_count})."
+        )
+      else:
+        warnings.append(f"default-client queue visibility check failed: {default_err}")
+    else:
+      warnings.append(f"default-client token request failed: {default_token.get('error', 'unknown error')}")
 
   rows = []
   for item in queue_entities:
@@ -15795,6 +15842,8 @@ def genesys_extract_all_queues_route():
     "pages_scanned": pages_scanned,
     "queue_count": len(rows),
     "queue_api_source": queue_source,
+    "token_source": token_source,
+    "warnings": warnings,
     "queues": rows,
   }
   raw_filename = f"genesys_all_queues_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -15809,6 +15858,8 @@ def genesys_extract_all_queues_route():
     "region": region,
     "pages_scanned": pages_scanned,
     "queue_api_source": queue_source,
+    "token_source": token_source,
+    "warnings": warnings,
     "queue_count": len(rows),
     "queues": rows,
     "raw_download_url": f"/download/job-output/{raw_job_id}",
