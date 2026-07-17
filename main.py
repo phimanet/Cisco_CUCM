@@ -3956,12 +3956,15 @@ def _load_genesys_division_filters() -> dict:
       if not isinstance(filters, dict):
         filters = {}
       cleaned = {}
-      for division_id, item in filters.items():
-        clean_division_id = str(division_id or "").strip()
-        if not clean_division_id:
+      for filter_id, item in filters.items():
+        clean_filter_id = str(filter_id or "").strip()
+        if not clean_filter_id:
           continue
         if not isinstance(item, dict):
           continue
+        clean_division_id = str(item.get("division_id", "") or "").strip()
+        if not clean_division_id:
+          clean_division_id = clean_filter_id
         skill_ids = []
         queue_ids = []
         for sid in (item.get("skill_ids", []) if isinstance(item.get("skill_ids"), list) else []):
@@ -3972,7 +3975,8 @@ def _load_genesys_division_filters() -> dict:
           value = str(qid or "").strip()
           if value and value not in queue_ids:
             queue_ids.append(value)
-        cleaned[clean_division_id] = {
+        cleaned[clean_filter_id] = {
+          "filter_id": clean_filter_id,
           "division_id": clean_division_id,
           "filter_name": str(item.get("filter_name", "") or item.get("division_name", "") or "").strip(),
           "division_name": str(item.get("division_name", "") or "").strip(),
@@ -14026,11 +14030,14 @@ def genesys_admin_placeholder(request: Request):
                   }
                   Object.keys(divisionFilterMap).forEach(function (key) { delete divisionFilterMap[key]; });
                   (Array.isArray(payload.filters) ? payload.filters : []).forEach(function (row) {
+                    const filterId = String((row && row.filter_id) || (row && row.division_id) || "").trim();
                     const divisionId = String((row && row.division_id) || "").trim();
-                    if (!divisionId) {
+                    if (!filterId || !divisionId) {
                       return;
                     }
-                    divisionFilterMap[divisionId] = {
+                    divisionFilterMap[filterId] = {
+                      filter_id: filterId,
+                      division_id: divisionId,
                       filter_name: String((row && row.filter_name) || (row && row.division_name) || divisionId).trim(),
                       division_name: String((row && row.division_name) || divisionId).trim(),
                       skill_ids: Array.isArray(row && row.skill_ids) ? row.skill_ids.map(function (x) { return String(x || "").trim(); }).filter(Boolean) : [],
@@ -14072,8 +14079,8 @@ def genesys_admin_placeholder(request: Request):
                   }
                   setFilterStatus("Saved filter '" + filterName + "' for division " + divisionName + ".", false);
                   await loadSavedFilters();
-                  if (savedFilterSelectEl) {
-                    savedFilterSelectEl.value = divisionId;
+                  if (savedFilterSelectEl && payload && payload.filter_id) {
+                    savedFilterSelectEl.value = String(payload.filter_id || "").trim();
                   }
                   return true;
                 } catch (err) {
@@ -14083,24 +14090,24 @@ def genesys_admin_placeholder(request: Request):
               }
 
               function applySavedFilter() {
-                const divisionId = String((savedFilterSelectEl && savedFilterSelectEl.value) || "").trim();
-                if (!divisionId || !divisionFilterMap[divisionId]) {
+                const filterId = String((savedFilterSelectEl && savedFilterSelectEl.value) || "").trim();
+                if (!filterId || !divisionFilterMap[filterId]) {
                   setFilterStatus("Select a saved filter first.", true);
                   return false;
                 }
-                setSelected(divisionSelect, [divisionId]);
-                setSelected(skillsSelect, divisionFilterMap[divisionId].skill_ids || []);
-                setSelected(queuesSelect, divisionFilterMap[divisionId].queue_ids || []);
+                setSelected(divisionSelect, [divisionFilterMap[filterId].division_id || ""]);
+                setSelected(skillsSelect, divisionFilterMap[filterId].skill_ids || []);
+                setSelected(queuesSelect, divisionFilterMap[filterId].queue_ids || []);
                 if (useDivisionFilterEl) {
                   useDivisionFilterEl.checked = true;
                 }
-                setFilterStatus("Applied saved filter '" + String(divisionFilterMap[divisionId].filter_name || divisionFilterMap[divisionId].division_name || divisionId) + "'.", false);
+                setFilterStatus("Applied saved filter '" + String(divisionFilterMap[filterId].filter_name || divisionFilterMap[filterId].division_name || filterId) + "'.", false);
                 return false;
               }
 
               async function deleteSavedFilter() {
-                const divisionId = String((savedFilterSelectEl && savedFilterSelectEl.value) || "").trim();
-                if (!divisionId) {
+                const filterId = String((savedFilterSelectEl && savedFilterSelectEl.value) || "").trim();
+                if (!filterId) {
                   setFilterStatus("Select a saved filter to delete.", true);
                   return false;
                 }
@@ -14108,14 +14115,14 @@ def genesys_admin_placeholder(request: Request):
                   return false;
                 }
                 const formData = new FormData();
-                formData.append("division_id", divisionId);
+                formData.append("filter_id", filterId);
                 try {
                   const response = await fetch("/genesys/division-filters/delete", { method: "POST", body: formData });
                   const payload = await response.json();
                   if (!response.ok || !payload.ok) {
                     throw new Error((payload && payload.error) || "Unable to delete division filter.");
                   }
-                  setFilterStatus("Deleted saved filter for division " + divisionId + ".", false);
+                  setFilterStatus("Deleted saved filter.", false);
                   await loadSavedFilters();
                   return true;
                 } catch (err) {
@@ -15078,12 +15085,12 @@ def genesys_admin_placeholder(request: Request):
             if (leftName > rightName) return 1;
             return 0;
           });
-          keys.forEach(function (divisionId) {
-            const row = divisionFilterMap[divisionId] || {};
+          keys.forEach(function (filterId) {
+            const row = divisionFilterMap[filterId] || {};
             const option = document.createElement("option");
-            option.value = divisionId;
-            const filterName = String(row.filter_name || row.division_name || divisionId || "").trim();
-            const divisionName = String(row.division_name || divisionId || "").trim();
+            option.value = filterId;
+            const filterName = String(row.filter_name || row.division_name || filterId || "").trim();
+            const divisionName = String(row.division_name || row.division_id || filterId || "").trim();
             const skillCount = Array.isArray(row.skill_ids) ? row.skill_ids.length : 0;
             const queueCount = Array.isArray(row.queue_ids) ? row.queue_ids.length : 0;
             option.textContent = filterName + " | Division " + divisionName + " | Skills " + skillCount + " | Queues " + queueCount;
@@ -15107,7 +15114,8 @@ def genesys_admin_placeholder(request: Request):
           let queues = Array.isArray(updateCatalogCache.queues) ? updateCatalogCache.queues.slice() : [];
 
           if (useSavedFilter && selectedDivisionId) {
-            const filter = divisionFilterMap[selectedDivisionId];
+            const selectedFilterId = String((updateSavedFilterSelectEl && updateSavedFilterSelectEl.value) || "").trim();
+            const filter = selectedFilterId ? divisionFilterMap[selectedFilterId] : null;
             if (filter && filter.enabled !== false) {
               const allowedSkill = new Set((Array.isArray(filter.skill_ids) ? filter.skill_ids : []).map(function (id) { return String(id || "").trim(); }));
               const allowedQueue = new Set((Array.isArray(filter.queue_ids) ? filter.queue_ids : []).map(function (id) { return String(id || "").trim(); }));
@@ -15143,11 +15151,13 @@ def genesys_admin_placeholder(request: Request):
             const rows = Array.isArray(payload.filters) ? payload.filters : [];
             divisionFilterMap = {};
             rows.forEach(function (row) {
+              const filterId = String((row && row.filter_id) || (row && row.division_id) || "").trim();
               const divisionId = String((row && row.division_id) || "").trim();
-              if (!divisionId) {
+              if (!filterId || !divisionId) {
                 return;
               }
-              divisionFilterMap[divisionId] = {
+              divisionFilterMap[filterId] = {
+                filter_id: filterId,
                 filter_name: String((row && row.filter_name) || (row && row.division_name) || divisionId).trim(),
                 division_id: divisionId,
                 division_name: String((row && row.division_name) || "").trim(),
@@ -15199,8 +15209,8 @@ def genesys_admin_placeholder(request: Request):
             }
             _setDivisionFilterStatus("Saved filter '" + filterName + "' for " + divisionName + " (Skills " + skillIds.length + ", Queues " + queueIds.length + ").", false);
             await _loadDivisionFilters();
-            if (updateSavedFilterSelectEl) {
-              updateSavedFilterSelectEl.value = divisionId;
+            if (updateSavedFilterSelectEl && payload && payload.filter_id) {
+              updateSavedFilterSelectEl.value = String(payload.filter_id || "").trim();
             }
           } catch (err) {
             _setDivisionFilterStatus("Save failed: " + ((err && err.message) || "Unknown error."), true);
@@ -15217,7 +15227,7 @@ def genesys_admin_placeholder(request: Request):
             return;
           }
           const formData = new FormData();
-          formData.append("division_id", selected);
+          formData.append("filter_id", selected);
           try {
             const response = await fetch("/genesys/division-filters/delete", {
               method: "POST",
@@ -15227,7 +15237,7 @@ def genesys_admin_placeholder(request: Request):
             if (!response.ok || !payload.ok) {
               throw new Error((payload && payload.error) || "Unable to delete division filter.");
             }
-            _setDivisionFilterStatus("Deleted saved filter for division " + selected + ".", false);
+            _setDivisionFilterStatus("Deleted saved filter.", false);
             await _loadDivisionFilters();
           } catch (err) {
             _setDivisionFilterStatus("Delete failed: " + ((err && err.message) || "Unknown error."), true);
@@ -15240,10 +15250,15 @@ def genesys_admin_placeholder(request: Request):
             _setDivisionFilterStatus("Select a saved filter first.", true);
             return;
           }
+          const filter = divisionFilterMap[selected];
+          if (!filter) {
+            _setDivisionFilterStatus("Saved filter selection is no longer available.", true);
+            return;
+          }
           if (updateDivisionSelect) {
             Array.from(updateDivisionSelect.options || []).forEach(function (opt) {
               const value = String((opt && opt.value) || "").trim();
-              opt.selected = value === selected;
+              opt.selected = value === String(filter.division_id || "").trim();
             });
           }
           if (updateUseDivisionFilterEl) {
@@ -18304,11 +18319,12 @@ def genesys_division_filters_route():
   payload = _load_genesys_division_filters()
   filters = payload.get("filters", {}) if isinstance(payload, dict) else {}
   rows = []
-  for division_id, item in (filters.items() if isinstance(filters, dict) else []):
+  for filter_id, item in (filters.items() if isinstance(filters, dict) else []):
     if not isinstance(item, dict):
       continue
     rows.append({
-      "division_id": str(division_id or "").strip(),
+      "filter_id": str(filter_id or "").strip(),
+      "division_id": str(item.get("division_id", "") or filter_id or "").strip(),
       "filter_name": str(item.get("filter_name", "") or item.get("division_name", "") or "").strip(),
       "division_name": str(item.get("division_name", "") or "").strip(),
       "skill_ids": list(item.get("skill_ids", []) if isinstance(item.get("skill_ids"), list) else []),
@@ -18326,6 +18342,7 @@ def genesys_division_filters_route():
 
 @app.post("/genesys/division-filters/save")
 def genesys_division_filters_save_route(
+  filter_id: str = Form(""),
   division_id: str = Form(""),
   filter_name: str = Form(""),
   division_name: str = Form(""),
@@ -18333,6 +18350,7 @@ def genesys_division_filters_save_route(
   queue_ids_json: str = Form("[]"),
   enabled: str = Form("true"),
 ):
+  clean_filter_id = str(filter_id or "").strip() or str(uuid4())
   clean_division_id = str(division_id or "").strip()
   clean_filter_name = str(filter_name or "").strip()
   clean_division_name = str(division_name or "").strip()
@@ -18372,7 +18390,8 @@ def genesys_division_filters_save_route(
   if not isinstance(filters, dict):
     filters = {}
     payload["filters"] = filters
-  filters[clean_division_id] = {
+  filters[clean_filter_id] = {
+    "filter_id": clean_filter_id,
     "division_id": clean_division_id,
     "filter_name": clean_filter_name,
     "division_name": clean_division_name,
@@ -18387,6 +18406,7 @@ def genesys_division_filters_save_route(
 
   return JSONResponse({
     "ok": True,
+    "filter_id": clean_filter_id,
     "division_id": clean_division_id,
     "filter_name": clean_filter_name,
     "division_name": clean_division_name,
@@ -18399,11 +18419,14 @@ def genesys_division_filters_save_route(
 
 @app.post("/genesys/division-filters/delete")
 def genesys_division_filters_delete_route(
+  filter_id: str = Form(""),
   division_id: str = Form(""),
 ):
+  clean_filter_id = str(filter_id or "").strip()
   clean_division_id = str(division_id or "").strip()
-  if not clean_division_id:
-    return JSONResponse({"ok": False, "error": "division_id is required."}, status_code=400)
+  target_key = clean_filter_id or clean_division_id
+  if not target_key:
+    return JSONResponse({"ok": False, "error": "filter_id is required."}, status_code=400)
 
   payload = _load_genesys_division_filters()
   filters = payload.get("filters", {}) if isinstance(payload, dict) else {}
@@ -18411,15 +18434,16 @@ def genesys_division_filters_delete_route(
     filters = {}
     payload["filters"] = filters
 
-  if clean_division_id not in filters:
+  if target_key not in filters:
     return JSONResponse({"ok": False, "error": "Division filter not found."}, status_code=404)
 
-  filters.pop(clean_division_id, None)
+  filters.pop(target_key, None)
   if not _save_genesys_division_filters(payload):
     return JSONResponse({"ok": False, "error": "Unable to delete division filter."}, status_code=500)
 
   return JSONResponse({
     "ok": True,
+    "filter_id": target_key,
     "division_id": clean_division_id,
     "path": GENESYS_DIVISION_FILTERS_PATH,
   })
