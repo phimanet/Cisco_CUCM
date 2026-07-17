@@ -12526,7 +12526,7 @@ def genesys_admin_placeholder(request: Request):
             <p style="margin-top:0; color:#4e6a84;">Proof mode: update one user first, then apply the same Division/Skills/Queues to a batch of emails.</p>
 
             <div class="search-filter-row">
-              <button type="button" id="genesys-update-load-catalog-btn" style="background:#385977;">Load Divisions / Skills / Queues</button>
+              <button type="button" id="genesys-update-load-catalog-btn" style="background:#385977;" onclick="if (window.runGenesysUpdateLoadCatalog) { return window.runGenesysUpdateLoadCatalog(); } var s=document.getElementById('genesys-update-status'); if (s) { s.textContent='Catalog handler missing (JS did not load).'; } return false;">Load Divisions / Skills / Queues</button>
               <span id="genesys-update-catalog-count" style="font-size:12px; color:#4e6a84;">Catalog not loaded yet.</span>
             </div>
             <div id="genesys-update-catalog-download" style="margin:4px 0 8px 0;"></div>
@@ -12574,6 +12574,199 @@ def genesys_admin_placeholder(request: Request):
             <p id="genesys-update-status" style="color:#2c5c8a; min-height:18px; margin-top:10px;">Ready.</p>
             <div id="genesys-update-summary" style="display:none; margin-top:10px; border:1px solid #c8dbee; border-radius:8px; background:#f8fcff; padding:10px;"></div>
           </div>
+
+          <script>
+            (function () {
+              if (window._genesysUpdateFallbackBound) {
+                return;
+              }
+              window._genesysUpdateFallbackBound = true;
+
+              const loadBtn = document.getElementById("genesys-update-load-catalog-btn");
+              const lookupBtn = document.getElementById("genesys-update-single-lookup-btn");
+              const statusEl = document.getElementById("genesys-update-status");
+              const profileEl = document.getElementById("genesys-update-single-profile");
+              const emailEl = document.getElementById("genesys-update-single-email");
+              const catalogCountEl = document.getElementById("genesys-update-catalog-count");
+              const catalogDownloadEl = document.getElementById("genesys-update-catalog-download");
+              const divisionSelect = document.getElementById("genesys-update-division-select");
+              const skillsSelect = document.getElementById("genesys-update-skills-select");
+              const queuesSelect = document.getElementById("genesys-update-queues-select");
+
+              if (!loadBtn || !lookupBtn || !statusEl || !emailEl) {
+                return;
+              }
+
+              function esc(value) {
+                return String(value || "")
+                  .replace(/&/g, "&amp;")
+                  .replace(/</g, "&lt;")
+                  .replace(/>/g, "&gt;")
+                  .replace(/\"/g, "&quot;")
+                  .replace(/'/g, "&#39;");
+              }
+
+              function selectedCount(selectEl) {
+                if (!selectEl || !selectEl.options) {
+                  return 0;
+                }
+                return Array.from(selectEl.options).filter(function (opt) {
+                  return Boolean(opt && String(opt.value || "").trim());
+                }).length;
+              }
+
+              function populateSelect(selectEl, rows, placeholder) {
+                if (!selectEl) {
+                  return;
+                }
+                selectEl.innerHTML = "";
+                if (!Array.isArray(rows) || !rows.length) {
+                  const option = document.createElement("option");
+                  option.value = "";
+                  option.textContent = placeholder || "(none)";
+                  selectEl.appendChild(option);
+                  return;
+                }
+                rows.forEach(function (row) {
+                  const optionId = String((row && row.id) || "").trim();
+                  const optionName = String((row && row.name) || optionId || "").trim();
+                  if (!optionId) {
+                    return;
+                  }
+                  const option = document.createElement("option");
+                  option.value = optionId;
+                  option.textContent = (row && row.priority ? "[Priority] " : "") + optionName;
+                  selectEl.appendChild(option);
+                });
+              }
+
+              function setSelected(selectEl, ids) {
+                if (!selectEl) {
+                  return;
+                }
+                const wanted = new Set((Array.isArray(ids) ? ids : []).map(function (item) {
+                  return String(item || "").trim();
+                }));
+                Array.from(selectEl.options || []).forEach(function (opt) {
+                  const value = String((opt && opt.value) || "").trim();
+                  opt.selected = wanted.has(value);
+                });
+              }
+
+              async function loadCatalog() {
+                const original = loadBtn.textContent;
+                loadBtn.disabled = true;
+                loadBtn.textContent = "Loading...";
+                statusEl.textContent = "Loading Genesys catalog (divisions, skills, queues)...";
+                try {
+                  const response = await fetch("/genesys/catalog/options", { method: "GET" });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || "Catalog load failed.");
+                  }
+
+                  const divisions = Array.isArray(payload.divisions) ? payload.divisions : [];
+                  const skills = Array.isArray(payload.skills) ? payload.skills : [];
+                  const queues = Array.isArray(payload.queues) ? payload.queues : [];
+
+                  populateSelect(divisionSelect, divisions, "No divisions found");
+                  populateSelect(skillsSelect, skills, "No skills found");
+                  populateSelect(queuesSelect, queues, "No queues found");
+
+                  if (catalogCountEl) {
+                    const skillFound = Number(payload.important_skill_count || 0);
+                    const skillTotal = Number(payload.important_skill_total || 0);
+                    const queueFound = Number(payload.important_queue_count || 0);
+                    const queueTotal = Number(payload.important_queue_total || 0);
+                    catalogCountEl.textContent = "Divisions: " + divisions.length + " | Skills: " + skills.length + " (Priority: " + skillFound + "/" + skillTotal + ") | Queues: " + queues.length + " (Priority: " + queueFound + "/" + queueTotal + ")";
+                  }
+
+                  if (catalogDownloadEl) {
+                    const rawUrl = String((payload && payload.raw_download_url) || "").trim();
+                    const rawName = String((payload && payload.raw_filename) || "genesys_catalog_options.json").trim();
+                    catalogDownloadEl.innerHTML = rawUrl
+                      ? "<a href='" + esc(rawUrl) + "' style='display:inline-block;padding:7px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Catalog JSON (" + esc(rawName) + ")</a>"
+                      : "";
+                  }
+
+                  statusEl.textContent = "Catalog loaded. Select one Division and one or more Skills/Queues, then run single-user proof.";
+                  return true;
+                } catch (err) {
+                  statusEl.textContent = "Catalog load failed: " + ((err && err.message) || "Unknown error.");
+                  return false;
+                } finally {
+                  loadBtn.disabled = false;
+                  loadBtn.textContent = original || "Load Divisions / Skills / Queues";
+                }
+              }
+
+              async function lookupUser() {
+                const userEmail = String(emailEl.value || "").trim().toLowerCase();
+                if (!userEmail || userEmail.indexOf("@") < 0) {
+                  statusEl.textContent = "Enter a valid user email first.";
+                  return false;
+                }
+
+                if (selectedCount(divisionSelect) === 0 && selectedCount(skillsSelect) === 0 && selectedCount(queuesSelect) === 0) {
+                  const ready = await loadCatalog();
+                  if (!ready) {
+                    if (profileEl) {
+                      profileEl.textContent = "Catalog load failed. Resolve catalog load first, then retry Lookup User.";
+                    }
+                    return false;
+                  }
+                }
+
+                const original = lookupBtn.textContent;
+                lookupBtn.disabled = true;
+                lookupBtn.textContent = "Looking...";
+                statusEl.textContent = "Looking up current profile for " + userEmail + "...";
+
+                try {
+                  const formData = new FormData();
+                  formData.append("user_email", userEmail);
+                  const response = await fetch("/genesys/users/search-profile", {
+                    method: "POST",
+                    body: formData,
+                  });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || "User lookup failed.");
+                  }
+
+                  setSelected(divisionSelect, payload.division_id ? [payload.division_id] : []);
+                  setSelected(skillsSelect, Array.isArray(payload.skill_ids) ? payload.skill_ids : []);
+                  setSelected(queuesSelect, Array.isArray(payload.queue_ids) ? payload.queue_ids : []);
+
+                  if (profileEl) {
+                    const webrtcText = String(payload.webrtc_phone || "").trim();
+                    profileEl.innerHTML = "Current profile loaded: Division=" + esc(String(payload.division_name || payload.division_id || "(none)"))
+                      + " | Skills=" + Number((payload.skill_ids || []).length || 0)
+                      + " | Queues=" + Number((payload.queue_ids || []).length || 0)
+                      + " | WebRTC=" + esc(webrtcText || "(missing)");
+                  }
+                  statusEl.textContent = "Current profile loaded for " + userEmail + ". Adjust selections, then run update.";
+                  return true;
+                } catch (err) {
+                  statusEl.textContent = "User lookup failed: " + ((err && err.message) || "Unknown error.");
+                  return false;
+                } finally {
+                  lookupBtn.disabled = false;
+                  lookupBtn.textContent = original || "Lookup User";
+                }
+              }
+
+              window.runGenesysUpdateLoadCatalog = function () {
+                loadCatalog();
+                return false;
+              };
+
+              window.runGenesysUpdateSingleLookup = function () {
+                lookupUser();
+                return false;
+              };
+            })();
+          </script>
 
           <div id="genesys-queue-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
             <h3 style="margin-top:0;">Queue Lookup</h3>
