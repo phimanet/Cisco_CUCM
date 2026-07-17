@@ -196,6 +196,17 @@ GENESYS_PRIORITY_QUEUE_IDS = [
   for item in (os.getenv("GENESYS_PRIORITY_QUEUE_IDS", "df95c0ce-1ca4-4ab1-8ce3-f474642edf4d") or "df95c0ce-1ca4-4ab1-8ce3-f474642edf4d").split(",")
   if (item or "").strip()
 ]
+GENESYS_IMPORTANT_SKILL_NAMES = [
+  (item or "").strip()
+  for item in (
+    os.getenv(
+      "GENESYS_IMPORTANT_SKILL_NAMES",
+      "AMNLS Billing,AMNLS CST,AMNLS IPI,AMNLS RTA,AMNLS RTC,AMNLS TST,CS_EC_SQ,CS_General_AfterHours,CS_General_Messaging,CS_General_SK1,CS_General_SMS,CS_General_Value_Based_SK2,CS_KTA,CS_KTA_Touchpoint,CS_MSP,CS_NAS_SQ,CS_NF_SQ,CS_Offshore_Holiday_Support,CS_PLS_SQ,CS_Strike_SQ,HR Service Center,ITSC-EventMenuOption,Test_RP_SK1,Test_RP_SK2",
+    )
+    or ""
+  ).split(",")
+  if (item or "").strip()
+]
 AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aerialink.net/v5") or "https://apix5.aerialink.net/v5").strip().rstrip("/")
 AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
 AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
@@ -2135,6 +2146,16 @@ def _genesys_lookup_user_by_email(region: str, access_token: str, user_email: st
 def _genesys_load_catalog_options(region: str, access_token: str) -> dict:
   clean_region, _, api_base = _genesys_region_to_urls(region)
 
+  def _normalized(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+  important_skill_name_map = {
+    _normalized(name): str(name or "").strip()
+    for name in GENESYS_IMPORTANT_SKILL_NAMES
+    if str(name or "").strip()
+  }
+  important_skill_name_set = {key for key in important_skill_name_map.keys() if key}
+
   divisions_all, divisions_pages, divisions_err = _genesys_collect_paged_entities(
     api_base,
     access_token,
@@ -2157,7 +2178,8 @@ def _genesys_load_catalog_options(region: str, access_token: str) -> dict:
     max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 200)),
   )
 
-  def _to_options(rows: list[dict]) -> list[dict]:
+  def _to_options(rows: list[dict], prioritized_names: set[str] | None = None) -> list[dict]:
+    prioritized_names = prioritized_names or set()
     options = []
     for row in rows:
       if not isinstance(row, dict):
@@ -2166,8 +2188,21 @@ def _genesys_load_catalog_options(region: str, access_token: str) -> dict:
       option_name = str(row.get("name", "") or option_id).strip()
       if not option_id:
         continue
-      options.append({"id": option_id, "name": option_name})
-    return sorted(options, key=lambda item: (item.get("name", "").lower(), item.get("id", "").lower()))
+      normalized_name = _normalized(option_name)
+      is_priority = normalized_name in prioritized_names
+      options.append({"id": option_id, "name": option_name, "priority": bool(is_priority)})
+    return sorted(
+      options,
+      key=lambda item: (
+        0 if item.get("priority") else 1,
+        item.get("name", "").lower(),
+        item.get("id", "").lower(),
+      ),
+    )
+
+  divisions = _to_options(divisions_all)
+  skills = _to_options(skills_all, important_skill_name_set)
+  queues = _to_options(queues_all)
 
   warnings = []
   if divisions_err:
@@ -2177,12 +2212,27 @@ def _genesys_load_catalog_options(region: str, access_token: str) -> dict:
   if queues_err:
     warnings.append(f"queues: {queues_err}")
 
+  found_skill_names = {
+    _normalized(item.get("name", ""))
+    for item in skills
+    if isinstance(item, dict)
+  }
+  missing_important_skills = [
+    important_skill_name_map[name]
+    for name in sorted(important_skill_name_set)
+    if name not in found_skill_names
+  ]
+  if missing_important_skills:
+    warnings.append("important skills not found: " + ", ".join(missing_important_skills))
+
   return {
     "ok": not (divisions_err and skills_err and queues_err),
     "region": clean_region,
-    "divisions": _to_options(divisions_all),
-    "skills": _to_options(skills_all),
-    "queues": _to_options(queues_all),
+    "divisions": divisions,
+    "skills": skills,
+    "queues": queues,
+    "important_skill_count": int(sum(1 for item in skills if item.get("priority"))),
+    "important_skill_total": int(len(important_skill_name_set)),
     "pages_scanned": {
       "divisions": int(divisions_pages or 0),
       "skills": int(skills_pages or 0),
@@ -12485,12 +12535,13 @@ def genesys_admin_placeholder(request: Request):
           rows.forEach(function (row) {
             const id = String((row && row.id) || "").trim();
             const name = String((row && row.name) || id || "").trim();
+            const priority = Boolean(row && row.priority);
             if (!id) {
               return;
             }
             const option = document.createElement("option");
             option.value = id;
-            option.textContent = name;
+            option.textContent = (priority ? "[Priority] " : "") + name;
             selectEl.appendChild(option);
           });
         }
@@ -12523,7 +12574,9 @@ def genesys_admin_placeholder(request: Request):
 
             updateCatalogLoaded = true;
             if (updateCatalogCountEl) {
-              updateCatalogCountEl.textContent = "Divisions: " + divisions.length + " | Skills: " + skills.length + " | Queues: " + queues.length;
+              const importantFound = Number(payload.important_skill_count || 0);
+              const importantTotal = Number(payload.important_skill_total || 0);
+              updateCatalogCountEl.textContent = "Divisions: " + divisions.length + " | Skills: " + skills.length + " (Priority: " + importantFound + "/" + importantTotal + ") | Queues: " + queues.length;
             }
             if (updateCatalogDownloadEl) {
               if (payload.raw_download_url) {
