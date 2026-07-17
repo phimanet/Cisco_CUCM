@@ -19298,7 +19298,8 @@ def genesys_user_search_update_batch_route(
 
   region = token_result.get("region", clean_region)
   access_token = token_result.get("access_token", "")
-  max_workers = 3
+  configured_workers = max(1, min(int(GENESYS_UPDATE_BATCH_MAX_WORKERS or 3), 10))
+  max_workers = max(1, min(configured_workers, len(users)))
   applied_parts = []
   if apply_division:
     applied_parts.append("Division")
