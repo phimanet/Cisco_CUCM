@@ -2276,12 +2276,25 @@ def _genesys_load_catalog_options(region: str, access_token: str) -> dict:
   if missing_important_queues:
     warnings.append("important queues not found: " + ", ".join(missing_important_queues))
 
+  # Keep preferred queue names visible to operators even when API visibility is limited.
+  queue_missing_placeholders = [
+    {
+      "id": "",
+      "name": f"{queue_name} (missing in API catalog)",
+      "priority": True,
+      "missing": True,
+      "selectable": False,
+    }
+    for queue_name in missing_important_queues
+  ]
+  queue_options_display = queue_missing_placeholders + queues
+
   return {
     "ok": not (divisions_err and skills_err and queues_err),
     "region": clean_region,
     "divisions": divisions,
     "skills": skills,
-    "queues": queues,
+    "queues": queue_options_display,
     "important_skill_count": int(sum(1 for item in skills if item.get("priority"))),
     "important_skill_total": int(len(important_skill_name_set)),
     "important_queue_count": int(sum(1 for item in queues if item.get("priority"))),
@@ -12734,12 +12747,15 @@ def genesys_admin_placeholder(request: Request):
                 rows.forEach(function (row) {
                   const optionId = String((row && row.id) || "").trim();
                   const optionName = String((row && row.name) || optionId || "").trim();
-                  if (!optionId) {
+                  const isMissing = Boolean(row && row.missing);
+                  const selectable = (row && typeof row.selectable !== "undefined") ? Boolean(row.selectable) : !isMissing;
+                  if (!optionName) {
                     return;
                   }
                   const option = document.createElement("option");
                   option.value = optionId;
                   option.textContent = (row && row.priority ? "[Priority] " : "") + optionName;
+                  option.disabled = !selectable;
                   selectEl.appendChild(option);
                 });
               }
@@ -13040,13 +13056,16 @@ def genesys_admin_placeholder(request: Request):
           rows.forEach(function (row) {
             const id = String((row && row.id) || "").trim();
             const name = String((row && row.name) || id || "").trim();
+            const isMissing = Boolean(row && row.missing);
+            const selectable = (row && typeof row.selectable !== "undefined") ? Boolean(row.selectable) : !isMissing;
             const priority = Boolean(row && row.priority);
-            if (!id) {
+            if (!name) {
               return;
             }
             const option = document.createElement("option");
             option.value = id;
             option.textContent = (priority ? "[Priority] " : "") + name;
+            option.disabled = !selectable;
             selectEl.appendChild(option);
           });
         }
