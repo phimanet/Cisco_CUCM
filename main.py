@@ -1020,6 +1020,205 @@ def _genesys_send_json(
   return True, body if isinstance(body, dict) else {}, "", response.status_code
 
 
+def _genesys_extract_queue_id_from_uri(value: str) -> str:
+  text = str(value or "").strip()
+  if not text:
+    return ""
+  match = re.search(r"/queues/([^/?#]+)", text, flags=re.IGNORECASE)
+  if not match:
+    return ""
+  return str(match.group(1) or "").strip()
+
+
+def _genesys_normalize_queue_entity(entity: dict) -> dict:
+  if not isinstance(entity, dict):
+    return {}
+
+  queue_obj = entity.get("queue") if isinstance(entity.get("queue"), dict) else {}
+  queue_id = str(
+    entity.get("id", "")
+    or entity.get("queueId", "")
+    or queue_obj.get("id", "")
+    or ""
+  ).strip()
+  queue_name = str(
+    entity.get("name", "")
+    or entity.get("queueName", "")
+    or queue_obj.get("name", "")
+    or ""
+  ).strip()
+
+  if not queue_id:
+    queue_id = _genesys_extract_queue_id_from_uri(entity.get("uri", ""))
+  if not queue_id:
+    queue_id = _genesys_extract_queue_id_from_uri(entity.get("selfUri", ""))
+
+  division = entity.get("division") if isinstance(entity.get("division"), dict) else {}
+  member_count_raw = entity.get("memberCount", entity.get("membersCount", 0))
+  try:
+    member_count = int(member_count_raw or 0)
+  except Exception:
+    member_count = 0
+
+  return {
+    "id": queue_id,
+    "name": queue_name,
+    "division": str(division.get("name", "") or "").strip(),
+    "member_count": member_count,
+  }
+
+
+def _genesys_extract_queue_items_from_payload(payload: dict) -> list[dict]:
+  if not isinstance(payload, dict):
+    return []
+
+  items = []
+  for key in ["entities", "queues", "items", "results", "data"]:
+    value = payload.get(key)
+    if isinstance(value, list):
+      for item in value:
+        if isinstance(item, dict):
+          items.append(item)
+
+  queue_single = payload.get("queue")
+  if isinstance(queue_single, dict):
+    items.append(queue_single)
+
+  uris = payload.get("uris")
+  if isinstance(uris, list):
+    for uri in uris:
+      queue_id = _genesys_extract_queue_id_from_uri(uri)
+      if queue_id:
+        items.append({"id": queue_id, "uri": str(uri or "").strip()})
+
+  return items
+
+
+def _genesys_list_queues(api_base: str, access_token: str, max_pages: int = 200) -> tuple[list[dict], int, str, str]:
+  page_cap = max(1, min(max_pages, 500))
+  variants = [
+    {
+      "label": "routing-queues",
+      "path": "/api/v2/routing/queues",
+      "params": {"pageSize": 100},
+      "paged": True,
+    },
+    {
+      "label": "queues-fields",
+      "path": "/api/v2/queues",
+      "params": {"fields": "*"},
+      "paged": False,
+    },
+    {
+      "label": "queues-uris",
+      "path": "/api/v2/queues",
+      "params": {},
+      "paged": False,
+    },
+  ]
+
+  errors = []
+  first_ok_empty = None
+
+  for variant in variants:
+    label = str(variant.get("label", "queues")).strip() or "queues"
+    path = str(variant.get("path", "")).strip()
+    base_params = dict(variant.get("params", {}) or {})
+    paged = bool(variant.get("paged", False))
+
+    collected = []
+    pages_scanned = 0
+    page_limit = page_cap if paged else 1
+
+    for page_number in range(1, page_limit + 1):
+      params = dict(base_params)
+      if paged:
+        params["pageNumber"] = page_number
+
+      ok_page, payload, err_page = _genesys_get_json(api_base, access_token, path, params=params)
+      if not ok_page:
+        errors.append(f"{label}: {err_page}")
+        collected = []
+        pages_scanned = 0
+        break
+
+      pages_scanned += 1
+      items = _genesys_extract_queue_items_from_payload(payload)
+      if items:
+        collected.extend(items)
+
+      if not paged:
+        break
+
+      next_uri = str(payload.get("nextUri", "") or payload.get("next_uri", "")).strip() if isinstance(payload, dict) else ""
+      page_count_raw = payload.get("pageCount", 0) if isinstance(payload, dict) else 0
+      try:
+        page_count = int(page_count_raw or 0)
+      except Exception:
+        page_count = 0
+
+      if next_uri:
+        continue
+      if page_count and page_number < page_count:
+        continue
+      if len(items) >= int(base_params.get("pageSize", 100) or 100):
+        continue
+      break
+
+    if collected:
+      normalized = []
+      seen = set()
+      for item in collected:
+        normalized_row = _genesys_normalize_queue_entity(item)
+        row_id = str(normalized_row.get("id", "") or "").strip().lower()
+        row_name = str(normalized_row.get("name", "") or "").strip().lower()
+        dedupe_key = (row_id, row_name)
+        if dedupe_key in seen:
+          continue
+        if not row_id and not row_name:
+          continue
+        seen.add(dedupe_key)
+        normalized.append(normalized_row)
+      if normalized:
+        return normalized, pages_scanned, "", label
+
+    if pages_scanned > 0 and first_ok_empty is None:
+      first_ok_empty = ([], pages_scanned, "", label)
+
+  if first_ok_empty is not None:
+    rows, pages_scanned, _, label = first_ok_empty
+    return rows, pages_scanned, "", label
+  return [], 0, (" | ".join(errors) if errors else "Queue list lookup failed."), ""
+
+
+def _genesys_get_queue_by_id(api_base: str, access_token: str, queue_id: str) -> tuple[dict, str]:
+  clean_queue_id = str(queue_id or "").strip()
+  if not clean_queue_id:
+    return {}, "Queue id is required."
+
+  attempts = [
+    (f"/api/v2/routing/queues/{clean_queue_id}", None),
+    (f"/api/v2/queues/{clean_queue_id}", {"fields": "*"}),
+    (f"/api/v2/queues/{clean_queue_id}", None),
+  ]
+
+  errors = []
+  for path, params in attempts:
+    ok_queue, payload, err_queue = _genesys_get_json(api_base, access_token, path, params=params)
+    if not ok_queue:
+      errors.append(f"{path}: {err_queue}")
+      continue
+
+    queue_candidate = payload.get("queue") if isinstance(payload, dict) and isinstance(payload.get("queue"), dict) else payload
+    queue_row = _genesys_normalize_queue_entity(queue_candidate if isinstance(queue_candidate, dict) else {})
+    if queue_row.get("id") or queue_row.get("name"):
+      if not queue_row.get("id"):
+        queue_row["id"] = clean_queue_id
+      return queue_row, ""
+
+  return {}, (" | ".join(errors) if errors else "Queue lookup failed.")
+
+
 def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id: str, user_name: str, user_email: str = "") -> dict:
   clean_region, _, api_base = _genesys_region_to_urls(region)
   fallback_template = _load_genesys_webrtc_template()
@@ -1737,10 +1936,7 @@ def _genesys_get_user_queues_paged(api_base: str, access_token: str, user_id: st
     if not ok_page:
       return entities_all, err_page, pages_scanned
 
-    entities = payload.get("entities", []) if isinstance(payload, dict) else []
-    if not isinstance(entities, list):
-      entities = []
-
+    entities = _genesys_extract_queue_items_from_payload(payload)
     entities_all.extend([item for item in entities if isinstance(item, dict)])
     pages_scanned += 1
 
@@ -1850,11 +2046,10 @@ def _genesys_get_queue_name(api_base: str, access_token: str, queue_id: str) -> 
   if not clean_queue_id:
     return ""
 
-  ok_queue, queue_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/routing/queues/{clean_queue_id}")
-  if ok_queue and isinstance(queue_payload, dict):
-    queue_name = str(queue_payload.get("name", "") or "").strip()
-    if queue_name:
-      return queue_name
+  queue_row, _ = _genesys_get_queue_by_id(api_base, access_token, clean_queue_id)
+  queue_name = str(queue_row.get("name", "") if isinstance(queue_row, dict) else "").strip()
+  if queue_name:
+    return queue_name
   return clean_queue_id
 
 
@@ -1902,30 +2097,15 @@ def _genesys_lookup_user_queues_via_membership(api_base: str, access_token: str,
       diagnostics["priority_matches"] = len(priority_matches)
       return priority_matches, "", diagnostics
 
-  queue_entities = []
-  max_queue_pages = max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 200))
-
-  for page_number in range(1, max_queue_pages + 1):
-    ok_queues, queues_payload, err_queues = _genesys_get_json(
-      api_base,
-      access_token,
-      "/api/v2/routing/queues",
-      params={"pageSize": 100, "pageNumber": page_number},
-    )
-    if not ok_queues:
-      diagnostics["scanned_queue_pages"] = page_number - 1
-      return [], err_queues, diagnostics
-
-    entities = queues_payload.get("entities", []) if isinstance(queues_payload, dict) else []
-    if isinstance(entities, list):
-      queue_entities.extend(entities)
-      diagnostics["scanned_queue_count"] = len(queue_entities)
-
-    diagnostics["scanned_queue_pages"] = page_number
-
-    page_count = int(queues_payload.get("pageCount", 0) or 0) if isinstance(queues_payload, dict) else 0
-    if not page_count or page_number >= page_count:
-      break
+  queue_entities, queue_pages, queue_err, _queue_source = _genesys_list_queues(
+    api_base,
+    access_token,
+    max_pages=max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 200)),
+  )
+  diagnostics["scanned_queue_pages"] = int(queue_pages or 0)
+  diagnostics["scanned_queue_count"] = int(len(queue_entities))
+  if queue_err:
+    return [], queue_err, diagnostics
 
   matched_queue_names = []
   for queue_item in queue_entities:
@@ -1956,34 +2136,26 @@ def _genesys_search_queues_by_name(api_base: str, access_token: str, queue_name:
     return [], "Queue name is required."
 
   matched = []
-  max_queue_pages = max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 200))
-  for page_number in range(1, max_queue_pages + 1):
-    ok_queues, queues_payload, err_queues = _genesys_get_json(
-      api_base,
-      access_token,
-      "/api/v2/routing/queues",
-      params={"pageSize": 100, "pageNumber": page_number},
-    )
-    if not ok_queues:
-      return [], err_queues
+  queue_rows, _queue_pages, queue_err, _queue_source = _genesys_list_queues(
+    api_base,
+    access_token,
+    max_pages=max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 200)),
+  )
+  if queue_err:
+    return [], queue_err
 
-    entities = queues_payload.get("entities", []) if isinstance(queues_payload, dict) else []
-    for item in entities:
-      if not isinstance(item, dict):
-        continue
-      q_name = str(item.get("name", "") or "").strip()
-      q_id = str(item.get("id", "") or "").strip()
-      if not q_name and not q_id:
-        continue
+  for row in queue_rows:
+    if not isinstance(row, dict):
+      continue
+    q_name = str(row.get("name", "") or "").strip()
+    q_id = str(row.get("id", "") or "").strip()
+    if not q_name and not q_id:
+      continue
 
-      q_name_l = q_name.lower()
-      q_id_l = q_id.lower()
-      if clean_queue_name == q_name_l or clean_queue_name == q_id_l or clean_queue_name in q_name_l:
-        matched.append(item)
-
-    page_count = int(queues_payload.get("pageCount", 0) or 0) if isinstance(queues_payload, dict) else 0
-    if not page_count or page_number >= page_count:
-      break
+    q_name_l = q_name.lower()
+    q_id_l = q_id.lower()
+    if clean_queue_name == q_name_l or clean_queue_name == q_id_l or clean_queue_name in q_name_l:
+      matched.append({"id": q_id, "name": q_name})
 
   # Prefer exact name/id matches first.
   def _rank(item: dict) -> tuple[int, str]:
@@ -12364,7 +12536,7 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn active" data-panel-target="genesys-user-panel" onclick="(function(){var id='genesys-user-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User WebRTC Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-bulk-email-panel" onclick="(function(){var id='genesys-bulk-email-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Bulk WebRTC build</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-update-panel" onclick="(function(){var id='genesys-user-update-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Search and Update</button>
-          <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel" onclick="(function(){var id='genesys-queue-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Lookup</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel" onclick="(function(){var id='genesys-queue-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Info</button>
         </aside>
 
         <section class="portal-main">
@@ -13049,12 +13221,22 @@ def genesys_admin_placeholder(request: Request):
           </script>
 
           <div id="genesys-queue-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
-            <h3 style="margin-top:0;">Queue Lookup</h3>
+            <h3 style="margin-top:0;">Queue Info</h3>
+            <p style="margin-top:0; color:#4e6a84;">Step 1: Retrieve all queues. Step 2: Select a queue and view members.</p>
             <form id="genesys-queue-search-form">
               <div class="search-filter-row">
-                <input name="queue_name" placeholder="Queue Name or Queue ID *" style="width:340px;" required>
+                <button type="button" id="genesys-queue-extract-all-btn" style="background:#455a64;">Retrieve All Queues</button>
+                <input id="genesys-queue-name" name="queue_name" placeholder="Optional: Queue Name or Queue ID" style="width:340px;">
                 <button type="submit">Lookup Queue Members</button>
-                <button type="button" id="genesys-queue-extract-all-btn" style="background:#455a64;">Extract All Queues</button>
+              </div>
+              <div class="search-filter-row" style="align-items:flex-start;">
+                <select id="genesys-queue-select" size="8" style="min-width:480px; width:100%; max-width:760px;"></select>
+                <button type="button" id="genesys-queue-view-members-btn" style="background:#2d7a43;">View Selected Queue Members</button>
+              </div>
+              <div class="search-filter-row" style="align-items:flex-start;">
+                <input id="genesys-queue-member-user" placeholder="User Email or User ID for Add/Remove" style="width:340px;">
+                <button type="button" id="genesys-queue-add-member-btn" style="background:#2d7a43;">Add User To Selected Queue</button>
+                <button type="button" id="genesys-queue-remove-member-btn" style="background:#8a2d2d;">Remove User From Selected Queue</button>
               </div>
             </form>
             <p id="genesys-queue-search-status" style="color:#2c5c8a; min-height:18px;">Ready.</p>
@@ -13091,6 +13273,11 @@ def genesys_admin_placeholder(request: Request):
         const queueResultsEl = document.getElementById("genesys-queue-search-results");
         const queueRawDownloadEl = document.getElementById("genesys-queue-raw-download");
         const queueExtractAllBtn = document.getElementById("genesys-queue-extract-all-btn");
+        const queueSelectEl = document.getElementById("genesys-queue-select");
+        const queueViewMembersBtn = document.getElementById("genesys-queue-view-members-btn");
+        const queueMemberUserEl = document.getElementById("genesys-queue-member-user");
+        const queueAddMemberBtn = document.getElementById("genesys-queue-add-member-btn");
+        const queueRemoveMemberBtn = document.getElementById("genesys-queue-remove-member-btn");
         const updateLoadCatalogBtn = document.getElementById("genesys-update-load-catalog-btn");
         const updateCatalogCountEl = document.getElementById("genesys-update-catalog-count");
         const updateCatalogDownloadEl = document.getElementById("genesys-update-catalog-download");
@@ -14549,16 +14736,91 @@ def genesys_admin_placeholder(request: Request):
         }
 
         if (queueForm && queueStatusEl && queueResultsEl) {
-          queueForm.addEventListener("submit", async function (event) {
-            event.preventDefault();
-            queueStatusEl.textContent = "Running queue lookup...";
-            queueResultsEl.innerHTML = "";
-            if (queueRawDownloadEl) {
-              queueRawDownloadEl.innerHTML = "";
+          let queueCatalogRows = [];
+          let lastQueueRows = [];
+
+          function _queueSelectedId() {
+            if (!queueSelectEl) {
+              return "";
+            }
+            return String(queueSelectEl.value || "").trim();
+          }
+
+          function _renderQueueSelect(rows) {
+            if (!queueSelectEl) {
+              return;
+            }
+            queueSelectEl.innerHTML = "";
+            if (!Array.isArray(rows) || !rows.length) {
+              const opt = document.createElement("option");
+              opt.value = "";
+              opt.textContent = "No queues loaded";
+              queueSelectEl.appendChild(opt);
+              return;
+            }
+            rows.forEach(function (row) {
+              const qid = String((row && row.id) || "").trim();
+              const qname = String((row && row.name) || qid || "").trim();
+              if (!qid) {
+                return;
+              }
+              const opt = document.createElement("option");
+              opt.value = qid;
+              opt.textContent = qname + " [" + qid + "]";
+              queueSelectEl.appendChild(opt);
+            });
+          }
+
+          function _renderQueueMembers(payload) {
+            const rows = Array.isArray(payload && payload.rows) ? payload.rows : [];
+            const diagnostics = Array.isArray(payload && payload.diagnostics) ? payload.diagnostics : [];
+            lastQueueRows = rows;
+
+            if (!rows.length) {
+              let noRowsHtml = "<p style='color:#4e6a84;'>No queue members found for this query.</p>";
+              if (diagnostics.length) {
+                noRowsHtml += "<div style='margin-top:8px;padding:8px;border:1px solid #d7e3ee;border-radius:6px;background:#f9fcff;'><strong>Diagnostics</strong><pre style='white-space:pre-wrap;margin:6px 0 0 0;font-size:12px;line-height:1.35;'>" + diagnostics.join("\\n") + "</pre></div>";
+              }
+              queueResultsEl.innerHTML = noRowsHtml;
+              return;
             }
 
+            let html = "<table><thead><tr>";
+            html += "<th>Select</th><th>Queue Name</th><th>Queue ID</th><th>Member Name</th><th>Member Email</th><th>Member Username</th><th>Member ID</th>";
+            html += "</tr></thead><tbody>";
+            rows.forEach(function (row, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const memberId = _escapeHtml(String((row && row.member_id) || ""));
+              const memberEmail = _escapeHtml(String((row && row.member_email) || ""));
+              html += "<tr style='background:" + bg + ";'>";
+              html += "<td><input type='radio' name='genesys_queue_member_row' class='genesys-queue-member-radio' data-member-id='" + memberId + "' data-member-email='" + memberEmail + "'></td>";
+              html += "<td>" + (row.queue_name || "") + "</td>";
+              html += "<td style='font-family:Consolas,monospace;'>" + (row.queue_id || "") + "</td>";
+              html += "<td>" + (row.member_name || "") + "</td>";
+              html += "<td>" + (row.member_email || "") + "</td>";
+              html += "<td>" + (row.member_username || "") + "</td>";
+              html += "<td style='font-family:Consolas,monospace;'>" + (row.member_id || "") + "</td>";
+              html += "</tr>";
+            });
+            html += "</tbody></table>";
+            if (diagnostics.length) {
+              html += "<div style='margin-top:8px;padding:8px;border:1px solid #d7e3ee;border-radius:6px;background:#f9fcff;'><strong>Diagnostics</strong><pre style='white-space:pre-wrap;margin:6px 0 0 0;font-size:12px;line-height:1.35;'>" + diagnostics.join("\\n") + "</pre></div>";
+            }
+            queueResultsEl.innerHTML = html;
+          }
+
+          async function _lookupQueueMembers(queueQuery) {
+            const q = String(queueQuery || "").trim();
+            if (!q) {
+              queueStatusEl.textContent = "Select a queue first, or type queue name/ID.";
+              return;
+            }
+
+            queueStatusEl.textContent = "Loading queue members...";
+            queueResultsEl.innerHTML = "";
             try {
-              const formData = new FormData(queueForm);
+              const formData = new FormData();
+              formData.append("queue_name", q);
               const response = await fetch("/genesys/queues/lookup", {
                 method: "POST",
                 body: formData,
@@ -14568,68 +14830,39 @@ def genesys_admin_placeholder(request: Request):
                 throw new Error((payload && payload.error) || "Queue lookup failed.");
               }
 
-              const rows = payload.rows || [];
               const warnings = Array.isArray(payload.warnings) ? payload.warnings.length : 0;
-              const diagnostics = Array.isArray(payload.diagnostics) ? payload.diagnostics : [];
-              const directQueueId = String(payload.direct_queue_id || "");
-              queueStatusEl.textContent = "Queue Query: " + (payload.query || "") + " | Direct Queue ID: " + (directQueueId || "(none)") + " | Matched Queues: " + ((payload.queues || []).length || 0) + " | Member Rows: " + rows.length + " | Warnings: " + warnings + " | Diagnostics: " + diagnostics.length;
-
-              if (!rows.length) {
-                let noRowsHtml = "<p style='color:#4e6a84;'>No queue members found for this query.</p>";
-                if (diagnostics.length) {
-                  noRowsHtml += "<div style='margin-top:8px;padding:8px;border:1px solid #d7e3ee;border-radius:6px;background:#f9fcff;'><strong>Diagnostics</strong><pre style='white-space:pre-wrap;margin:6px 0 0 0;font-size:12px;line-height:1.35;'>" + diagnostics.join("\\n") + "</pre></div>";
-                }
-                queueResultsEl.innerHTML = noRowsHtml;
-                return;
-              }
-
-              let html = "<table><thead><tr>";
-              html += "<th>Queue Name</th><th>Queue ID</th><th>Member Name</th><th>Member Email</th><th>Member Username</th><th>Member ID</th>";
-              html += "</tr></thead><tbody>";
-              rows.forEach(function (row, i) {
-                const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
-                html += "<tr style='background:" + bg + ";'>";
-                html += "<td>" + (row.queue_name || "") + "</td>";
-                html += "<td style='font-family:Consolas,monospace;'>" + (row.queue_id || "") + "</td>";
-                html += "<td>" + (row.member_name || "") + "</td>";
-                html += "<td>" + (row.member_email || "") + "</td>";
-                html += "<td>" + (row.member_username || "") + "</td>";
-                html += "<td style='font-family:Consolas,monospace;'>" + (row.member_id || "") + "</td>";
-                html += "</tr>";
-              });
-              html += "</tbody></table>";
-              if (diagnostics.length) {
-                html += "<div style='margin-top:8px;padding:8px;border:1px solid #d7e3ee;border-radius:6px;background:#f9fcff;'><strong>Diagnostics</strong><pre style='white-space:pre-wrap;margin:6px 0 0 0;font-size:12px;line-height:1.35;'>" + diagnostics.join("\\n") + "</pre></div>";
-              }
-              queueResultsEl.innerHTML = html;
+              const diagnostics = Array.isArray(payload.diagnostics) ? payload.diagnostics.length : 0;
+              queueStatusEl.textContent = "Queue: " + (payload.query || q) + " | Matched Queues: " + ((payload.queues || []).length || 0) + " | Member Rows: " + ((payload.rows || []).length || 0) + " | Warnings: " + warnings + " | Diagnostics: " + diagnostics;
+              _renderQueueMembers(payload);
             } catch (err) {
               queueStatusEl.textContent = "Queue lookup failed: " + ((err && err.message) || "Unknown error.");
             }
-          });
-        }
+          }
 
-        if (queueExtractAllBtn && queueStatusEl && queueResultsEl) {
-          queueExtractAllBtn.addEventListener("click", async function () {
-            const originalText = queueExtractAllBtn.textContent;
-            queueExtractAllBtn.disabled = true;
-            queueExtractAllBtn.textContent = "Extracting...";
-            queueStatusEl.textContent = "Extracting all queue names...";
+          async function _retrieveAllQueues() {
+            const originalText = queueExtractAllBtn ? queueExtractAllBtn.textContent : "Retrieve All Queues";
+            if (queueExtractAllBtn) {
+              queueExtractAllBtn.disabled = true;
+              queueExtractAllBtn.textContent = "Retrieving...";
+            }
+            queueStatusEl.textContent = "Retrieving all queues...";
             queueResultsEl.innerHTML = "";
             if (queueRawDownloadEl) {
               queueRawDownloadEl.innerHTML = "";
             }
 
             try {
-              const response = await fetch("/genesys/queues/extract-all", {
-                method: "POST",
-              });
+              const response = await fetch("/genesys/queues/extract-all", { method: "POST" });
               const payload = await response.json();
               if (!response.ok || !payload.ok) {
                 throw new Error((payload && payload.error) || "Queue extract failed.");
               }
 
               const rows = Array.isArray(payload.queues) ? payload.queues : [];
-              queueStatusEl.textContent = "Region: " + (payload.region || "") + " | Queue Pages: " + String(payload.pages_scanned || 0) + " | Queues: " + rows.length;
+              queueCatalogRows = rows;
+              _renderQueueSelect(rows);
+              const source = String(payload.queue_api_source || "").trim();
+              queueStatusEl.textContent = "Region: " + (payload.region || "") + " | Queue Pages: " + String(payload.pages_scanned || 0) + " | Queues: " + rows.length + (source ? (" | Source: " + source) : "");
               if (queueRawDownloadEl && payload.raw_download_url) {
                 const rawName = payload.raw_filename || "genesys_all_queues.json";
                 queueRawDownloadEl.innerHTML = "<a href='" + payload.raw_download_url + "' style='display:inline-block;padding:7px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Queue JSON (" + rawName + ")</a>";
@@ -14657,10 +14890,102 @@ def genesys_admin_placeholder(request: Request):
             } catch (err) {
               queueStatusEl.textContent = "Queue extract failed: " + ((err && err.message) || "Unknown error.");
             } finally {
-              queueExtractAllBtn.disabled = false;
-              queueExtractAllBtn.textContent = originalText;
+              if (queueExtractAllBtn) {
+                queueExtractAllBtn.disabled = false;
+                queueExtractAllBtn.textContent = originalText;
+              }
             }
+          }
+
+          async function _queueMemberChange(action) {
+            const queueId = _queueSelectedId() || String((document.getElementById("genesys-queue-name") || {}).value || "").trim();
+            if (!queueId) {
+              queueStatusEl.textContent = "Select a queue first.";
+              return;
+            }
+
+            let userToken = String((queueMemberUserEl && queueMemberUserEl.value) || "").trim();
+            if (!userToken && action === "remove") {
+              const selected = queueResultsEl.querySelector(".genesys-queue-member-radio:checked");
+              if (selected) {
+                userToken = String(selected.getAttribute("data-member-id") || selected.getAttribute("data-member-email") || "").trim();
+                if (queueMemberUserEl && userToken) {
+                  queueMemberUserEl.value = userToken;
+                }
+              }
+            }
+
+            if (!userToken) {
+              queueStatusEl.textContent = (action === "add")
+                ? "Enter user email or user ID to add."
+                : "Enter/select user email or user ID to remove.";
+              return;
+            }
+
+            const endpoint = action === "add" ? "/genesys/queues/member-add" : "/genesys/queues/member-remove";
+            queueStatusEl.textContent = (action === "add" ? "Adding user to queue..." : "Removing user from queue...");
+
+            try {
+              const formData = new FormData();
+              formData.append("queue_id", queueId);
+              if (userToken.indexOf("@") >= 0) {
+                formData.append("user_email", userToken);
+              } else {
+                formData.append("user_id", userToken);
+              }
+
+              const response = await fetch(endpoint, {
+                method: "POST",
+                body: formData,
+              });
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {
+                throw new Error((payload && payload.error) || "Queue membership update failed.");
+              }
+
+              queueStatusEl.textContent = (action === "add" ? "Add complete: " : "Remove complete: ")
+                + "Queue=" + String(payload.queue_name || payload.queue_id || queueId)
+                + " | User=" + String(payload.user_email || payload.user_id || userToken)
+                + " | Result=" + String(payload.result || "ok");
+
+              await _lookupQueueMembers(queueId);
+            } catch (err) {
+              queueStatusEl.textContent = (action === "add" ? "Add failed: " : "Remove failed: ") + ((err && err.message) || "Unknown error.");
+            }
+          }
+
+          queueForm.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            const queueNameInput = document.getElementById("genesys-queue-name");
+            const userTyped = String((queueNameInput && queueNameInput.value) || "").trim();
+            const selectedId = _queueSelectedId();
+            await _lookupQueueMembers(userTyped || selectedId);
           });
+
+          if (queueExtractAllBtn) {
+            queueExtractAllBtn.addEventListener("click", function () {
+              _retrieveAllQueues();
+            });
+          }
+
+          if (queueViewMembersBtn) {
+            queueViewMembersBtn.addEventListener("click", function () {
+              const selectedId = _queueSelectedId();
+              _lookupQueueMembers(selectedId);
+            });
+          }
+
+          if (queueAddMemberBtn) {
+            queueAddMemberBtn.addEventListener("click", function () {
+              _queueMemberChange("add");
+            });
+          }
+
+          if (queueRemoveMemberBtn) {
+            queueRemoveMemberBtn.addEventListener("click", function () {
+              _queueMemberChange("remove");
+            });
+          }
         }
       })();
     </script>
@@ -15208,11 +15533,9 @@ def genesys_extract_all_queues_route():
   _, _, api_base = _genesys_region_to_urls(region)
   access_token = token_result.get("access_token", "")
 
-  queue_entities, pages_scanned, queue_err = _genesys_collect_paged_entities(
+  queue_entities, pages_scanned, queue_err, queue_source = _genesys_list_queues(
     api_base,
     access_token,
-    "/api/v2/routing/queues",
-    page_size=100,
     max_pages=max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 500)),
   )
   if queue_err:
@@ -15222,15 +15545,11 @@ def genesys_extract_all_queues_route():
   for item in queue_entities:
     if not isinstance(item, dict):
       continue
-    q_id = str(item.get("id", "") or "").strip()
-    q_name = str(item.get("name", "") or "").strip()
-    division = item.get("division") if isinstance(item.get("division"), dict) else {}
-    division_name = str(division.get("name", "") or "").strip()
-    member_count_raw = item.get("memberCount", item.get("membersCount", 0))
-    try:
-      member_count = int(member_count_raw or 0)
-    except Exception:
-      member_count = 0
+    normalized = _genesys_normalize_queue_entity(item)
+    q_id = str(normalized.get("id", "") or "").strip()
+    q_name = str(normalized.get("name", "") or "").strip()
+    division_name = str(normalized.get("division", "") or "").strip()
+    member_count = int(normalized.get("member_count", 0) or 0)
 
     if not q_id and not q_name:
       continue
@@ -15249,6 +15568,7 @@ def genesys_extract_all_queues_route():
     "region": region,
     "pages_scanned": pages_scanned,
     "queue_count": len(rows),
+    "queue_api_source": queue_source,
     "queues": rows,
   }
   raw_filename = f"genesys_all_queues_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -15262,10 +15582,125 @@ def genesys_extract_all_queues_route():
     "ok": True,
     "region": region,
     "pages_scanned": pages_scanned,
+    "queue_api_source": queue_source,
     "queue_count": len(rows),
     "queues": rows,
     "raw_download_url": f"/download/job-output/{raw_job_id}",
     "raw_filename": raw_filename,
+  })
+
+
+def _genesys_resolve_queue_action_user(region: str, access_token: str, user_id: str, user_email: str) -> dict:
+  clean_user_id = str(user_id or "").strip()
+  clean_user_email = str(user_email or "").strip().lower()
+  if clean_user_id:
+    return {
+      "ok": True,
+      "user_id": clean_user_id,
+      "user_email": clean_user_email,
+      "user_name": "",
+      "region": region,
+    }
+
+  if not clean_user_email:
+    return {"ok": False, "error": "user_id or user_email is required."}
+
+  lookup_result = _genesys_lookup_user_by_email(region, access_token, clean_user_email)
+  if not lookup_result.get("ok"):
+    return {"ok": False, "error": lookup_result.get("error", "Unable to resolve user by email.")}
+
+  return {
+    "ok": True,
+    "user_id": str(lookup_result.get("user_id", "") or "").strip(),
+    "user_email": str(lookup_result.get("email", clean_user_email) or clean_user_email).strip().lower(),
+    "user_name": str(lookup_result.get("display_name", "") or lookup_result.get("user_name", "") or "").strip(),
+    "region": region,
+  }
+
+
+@app.post("/genesys/queues/member-add")
+def genesys_queue_member_add_route(
+  queue_id: str = Form(""),
+  user_id: str = Form(""),
+  user_email: str = Form(""),
+):
+  clean_queue_id = str(queue_id or "").strip()
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  if not clean_queue_id:
+    return JSONResponse({"ok": False, "error": "queue_id is required."}, status_code=400)
+
+  token_result = _genesys_get_queue_access_token(clean_region)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+
+  region = token_result.get("region", clean_region)
+  _, _, api_base = _genesys_region_to_urls(region)
+  access_token = token_result.get("access_token", "")
+
+  user_resolved = _genesys_resolve_queue_action_user(region, access_token, user_id, user_email)
+  if not user_resolved.get("ok"):
+    return JSONResponse({"ok": False, "error": user_resolved.get("error", "Unable to resolve user.")}, status_code=400)
+
+  resolved_user_id = str(user_resolved.get("user_id", "") or "").strip()
+  if not resolved_user_id:
+    return JSONResponse({"ok": False, "error": "Resolved user id is empty."}, status_code=400)
+
+  ok_add, add_state = _genesys_add_user_to_queue(api_base, access_token, resolved_user_id, clean_queue_id)
+  if not ok_add:
+    return JSONResponse({"ok": False, "error": str(add_state or "Queue member add failed.")}, status_code=400)
+
+  return JSONResponse({
+    "ok": True,
+    "region": region,
+    "queue_id": clean_queue_id,
+    "queue_name": _genesys_get_queue_name(api_base, access_token, clean_queue_id),
+    "user_id": resolved_user_id,
+    "user_email": str(user_resolved.get("user_email", "") or "").strip().lower(),
+    "user_name": str(user_resolved.get("user_name", "") or "").strip(),
+    "result": str(add_state or "added"),
+  })
+
+
+@app.post("/genesys/queues/member-remove")
+def genesys_queue_member_remove_route(
+  queue_id: str = Form(""),
+  user_id: str = Form(""),
+  user_email: str = Form(""),
+):
+  clean_queue_id = str(queue_id or "").strip()
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  if not clean_queue_id:
+    return JSONResponse({"ok": False, "error": "queue_id is required."}, status_code=400)
+
+  token_result = _genesys_get_queue_access_token(clean_region)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+
+  region = token_result.get("region", clean_region)
+  _, _, api_base = _genesys_region_to_urls(region)
+  access_token = token_result.get("access_token", "")
+
+  user_resolved = _genesys_resolve_queue_action_user(region, access_token, user_id, user_email)
+  if not user_resolved.get("ok"):
+    return JSONResponse({"ok": False, "error": user_resolved.get("error", "Unable to resolve user.")}, status_code=400)
+
+  resolved_user_id = str(user_resolved.get("user_id", "") or "").strip()
+  if not resolved_user_id:
+    return JSONResponse({"ok": False, "error": "Resolved user id is empty."}, status_code=400)
+
+  ok_remove, remove_state = _genesys_remove_user_from_queue(api_base, access_token, resolved_user_id, clean_queue_id)
+  if not ok_remove:
+    return JSONResponse({"ok": False, "error": str(remove_state or "Queue member remove failed.")}, status_code=400)
+
+  return JSONResponse({
+    "ok": True,
+    "region": region,
+    "queue_id": clean_queue_id,
+    "queue_name": _genesys_get_queue_name(api_base, access_token, clean_queue_id),
+    "user_id": resolved_user_id,
+    "user_email": str(user_resolved.get("user_email", "") or "").strip().lower(),
+    "user_name": str(user_resolved.get("user_name", "") or "").strip(),
+    "result": str(remove_state or "removed"),
   })
 
 
