@@ -3011,13 +3011,14 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
 
   ok_routing, routing_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}/routingstatus")
   ok_station_assoc, station_assoc_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}/stationassociations")
-  webrtc_phone = _genesys_extract_webrtc_phone(
+  associated_webrtc_phone = _genesys_extract_webrtc_phone(
     user_payload if ok_user else {},
     routing_payload if ok_routing else {},
     station_assoc_payload if ok_station_assoc else {},
   )
 
-  if not webrtc_phone:
+  inventory_webrtc_phone = ""
+  if not associated_webrtc_phone:
     phone_management_name, _, _, _ = _genesys_lookup_phone_management_name(
       api_base,
       access_token,
@@ -3026,7 +3027,7 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
       email,
     )
     if phone_management_name:
-      webrtc_phone = phone_management_name
+      inventory_webrtc_phone = str(phone_management_name or "").strip()
 
   skill_ids, skills_err = _genesys_get_user_skill_ids(api_base, access_token, clean_user_id)
   if skills_err:
@@ -3044,8 +3045,12 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
     "user_email": email,
     "division_id": division_id,
     "division_name": division_name,
-    "webrtc_phone": str(webrtc_phone or "").strip(),
-    "has_webrtc_phone": bool(str(webrtc_phone or "").strip()),
+    "webrtc_phone": str(associated_webrtc_phone or "").strip(),
+    "webrtc_associated_phone": str(associated_webrtc_phone or "").strip(),
+    "webrtc_inventory_phone": str(inventory_webrtc_phone or "").strip(),
+    "has_webrtc_phone": bool(str(associated_webrtc_phone or "").strip()),
+    "has_webrtc_association": bool(str(associated_webrtc_phone or "").strip()),
+    "has_webrtc_inventory_match": bool(str(inventory_webrtc_phone or "").strip()),
     "skill_ids": skill_ids,
     "queue_ids": queue_ids,
   }
@@ -13807,11 +13812,15 @@ def genesys_admin_placeholder(request: Request):
                   setSelected(queuesSelect, Array.isArray(payload.queue_ids) ? payload.queue_ids : []);
 
                   if (profileEl) {
-                    const webrtcText = String(payload.webrtc_phone || "").trim();
+                    const associatedWebrtc = String(payload.webrtc_associated_phone || payload.webrtc_phone || "").trim();
+                    const inventoryWebrtc = String(payload.webrtc_inventory_phone || "").trim();
+                    const inventoryHint = (!associatedWebrtc && inventoryWebrtc) ? (" | Inventory Match=" + esc(inventoryWebrtc)) : "";
                     profileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Profile Division=" + esc(String(payload.division_name || payload.division_id || "(none)"))
                       + " | Skills=" + Number((payload.skill_ids || []).length || 0)
                       + " | Queues=" + Number((payload.queue_ids || []).length || 0)
-                      + " | WebRTC=" + esc(webrtcText || "(missing)") + "</strong>";
+                      + " | WebRTC Associated=" + esc(associatedWebrtc || "(none)")
+                      + inventoryHint
+                      + "</strong>";
                   }
                   statusEl.textContent = "Current profile loaded for " + userEmail + ". Select a Division Access target explicitly if you want to grant additional role-based access, then run update.";
                   return true;
@@ -14751,11 +14760,15 @@ def genesys_admin_placeholder(request: Request):
             _setSelectedOptions(updateQueuesSelect, Array.isArray(payload.queue_ids) ? payload.queue_ids : []);
 
             if (updateSingleProfileEl) {
-              const webrtcText = String(payload.webrtc_phone || "").trim();
+              const associatedWebrtc = String(payload.webrtc_associated_phone || payload.webrtc_phone || "").trim();
+              const inventoryWebrtc = String(payload.webrtc_inventory_phone || "").trim();
+              const inventoryHint = (!associatedWebrtc && inventoryWebrtc) ? (" | Inventory Match=" + _escapeHtml(inventoryWebrtc)) : "";
               updateSingleProfileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Profile Division=" + _escapeHtml(String(payload.division_name || payload.division_id || "(none)"))
                 + " | Skills=" + Number((payload.skill_ids || []).length || 0)
                 + " | Queues=" + Number((payload.queue_ids || []).length || 0)
-                + " | WebRTC=" + _escapeHtml(webrtcText || "(missing)") + "</strong>";
+                + " | WebRTC Associated=" + _escapeHtml(associatedWebrtc || "(none)")
+                + inventoryHint
+                + "</strong>";
             }
 
             if (updateSingleActionsEl) {
@@ -14810,7 +14823,13 @@ def genesys_admin_placeholder(request: Request):
                 updateSingleActionsEl.appendChild(button);
               }
             }
-            updateStatusEl.textContent = "Current profile loaded for " + userEmail + ". Adjust Skills/Queues, and only select Division Access if you want to grant additional role-based access.";
+            const hasAssoc = !!String(payload.webrtc_associated_phone || payload.webrtc_phone || "").trim();
+            const hasInventoryOnly = !hasAssoc && !!String(payload.webrtc_inventory_phone || "").trim();
+            if (hasInventoryOnly) {
+              updateStatusEl.textContent = "Current profile loaded for " + userEmail + ". WebRTC inventory exists but is not associated to the user profile. Skills/Queues can still be updated.";
+            } else {
+              updateStatusEl.textContent = "Current profile loaded for " + userEmail + ". Adjust Skills/Queues, and only select Division Access if you want to grant additional role-based access.";
+            }
           } catch (err) {
             updateStatusEl.textContent = "User lookup failed: " + ((err && err.message) || "Unknown error.");
             if (updateSingleActionsEl) {
