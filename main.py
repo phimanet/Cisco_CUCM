@@ -14278,6 +14278,7 @@ def genesys_admin_placeholder(request: Request):
                     const associatedWebrtc = String(payload.webrtc_associated_phone || payload.webrtc_phone || "").trim();
                     const userWebrtc = String(payload.webrtc_user_phone || "").trim();
                     const inventoryWebrtc = String(payload.webrtc_inventory_phone || "").trim();
+                    const configuredWebrtc = associatedWebrtc || userWebrtc || inventoryWebrtc;
                     const associationState = associatedWebrtc
                       ? "Associated"
                       : (inventoryWebrtc ? "Created but not associated" : "Not created");
@@ -14286,8 +14287,7 @@ def genesys_admin_placeholder(request: Request):
                     profileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Profile Division=" + esc(String(payload.division_name || payload.division_id || "(none)"))
                       + " | Skills=" + Number((payload.skill_ids || []).length || 0)
                       + " | Queues=" + Number((payload.queue_ids || []).length || 0)
-                      + " | User Phone=" + esc(userWebrtc || "(none)")
-                      + " | Associated Phone=" + esc(associatedWebrtc || "(none)")
+                      + " | WebRTC Phone=" + esc(configuredWebrtc || "(none)")
                       + "</strong>"
                       + "<div style='margin-top:6px; font-size:12px; color:#5b6f82;'><strong>Association Status:</strong> " + esc(associationState) + "</div>"
                       + "<div style='margin-top:6px; font-size:12px; color:#5b6f82;'><strong>Inventory Match:</strong> " + esc(inventoryWebrtc || "(none)") + "</div>"
@@ -15356,6 +15356,7 @@ def genesys_admin_placeholder(request: Request):
               const associatedWebrtc = String(payload.webrtc_associated_phone || payload.webrtc_phone || "").trim();
               const userWebrtc = String(payload.webrtc_user_phone || "").trim();
               const inventoryWebrtc = String(payload.webrtc_inventory_phone || "").trim();
+              const configuredWebrtc = associatedWebrtc || userWebrtc || inventoryWebrtc;
               const associationState = associatedWebrtc
                 ? "Associated"
                 : (inventoryWebrtc ? "Created but not associated" : "Not created");
@@ -15364,8 +15365,7 @@ def genesys_admin_placeholder(request: Request):
               updateSingleProfileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Profile Division=" + _escapeHtml(String(payload.division_name || payload.division_id || "(none)"))
                 + " | Skills=" + Number((payload.skill_ids || []).length || 0)
                 + " | Queues=" + Number((payload.queue_ids || []).length || 0)
-                + " | User Phone=" + _escapeHtml(userWebrtc || "(none)")
-                + " | Associated Phone=" + _escapeHtml(associatedWebrtc || "(none)")
+                + " | WebRTC Phone=" + _escapeHtml(configuredWebrtc || "(none)")
                 + "</strong>"
                 + "<div style='margin-top:6px; font-size:12px; color:#5b6f82;'><strong>Association Status:</strong> " + _escapeHtml(associationState) + "</div>"
                 + "<div style='margin-top:6px; font-size:12px; color:#5b6f82;'><strong>Inventory Match:</strong> " + _escapeHtml(inventoryWebrtc || "(none)") + "</div>"
