@@ -3155,6 +3155,17 @@ def _genesys_ensure_update_webrtc_prerequisite(region: str, access_token: str, u
           "webrtc_create_mode": str(retry_result.get("create_mode", "") or "").strip(),
         }
 
+      # Final degrade mode: do not block other updates on unresolved ghost assignments.
+      return {
+        "ok": True,
+        "error": "",
+        "webrtc_phone": "",
+        "inventory_phone": inventory_phone,
+        "webrtc_status": "warning: ghost assignment unresolved (continuing updates)",
+        "webrtc_create_mode": str(build_result.get("create_mode", "") or "existing").strip(),
+        "webrtc_warning": str(build_result.get("error", "") or "Ghost assignment unresolved after auto-repair.").strip(),
+      }
+
     error_message = str(build_result.get("error", "Unable to auto-create/associate WebRTC phone.") or "").strip()
     if inventory_phone:
       error_message += f" Inventory match found ({inventory_phone}) but association failed."
@@ -3189,6 +3200,7 @@ def _genesys_ensure_update_webrtc_prerequisite(region: str, access_token: str, u
     "inventory_phone": inventory_phone,
     "webrtc_status": str(build_result.get("association_result", "") or "associated").strip(),
     "webrtc_create_mode": str(build_result.get("create_mode", "") or "").strip(),
+    "webrtc_warning": "",
   }
 
 
@@ -13911,6 +13923,7 @@ def genesys_admin_placeholder(request: Request):
                     "<strong>Single User Update Result</strong>"
                     + "<div style='margin-top:6px;'>User: " + esc(String(payload.user_email || userEmail)) + "</div>"
                     + "<div style='margin-top:6px;'>WebRTC: " + esc(String(payload.webrtc_status || "")) + " (mode=" + esc(String(payload.webrtc_create_mode || "")) + ", phone=" + esc(String(payload.webrtc_phone || "")) + ")</div>"
+                    + (String(payload.webrtc_warning || "").trim() ? ("<div style='margin-top:6px;color:#8a2d2d;'>WebRTC Warning: " + esc(String(payload.webrtc_warning || "")) + "</div>") : "")
                     + "<div style='margin-top:6px;'>Division: " + esc(String(payload.division_status || "")) + "</div>"
                     + "<div style='margin-top:6px;'>Skills: " + esc(String(payload.skills_status || "")) + "</div>"
                     + "<div style='margin-top:6px;'>Queues: " + esc(String(payload.queues_status || "")) + "</div>",
@@ -15098,6 +15111,7 @@ def genesys_admin_placeholder(request: Request):
               "<strong>Single User Update Result</strong>"
               + "<div style='margin-top:6px;'>User: " + _escapeHtml(String(payload.user_email || userEmail)) + "</div>"
               + "<div style='margin-top:6px;'>WebRTC: " + _escapeHtml(String(payload.webrtc_status || "")) + " (mode=" + _escapeHtml(String(payload.webrtc_create_mode || "")) + ", phone=" + _escapeHtml(String(payload.webrtc_phone || "")) + ")</div>"
+              + (String(payload.webrtc_warning || "").trim() ? ("<div style='margin-top:6px;color:#8a2d2d;'>WebRTC Warning: " + _escapeHtml(String(payload.webrtc_warning || "")) + "</div>") : "")
               + "<div style='margin-top:6px;'>Division: " + _escapeHtml(String(payload.division_status || "")) + "</div>"
               + "<div style='margin-top:6px;'>Skills: " + _escapeHtml(String(payload.skills_status || "")) + "</div>"
               + "<div style='margin-top:6px;'>Queues: " + _escapeHtml(String(payload.queues_status || "")) + "</div>",
@@ -18085,6 +18099,7 @@ def genesys_user_search_update_route(
     "webrtc_status": str(prereq_result.get("webrtc_status", "already_associated") or "already_associated").strip(),
     "webrtc_phone": str(prereq_result.get("webrtc_phone", "") or "").strip(),
     "webrtc_create_mode": str(prereq_result.get("webrtc_create_mode", "existing") or "existing").strip(),
+    "webrtc_warning": str(prereq_result.get("webrtc_warning", "") or "").strip(),
     "division_status": apply_result.get("division_status", ""),
     "skills_status": apply_result.get("skills_status", ""),
     "queues_status": apply_result.get("queues_status", ""),
@@ -18248,6 +18263,7 @@ def genesys_user_search_update_batch_route(
         "webrtc_status": str(prereq_result.get("webrtc_status", "already_associated") or "already_associated").strip(),
         "webrtc_phone": str(prereq_result.get("webrtc_phone", "") or "").strip(),
         "webrtc_create_mode": str(prereq_result.get("webrtc_create_mode", "existing") or "existing").strip(),
+        "webrtc_warning": str(prereq_result.get("webrtc_warning", "") or "").strip(),
         "division_status": apply_result.get("division_status", ""),
         "skills_status": apply_result.get("skills_status", ""),
         "queues_status": apply_result.get("queues_status", ""),
