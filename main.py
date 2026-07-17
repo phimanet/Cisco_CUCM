@@ -23816,6 +23816,10 @@ def menu_admin_page(request: Request):
             <strong>SMS Item Menu</strong>
             <span>Manage Twilio number verification and lookup operations.</span>
           </a>
+          <a class="hero-link-card" href="/opentext-admin">
+            <strong>OpenText Admin</strong>
+            <span>OpenTxt Numbers List and number lookup tools.</span>
+          </a>
           <a class="hero-link-card" href="/page4">
             <strong>Server Certificate Manager</strong>
             <span>LAB-only read-only certificate inventory for CUCM, IM and Presence, and Unity.</span>
