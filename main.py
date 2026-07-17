@@ -13225,24 +13225,250 @@ def genesys_admin_placeholder(request: Request):
             <p style="margin-top:0; color:#4e6a84;">Step 1: Retrieve all queues. Step 2: Select a queue and view members.</p>
             <form id="genesys-queue-search-form">
               <div class="search-filter-row">
-                <button type="button" id="genesys-queue-extract-all-btn" style="background:#455a64;">Retrieve All Queues</button>
+                <button type="button" id="genesys-queue-extract-all-btn" style="background:#455a64;" onclick="if (window.runQueueInfoRetrieveAll) { return window.runQueueInfoRetrieveAll(); } return false;">Retrieve All Queues</button>
                 <input id="genesys-queue-name" name="queue_name" placeholder="Optional: Queue Name or Queue ID" style="width:340px;">
-                <button type="submit">Lookup Queue Members</button>
+                <button type="submit" onclick="if (window.runQueueInfoLookupMembersFromForm) { return window.runQueueInfoLookupMembersFromForm(); } return true;">Lookup Queue Members</button>
               </div>
               <div class="search-filter-row" style="align-items:flex-start;">
                 <select id="genesys-queue-select" size="8" style="min-width:480px; width:100%; max-width:760px;"></select>
-                <button type="button" id="genesys-queue-view-members-btn" style="background:#2d7a43;">View Selected Queue Members</button>
+                <button type="button" id="genesys-queue-view-members-btn" style="background:#2d7a43;" onclick="if (window.runQueueInfoLookupMembersSelected) { return window.runQueueInfoLookupMembersSelected(); } return false;">View Selected Queue Members</button>
               </div>
               <div class="search-filter-row" style="align-items:flex-start;">
                 <input id="genesys-queue-member-user" placeholder="User Email or User ID for Add/Remove" style="width:340px;">
-                <button type="button" id="genesys-queue-add-member-btn" style="background:#2d7a43;">Add User To Selected Queue</button>
-                <button type="button" id="genesys-queue-remove-member-btn" style="background:#8a2d2d;">Remove User From Selected Queue</button>
+                <button type="button" id="genesys-queue-add-member-btn" style="background:#2d7a43;" onclick="if (window.runQueueInfoAddMember) { return window.runQueueInfoAddMember(); } return false;">Add User To Selected Queue</button>
+                <button type="button" id="genesys-queue-remove-member-btn" style="background:#8a2d2d;" onclick="if (window.runQueueInfoRemoveMember) { return window.runQueueInfoRemoveMember(); } return false;">Remove User From Selected Queue</button>
               </div>
             </form>
             <p id="genesys-queue-search-status" style="color:#2c5c8a; min-height:18px;">Ready.</p>
             <div id="genesys-queue-raw-download" style="margin:6px 0 10px 0;"></div>
             <div id="genesys-queue-search-results" style="overflow-x:auto;"></div>
           </div>
+          <script>
+            (function () {
+              const panel = document.getElementById("genesys-queue-panel");
+              if (!panel) {
+                return;
+              }
+              if (String(panel.dataset.queueFallbackBound || "") === "1") {
+                return;
+              }
+              panel.dataset.queueFallbackBound = "1";
+
+              const queueForm = document.getElementById("genesys-queue-search-form");
+              const queueNameEl = document.getElementById("genesys-queue-name");
+              const queueSelectEl = document.getElementById("genesys-queue-select");
+              const queueStatusEl = document.getElementById("genesys-queue-search-status");
+              const queueResultsEl = document.getElementById("genesys-queue-search-results");
+              const queueRawDownloadEl = document.getElementById("genesys-queue-raw-download");
+              const queueExtractAllBtn = document.getElementById("genesys-queue-extract-all-btn");
+              const queueViewMembersBtn = document.getElementById("genesys-queue-view-members-btn");
+              const queueMemberUserEl = document.getElementById("genesys-queue-member-user");
+              const queueAddMemberBtn = document.getElementById("genesys-queue-add-member-btn");
+              const queueRemoveMemberBtn = document.getElementById("genesys-queue-remove-member-btn");
+
+              if (!queueForm || !queueStatusEl || !queueResultsEl) {
+                return;
+              }
+
+              function selectedQueueId() {
+                if (!queueSelectEl) {
+                  return "";
+                }
+                return String(queueSelectEl.value || "").trim();
+              }
+
+              function renderQueueSelect(rows) {
+                if (!queueSelectEl) {
+                  return;
+                }
+                queueSelectEl.innerHTML = "";
+                if (!Array.isArray(rows) || !rows.length) {
+                  const opt = document.createElement("option");
+                  opt.value = "";
+                  opt.textContent = "No queues loaded";
+                  queueSelectEl.appendChild(opt);
+                  return;
+                }
+                rows.forEach(function (row) {
+                  const qid = String((row && row.id) || "").trim();
+                  const qname = String((row && row.name) || qid || "").trim();
+                  if (!qid) {
+                    return;
+                  }
+                  const opt = document.createElement("option");
+                  opt.value = qid;
+                  opt.textContent = qname + " [" + qid + "]";
+                  queueSelectEl.appendChild(opt);
+                });
+              }
+
+              function renderQueueMembers(payload) {
+                const rows = Array.isArray(payload && payload.rows) ? payload.rows : [];
+                if (!rows.length) {
+                  queueResultsEl.innerHTML = "<p style='color:#4e6a84;'>No queue members found for this query.</p>";
+                  return;
+                }
+
+                let html = "<table><thead><tr>";
+                html += "<th>Select</th><th>Queue Name</th><th>Queue ID</th><th>Member Name</th><th>Member Email</th><th>Member Username</th><th>Member ID</th>";
+                html += "</tr></thead><tbody>";
+                rows.forEach(function (row, i) {
+                  const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                  const memberId = String((row && row.member_id) || "").replace(/'/g, "&#39;");
+                  const memberEmail = String((row && row.member_email) || "").replace(/'/g, "&#39;");
+                  html += "<tr style='background:" + bg + ";'>";
+                  html += "<td><input type='radio' name='genesys_queue_member_row' class='genesys-queue-member-radio' data-member-id='" + memberId + "' data-member-email='" + memberEmail + "'></td>";
+                  html += "<td>" + String((row && row.queue_name) || "") + "</td>";
+                  html += "<td style='font-family:Consolas,monospace;'>" + String((row && row.queue_id) || "") + "</td>";
+                  html += "<td>" + String((row && row.member_name) || "") + "</td>";
+                  html += "<td>" + String((row && row.member_email) || "") + "</td>";
+                  html += "<td>" + String((row && row.member_username) || "") + "</td>";
+                  html += "<td style='font-family:Consolas,monospace;'>" + String((row && row.member_id) || "") + "</td>";
+                  html += "</tr>";
+                });
+                html += "</tbody></table>";
+                queueResultsEl.innerHTML = html;
+              }
+
+              async function retrieveAllQueues() {
+                const originalText = queueExtractAllBtn ? queueExtractAllBtn.textContent : "Retrieve All Queues";
+                if (queueExtractAllBtn) {
+                  queueExtractAllBtn.disabled = true;
+                  queueExtractAllBtn.textContent = "Retrieving...";
+                }
+                queueStatusEl.textContent = "Retrieving all queues...";
+
+                try {
+                  const response = await fetch("/genesys/queues/extract-all", { method: "POST" });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || "Queue extract failed.");
+                  }
+
+                  const rows = Array.isArray(payload.queues) ? payload.queues : [];
+                  renderQueueSelect(rows);
+                  queueStatusEl.textContent = "Region: " + String(payload.region || "") + " | Queue Pages: " + String(payload.pages_scanned || 0) + " | Queues: " + rows.length;
+                  if (queueRawDownloadEl && payload.raw_download_url) {
+                    const rawName = payload.raw_filename || "genesys_all_queues.json";
+                    queueRawDownloadEl.innerHTML = "<a href='" + payload.raw_download_url + "' style='display:inline-block;padding:7px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Queue JSON (" + rawName + ")</a>";
+                  }
+                } catch (err) {
+                  queueStatusEl.textContent = "Queue extract failed: " + ((err && err.message) || "Unknown error.");
+                } finally {
+                  if (queueExtractAllBtn) {
+                    queueExtractAllBtn.disabled = false;
+                    queueExtractAllBtn.textContent = originalText;
+                  }
+                }
+                return false;
+              }
+
+              async function lookupMembers(queueQuery) {
+                const q = String(queueQuery || "").trim();
+                if (!q) {
+                  queueStatusEl.textContent = "Select a queue first, or type queue name/ID.";
+                  return false;
+                }
+
+                queueStatusEl.textContent = "Loading queue members...";
+                try {
+                  const formData = new FormData();
+                  formData.append("queue_name", q);
+                  const response = await fetch("/genesys/queues/lookup", { method: "POST", body: formData });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || "Queue lookup failed.");
+                  }
+                  queueStatusEl.textContent = "Queue: " + String(payload.query || q) + " | Member Rows: " + Number((payload.rows || []).length || 0);
+                  renderQueueMembers(payload);
+                } catch (err) {
+                  queueStatusEl.textContent = "Queue lookup failed: " + ((err && err.message) || "Unknown error.");
+                }
+                return false;
+              }
+
+              async function changeMember(action) {
+                const queueId = selectedQueueId() || String((queueNameEl && queueNameEl.value) || "").trim();
+                if (!queueId) {
+                  queueStatusEl.textContent = "Select a queue first.";
+                  return false;
+                }
+
+                let userToken = String((queueMemberUserEl && queueMemberUserEl.value) || "").trim();
+                if (!userToken && action === "remove") {
+                  const selected = queueResultsEl.querySelector(".genesys-queue-member-radio:checked");
+                  if (selected) {
+                    userToken = String(selected.getAttribute("data-member-id") || selected.getAttribute("data-member-email") || "").trim();
+                    if (queueMemberUserEl) {
+                      queueMemberUserEl.value = userToken;
+                    }
+                  }
+                }
+
+                if (!userToken) {
+                  queueStatusEl.textContent = action === "add" ? "Enter user email or user ID to add." : "Enter/select user email or user ID to remove.";
+                  return false;
+                }
+
+                const endpoint = action === "add" ? "/genesys/queues/member-add" : "/genesys/queues/member-remove";
+                try {
+                  const formData = new FormData();
+                  formData.append("queue_id", queueId);
+                  if (userToken.indexOf("@") >= 0) {
+                    formData.append("user_email", userToken);
+                  } else {
+                    formData.append("user_id", userToken);
+                  }
+                  const response = await fetch(endpoint, { method: "POST", body: formData });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || "Queue membership update failed.");
+                  }
+                  queueStatusEl.textContent = (action === "add" ? "Add complete" : "Remove complete") + ": " + String(payload.result || "ok");
+                  await lookupMembers(queueId);
+                } catch (err) {
+                  queueStatusEl.textContent = (action === "add" ? "Add failed: " : "Remove failed: ") + ((err && err.message) || "Unknown error.");
+                }
+                return false;
+              }
+
+              window.runQueueInfoRetrieveAll = function () { return retrieveAllQueues(); };
+              window.runQueueInfoLookupMembersSelected = function () { return lookupMembers(selectedQueueId()); };
+              window.runQueueInfoLookupMembersFromForm = function () {
+                const q = String((queueNameEl && queueNameEl.value) || "").trim() || selectedQueueId();
+                return lookupMembers(q);
+              };
+              window.runQueueInfoAddMember = function () { return changeMember("add"); };
+              window.runQueueInfoRemoveMember = function () { return changeMember("remove"); };
+
+              if (queueExtractAllBtn && String(queueExtractAllBtn.dataset.bound || "") !== "1") {
+                queueExtractAllBtn.dataset.bound = "1";
+                queueExtractAllBtn.addEventListener("click", function () { retrieveAllQueues(); });
+              }
+              if (queueViewMembersBtn && String(queueViewMembersBtn.dataset.bound || "") !== "1") {
+                queueViewMembersBtn.dataset.bound = "1";
+                queueViewMembersBtn.addEventListener("click", function () { lookupMembers(selectedQueueId()); });
+              }
+              if (queueAddMemberBtn && String(queueAddMemberBtn.dataset.bound || "") !== "1") {
+                queueAddMemberBtn.dataset.bound = "1";
+                queueAddMemberBtn.addEventListener("click", function () { changeMember("add"); });
+              }
+              if (queueRemoveMemberBtn && String(queueRemoveMemberBtn.dataset.bound || "") !== "1") {
+                queueRemoveMemberBtn.dataset.bound = "1";
+                queueRemoveMemberBtn.addEventListener("click", function () { changeMember("remove"); });
+              }
+              if (queueForm && String(queueForm.dataset.queueBound || "") !== "1") {
+                queueForm.dataset.queueBound = "1";
+                queueForm.addEventListener("submit", function (event) {
+                  if (event && typeof event.preventDefault === "function") {
+                    event.preventDefault();
+                  }
+                  const q = String((queueNameEl && queueNameEl.value) || "").trim() || selectedQueueId();
+                  lookupMembers(q);
+                });
+              }
+            })();
+          </script>
         </section>
       </div>
     </main>
