@@ -2295,6 +2295,8 @@ def _genesys_load_catalog_options(region: str, access_token: str) -> dict:
     "divisions": divisions,
     "skills": skills,
     "queues": queue_options_display,
+    "missing_important_skills": missing_important_skills,
+    "missing_important_queues": missing_important_queues,
     "important_skill_count": int(sum(1 for item in skills if item.get("priority"))),
     "important_skill_total": int(len(important_skill_name_set)),
     "important_queue_count": int(sum(1 for item in queues if item.get("priority"))),
@@ -12798,7 +12800,9 @@ def genesys_admin_placeholder(request: Request):
                     const skillTotal = Number(payload.important_skill_total || 0);
                     const queueFound = Number(payload.important_queue_count || 0);
                     const queueTotal = Number(payload.important_queue_total || 0);
-                    catalogCountEl.textContent = "Divisions: " + divisions.length + " | Skills: " + skills.length + " (Priority: " + skillFound + "/" + skillTotal + ") | Queues: " + queues.length + " (Priority: " + queueFound + "/" + queueTotal + ")";
+                    const tokenSource = String((payload && payload.token_source) || "").trim();
+                    const sourceText = tokenSource ? (" | Source: " + tokenSource) : "";
+                    catalogCountEl.textContent = "Divisions: " + divisions.length + " | Skills: " + skills.length + " (Priority: " + skillFound + "/" + skillTotal + ") | Queues: " + queues.length + " (Priority: " + queueFound + "/" + queueTotal + ")" + sourceText;
                   }
 
                   if (catalogDownloadEl) {
@@ -12810,6 +12814,10 @@ def genesys_admin_placeholder(request: Request):
                   }
 
                   statusEl.textContent = "Catalog loaded. Select one Division and one or more Skills/Queues, then run single-user proof.";
+                  const warnings = Array.isArray(payload && payload.warnings) ? payload.warnings : [];
+                  if (warnings.length) {
+                    statusEl.textContent += " Warnings: " + warnings.join(" | ");
+                  }
                   return true;
                 } catch (err) {
                   statusEl.textContent = "Catalog load failed: " + ((err && err.message) || "Unknown error.");
@@ -13114,7 +13122,9 @@ def genesys_admin_placeholder(request: Request):
               const importantTotal = Number(payload.important_skill_total || 0);
               const importantQueueFound = Number(payload.important_queue_count || 0);
               const importantQueueTotal = Number(payload.important_queue_total || 0);
-              updateCatalogCountEl.textContent = "Divisions: " + divisions.length + " | Skills: " + skills.length + " (Priority: " + importantFound + "/" + importantTotal + ") | Queues: " + queues.length + " (Priority: " + importantQueueFound + "/" + importantQueueTotal + ")";
+              const tokenSource = String(payload.token_source || "").trim();
+              const sourceText = tokenSource ? (" | Source: " + tokenSource) : "";
+              updateCatalogCountEl.textContent = "Divisions: " + divisions.length + " | Skills: " + skills.length + " (Priority: " + importantFound + "/" + importantTotal + ") | Queues: " + queues.length + " (Priority: " + importantQueueFound + "/" + importantQueueTotal + ")" + sourceText;
             }
             if (updateCatalogDownloadEl) {
               if (payload.raw_download_url) {
@@ -15165,24 +15175,72 @@ def genesys_catalog_options_route():
       "error": token_result.get("error", "Genesys token request failed."),
     }, status_code=400)
 
-  catalog_result = _genesys_load_catalog_options(
+  primary_catalog = _genesys_load_catalog_options(
     token_result.get("region", clean_region),
     token_result.get("access_token", ""),
   )
-  if not catalog_result.get("ok"):
+
+  best_catalog = primary_catalog
+  best_source = str(token_result.get("token_source", "") or "default-client")
+
+  # If queue-client is used, compare against default client and keep whichever
+  # yields broader queue/skill visibility.
+  has_default_creds = bool((GENESYS_CLIENT_ID or "").strip()) and bool((GENESYS_CLIENT_SECRET or "").strip())
+  if has_default_creds and best_source == "queue-client":
+    default_token = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+    if default_token.get("ok"):
+      default_catalog = _genesys_load_catalog_options(
+        default_token.get("region", clean_region),
+        default_token.get("access_token", ""),
+      )
+      if default_catalog.get("ok"):
+        primary_queue_count = len(best_catalog.get("queues", []) if isinstance(best_catalog.get("queues"), list) else [])
+        default_queue_count = len(default_catalog.get("queues", []) if isinstance(default_catalog.get("queues"), list) else [])
+        primary_skill_count = len(best_catalog.get("skills", []) if isinstance(best_catalog.get("skills"), list) else [])
+        default_skill_count = len(default_catalog.get("skills", []) if isinstance(default_catalog.get("skills"), list) else [])
+        primary_missing_queue = len(best_catalog.get("missing_important_queues", []) if isinstance(best_catalog.get("missing_important_queues"), list) else [])
+        default_missing_queue = len(default_catalog.get("missing_important_queues", []) if isinstance(default_catalog.get("missing_important_queues"), list) else [])
+
+        use_default = (
+          (default_queue_count > primary_queue_count)
+          or (default_skill_count > primary_skill_count)
+          or (default_missing_queue < primary_missing_queue)
+        )
+
+        if use_default:
+          best_catalog = default_catalog
+          best_source = "default-client"
+          warns = list(best_catalog.get("warnings", []) if isinstance(best_catalog.get("warnings"), list) else [])
+          warns.append(
+            f"Catalog source switched to default-client for broader visibility (queues {default_queue_count} vs {primary_queue_count})."
+          )
+          best_catalog["warnings"] = warns
+        else:
+          warns = list(best_catalog.get("warnings", []) if isinstance(best_catalog.get("warnings"), list) else [])
+          warns.append(
+            f"Queue-client catalog retained (queues {primary_queue_count}); default-client returned queues {default_queue_count}."
+          )
+          best_catalog["warnings"] = warns
+
+  if not best_catalog.get("ok"):
     return JSONResponse({
       "ok": False,
       "error": "Unable to load catalog options from Genesys.",
-      "warnings": catalog_result.get("warnings", []),
+      "warnings": best_catalog.get("warnings", []),
     }, status_code=400)
 
+  best_catalog["token_source"] = best_source
+
   raw_payload = {
-    "region": catalog_result.get("region", clean_region),
-    "pages_scanned": catalog_result.get("pages_scanned", {}),
-    "warnings": catalog_result.get("warnings", []),
-    "divisions": catalog_result.get("divisions", []),
-    "skills": catalog_result.get("skills", []),
-    "queues": catalog_result.get("queues", []),
+    "region": best_catalog.get("region", clean_region),
+    "token_source": best_catalog.get("token_source", best_source),
+    "pages_scanned": best_catalog.get("pages_scanned", {}),
+    "warnings": best_catalog.get("warnings", []),
+    "divisions": best_catalog.get("divisions", []),
+    "skills": best_catalog.get("skills", []),
+    "queues": best_catalog.get("queues", []),
+    "missing_important_skills": best_catalog.get("missing_important_skills", []),
+    "missing_important_queues": best_catalog.get("missing_important_queues", []),
   }
   raw_filename = f"genesys_catalog_options_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
   raw_job_id = _store_job_output(
@@ -15190,10 +15248,10 @@ def genesys_catalog_options_route():
     raw_filename,
     "application/json",
   )
-  catalog_result["raw_download_url"] = f"/download/job-output/{raw_job_id}"
-  catalog_result["raw_filename"] = raw_filename
+  best_catalog["raw_download_url"] = f"/download/job-output/{raw_job_id}"
+  best_catalog["raw_filename"] = raw_filename
 
-  return JSONResponse(catalog_result)
+  return JSONResponse(best_catalog)
 
 
 @app.post("/genesys/users/search-update")
