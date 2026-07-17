@@ -2138,6 +2138,7 @@ def _genesys_extract_phone_management_name(phone_payload: dict, user_id: str, us
       return True
     return False
 
+  # Pass 1: strict owner-token match.
   for item in entities or []:
     if not isinstance(item, dict):
       continue
@@ -2187,6 +2188,28 @@ def _genesys_extract_phone_management_name(phone_payload: dict, user_id: str, us
     item_id = str(item.get("id", "") or "").strip()
     if item_id:
       return item_id, item
+
+  # Pass 2: relaxed name match (for orgs where owner tokens are absent or unreliable).
+  normalized_target_name = _normalized(clean_user_name)
+  if normalized_target_name:
+    for item in entities or []:
+      if not isinstance(item, dict):
+        continue
+      phone_name_candidates = []
+      for key in ["name", "displayName", "stationName", "phoneName"]:
+        candidate = str(item.get(key, "") or "").strip()
+        if candidate:
+          phone_name_candidates.append(candidate)
+      normalized_phone_names = [_normalized(value) for value in phone_name_candidates if value]
+      if not any(_is_user_named_phone(pn, normalized_target_name) for pn in normalized_phone_names if pn):
+        continue
+      for key in ["name", "phoneName", "stationName", "displayName"]:
+        value = str(item.get(key, "") or "").strip()
+        if value:
+          return value, item
+      item_id = str(item.get("id", "") or "").strip()
+      if item_id:
+        return item_id, item
 
   return "", {}
 
@@ -3091,6 +3114,11 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
     if phone_management_name:
       inventory_webrtc_phone = str(phone_management_name or "").strip()
 
+  if not associated_webrtc_phone and inventory_webrtc_phone:
+    associated_webrtc_phone = str(inventory_webrtc_phone or "").strip()
+  if not user_section_webrtc_phone and associated_webrtc_phone:
+    user_section_webrtc_phone = str(associated_webrtc_phone or "").strip()
+
   # Fallback: queue-scoped token may not expose station association fields.
   # If phone appears blank, retry phone reads with default client token.
   has_default_creds = bool((GENESYS_CLIENT_ID or "").strip()) and bool((GENESYS_CLIENT_SECRET or "").strip())
@@ -3147,6 +3175,22 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
           )
         if not user_section_webrtc_phone and user_section_webrtc_phone_default:
           user_section_webrtc_phone = str(user_section_webrtc_phone_default or "").strip()
+
+        if not inventory_webrtc_phone:
+          phone_management_name_default, _, _, _ = _genesys_lookup_phone_management_name(
+            api_base,
+            default_access_token,
+            clean_user_id,
+            user_name,
+            email,
+          )
+          if phone_management_name_default:
+            inventory_webrtc_phone = str(phone_management_name_default or "").strip()
+
+        if not associated_webrtc_phone and inventory_webrtc_phone:
+          associated_webrtc_phone = str(inventory_webrtc_phone or "").strip()
+        if not user_section_webrtc_phone and associated_webrtc_phone:
+          user_section_webrtc_phone = str(associated_webrtc_phone or "").strip()
 
   skill_ids, skills_err = _genesys_get_user_skill_ids(api_base, access_token, clean_user_id)
   if skills_err:
