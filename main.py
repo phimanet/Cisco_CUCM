@@ -3114,10 +3114,6 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
     if phone_management_name:
       inventory_webrtc_phone = str(phone_management_name or "").strip()
 
-  if not associated_webrtc_phone and inventory_webrtc_phone:
-    associated_webrtc_phone = str(inventory_webrtc_phone or "").strip()
-  if not user_section_webrtc_phone and associated_webrtc_phone:
-    user_section_webrtc_phone = str(associated_webrtc_phone or "").strip()
 
   # Fallback: queue-scoped token may not expose station association fields.
   # If phone appears blank, retry phone reads with default client token.
@@ -3187,10 +3183,6 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
           if phone_management_name_default:
             inventory_webrtc_phone = str(phone_management_name_default or "").strip()
 
-        if not associated_webrtc_phone and inventory_webrtc_phone:
-          associated_webrtc_phone = str(inventory_webrtc_phone or "").strip()
-        if not user_section_webrtc_phone and associated_webrtc_phone:
-          user_section_webrtc_phone = str(associated_webrtc_phone or "").strip()
 
   skill_ids, skills_err = _genesys_get_user_skill_ids(api_base, access_token, clean_user_id)
   if skills_err:
@@ -3209,7 +3201,7 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
     "division_id": division_id,
     "division_name": division_name,
     "webrtc_phone": str(associated_webrtc_phone or "").strip(),
-    "webrtc_user_phone": str(user_section_webrtc_phone or associated_webrtc_phone or "").strip(),
+    "webrtc_user_phone": str(user_section_webrtc_phone or "").strip(),
     "webrtc_associated_phone": str(associated_webrtc_phone or "").strip(),
     "webrtc_inventory_phone": str(inventory_webrtc_phone or "").strip(),
     "has_webrtc_phone": bool(str(associated_webrtc_phone or user_section_webrtc_phone or "").strip()),
@@ -14207,6 +14199,7 @@ def genesys_admin_placeholder(request: Request):
                   if (profileEl) {
                     const associatedWebrtc = String(payload.webrtc_associated_phone || payload.webrtc_phone || "").trim();
                     const userWebrtc = String(payload.webrtc_user_phone || "").trim();
+                    const inventoryWebrtc = String(payload.webrtc_inventory_phone || "").trim();
                     const currentSkills = selectedNames(skillsSelect);
                     const currentQueues = selectedNames(queuesSelect);
                     profileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Profile Division=" + esc(String(payload.division_name || payload.division_id || "(none)"))
@@ -14215,6 +14208,7 @@ def genesys_admin_placeholder(request: Request):
                       + " | User Phone=" + esc(userWebrtc || "(none)")
                       + " | Associated Phone=" + esc(associatedWebrtc || "(none)")
                       + "</strong>"
+                      + "<div style='margin-top:6px; font-size:12px; color:#5b6f82;'><strong>Inventory Match:</strong> " + esc(inventoryWebrtc || "(none)") + "</div>"
                       + "<div style='margin-top:6px; font-size:12px; color:#34556f;'><strong>Current Skills:</strong> " + esc(currentSkills.join(", ") || "(none)") + "</div>"
                       + "<div style='margin-top:2px; font-size:12px; color:#34556f;'><strong>Current Queues:</strong> " + esc(currentQueues.join(", ") || "(none)") + "</div>";
                   }
@@ -15165,6 +15159,7 @@ def genesys_admin_placeholder(request: Request):
             if (updateSingleProfileEl) {
               const associatedWebrtc = String(payload.webrtc_associated_phone || payload.webrtc_phone || "").trim();
               const userWebrtc = String(payload.webrtc_user_phone || "").trim();
+              const inventoryWebrtc = String(payload.webrtc_inventory_phone || "").trim();
               const currentSkills = _selectedLabels(updateSkillsSelect);
               const currentQueues = _selectedLabels(updateQueuesSelect);
               updateSingleProfileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Profile Division=" + _escapeHtml(String(payload.division_name || payload.division_id || "(none)"))
@@ -15173,6 +15168,7 @@ def genesys_admin_placeholder(request: Request):
                 + " | User Phone=" + _escapeHtml(userWebrtc || "(none)")
                 + " | Associated Phone=" + _escapeHtml(associatedWebrtc || "(none)")
                 + "</strong>"
+                + "<div style='margin-top:6px; font-size:12px; color:#5b6f82;'><strong>Inventory Match:</strong> " + _escapeHtml(inventoryWebrtc || "(none)") + "</div>"
                 + "<div style='margin-top:6px; font-size:12px; color:#34556f;'><strong>Current Skills:</strong> " + _escapeHtml(currentSkills.join(", ") || "(none)") + "</div>"
                 + "<div style='margin-top:2px; font-size:12px; color:#34556f;'><strong>Current Queues:</strong> " + _escapeHtml(currentQueues.join(", ") || "(none)") + "</div>";
             }
