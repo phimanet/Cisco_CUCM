@@ -2398,6 +2398,25 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
   division_id = str(division_obj.get("id", "") or "").strip()
   division_name = str(division_obj.get("name", "") or "").strip()
 
+  ok_routing, routing_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}/routingstatus")
+  ok_station_assoc, station_assoc_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}/stationassociations")
+  webrtc_phone = _genesys_extract_webrtc_phone(
+    user_payload if ok_user else {},
+    routing_payload if ok_routing else {},
+    station_assoc_payload if ok_station_assoc else {},
+  )
+
+  if not webrtc_phone:
+    phone_management_name, _, _, _ = _genesys_lookup_phone_management_name(
+      api_base,
+      access_token,
+      clean_user_id,
+      user_name,
+      email,
+    )
+    if phone_management_name:
+      webrtc_phone = phone_management_name
+
   skill_ids, skills_err = _genesys_get_user_skill_ids(api_base, access_token, clean_user_id)
   if skills_err:
     return {"ok": False, "error": f"Skill lookup failed: {skills_err}"}
@@ -2414,6 +2433,8 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
     "user_email": email,
     "division_id": division_id,
     "division_name": division_name,
+    "webrtc_phone": str(webrtc_phone or "").strip(),
+    "has_webrtc_phone": bool(str(webrtc_phone or "").strip()),
     "skill_ids": skill_ids,
     "queue_ids": queue_ids,
   }
@@ -12536,6 +12557,7 @@ def genesys_admin_placeholder(request: Request):
                 <button type="button" id="genesys-update-single-btn" style="background:#2d7a43;">Update 1 User</button>
               </div>
               <div id="genesys-update-single-profile" style="font-size:12px; color:#4e6a84; margin-top:6px;">No user loaded.</div>
+              <div id="genesys-update-single-actions" style="margin-top:6px;"></div>
             </div>
 
             <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f8fcff;">
@@ -12609,6 +12631,7 @@ def genesys_admin_placeholder(request: Request):
         const updateSingleLookupBtn = document.getElementById("genesys-update-single-lookup-btn");
         const updateSingleBtn = document.getElementById("genesys-update-single-btn");
         const updateSingleProfileEl = document.getElementById("genesys-update-single-profile");
+        const updateSingleActionsEl = document.getElementById("genesys-update-single-actions");
         const updateBatchEmailsEl = document.getElementById("genesys-update-batch-emails");
         const updateBatchBtn = document.getElementById("genesys-update-batch-btn");
         const updateBatchCountEl = document.getElementById("genesys-update-batch-count");
@@ -12839,13 +12862,59 @@ def genesys_admin_placeholder(request: Request):
             _setSelectedOptions(updateQueuesSelect, Array.isArray(payload.queue_ids) ? payload.queue_ids : []);
 
             if (updateSingleProfileEl) {
+              const webrtcText = String(payload.webrtc_phone || "").trim();
               updateSingleProfileEl.innerHTML = "Current profile loaded: Division=" + _escapeHtml(String(payload.division_name || payload.division_id || "(none)"))
                 + " | Skills=" + Number((payload.skill_ids || []).length || 0)
-                + " | Queues=" + Number((payload.queue_ids || []).length || 0);
+                + " | Queues=" + Number((payload.queue_ids || []).length || 0)
+                + " | WebRTC=" + _escapeHtml(webrtcText || "(missing)");
+            }
+
+            if (updateSingleActionsEl) {
+              updateSingleActionsEl.innerHTML = "";
+              if (!payload.has_webrtc_phone) {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.id = "genesys-update-build-webrtc-btn";
+                button.textContent = "Build + Attach WebRTC Phone";
+                button.style.background = "#2d7a43";
+                button.addEventListener("click", async function () {
+                  const originalText = button.textContent;
+                  button.disabled = true;
+                  button.textContent = "Building...";
+                  updateStatusEl.textContent = "Building WebRTC phone for " + userEmail + "...";
+                  try {
+                    const formData = new FormData();
+                    formData.append("user_id", String(payload.user_id || ""));
+                    formData.append("user_name", String(payload.user_name || ""));
+                    formData.append("user_email", String(payload.user_email || userEmail));
+
+                    const buildResponse = await fetch("/genesys/users/build-webrtc", {
+                      method: "POST",
+                      body: formData,
+                    });
+                    const buildPayload = await buildResponse.json();
+                    if (!buildResponse.ok || !buildPayload.ok) {
+                      throw new Error((buildPayload && buildPayload.error) || "Build failed.");
+                    }
+
+                    updateStatusEl.textContent = "WebRTC build complete for " + userEmail + ". Refreshing profile...";
+                    await _lookupSingleUserProfile();
+                  } catch (err) {
+                    updateStatusEl.textContent = "WebRTC build failed: " + ((err && err.message) || "Unknown error.");
+                  } finally {
+                    button.disabled = false;
+                    button.textContent = originalText;
+                  }
+                });
+                updateSingleActionsEl.appendChild(button);
+              }
             }
             updateStatusEl.textContent = "Current profile loaded for " + userEmail + ". Adjust selections, then run update.";
           } catch (err) {
             updateStatusEl.textContent = "User lookup failed: " + ((err && err.message) || "Unknown error.");
+            if (updateSingleActionsEl) {
+              updateSingleActionsEl.innerHTML = "";
+            }
           } finally {
             if (updateSingleLookupBtn) {
               updateSingleLookupBtn.disabled = false;
@@ -14848,6 +14917,8 @@ def genesys_user_search_profile_route(user_email: str = Form("")):
   )
   if not profile_result.get("ok"):
     return JSONResponse({"ok": False, "error": profile_result.get("error", "Profile lookup failed.")}, status_code=400)
+
+  profile_result["lookup_email"] = clean_user_email
 
   return JSONResponse(profile_result)
 
