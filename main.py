@@ -2048,46 +2048,69 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
 
 
 def _genesys_extract_webrtc_phone(user_payload: dict, routing_payload: dict, station_associations_payload: dict | None = None) -> str:
-  station = routing_payload.get("station") if isinstance(routing_payload, dict) else {}
-  if isinstance(station, dict):
-    station_name = str(station.get("name", "") or "").strip()
-    if station_name:
-      return station_name
+  def _station_label(value: object) -> str:
+    if isinstance(value, dict):
+      for key in ["name", "stationName", "phoneName", "displayName", "id"]:
+        text = str(value.get(key, "") or "").strip()
+        if text:
+          return text
+    if isinstance(value, str):
+      text = value.strip()
+      if text:
+        return text
+    return ""
 
-  # Fall back to user profile station field.
-  user_station = user_payload.get("station") if isinstance(user_payload, dict) else {}
-  if isinstance(user_station, dict):
-    user_station_name = str(user_station.get("name", "") or "").strip()
-    if user_station_name:
-      return user_station_name
+  if isinstance(routing_payload, dict):
+    for key in ["station", "defaultStation", "phone", "defaultPhone"]:
+      label = _station_label(routing_payload.get(key))
+      if label:
+        return label
 
-  # Final fallback: use the station association list for the user.
+  # Fall back to user profile station fields.
+  if isinstance(user_payload, dict):
+    for key in ["station", "defaultStation", "phone", "defaultPhone"]:
+      label = _station_label(user_payload.get(key))
+      if label:
+        return label
+
+  # Final fallback: use station association lists for the user.
   payload = station_associations_payload if isinstance(station_associations_payload, dict) else {}
-  entities = payload.get("entities", []) or []
-  for item in entities:
-    if not isinstance(item, dict):
+  entity_lists = [
+    payload.get("entities", []) if isinstance(payload, dict) else [],
+    payload.get("stationAssociations", []) if isinstance(payload, dict) else [],
+    payload.get("associatedStations", []) if isinstance(payload, dict) else [],
+  ]
+  for entities in entity_lists:
+    if not isinstance(entities, list):
       continue
-    station_obj = item.get("station") if isinstance(item.get("station"), dict) else item
-    station_name = str(station_obj.get("name", "") or "").strip()
-    if station_name:
-      return station_name
-    station_id = str(station_obj.get("id", "") or "").strip()
-    if station_id:
-      return station_id
+    for item in entities:
+      if not isinstance(item, dict):
+        continue
+      for key in ["station", "defaultStation", "phone"]:
+        label = _station_label(item.get(key))
+        if label:
+          return label
+      label = _station_label(item)
+      if label:
+        return label
 
   return ""
 
 
 def _genesys_user_section_phone(user_payload: dict) -> str:
   """Return only the phone/station value shown in the Genesys User profile section."""
-  user_station = user_payload.get("station") if isinstance(user_payload, dict) else {}
-  if isinstance(user_station, dict):
-    user_station_name = str(user_station.get("name", "") or "").strip()
-    if user_station_name:
-      return user_station_name
-    user_station_id = str(user_station.get("id", "") or "").strip()
-    if user_station_id:
-      return user_station_id
+  if isinstance(user_payload, dict):
+    for key in ["station", "defaultStation", "phone", "defaultPhone"]:
+      value = user_payload.get(key)
+      if isinstance(value, dict):
+        for nested_key in ["name", "stationName", "phoneName", "displayName", "id"]:
+          text = str(value.get(nested_key, "") or "").strip()
+          if text:
+            return text
+      elif isinstance(value, str):
+        text = value.strip()
+        if text:
+          return text
   return ""
 
 
@@ -3043,6 +3066,19 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
     station_assoc_payload if ok_station_assoc and isinstance(station_assoc_payload, dict) else {},
   )
 
+  if not associated_webrtc_phone:
+    ok_station_direct, station_direct_payload, _ = _genesys_get_json(
+      api_base,
+      access_token,
+      f"/api/v2/users/{clean_user_id}/station",
+    )
+    if ok_station_direct and isinstance(station_direct_payload, dict):
+      associated_webrtc_phone = _genesys_extract_webrtc_phone(
+        user_payload if isinstance(user_payload, dict) else {},
+        {"station": station_direct_payload},
+        {},
+      )
+
   inventory_webrtc_phone = ""
   if not associated_webrtc_phone:
     phone_management_name, _, _, _ = _genesys_lookup_phone_management_name(
@@ -3086,6 +3122,11 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
           default_access_token,
           f"/api/v2/users/{clean_user_id}/stationassociations",
         )
+        ok_station_direct_default, station_direct_payload_default, _ = _genesys_get_json(
+          api_base,
+          default_access_token,
+          f"/api/v2/users/{clean_user_id}/station",
+        )
 
         associated_webrtc_phone_default = _genesys_extract_webrtc_phone(
           user_payload_default if ok_user_default and isinstance(user_payload_default, dict) else {},
@@ -3098,6 +3139,12 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
 
         if associated_webrtc_phone_default:
           associated_webrtc_phone = str(associated_webrtc_phone_default or "").strip()
+        elif ok_station_direct_default and isinstance(station_direct_payload_default, dict):
+          associated_webrtc_phone = _genesys_extract_webrtc_phone(
+            user_payload_default if ok_user_default and isinstance(user_payload_default, dict) else {},
+            {"station": station_direct_payload_default},
+            {},
+          )
         if not user_section_webrtc_phone and user_section_webrtc_phone_default:
           user_section_webrtc_phone = str(user_section_webrtc_phone_default or "").strip()
 
@@ -3118,10 +3165,10 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
     "division_id": division_id,
     "division_name": division_name,
     "webrtc_phone": str(associated_webrtc_phone or "").strip(),
-    "webrtc_user_phone": str(user_section_webrtc_phone or "").strip(),
+    "webrtc_user_phone": str(user_section_webrtc_phone or associated_webrtc_phone or "").strip(),
     "webrtc_associated_phone": str(associated_webrtc_phone or "").strip(),
     "webrtc_inventory_phone": str(inventory_webrtc_phone or "").strip(),
-    "has_webrtc_phone": bool(str(associated_webrtc_phone or "").strip()),
+    "has_webrtc_phone": bool(str(associated_webrtc_phone or user_section_webrtc_phone or "").strip()),
     "has_webrtc_association": bool(str(associated_webrtc_phone or "").strip()),
     "has_webrtc_inventory_match": bool(str(inventory_webrtc_phone or "").strip()),
     "skill_ids": skill_ids,
@@ -13590,6 +13637,17 @@ def genesys_admin_placeholder(request: Request):
           <div id="genesys-user-update-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
             <h3 style="margin-top:0;">Genesys User Search and Update</h3>
 
+            <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f8fcff;">
+              <h4 style="margin:0 0 8px 0;">Single User Proof</h4>
+              <div class="search-filter-row">
+                <input id="genesys-update-single-email" placeholder="User email (e.g. jane.doe@amnhealthcare.com)" style="width:360px;" />
+                <button type="button" id="genesys-update-single-lookup-btn" style="background:#385977;" onclick="if (window.runGenesysUpdateSingleLookup) { return window.runGenesysUpdateSingleLookup(); } var s=document.getElementById('genesys-update-status'); if (s) { s.textContent='Lookup handler missing (JS did not load).'; } return false;">Lookup User</button>
+                <button type="button" id="genesys-update-single-btn" style="background:#2d7a43;">Update 1 User</button>
+              </div>
+              <div id="genesys-update-single-profile" style="font-size:20px; font-weight:900; line-height:1.35; color:#12304a; margin-top:8px;">No user loaded.</div>
+              <div id="genesys-update-single-actions" style="margin-top:6px;"></div>
+            </div>
+
             <div class="search-filter-row">
               <button type="button" id="genesys-update-load-catalog-btn" style="background:#385977;" onclick="if (window.runGenesysUpdateLoadCatalog) { return window.runGenesysUpdateLoadCatalog(); } var s=document.getElementById('genesys-update-status'); if (s) { s.textContent='Catalog handler missing (JS did not load).'; } return false;">Load Divisions / Skills / Queues</button>
               <span id="genesys-update-catalog-count" style="font-size:12px; color:#4e6a84;">Catalog not loaded yet.</span>
@@ -13632,17 +13690,6 @@ def genesys_admin_placeholder(request: Request):
                 </div>
               </div>
               <p id="genesys-update-filter-status" style="margin:8px 0 0 0; color:#2c5c8a; min-height:18px;">Saved filters not loaded yet.</p>
-            </div>
-
-            <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f8fcff;">
-              <h4 style="margin:0 0 8px 0;">Single User Proof</h4>
-              <div class="search-filter-row">
-                <input id="genesys-update-single-email" placeholder="User email (e.g. jane.doe@amnhealthcare.com)" style="width:360px;" />
-                <button type="button" id="genesys-update-single-lookup-btn" style="background:#385977;" onclick="if (window.runGenesysUpdateSingleLookup) { return window.runGenesysUpdateSingleLookup(); } var s=document.getElementById('genesys-update-status'); if (s) { s.textContent='Lookup handler missing (JS did not load).'; } return false;">Lookup User</button>
-                <button type="button" id="genesys-update-single-btn" style="background:#2d7a43;">Update 1 User</button>
-              </div>
-              <div id="genesys-update-single-profile" style="font-size:20px; font-weight:900; line-height:1.35; color:#12304a; margin-top:8px;">No user loaded.</div>
-              <div id="genesys-update-single-actions" style="margin-top:6px;"></div>
             </div>
 
             <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f8fcff;">
@@ -13723,6 +13770,20 @@ def genesys_admin_placeholder(request: Request):
                 return Array.from(selectEl.options).filter(function (opt) {
                   return Boolean(opt && String(opt.value || "").trim());
                 }).length;
+              }
+
+              function selectedNames(selectEl) {
+                if (!selectEl || !selectEl.options) {
+                  return [];
+                }
+                return Array.from(selectEl.options)
+                  .filter(function (opt) {
+                    return Boolean(opt && opt.selected && String(opt.value || "").trim());
+                  })
+                  .map(function (opt) {
+                    return String((opt && opt.textContent) || "").replace(/^\[Priority\]\s*/, "").trim();
+                  })
+                  .filter(Boolean);
               }
 
               function populateSelect(selectEl, rows, placeholder) {
@@ -14102,12 +14163,16 @@ def genesys_admin_placeholder(request: Request):
                   if (profileEl) {
                     const associatedWebrtc = String(payload.webrtc_associated_phone || payload.webrtc_phone || "").trim();
                     const userWebrtc = String(payload.webrtc_user_phone || "").trim();
+                    const currentSkills = selectedNames(skillsSelect);
+                    const currentQueues = selectedNames(queuesSelect);
                     profileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Profile Division=" + esc(String(payload.division_name || payload.division_id || "(none)"))
                       + " | Skills=" + Number((payload.skill_ids || []).length || 0)
                       + " | Queues=" + Number((payload.queue_ids || []).length || 0)
                       + " | User Phone=" + esc(userWebrtc || "(none)")
                       + " | Associated Phone=" + esc(associatedWebrtc || "(none)")
-                      + "</strong>";
+                      + "</strong>"
+                      + "<div style='margin-top:6px; font-size:12px; color:#34556f;'><strong>Current Skills:</strong> " + esc(currentSkills.join(", ") || "(none)") + "</div>"
+                      + "<div style='margin-top:2px; font-size:12px; color:#34556f;'><strong>Current Queues:</strong> " + esc(currentQueues.join(", ") || "(none)") + "</div>";
                   }
                   statusEl.textContent = "Current profile loaded for " + userEmail + ". Select a Division target if you want to update the user's profile division, then run update.";
                   return true;
@@ -14669,6 +14734,18 @@ def genesys_admin_placeholder(request: Request):
             .filter(Boolean);
         }
 
+        function _selectedLabels(selectEl) {
+          if (!selectEl) {
+            return [];
+          }
+          return Array.from(selectEl.options || [])
+            .filter(function (opt) { return Boolean(opt && opt.selected && String(opt.value || "").trim()); })
+            .map(function (opt) {
+              return String((opt && opt.textContent) || "").replace(/^\[Priority\]\s*/, "").trim();
+            })
+            .filter(Boolean);
+        }
+
         function _populateSelect(selectEl, rows, placeholder) {
           if (!selectEl) {
             return;
@@ -15044,12 +15121,16 @@ def genesys_admin_placeholder(request: Request):
             if (updateSingleProfileEl) {
               const associatedWebrtc = String(payload.webrtc_associated_phone || payload.webrtc_phone || "").trim();
               const userWebrtc = String(payload.webrtc_user_phone || "").trim();
+              const currentSkills = _selectedLabels(updateSkillsSelect);
+              const currentQueues = _selectedLabels(updateQueuesSelect);
               updateSingleProfileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Profile Division=" + _escapeHtml(String(payload.division_name || payload.division_id || "(none)"))
                 + " | Skills=" + Number((payload.skill_ids || []).length || 0)
                 + " | Queues=" + Number((payload.queue_ids || []).length || 0)
                 + " | User Phone=" + _escapeHtml(userWebrtc || "(none)")
                 + " | Associated Phone=" + _escapeHtml(associatedWebrtc || "(none)")
-                + "</strong>";
+                + "</strong>"
+                + "<div style='margin-top:6px; font-size:12px; color:#34556f;'><strong>Current Skills:</strong> " + _escapeHtml(currentSkills.join(", ") || "(none)") + "</div>"
+                + "<div style='margin-top:2px; font-size:12px; color:#34556f;'><strong>Current Queues:</strong> " + _escapeHtml(currentQueues.join(", ") || "(none)") + "</div>";
             }
 
             if (updateSingleActionsEl) {
