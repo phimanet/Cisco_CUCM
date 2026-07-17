@@ -13275,10 +13275,6 @@ def home(request: Request):
 
 @app.get("/genesys-login", response_class=HTMLResponse)
 def genesys_login_page(request: Request):
-  session = _get_auth_session(request) or {}
-  if session and str(session.get("username", "") or "").strip():
-    return RedirectResponse(url="/genesys-admin", status_code=303)
-
   return """
 <html>
   <head>
