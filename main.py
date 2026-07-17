@@ -3055,6 +3055,52 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
     if phone_management_name:
       inventory_webrtc_phone = str(phone_management_name or "").strip()
 
+  # Fallback: queue-scoped token may not expose station association fields.
+  # If phone appears blank, retry phone reads with default client token.
+  has_default_creds = bool((GENESYS_CLIENT_ID or "").strip()) and bool((GENESYS_CLIENT_SECRET or "").strip())
+  if not associated_webrtc_phone and has_default_creds:
+    default_token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+    if default_token_result.get("ok"):
+      default_access_token = str(default_token_result.get("access_token", "") or "").strip()
+      if default_access_token:
+        ok_user_default, user_payload_default, _ = _genesys_get_json(
+          api_base,
+          default_access_token,
+          f"/api/v2/users/{clean_user_id}",
+          params={"expand": "station"},
+        )
+        if not ok_user_default:
+          ok_user_default, user_payload_default, _ = _genesys_get_json(
+            api_base,
+            default_access_token,
+            f"/api/v2/users/{clean_user_id}",
+          )
+
+        ok_routing_default, routing_payload_default, _ = _genesys_get_json(
+          api_base,
+          default_access_token,
+          f"/api/v2/users/{clean_user_id}/routingstatus",
+        )
+        ok_station_default, station_assoc_payload_default, _ = _genesys_get_json(
+          api_base,
+          default_access_token,
+          f"/api/v2/users/{clean_user_id}/stationassociations",
+        )
+
+        associated_webrtc_phone_default = _genesys_extract_webrtc_phone(
+          user_payload_default if ok_user_default and isinstance(user_payload_default, dict) else {},
+          routing_payload_default if ok_routing_default and isinstance(routing_payload_default, dict) else {},
+          station_assoc_payload_default if ok_station_default and isinstance(station_assoc_payload_default, dict) else {},
+        )
+        user_section_webrtc_phone_default = _genesys_user_section_phone(
+          user_payload_default if ok_user_default and isinstance(user_payload_default, dict) else {}
+        )
+
+        if associated_webrtc_phone_default:
+          associated_webrtc_phone = str(associated_webrtc_phone_default or "").strip()
+        if not user_section_webrtc_phone and user_section_webrtc_phone_default:
+          user_section_webrtc_phone = str(user_section_webrtc_phone_default or "").strip()
+
   skill_ids, skills_err = _genesys_get_user_skill_ids(api_base, access_token, clean_user_id)
   if skills_err:
     return {"ok": False, "error": f"Skill lookup failed: {skills_err}"}
