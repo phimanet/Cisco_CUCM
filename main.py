@@ -428,6 +428,26 @@ GENESYS_WEBRTC_TEMPLATE_PATH = os.path.join(
   "genesys_webrtc_phone_template.json",
 )
 GENESYS_WEBRTC_LINE_BASE_SETTINGS_CACHE = {}
+GENESYS_BULK_HISTORY_LOCK = threading.Lock()
+GENESYS_BULK_HISTORY_FIELDS = [
+  "timestamp",
+  "status",
+  "requested",
+  "success_count",
+  "failure_count",
+  "workers",
+  "duration_seconds",
+  "original_emails",
+  "failed_emails",
+  "original_download_url",
+  "failed_download_url",
+]
+GENESYS_BULK_HISTORY_PATH = os.path.join(
+  os.path.dirname(os.path.abspath(__file__)),
+  "logs",
+  "genesys_bulk_history.csv",
+)
+GENESYS_BULK_HISTORY_MAX_ROWS = int((os.getenv("GENESYS_BULK_HISTORY_MAX_ROWS", "200") or "200").strip())
 STRIKE_MASK_HISTORY_LOCK = threading.Lock()
 STRIKE_MASK_HISTORY_FIELDS = [
   "timestamp",
@@ -6184,6 +6204,78 @@ def _append_audit_event(
       writer.writerow(row)
 
 
+def _ensure_genesys_bulk_history_log():
+  os.makedirs(os.path.dirname(GENESYS_BULK_HISTORY_PATH), exist_ok=True)
+  if os.path.exists(GENESYS_BULK_HISTORY_PATH):
+    return
+
+  with open(GENESYS_BULK_HISTORY_PATH, "w", newline="", encoding="utf-8") as handle:
+    writer = csv.writer(handle)
+    writer.writerow(GENESYS_BULK_HISTORY_FIELDS)
+
+
+def _prune_genesys_bulk_history_locked():
+  _ensure_genesys_bulk_history_log()
+  with open(GENESYS_BULK_HISTORY_PATH, "r", newline="", encoding="utf-8") as handle:
+    rows = list(csv.DictReader(handle))
+
+  if len(rows) <= GENESYS_BULK_HISTORY_MAX_ROWS:
+    return
+
+  kept_rows = rows[-GENESYS_BULK_HISTORY_MAX_ROWS:]
+  with open(GENESYS_BULK_HISTORY_PATH, "w", newline="", encoding="utf-8") as handle:
+    writer = csv.DictWriter(handle, fieldnames=GENESYS_BULK_HISTORY_FIELDS)
+    writer.writeheader()
+    for row in kept_rows:
+      writer.writerow({field: row.get(field, "") for field in GENESYS_BULK_HISTORY_FIELDS})
+
+
+def _append_genesys_bulk_history_event(
+  status: str,
+  requested: int,
+  success_count: int,
+  failure_count: int,
+  workers: int,
+  duration_seconds: float,
+  original_emails: list[str],
+  failed_emails: list[str],
+  original_download_url: str,
+  failed_download_url: str,
+):
+  row = [
+    _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+    str(status or "").strip(),
+    str(int(requested or 0)),
+    str(int(success_count or 0)),
+    str(int(failure_count or 0)),
+    str(int(workers or 0)),
+    f"{float(duration_seconds or 0):.2f}",
+    "\n".join([str(item or "").strip() for item in (original_emails or []) if str(item or "").strip()]),
+    "\n".join([str(item or "").strip() for item in (failed_emails or []) if str(item or "").strip()]),
+    str(original_download_url or "").strip(),
+    str(failed_download_url or "").strip(),
+  ]
+
+  with GENESYS_BULK_HISTORY_LOCK:
+    _ensure_genesys_bulk_history_log()
+    _prune_genesys_bulk_history_locked()
+    with open(GENESYS_BULK_HISTORY_PATH, "a", newline="", encoding="utf-8") as handle:
+      writer = csv.writer(handle)
+      writer.writerow(row)
+
+
+def _read_genesys_bulk_history(limit: int = 20) -> list[dict]:
+  clean_limit = max(1, min(int(limit or 20), 100))
+  with GENESYS_BULK_HISTORY_LOCK:
+    _ensure_genesys_bulk_history_log()
+    with open(GENESYS_BULK_HISTORY_PATH, "r", newline="", encoding="utf-8") as handle:
+      rows = list(csv.DictReader(handle))
+
+  rows = rows[-clean_limit:]
+  rows.reverse()
+  return rows
+
+
 # ---------------------------------------------------------------------------
 # Separation SMS Report - scheduled email for offboarded employees
 # ---------------------------------------------------------------------------
@@ -11737,6 +11829,14 @@ def genesys_admin_placeholder(request: Request):
               <summary style="cursor:pointer; font-weight:700; color:#2c5c8a;">Bulk WebRTC Debug Output</summary>
               <pre id="genesys-bulk-email-debug" style="margin:8px 0 0 0; white-space:pre-wrap; font-size:12px; line-height:1.35; max-height:220px; overflow:auto;"></pre>
             </details>
+            <div id="genesys-bulk-history-wrap" style="margin-top:12px; border:1px solid #d7e3ee; border-radius:8px; background:#f7fbff; padding:10px;">
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+                <strong style="color:#2c5c8a;">Bulk Batch Logs (Last 20)</strong>
+                <button type="button" id="genesys-bulk-history-refresh-btn" style="background:#385977; color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Refresh</button>
+              </div>
+              <p id="genesys-bulk-history-status" style="margin:8px 0 8px 0; color:#4e6a84; min-height:18px;">Loading...</p>
+              <div id="genesys-bulk-history-table" style="overflow-x:auto;"></div>
+            </div>
           </div>
 
           <script>
@@ -11941,6 +12041,9 @@ def genesys_admin_placeholder(request: Request):
         const bulkEmailCountEl = document.getElementById("genesys-bulk-email-count");
         const bulkEmailBuildBtn = document.getElementById("genesys-bulk-email-build-btn");
         const bulkEmailDebugEl = document.getElementById("genesys-bulk-email-debug");
+        const bulkHistoryStatusEl = document.getElementById("genesys-bulk-history-status");
+        const bulkHistoryTableEl = document.getElementById("genesys-bulk-history-table");
+        const bulkHistoryRefreshBtn = document.getElementById("genesys-bulk-history-refresh-btn");
         const orgSnapshotBtn = document.getElementById("genesys-org-snapshot-btn");
         const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn[data-panel-target]"));
         const panels = Array.from(document.querySelectorAll(".genesys-panel"));
@@ -12016,6 +12119,73 @@ def genesys_admin_placeholder(request: Request):
             .filter(function (item, index, allItems) {
               return Boolean(item) && allItems.indexOf(item) === index && item.indexOf("@") > 0;
             });
+        }
+
+        function _copyTextToClipboard(text) {
+          const value = String(text || "");
+          if (!value) {
+            return;
+          }
+          if (navigator && navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(value).catch(function () {});
+            return;
+          }
+          const ta = document.createElement("textarea");
+          ta.value = value;
+          ta.style.position = "fixed";
+          ta.style.left = "-9999px";
+          document.body.appendChild(ta);
+          ta.select();
+          try {
+            document.execCommand("copy");
+          } catch (_copyErr) {
+          }
+          document.body.removeChild(ta);
+        }
+
+        async function _loadBulkHistory() {
+          if (!bulkHistoryStatusEl || !bulkHistoryTableEl) {
+            return;
+          }
+          bulkHistoryStatusEl.textContent = "Loading latest batch logs...";
+          bulkHistoryTableEl.innerHTML = "";
+          try {
+            const response = await fetch("/genesys/users/batch-history?limit=20", { method: "GET" });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Unable to load batch logs.");
+            }
+
+            const rows = Array.isArray(payload.rows) ? payload.rows : [];
+            if (!rows.length) {
+              bulkHistoryStatusEl.textContent = "No batch logs yet.";
+              return;
+            }
+
+            bulkHistoryStatusEl.textContent = "Showing " + rows.length + " most recent batch log(s).";
+            let html = "<table><thead><tr>";
+            html += "<th>Timestamp</th><th>Status</th><th>Requested</th><th>Processed</th><th>Failed</th><th>Duration(s)</th><th>Original Input</th><th>Failed Rerun</th>";
+            html += "</tr></thead><tbody>";
+            rows.forEach(function (row, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const originalUrl = _escapeHtml(String((row && row.original_download_url) || ""));
+              const failedUrl = _escapeHtml(String((row && row.failed_download_url) || ""));
+              html += "<tr style='background:" + bg + ";'>";
+              html += "<td>" + _escapeHtml(String((row && row.timestamp) || "")) + "</td>";
+              html += "<td>" + _escapeHtml(String((row && row.status) || "")) + "</td>";
+              html += "<td>" + _escapeHtml(String((row && row.requested) || "0")) + "</td>";
+              html += "<td>" + _escapeHtml(String((row && row.success_count) || "0")) + "</td>";
+              html += "<td>" + _escapeHtml(String((row && row.failure_count) || "0")) + "</td>";
+              html += "<td>" + _escapeHtml(String((row && row.duration_seconds) || "0")) + "</td>";
+              html += "<td>" + (originalUrl ? ("<a href='" + originalUrl + "'>Download</a>") : "-") + "</td>";
+              html += "<td>" + (failedUrl ? ("<a href='" + failedUrl + "'>Download</a>") : "-") + "</td>";
+              html += "</tr>";
+            });
+            html += "</tbody></table>";
+            bulkHistoryTableEl.innerHTML = html;
+          } catch (err) {
+            bulkHistoryStatusEl.textContent = "Bulk log load failed: " + ((err && err.message) || "Unknown error.");
+          }
         }
 
         function _markBuildSuccess(btn, buildPayload) {
@@ -12169,10 +12339,31 @@ def genesys_admin_placeholder(request: Request):
                 "<strong>Bulk WebRTC Build Result</strong>",
                 "<div style='margin-top:6px;'>Requested: " + Number(batchPayload.requested || pendingUsers.length) + " | Processed: " + Number(batchPayload.success_count || succeeded.length) + " | Already Present: " + Number(alreadyPresent.length) + " | Failed: " + Number(batchPayload.failure_count || failed.length) + "</div>",
               ];
+              const failedEmails = Array.isArray(batchPayload.failed_emails) ? batchPayload.failed_emails : [];
+              const failedEmailText = failedEmails.join("\n");
+              const originalUrl = String(batchPayload.original_emails_download_url || "");
+              const failedUrl = String(batchPayload.failed_emails_download_url || "");
+              summaryHtml.push("<div style='margin-top:8px;'><strong>Downloads</strong><div style='margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;'><a href='" + _escapeHtml(originalUrl) + "' style='display:inline-block;padding:6px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Original Input</a><a href='" + _escapeHtml(failedUrl) + "' style='display:inline-block;padding:6px 10px;background:#8a5a2c;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Failed Emails</a></div></div>");
+              summaryHtml.push("<div style='margin-top:8px;'><strong>Failed Emails (Copy/Paste Rerun)</strong><textarea id='genesys-failed-emails-textarea' readonly style='width:100%;min-height:90px;resize:vertical;padding:8px;border-radius:8px;border:1px solid #c8dbee;">" + _escapeHtml(failedEmailText) + "</textarea><div style='margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;'><button type='button' id='genesys-copy-failed-emails-btn' style='background:#385977;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-weight:700;cursor:pointer;" + (failedEmails.length ? "" : "opacity:0.5;cursor:not-allowed;") + "' " + (failedEmails.length ? "" : "disabled") + ">Copy Failed Emails</button><span style='font-size:12px;color:#4e6a84;'>" + (failedEmails.length ? (failedEmails.length + " failed email(s) ready to rerun.") : "No failed emails.") + "</span></div></div>");
               if (failureList.length) {
                 summaryHtml.push("<div style='margin-top:8px;'><strong>Failures</strong><ul style='margin:6px 0 0 18px;'>" + failureList.join("") + "</ul></div>");
               }
               _setBulkEmailSummary(summaryHtml.join(""), true);
+
+              const copyBtn = document.getElementById("genesys-copy-failed-emails-btn");
+              if (copyBtn && failedEmails.length) {
+                copyBtn.addEventListener("click", function () {
+                  _copyTextToClipboard(failedEmailText);
+                  copyBtn.textContent = "Copied";
+                  copyBtn.style.background = "#2d7a43";
+                  window.setTimeout(function () {
+                    copyBtn.textContent = "Copy Failed Emails";
+                    copyBtn.style.background = "#385977";
+                  }, 1400);
+                });
+              }
+
+              _loadBulkHistory();
 
               bulkEmailStatusEl.textContent = "Bulk build complete: Processed " + Number(batchPayload.success_count || succeeded.length) + " of " + Number(batchPayload.requested || pendingUsers.length) + " email(s). Already present: " + Number(alreadyPresent.length) + ".";
               _appendBulkEmailDebug("Bulk build completed.", {
@@ -12217,6 +12408,14 @@ def genesys_admin_placeholder(request: Request):
             });
           }
         }
+
+        if (bulkHistoryRefreshBtn) {
+          bulkHistoryRefreshBtn.addEventListener("click", function () {
+            _loadBulkHistory();
+          });
+        }
+
+        _loadBulkHistory();
 
         if (form && statusEl && resultsEl && rawDownloadEl) {
           form.dataset.jsBound = "1";
@@ -13245,6 +13444,7 @@ def genesys_build_webrtc_route(
 
 @app.post("/genesys/users/build-webrtc-batch")
 def genesys_build_webrtc_batch_route(users_json: str = Form("")):
+  started_at = time.time()
   clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
 
   try:
@@ -13334,15 +13534,81 @@ def genesys_build_webrtc_batch_route(users_json: str = Form("")):
   success_count = sum(1 for row in results if row.get("ok"))
 
   failure_count = len(results) - success_count
+  requested = len(users)
+  status = "completed" if failure_count == 0 else "completed_with_failures"
+
+  original_emails = []
+  seen_original = set()
+  for user in users:
+    email = str(user.get("user_email", "") or "").strip().lower()
+    if not email or email in seen_original:
+      continue
+    seen_original.add(email)
+    original_emails.append(email)
+
+  failed_emails = []
+  seen_failed = set()
+  for row in results:
+    if row.get("ok"):
+      continue
+    email = str(row.get("user_email", "") or "").strip().lower()
+    if not email or email in seen_failed:
+      continue
+    seen_failed.add(email)
+    failed_emails.append(email)
+
+  timestamp_token = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+  original_text = "\n".join(original_emails) + ("\n" if original_emails else "")
+  failed_text = "\n".join(failed_emails) + ("\n" if failed_emails else "")
+
+  original_job_id = _store_job_output(
+    original_text.encode("utf-8"),
+    f"genesys_bulk_original_emails_{timestamp_token}.txt",
+    "text/plain",
+  )
+  failed_job_id = _store_job_output(
+    failed_text.encode("utf-8"),
+    f"genesys_bulk_failed_emails_{timestamp_token}.txt",
+    "text/plain",
+  )
+  original_download_url = f"/download/job-output/{original_job_id}"
+  failed_download_url = f"/download/job-output/{failed_job_id}"
+
+  duration_seconds = max(0.0, time.time() - started_at)
+  _append_genesys_bulk_history_event(
+    status=status,
+    requested=requested,
+    success_count=success_count,
+    failure_count=failure_count,
+    workers=max_workers,
+    duration_seconds=duration_seconds,
+    original_emails=original_emails,
+    failed_emails=failed_emails,
+    original_download_url=original_download_url,
+    failed_download_url=failed_download_url,
+  )
+
   return JSONResponse({
     "ok": True,
     "region": region,
-    "requested": len(users),
+    "requested": requested,
     "workers": max_workers,
+    "status": status,
+    "duration_seconds": round(duration_seconds, 2),
     "success_count": success_count,
     "failure_count": failure_count,
+    "original_emails": original_emails,
+    "failed_emails": failed_emails,
+    "original_emails_download_url": original_download_url,
+    "failed_emails_download_url": failed_download_url,
     "results": results,
   })
+
+
+@app.get("/genesys/users/batch-history")
+def genesys_bulk_history_route(limit: int = 20):
+  rows = _read_genesys_bulk_history(limit)
+  return JSONResponse({"ok": True, "rows": rows})
 
 
 @app.post("/genesys/users/build-webrtc-emails")
