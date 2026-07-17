@@ -13899,7 +13899,7 @@ def genesys_admin_placeholder(request: Request):
 
               function parseEmailList(text) {
                 return String(text || "")
-                  .split(/[\n,;\s]+/)
+                  .split(/[\\n,;\\s]+/)
                   .map(function (item) { return String(item || "").trim().toLowerCase(); })
                   .filter(function (item, index, allItems) {
                     return Boolean(item) && allItems.indexOf(item) === index && item.indexOf("@") > 0;
