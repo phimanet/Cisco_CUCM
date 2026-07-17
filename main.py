@@ -509,6 +509,9 @@ GENESYS_UPDATE_BATCH_HISTORY_PATH = os.path.join(
   "genesys_user_update_batch_history.csv",
 )
 GENESYS_UPDATE_BATCH_HISTORY_MAX_ROWS = int((os.getenv("GENESYS_UPDATE_BATCH_HISTORY_MAX_ROWS", "200") or "200").strip())
+GENESYS_UPDATE_BATCH_JOBS = {}
+GENESYS_UPDATE_BATCH_JOBS_LOCK = threading.Lock()
+GENESYS_UPDATE_BATCH_JOBS_MAX = int((os.getenv("GENESYS_UPDATE_BATCH_JOBS_MAX", "100") or "100").strip())
 _genesys_default_filter_path = (os.getenv("GENESYS_DIVISION_FILTERS_PATH", "") or "").strip()
 if not _genesys_default_filter_path:
   if os.name == "nt":
@@ -7815,6 +7818,71 @@ def _read_genesys_update_batch_history(limit: int = 20) -> list[dict]:
   return rows
 
 
+def _genesys_update_batch_prune_jobs_locked():
+  if len(GENESYS_UPDATE_BATCH_JOBS) <= GENESYS_UPDATE_BATCH_JOBS_MAX:
+    return
+
+  ordered = sorted(
+    GENESYS_UPDATE_BATCH_JOBS.items(),
+    key=lambda item: float((item[1] or {}).get("created_epoch", 0.0) or 0.0),
+  )
+  remove_count = len(ordered) - GENESYS_UPDATE_BATCH_JOBS_MAX
+  for job_id, _job in ordered[:remove_count]:
+    GENESYS_UPDATE_BATCH_JOBS.pop(job_id, None)
+
+
+def _genesys_update_batch_get_job(job_id: str) -> dict | None:
+  with GENESYS_UPDATE_BATCH_JOBS_LOCK:
+    job = GENESYS_UPDATE_BATCH_JOBS.get(str(job_id or "").strip())
+    if not isinstance(job, dict):
+      return None
+    return dict(job)
+
+
+def _genesys_update_batch_set_job(job_id: str, updates: dict):
+  clean_job_id = str(job_id or "").strip()
+  if not clean_job_id or not isinstance(updates, dict):
+    return
+
+  with GENESYS_UPDATE_BATCH_JOBS_LOCK:
+    job = GENESYS_UPDATE_BATCH_JOBS.get(clean_job_id)
+    if not isinstance(job, dict):
+      return
+    job.update(updates)
+
+
+def _genesys_update_batch_job_status_payload(job: dict) -> dict:
+  clean_job = dict(job or {})
+  payload = {
+    "ok": True,
+    "job_id": str(clean_job.get("job_id", "") or "").strip(),
+    "queued": str(clean_job.get("status", "queued") or "queued").strip() in {"queued", "running"},
+    "status": str(clean_job.get("status", "queued") or "queued").strip(),
+    "requested": int(clean_job.get("requested", 0) or 0),
+    "processed": int(clean_job.get("processed", 0) or 0),
+    "success_count": int(clean_job.get("success_count", 0) or 0),
+    "failure_count": int(clean_job.get("failure_count", 0) or 0),
+    "workers": int(clean_job.get("workers", 0) or 0),
+    "applied_summary": str(clean_job.get("applied_summary", "") or "").strip(),
+    "created_at": str(clean_job.get("created_at", "") or "").strip(),
+    "started_at": str(clean_job.get("started_at", "") or "").strip(),
+    "finished_at": str(clean_job.get("finished_at", "") or "").strip(),
+    "duration_seconds": float(clean_job.get("duration_seconds", 0.0) or 0.0),
+    "error": str(clean_job.get("error", "") or "").strip(),
+    "region": str(clean_job.get("region", "") or "").strip(),
+  }
+
+  if payload["status"] in {"completed", "completed_with_failures", "failed"}:
+    payload["queued"] = False
+    payload["results"] = clean_job.get("results", []) if isinstance(clean_job.get("results", []), list) else []
+    payload["original_emails"] = clean_job.get("original_emails", []) if isinstance(clean_job.get("original_emails", []), list) else []
+    payload["failed_emails"] = clean_job.get("failed_emails", []) if isinstance(clean_job.get("failed_emails", []), list) else []
+    payload["original_emails_download_url"] = str(clean_job.get("original_emails_download_url", "") or "").strip()
+    payload["failed_emails_download_url"] = str(clean_job.get("failed_emails_download_url", "") or "").strip()
+
+  return payload
+
+
 # ---------------------------------------------------------------------------
 # Separation SMS Report - scheduled email for offboarded employees
 # ---------------------------------------------------------------------------
@@ -14336,10 +14404,10 @@ def genesys_admin_placeholder(request: Request):
                 const originalText = updateBatchBtn ? updateBatchBtn.textContent : "Run Batch User Update";
                 if (updateBatchBtn) {
                   updateBatchBtn.disabled = true;
-                  updateBatchBtn.textContent = "Running...";
+                  updateBatchBtn.textContent = "Submitting...";
                 }
                 setSummary("", false);
-                statusEl.textContent = "Running batch user update for " + emails.length + " user(s)...";
+                statusEl.textContent = "Submitting batch user update for " + emails.length + " user(s)...";
 
                 try {
                   const formData = new FormData();
@@ -14347,6 +14415,7 @@ def genesys_admin_placeholder(request: Request):
                   formData.append("update_division", applyDivision ? "true" : "false");
                   formData.append("update_skills", applySkills ? "true" : "false");
                   formData.append("update_queues", applyQueues ? "true" : "false");
+                  formData.append("run_async", "true");
                   formData.append("division_id", applyDivision ? (divisionIds[0] || "") : "");
                   formData.append("skill_ids_json", JSON.stringify(skillIds));
                   formData.append("queue_ids_json", JSON.stringify(queueIds));
@@ -14356,27 +14425,68 @@ def genesys_admin_placeholder(request: Request):
                   if (!response.ok || !payload.ok) {
                     throw new Error((payload && payload.error) || "Batch user update failed.");
                   }
-
-                  const failed = Array.isArray(payload.results)
-                    ? payload.results.filter(function (row) { return !(row && row.ok); })
-                    : [];
-                  const failedList = failed.map(function (row) {
-                    const email = esc(String((row && row.user_email) || "(unknown)"));
-                    const err = esc(String((row && row.error) || "Unknown error"));
-                    return "<li><strong>" + email + "</strong>: " + err + "</li>";
-                  });
-
-                  statusEl.textContent = "Batch user update complete: Updated " + Number(payload.success_count || 0) + " of " + Number(payload.requested || emails.length) + " user(s).";
-                  let summaryHtml = "<strong>Batch User Update Result</strong>"
-                    + "<div style='margin-top:6px;'>Requested: " + Number(payload.requested || emails.length)
-                    + " | Updated: " + Number(payload.success_count || 0)
-                    + " | Failed: " + Number(payload.failure_count || failed.length)
-                    + "</div>";
-                  if (failedList.length) {
-                    summaryHtml += "<div style='margin-top:8px;'><strong>Failures</strong><ul style='margin:6px 0 0 18px;'>" + failedList.join("") + "</ul></div>";
+                  const jobId = String((payload && payload.job_id) || "").trim();
+                  if (!jobId) {
+                    throw new Error("Batch was accepted but no job ID was returned.");
                   }
-                  setSummary(summaryHtml, true);
-                  loadUpdateBatchHistoryFallback();
+
+                  const buildFinalSummary = function (jobPayload) {
+                    const failed = Array.isArray(jobPayload.results)
+                      ? jobPayload.results.filter(function (row) { return !(row && row.ok); })
+                      : [];
+                    const failedList = failed.map(function (row) {
+                      const email = esc(String((row && row.user_email) || "(unknown)"));
+                      const err = esc(String((row && row.error) || "Unknown error"));
+                      return "<li><strong>" + email + "</strong>: " + err + "</li>";
+                    });
+
+                    let summaryHtml = "<strong>Batch User Update Result</strong>"
+                      + "<div style='margin-top:6px;'>Job ID: " + esc(String(jobPayload.job_id || "")) + "</div>"
+                      + "<div style='margin-top:6px;'>Requested: " + Number(jobPayload.requested || emails.length)
+                      + " | Updated: " + Number(jobPayload.success_count || 0)
+                      + " | Failed: " + Number(jobPayload.failure_count || failed.length)
+                      + "</div>";
+                    if (String(jobPayload.original_emails_download_url || "").trim()) {
+                      summaryHtml += "<div style='margin-top:6px;'><a href='" + esc(String(jobPayload.original_emails_download_url || "")) + "' target='_blank' rel='noopener'>Download Original Email Input</a></div>";
+                    }
+                    if (String(jobPayload.failed_emails_download_url || "").trim()) {
+                      summaryHtml += "<div style='margin-top:4px;'><a href='" + esc(String(jobPayload.failed_emails_download_url || "")) + "' target='_blank' rel='noopener'>Download Failed Email List</a></div>";
+                    }
+                    if (failedList.length) {
+                      summaryHtml += "<div style='margin-top:8px;'><strong>Failures</strong><ul style='margin:6px 0 0 18px;'>" + failedList.join("") + "</ul></div>";
+                    }
+                    return summaryHtml;
+                  };
+
+                  const pollStart = Date.now();
+                  const pollTimeoutMs = 10 * 60 * 1000;
+                  while (true) {
+                    const statusResp = await fetch("/genesys/users/search-update-batch/status?job_id=" + encodeURIComponent(jobId), { method: "GET" });
+                    const statusPayload = await statusResp.json();
+                    if (!statusResp.ok || !statusPayload.ok) {
+                      throw new Error((statusPayload && statusPayload.error) || "Batch status check failed.");
+                    }
+
+                    const processed = Number(statusPayload.processed || 0);
+                    const requested = Number(statusPayload.requested || emails.length);
+                    const succeeded = Number(statusPayload.success_count || 0);
+                    const failedCount = Number(statusPayload.failure_count || 0);
+                    statusEl.textContent = "Batch job " + jobId + " is " + String(statusPayload.status || "running") + " (" + processed + "/" + requested + ", success=" + succeeded + ", failed=" + failedCount + ").";
+
+                    if (!statusPayload.queued) {
+                      const summaryHtml = buildFinalSummary(statusPayload);
+                      setSummary(summaryHtml, true);
+                      statusEl.textContent = "Batch user update complete: Updated " + succeeded + " of " + requested + " user(s).";
+                      loadUpdateBatchHistoryFallback();
+                      break;
+                    }
+
+                    if ((Date.now() - pollStart) > pollTimeoutMs) {
+                      statusEl.textContent = "Batch is still running in background. Job ID: " + jobId + ". Use Refresh logs or rerun status check.";
+                      break;
+                    }
+                    await new Promise(function (resolve) { window.setTimeout(resolve, 2000); });
+                  }
                   return true;
                 } catch (err) {
                   statusEl.textContent = "Batch user update failed: " + ((err && err.message) || "Unknown error.");
@@ -15871,10 +15981,10 @@ def genesys_admin_placeholder(request: Request):
           window.__genesysBatchUpdateInFlight = true;
           if (updateBatchBtn) {
             updateBatchBtn.disabled = true;
-            updateBatchBtn.textContent = "Running...";
+            updateBatchBtn.textContent = "Submitting...";
           }
           _setUpdateSummary("", false);
-          updateStatusEl.textContent = "Running batch user update for " + emails.length + " user(s)...";
+          updateStatusEl.textContent = "Submitting batch user update for " + emails.length + " user(s)...";
 
           try {
             const formData = new FormData();
@@ -15882,6 +15992,7 @@ def genesys_admin_placeholder(request: Request):
             formData.append("update_division", applyDivision ? "true" : "false");
             formData.append("update_skills", applySkills ? "true" : "false");
             formData.append("update_queues", applyQueues ? "true" : "false");
+            formData.append("run_async", "true");
             formData.append("division_id", applyDivision ? (divisionIds[0] || "") : "");
             formData.append("skill_ids_json", JSON.stringify(skillIds));
             formData.append("queue_ids_json", JSON.stringify(queueIds));
@@ -15895,26 +16006,67 @@ def genesys_admin_placeholder(request: Request):
               throw new Error((payload && payload.error) || "Batch user update failed.");
             }
 
-            const failed = Array.isArray(payload.results)
-              ? payload.results.filter(function (row) { return !(row && row.ok); })
-              : [];
-            const failedList = failed.map(function (row) {
-              const email = _escapeHtml(String((row && row.user_email) || "(unknown)"));
-              const err = _escapeHtml(String((row && row.error) || "Unknown error"));
-              return "<li><strong>" + email + "</strong>: " + err + "</li>";
-            });
-
-            updateStatusEl.textContent = "Batch user update complete: Updated " + Number(payload.success_count || 0) + " of " + Number(payload.requested || emails.length) + " user(s).";
-            let summaryHtml = "<strong>Batch User Update Result</strong>"
-              + "<div style='margin-top:6px;'>Requested: " + Number(payload.requested || emails.length)
-              + " | Updated: " + Number(payload.success_count || 0)
-              + " | Failed: " + Number(payload.failure_count || failed.length)
-              + "</div>";
-            if (failedList.length) {
-              summaryHtml += "<div style='margin-top:8px;'><strong>Failures</strong><ul style='margin:6px 0 0 18px;'>" + failedList.join("") + "</ul></div>";
+            const jobId = String((payload && payload.job_id) || "").trim();
+            if (!jobId) {
+              throw new Error("Batch was accepted but no job ID was returned.");
             }
-            _setUpdateSummary(summaryHtml, true);
-            _loadUpdateBatchHistory();
+
+            const _buildFinalSummary = function (jobPayload) {
+              const failed = Array.isArray(jobPayload.results)
+                ? jobPayload.results.filter(function (row) { return !(row && row.ok); })
+                : [];
+              const failedList = failed.map(function (row) {
+                const email = _escapeHtml(String((row && row.user_email) || "(unknown)"));
+                const err = _escapeHtml(String((row && row.error) || "Unknown error"));
+                return "<li><strong>" + email + "</strong>: " + err + "</li>";
+              });
+
+              let summaryHtml = "<strong>Batch User Update Result</strong>"
+                + "<div style='margin-top:6px;'>Job ID: " + _escapeHtml(String(jobPayload.job_id || "")) + "</div>"
+                + "<div style='margin-top:6px;'>Requested: " + Number(jobPayload.requested || emails.length)
+                + " | Updated: " + Number(jobPayload.success_count || 0)
+                + " | Failed: " + Number(jobPayload.failure_count || failed.length)
+                + "</div>";
+              if (String(jobPayload.original_emails_download_url || "").trim()) {
+                summaryHtml += "<div style='margin-top:6px;'><a href='" + _escapeHtml(String(jobPayload.original_emails_download_url || "")) + "' target='_blank' rel='noopener'>Download Original Email Input</a></div>";
+              }
+              if (String(jobPayload.failed_emails_download_url || "").trim()) {
+                summaryHtml += "<div style='margin-top:4px;'><a href='" + _escapeHtml(String(jobPayload.failed_emails_download_url || "")) + "' target='_blank' rel='noopener'>Download Failed Email List</a></div>";
+              }
+              if (failedList.length) {
+                summaryHtml += "<div style='margin-top:8px;'><strong>Failures</strong><ul style='margin:6px 0 0 18px;'>" + failedList.join("") + "</ul></div>";
+              }
+              return summaryHtml;
+            };
+
+            const pollStart = Date.now();
+            const pollTimeoutMs = 10 * 60 * 1000;
+            while (true) {
+              const statusResp = await fetch("/genesys/users/search-update-batch/status?job_id=" + encodeURIComponent(jobId), { method: "GET" });
+              const statusPayload = await statusResp.json();
+              if (!statusResp.ok || !statusPayload.ok) {
+                throw new Error((statusPayload && statusPayload.error) || "Batch status check failed.");
+              }
+
+              const processed = Number(statusPayload.processed || 0);
+              const requested = Number(statusPayload.requested || emails.length);
+              const succeeded = Number(statusPayload.success_count || 0);
+              const failedCount = Number(statusPayload.failure_count || 0);
+              updateStatusEl.textContent = "Batch job " + jobId + " is " + String(statusPayload.status || "running") + " (" + processed + "/" + requested + ", success=" + succeeded + ", failed=" + failedCount + ").";
+
+              if (!statusPayload.queued) {
+                _setUpdateSummary(_buildFinalSummary(statusPayload), true);
+                updateStatusEl.textContent = "Batch user update complete: Updated " + succeeded + " of " + requested + " user(s).";
+                _loadUpdateBatchHistory();
+                break;
+              }
+
+              if ((Date.now() - pollStart) > pollTimeoutMs) {
+                updateStatusEl.textContent = "Batch is still running in background. Job ID: " + jobId + ". Use Refresh logs or rerun status check.";
+                break;
+              }
+              await new Promise(function (resolve) { window.setTimeout(resolve, 2000); });
+            }
           } catch (err) {
             updateStatusEl.textContent = "Batch user update failed: " + ((err && err.message) || "Unknown error.");
           } finally {
@@ -18954,6 +19106,7 @@ def genesys_user_search_update_batch_route(
   update_division: str = Form("true"),
   update_skills: str = Form("true"),
   update_queues: str = Form("true"),
+  run_async: str = Form("true"),
 ):
   def _to_bool(value: str, default: bool = False) -> bool:
     text = str(value or "").strip().lower()
@@ -18966,6 +19119,7 @@ def genesys_user_search_update_batch_route(
   apply_division = _to_bool(update_division, True)
   apply_skills = _to_bool(update_skills, True)
   apply_queues = _to_bool(update_queues, True)
+  async_mode = _to_bool(run_async, True)
   if not apply_division and not apply_skills and not apply_queues:
     return JSONResponse({"ok": False, "error": "At least one field update must be selected."}, status_code=400)
 
@@ -19019,7 +19173,14 @@ def genesys_user_search_update_batch_route(
   region = token_result.get("region", clean_region)
   access_token = token_result.get("access_token", "")
   max_workers = 3
-  started_at = time.time()
+  applied_parts = []
+  if apply_division:
+    applied_parts.append("Division")
+  if apply_skills:
+    applied_parts.append(f"Skills({len(skill_ids)})")
+  if apply_queues:
+    applied_parts.append(f"Queues({len(queue_ids)})")
+  applied_summary = ", ".join(applied_parts) if applied_parts else "(none)"
 
   def _run_one(index: int, email: str) -> tuple[int, dict]:
     try:
@@ -19073,87 +19234,183 @@ def genesys_user_search_update_batch_route(
     except Exception as exc:
       return index, {"ok": False, "user_email": email, "error": f"Unhandled batch update error: {exc}"}
 
-  indexed_results = [None] * len(users)
-  with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-    future_map = {executor.submit(_run_one, idx, email): idx for idx, email in enumerate(users)}
-    for future in concurrent.futures.as_completed(future_map):
-      idx, result = future.result()
-      indexed_results[idx] = result
+  def _finish_batch_job(job_id: str):
+    started_at = time.time()
+    started_label = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+    _genesys_update_batch_set_job(job_id, {
+      "status": "running",
+      "started_at": started_label,
+      "started_epoch": started_at,
+    })
 
-  results = [row for row in indexed_results if isinstance(row, dict)]
-  success_count = sum(1 for row in results if row.get("ok"))
-  failure_count = len(results) - success_count
-  requested = len(users)
-  status = "completed" if failure_count == 0 else "completed_with_failures"
+    indexed_results = [None] * len(users)
+    try:
+      with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_map = {executor.submit(_run_one, idx, email): idx for idx, email in enumerate(users)}
+        for future in concurrent.futures.as_completed(future_map):
+          idx, result = future.result()
+          indexed_results[idx] = result
+          processed = sum(1 for row in indexed_results if isinstance(row, dict))
+          success_count = sum(1 for row in indexed_results if isinstance(row, dict) and row.get("ok"))
+          _genesys_update_batch_set_job(job_id, {
+            "processed": processed,
+            "success_count": success_count,
+            "failure_count": max(0, processed - success_count),
+          })
 
-  failed_emails = []
-  seen_failed = set()
-  for row in results:
-    if row.get("ok"):
-      continue
-    email = str(row.get("user_email", "") or "").strip().lower()
-    if not email or email in seen_failed:
-      continue
-    seen_failed.add(email)
-    failed_emails.append(email)
+      results = [row for row in indexed_results if isinstance(row, dict)]
+      success_count = sum(1 for row in results if row.get("ok"))
+      failure_count = len(results) - success_count
+      requested = len(users)
+      final_status = "completed" if failure_count == 0 else "completed_with_failures"
 
-  original_emails = list(users)
-  timestamp_token = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-  original_text = "\n".join(original_emails) + ("\n" if original_emails else "")
-  failed_text = "\n".join(failed_emails) + ("\n" if failed_emails else "")
+      failed_emails = []
+      seen_failed = set()
+      for row in results:
+        if row.get("ok"):
+          continue
+        email = str(row.get("user_email", "") or "").strip().lower()
+        if not email or email in seen_failed:
+          continue
+        seen_failed.add(email)
+        failed_emails.append(email)
 
-  original_job_id = _store_job_output(
-    original_text.encode("utf-8"),
-    f"genesys_user_update_batch_original_{timestamp_token}.txt",
-    "text/plain",
+      original_emails = list(users)
+      timestamp_token = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+      original_text = "\n".join(original_emails) + ("\n" if original_emails else "")
+      failed_text = "\n".join(failed_emails) + ("\n" if failed_emails else "")
+
+      original_job_id = _store_job_output(
+        original_text.encode("utf-8"),
+        f"genesys_user_update_batch_original_{timestamp_token}.txt",
+        "text/plain",
+      )
+      failed_job_id = _store_job_output(
+        failed_text.encode("utf-8"),
+        f"genesys_user_update_batch_failed_{timestamp_token}.txt",
+        "text/plain",
+      )
+      original_download_url = f"/download/job-output/{original_job_id}"
+      failed_download_url = f"/download/job-output/{failed_job_id}"
+
+      duration_seconds = max(0.0, time.time() - started_at)
+      finished_label = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+
+      _append_genesys_update_batch_history_event(
+        status=final_status,
+        requested=requested,
+        success_count=success_count,
+        failure_count=failure_count,
+        workers=max_workers,
+        duration_seconds=duration_seconds,
+        applied_summary=applied_summary,
+        original_emails=original_emails,
+        failed_emails=failed_emails,
+        original_download_url=original_download_url,
+        failed_download_url=failed_download_url,
+      )
+
+      _genesys_update_batch_set_job(job_id, {
+        "status": final_status,
+        "processed": requested,
+        "success_count": success_count,
+        "failure_count": failure_count,
+        "duration_seconds": round(duration_seconds, 2),
+        "finished_at": finished_label,
+        "finished_epoch": time.time(),
+        "original_emails": original_emails,
+        "failed_emails": failed_emails,
+        "original_emails_download_url": original_download_url,
+        "failed_emails_download_url": failed_download_url,
+        "results": results,
+      })
+    except Exception as exc:
+      duration_seconds = max(0.0, time.time() - started_at)
+      _genesys_update_batch_set_job(job_id, {
+        "status": "failed",
+        "error": f"Unhandled batch update worker error: {exc}",
+        "duration_seconds": round(duration_seconds, 2),
+        "finished_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+        "finished_epoch": time.time(),
+      })
+
+  created_epoch = time.time()
+  created_label = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+  job_id = str(uuid4())
+
+  with GENESYS_UPDATE_BATCH_JOBS_LOCK:
+    GENESYS_UPDATE_BATCH_JOBS[job_id] = {
+      "job_id": job_id,
+      "status": "queued",
+      "created_at": created_label,
+      "created_epoch": created_epoch,
+      "started_at": "",
+      "started_epoch": 0.0,
+      "finished_at": "",
+      "finished_epoch": 0.0,
+      "requested": len(users),
+      "processed": 0,
+      "success_count": 0,
+      "failure_count": 0,
+      "workers": max_workers,
+      "applied_summary": applied_summary,
+      "duration_seconds": 0.0,
+      "region": region,
+      "error": "",
+      "original_emails": list(users),
+      "failed_emails": [],
+      "original_emails_download_url": "",
+      "failed_emails_download_url": "",
+      "results": [],
+    }
+    _genesys_update_batch_prune_jobs_locked()
+
+  worker = threading.Thread(
+    target=_finish_batch_job,
+    args=(job_id,),
+    name=f"genesys-update-batch-{job_id[:8]}",
+    daemon=True,
   )
-  failed_job_id = _store_job_output(
-    failed_text.encode("utf-8"),
-    f"genesys_user_update_batch_failed_{timestamp_token}.txt",
-    "text/plain",
-  )
-  original_download_url = f"/download/job-output/{original_job_id}"
-  failed_download_url = f"/download/job-output/{failed_job_id}"
+  worker.start()
 
-  applied_parts = []
-  if apply_division:
-    applied_parts.append("Division")
-  if apply_skills:
-    applied_parts.append(f"Skills({len(skill_ids)})")
-  if apply_queues:
-    applied_parts.append(f"Queues({len(queue_ids)})")
-  applied_summary = ", ".join(applied_parts) if applied_parts else "(none)"
+  if async_mode:
+    return JSONResponse({
+      "ok": True,
+      "queued": True,
+      "job_id": job_id,
+      "status": "queued",
+      "requested": len(users),
+      "workers": max_workers,
+      "applied_summary": applied_summary,
+      "message": "Batch accepted and running in background.",
+      "status_url": f"/genesys/users/search-update-batch/status?job_id={job_id}",
+    })
 
-  duration_seconds = max(0.0, time.time() - started_at)
-  _append_genesys_update_batch_history_event(
-    status=status,
-    requested=requested,
-    success_count=success_count,
-    failure_count=failure_count,
-    workers=max_workers,
-    duration_seconds=duration_seconds,
-    applied_summary=applied_summary,
-    original_emails=original_emails,
-    failed_emails=failed_emails,
-    original_download_url=original_download_url,
-    failed_download_url=failed_download_url,
-  )
+  # Compatibility mode for callers expecting a completed payload in one response.
+  join_timeout_seconds = 90
+  worker.join(timeout=join_timeout_seconds)
+  final_job = _genesys_update_batch_get_job(job_id)
+  if not isinstance(final_job, dict):
+    return JSONResponse({"ok": False, "error": "Batch job not found."}, status_code=500)
+  payload = _genesys_update_batch_job_status_payload(final_job)
+  if payload.get("queued"):
+    payload["message"] = f"Batch still running after {join_timeout_seconds}s; poll status_url for completion."
+    payload["status_url"] = f"/genesys/users/search-update-batch/status?job_id={job_id}"
+    return JSONResponse(payload)
+  return JSONResponse(payload)
 
-  return JSONResponse({
-    "ok": True,
-    "region": region,
-    "requested": requested,
-    "workers": max_workers,
-    "status": status,
-    "duration_seconds": round(duration_seconds, 2),
-    "success_count": success_count,
-    "failure_count": failure_count,
-    "original_emails": original_emails,
-    "failed_emails": failed_emails,
-    "original_emails_download_url": original_download_url,
-    "failed_emails_download_url": failed_download_url,
-    "results": results,
-  })
+
+@app.get("/genesys/users/search-update-batch/status")
+def genesys_user_search_update_batch_status_route(job_id: str = Query("")):
+  clean_job_id = str(job_id or "").strip()
+  if not clean_job_id:
+    return JSONResponse({"ok": False, "error": "job_id is required."}, status_code=400)
+
+  job = _genesys_update_batch_get_job(clean_job_id)
+  if not isinstance(job, dict):
+    return JSONResponse({"ok": False, "error": "Batch job not found."}, status_code=404)
+
+  return JSONResponse(_genesys_update_batch_job_status_payload(job))
 
 
 @app.get("/genesys/users/search-update-history")
