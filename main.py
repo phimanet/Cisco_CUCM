@@ -13281,44 +13281,64 @@ def genesys_build_webrtc_batch_route(users_json: str = Form("")):
 
   region = token_result.get("region", clean_region)
   access_token = token_result.get("access_token", "")
-  results = []
-  success_count = 0
+  max_workers = 3
 
-  for user in users:
-    build_result = _genesys_build_webrtc_phone_for_user(
-      region,
-      access_token,
-      user["user_id"],
-      user["user_name"],
-      user.get("user_email", ""),
-    )
-    if build_result.get("ok"):
-      success_count += 1
-      results.append({
-        "ok": True,
-        "user_id": user["user_id"],
-        "user_name": user["user_name"],
-        "user_email": user.get("user_email", ""),
-        "phone_id": build_result.get("phone_id", ""),
-        "phone_name": build_result.get("phone_name", ""),
-        "create_mode": build_result.get("create_mode", ""),
-        "association_result": build_result.get("association_result", ""),
-        "already_present": bool(build_result.get("already_present", False)),
-      })
-    else:
-      results.append({
+  def _build_one(index: int, user: dict) -> tuple[int, dict]:
+    try:
+      build_result = _genesys_build_webrtc_phone_for_user(
+        region,
+        access_token,
+        user["user_id"],
+        user["user_name"],
+        user.get("user_email", ""),
+      )
+      if build_result.get("ok"):
+        return index, {
+          "ok": True,
+          "user_id": user["user_id"],
+          "user_name": user["user_name"],
+          "user_email": user.get("user_email", ""),
+          "phone_id": build_result.get("phone_id", ""),
+          "phone_name": build_result.get("phone_name", ""),
+          "create_mode": build_result.get("create_mode", ""),
+          "association_result": build_result.get("association_result", ""),
+          "already_present": bool(build_result.get("already_present", False)),
+        }
+      return index, {
         "ok": False,
         "user_id": user["user_id"],
         "user_name": user["user_name"],
         "user_email": user.get("user_email", ""),
         "error": build_result.get("error", "WebRTC phone build failed."),
-      })
+      }
+    except Exception as exc:
+      return index, {
+        "ok": False,
+        "user_id": user.get("user_id", ""),
+        "user_name": user.get("user_name", ""),
+        "user_email": user.get("user_email", ""),
+        "error": f"Unhandled bulk worker error: {exc}",
+      }
+
+  indexed_results = [None] * len(users)
+  with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    future_map = {
+      executor.submit(_build_one, idx, user): idx
+      for idx, user in enumerate(users)
+    }
+    for future in concurrent.futures.as_completed(future_map):
+      index, row = future.result()
+      indexed_results[index] = row
+
+  results = [row for row in indexed_results if isinstance(row, dict)]
+  success_count = sum(1 for row in results if row.get("ok"))
 
   failure_count = len(results) - success_count
   return JSONResponse({
     "ok": True,
     "region": region,
     "requested": len(users),
+    "workers": max_workers,
     "success_count": success_count,
     "failure_count": failure_count,
     "results": results,
