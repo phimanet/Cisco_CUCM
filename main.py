@@ -1,4 +1,5 @@
 ﻿import csv
+import base64
 import datetime
 import hashlib
 import io
@@ -228,6 +229,11 @@ _opentext_base_default = "https://api.us.cloudmessaging.opentext.com/mra/v1"
 if OPENTEXT_TOKEN_URL.lower().endswith("/oauth2/token"):
   _opentext_base_default = OPENTEXT_TOKEN_URL[: -len("/oauth2/token")]
 OPENTEXT_BASE_URL = (os.getenv("OPENTEXT_BASE_URL", _opentext_base_default) or _opentext_base_default).strip().rstrip("/")
+OPENTEXT_BASE_URL_CANDIDATES = [
+  (item or "").strip().rstrip("/")
+  for item in (os.getenv("OPENTEXT_BASE_URL_CANDIDATES", "") or "").split(",")
+  if (item or "").strip()
+]
 OPENTEXT_API_TIMEOUT_SECONDS = int((os.getenv("OPENTEXT_API_TIMEOUT_SECONDS", "20") or "20").strip())
 OPENTEXT_MAX_RESULTS = int((os.getenv("OPENTEXT_MAX_RESULTS", "200") or "200").strip())
 AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aerialink.net/v5") or "https://apix5.aerialink.net/v5").strip().rstrip("/")
@@ -737,11 +743,38 @@ def _opentext_get_token_claims(access_token: str) -> dict:
     return {}
 
 
-def _opentext_get_json(access_token: str, path: str, params: dict | None = None) -> tuple[bool, dict, str, int]:
+def _opentext_base_candidates() -> list[str]:
+  candidates = []
+  seen = set()
+
+  def _add(value: str):
+    clean = str(value or "").strip().rstrip("/")
+    if not clean or clean in seen:
+      return
+    seen.add(clean)
+    candidates.append(clean)
+
+  _add(OPENTEXT_BASE_URL)
+  for item in OPENTEXT_BASE_URL_CANDIDATES:
+    _add(item)
+
+  if OPENTEXT_BASE_URL.endswith("/mra/v1"):
+    _add(OPENTEXT_BASE_URL[: -len("/v1")])
+  if OPENTEXT_BASE_URL.endswith("/mra"):
+    _add(OPENTEXT_BASE_URL + "/v1")
+
+  _add("https://api.us.cloudmessaging.opentext.com/mra/v1")
+  _add("https://api.us.cloudmessaging.opentext.com/mra")
+  _add("https://api.us.cloudmessaging.opentext.com/m2f/v1")
+  return candidates
+
+
+def _opentext_get_json(access_token: str, path: str, params: dict | None = None, base_url: str = "") -> tuple[bool, dict, str, int]:
   clean_path = str(path or "").strip()
   if not clean_path.startswith("/"):
     clean_path = "/" + clean_path
-  url = f"{OPENTEXT_BASE_URL}{clean_path}"
+  chosen_base = str(base_url or OPENTEXT_BASE_URL).strip().rstrip("/")
+  url = f"{chosen_base}{clean_path}"
   headers = {
     "Authorization": f"Bearer {access_token}",
     "Accept": "application/json",
@@ -749,7 +782,7 @@ def _opentext_get_json(access_token: str, path: str, params: dict | None = None)
   try:
     response = requests.get(url, headers=headers, params=params or {}, timeout=OPENTEXT_API_TIMEOUT_SECONDS)
   except Exception as exc:
-    return False, {}, f"OpenText API request failed for {clean_path}: {exc}", 0
+    return False, {}, f"{chosen_base}{clean_path}: request failed: {exc}", 0
 
   payload = {}
   body_text = response.text or ""
@@ -782,7 +815,7 @@ def _opentext_get_json(access_token: str, path: str, params: dict | None = None)
       message = f"HTTP {response.status_code}"
       if body_snippet:
         message += f" | body: {body_snippet}"
-    return False, payload if isinstance(payload, dict) else {}, message, response.status_code
+    return False, payload if isinstance(payload, dict) else {}, f"{chosen_base}{clean_path}: {message}", response.status_code
 
   return True, payload if isinstance(payload, dict) else {}, "", response.status_code
 
@@ -848,6 +881,7 @@ def _opentext_numbers_lookup(number_query: str = "", limit: int = 200) -> dict:
   warnings = []
   errors = []
   source_path = ""
+  source_base = ""
   payload_used = {}
 
   attempts = []
@@ -857,7 +891,11 @@ def _opentext_numbers_lookup(number_query: str = "", limit: int = 200) -> dict:
       {"path": "/numbers", "params": {"number": normalized_query, "limit": safe_limit}},
       {"path": "/numbers", "params": {"phoneNumber": normalized_query, "limit": safe_limit}},
       {"path": "/numbers/search", "params": {"q": normalized_query, "limit": safe_limit}},
+      {"path": "/phone-numbers", "params": {"number": normalized_query, "limit": safe_limit}},
+      {"path": "/phone-numbers/search", "params": {"q": normalized_query, "limit": safe_limit}},
       {"path": "/tns", "params": {"number": normalized_query, "limit": safe_limit}},
+      {"path": "/m2f/numbers", "params": {"number": normalized_query, "limit": safe_limit}},
+      {"path": "/m2f/tns", "params": {"number": normalized_query, "limit": safe_limit}},
     ])
     if xcan:
       attempts.extend([
@@ -865,6 +903,7 @@ def _opentext_numbers_lookup(number_query: str = "", limit: int = 200) -> dict:
         {"path": f"/accounts/{xcan}/numbers", "params": {"number": normalized_query, "limit": safe_limit}},
         {"path": f"/accounts/{xcan}/tns", "params": {"number": normalized_query, "limit": safe_limit}},
         {"path": f"/xcan/{xcan}/numbers", "params": {"number": normalized_query, "limit": safe_limit}},
+        {"path": f"/m2f/accounts/{xcan}/numbers", "params": {"number": normalized_query, "limit": safe_limit}},
       ])
   else:
     attempts.extend([
@@ -872,35 +911,44 @@ def _opentext_numbers_lookup(number_query: str = "", limit: int = 200) -> dict:
       {"path": "/numbers", "params": {"pageSize": safe_limit}},
       {"path": "/phone-numbers", "params": {"limit": safe_limit}},
       {"path": "/tns", "params": {"limit": safe_limit}},
+      {"path": "/m2f/numbers", "params": {"limit": safe_limit}},
+      {"path": "/m2f/tns", "params": {"limit": safe_limit}},
     ])
     if xcan:
       attempts.extend([
         {"path": f"/accounts/{xcan}/numbers", "params": {"limit": safe_limit}},
         {"path": f"/accounts/{xcan}/tns", "params": {"limit": safe_limit}},
         {"path": f"/xcan/{xcan}/numbers", "params": {"limit": safe_limit}},
+        {"path": f"/m2f/accounts/{xcan}/numbers", "params": {"limit": safe_limit}},
       ])
 
+  base_candidates = _opentext_base_candidates()
   rows = []
-  for attempt in attempts:
-    path = str(attempt.get("path", "") or "").strip()
-    params = dict(attempt.get("params", {}) or {})
-    ok_call, payload, err_call, status_code = _opentext_get_json(access_token, path, params=params)
-    if not ok_call:
-      errors.append(f"{path}: {err_call}")
-      if status_code in {401, 403}:
-        warnings.append(f"OpenText authorization issue on {path}: {err_call}")
-      continue
+  for base_url in base_candidates:
+    for attempt in attempts:
+      path = str(attempt.get("path", "") or "").strip()
+      params = dict(attempt.get("params", {}) or {})
+      ok_call, payload, err_call, status_code = _opentext_get_json(access_token, path, params=params, base_url=base_url)
+      if not ok_call:
+        errors.append(err_call)
+        if status_code in {401, 403}:
+          warnings.append(f"OpenText authorization issue on {base_url}{path}: {err_call}")
+        continue
 
-    extracted = _opentext_extract_number_rows(payload)
-    if extracted:
-      rows = extracted
+      extracted = _opentext_extract_number_rows(payload)
+      if extracted:
+        rows = extracted
+        payload_used = payload
+        source_path = path
+        source_base = base_url
+        break
+
       payload_used = payload
       source_path = path
-      break
+      source_base = base_url
 
-    # Keep successful payload diagnostics when no rows are found.
-    payload_used = payload
-    source_path = path
+    if rows:
+      break
 
   if rows:
     return {
@@ -908,6 +956,7 @@ def _opentext_numbers_lookup(number_query: str = "", limit: int = 200) -> dict:
       "query": str(number_query or "").strip(),
       "normalized_query": normalized_query,
       "count": len(rows),
+      "source_base": source_base,
       "source_path": source_path,
       "rows": rows,
       "warnings": warnings,
@@ -920,6 +969,7 @@ def _opentext_numbers_lookup(number_query: str = "", limit: int = 200) -> dict:
       "query": str(number_query or "").strip(),
       "normalized_query": normalized_query,
       "count": 0,
+      "source_base": source_base,
       "source_path": source_path,
       "rows": [],
       "warnings": warnings,
@@ -15967,7 +16017,7 @@ def opentext_admin_page(request: Request):
             const rows = Array.isArray(payload.rows) ? payload.rows : [];
             const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
             const normalized = String(payload.normalized_query || "").trim();
-            statusEl.textContent = "Source: " + String(payload.source_path || "") + " | Rows: " + rows.length + (normalized ? (" | Normalized: " + normalized) : "") + (warnings.length ? (" | Warnings: " + warnings.join(" | ")) : "");
+            statusEl.textContent = "Source: " + String(payload.source_base || "") + String(payload.source_path || "") + " | Rows: " + rows.length + (normalized ? (" | Normalized: " + normalized) : "") + (warnings.length ? (" | Warnings: " + warnings.join(" | ")) : "");
 
             if (!rows.length) {
               resultsEl.innerHTML = "<p style='color:#4e6a84;'>No numbers returned.</p>";
@@ -16066,6 +16116,7 @@ def opentext_numbers_list_route(request: Request, number: str = Form(""), limit:
     "ok": True,
     "query": lookup_result.get("query", ""),
     "normalized_query": lookup_result.get("normalized_query", ""),
+    "source_base": lookup_result.get("source_base", ""),
     "source_path": lookup_result.get("source_path", ""),
     "count": len(rows),
     "rows": rows,
