@@ -12556,7 +12556,7 @@ def genesys_admin_placeholder(request: Request):
                 <button type="button" id="genesys-update-single-lookup-btn" style="background:#385977;" onclick="if (window.runGenesysUpdateSingleLookup) { return window.runGenesysUpdateSingleLookup(); } var s=document.getElementById('genesys-update-status'); if (s) { s.textContent='Lookup handler missing (JS did not load).'; } return false;">Lookup User</button>
                 <button type="button" id="genesys-update-single-btn" style="background:#2d7a43;">Update 1 User</button>
               </div>
-              <div id="genesys-update-single-profile" style="font-size:12px; color:#4e6a84; margin-top:6px;">No user loaded.</div>
+              <div id="genesys-update-single-profile" style="font-size:20px; font-weight:900; line-height:1.35; color:#12304a; margin-top:8px;">No user loaded.</div>
               <div id="genesys-update-single-actions" style="margin-top:6px;"></div>
             </div>
 
@@ -12740,10 +12740,10 @@ def genesys_admin_placeholder(request: Request):
 
                   if (profileEl) {
                     const webrtcText = String(payload.webrtc_phone || "").trim();
-                    profileEl.innerHTML = "Current profile loaded: Division=" + esc(String(payload.division_name || payload.division_id || "(none)"))
+                    profileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Division=" + esc(String(payload.division_name || payload.division_id || "(none)"))
                       + " | Skills=" + Number((payload.skill_ids || []).length || 0)
                       + " | Queues=" + Number((payload.queue_ids || []).length || 0)
-                      + " | WebRTC=" + esc(webrtcText || "(missing)");
+                      + " | WebRTC=" + esc(webrtcText || "(missing)") + "</strong>";
                   }
                   statusEl.textContent = "Current profile loaded for " + userEmail + ". Adjust selections, then run update.";
                   return true;
@@ -13065,10 +13065,10 @@ def genesys_admin_placeholder(request: Request):
 
             if (updateSingleProfileEl) {
               const webrtcText = String(payload.webrtc_phone || "").trim();
-              updateSingleProfileEl.innerHTML = "Current profile loaded: Division=" + _escapeHtml(String(payload.division_name || payload.division_id || "(none)"))
+              updateSingleProfileEl.innerHTML = "<strong style='font-size:20px; font-weight:900; line-height:1.35; color:#12304a;'>Current profile loaded: Division=" + _escapeHtml(String(payload.division_name || payload.division_id || "(none)"))
                 + " | Skills=" + Number((payload.skill_ids || []).length || 0)
                 + " | Queues=" + Number((payload.queue_ids || []).length || 0)
-                + " | WebRTC=" + _escapeHtml(webrtcText || "(missing)");
+                + " | WebRTC=" + _escapeHtml(webrtcText || "(missing)") + "</strong>";
             }
 
             if (updateSingleActionsEl) {
