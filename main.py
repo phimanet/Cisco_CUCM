@@ -3974,6 +3974,7 @@ def _load_genesys_division_filters() -> dict:
             queue_ids.append(value)
         cleaned[clean_division_id] = {
           "division_id": clean_division_id,
+          "filter_name": str(item.get("filter_name", "") or item.get("division_name", "") or "").strip(),
           "division_name": str(item.get("division_name", "") or "").strip(),
           "skill_ids": skill_ids,
           "queue_ids": queue_ids,
@@ -13695,6 +13696,10 @@ def genesys_admin_placeholder(request: Request):
                   <label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Saved Division Filters</label>
                   <select id="genesys-update-saved-filter-select" size="5" style="width:100%; min-height:120px;"></select>
                 </div>
+                <div style="min-width:240px; flex:1 1 240px;">
+                  <label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Filter Name (optional)</label>
+                  <input id="genesys-update-filter-name" placeholder="Example: B4 Queue Set A" style="width:100%;" />
+                </div>
                 <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
                   <button type="button" id="genesys-update-filter-apply-btn" style="background:#2d7a43;" onclick="if (window.runGenesysDivisionFilterApply) { return window.runGenesysDivisionFilterApply(); } return false;">Apply Saved Filter</button>
                   <button type="button" id="genesys-update-filter-save-btn" style="background:#385977;" onclick="if (window.runGenesysDivisionFilterSave) { return window.runGenesysDivisionFilterSave(); } return false;">Save Current Selection</button>
@@ -13757,6 +13762,7 @@ def genesys_admin_placeholder(request: Request):
               const filterApplyBtn = document.getElementById("genesys-update-filter-apply-btn");
               const filterSaveBtn = document.getElementById("genesys-update-filter-save-btn");
               const filterDeleteBtn = document.getElementById("genesys-update-filter-delete-btn");
+              const filterNameEl = document.getElementById("genesys-update-filter-name");
               const updateHistoryStatusEl = document.getElementById("genesys-update-history-status");
               const updateHistoryTableEl = document.getElementById("genesys-update-history-table");
               const updateHistoryRefreshBtn = document.getElementById("genesys-update-history-refresh-btn");
@@ -13997,13 +14003,13 @@ def genesys_admin_placeholder(request: Request):
                 keys.sort(function (a, b) {
                   const left = divisionFilterMap[a] || {};
                   const right = divisionFilterMap[b] || {};
-                  return String(left.division_name || a).localeCompare(String(right.division_name || b));
+                  return String(left.filter_name || left.division_name || a).localeCompare(String(right.filter_name || right.division_name || b));
                 });
                 keys.forEach(function (divisionId) {
                   const row = divisionFilterMap[divisionId] || {};
                   const option = document.createElement("option");
                   option.value = divisionId;
-                  option.textContent = String(row.division_name || divisionId) + " | Skills " + ((row.skill_ids || []).length) + " | Queues " + ((row.queue_ids || []).length);
+                  option.textContent = String(row.filter_name || row.division_name || divisionId) + " | Division " + String(row.division_name || divisionId) + " | Skills " + ((row.skill_ids || []).length) + " | Queues " + ((row.queue_ids || []).length);
                   savedFilterSelectEl.appendChild(option);
                 });
                 if (prior) {
@@ -14025,6 +14031,7 @@ def genesys_admin_placeholder(request: Request):
                       return;
                     }
                     divisionFilterMap[divisionId] = {
+                      filter_name: String((row && row.filter_name) || (row && row.division_name) || divisionId).trim(),
                       division_name: String((row && row.division_name) || divisionId).trim(),
                       skill_ids: Array.isArray(row && row.skill_ids) ? row.skill_ids.map(function (x) { return String(x || "").trim(); }).filter(Boolean) : [],
                       queue_ids: Array.isArray(row && row.queue_ids) ? row.queue_ids.map(function (x) { return String(x || "").trim(); }).filter(Boolean) : [],
@@ -14049,8 +14056,10 @@ def genesys_admin_placeholder(request: Request):
                 const divisionId = divisionIds[0];
                 const selectedOption = Array.from(divisionSelect.options || []).find(function (opt) { return String(opt.value || "").trim() === divisionId; });
                 const divisionName = String((selectedOption && selectedOption.textContent) || divisionId).replace(/^\[Priority\]\s*/, "").trim();
+                const filterName = String((filterNameEl && filterNameEl.value) || "").trim() || divisionName;
                 const formData = new FormData();
                 formData.append("division_id", divisionId);
+                formData.append("filter_name", filterName);
                 formData.append("division_name", divisionName);
                 formData.append("skill_ids_json", JSON.stringify(selectedValues(skillsSelect)));
                 formData.append("queue_ids_json", JSON.stringify(selectedValues(queuesSelect)));
@@ -14061,7 +14070,7 @@ def genesys_admin_placeholder(request: Request):
                   if (!response.ok || !payload.ok) {
                     throw new Error((payload && payload.error) || "Unable to save division filter.");
                   }
-                  setFilterStatus("Saved filter for " + divisionName + ".", false);
+                  setFilterStatus("Saved filter '" + filterName + "' for division " + divisionName + ".", false);
                   await loadSavedFilters();
                   if (savedFilterSelectEl) {
                     savedFilterSelectEl.value = divisionId;
@@ -14085,7 +14094,7 @@ def genesys_admin_placeholder(request: Request):
                 if (useDivisionFilterEl) {
                   useDivisionFilterEl.checked = true;
                 }
-                setFilterStatus("Applied saved filter for " + String(divisionFilterMap[divisionId].division_name || divisionId) + ".", false);
+                setFilterStatus("Applied saved filter '" + String(divisionFilterMap[divisionId].filter_name || divisionFilterMap[divisionId].division_name || divisionId) + "'.", false);
                 return false;
               }
 
@@ -14781,6 +14790,7 @@ def genesys_admin_placeholder(request: Request):
         const updateFilterApplyBtn = document.getElementById("genesys-update-filter-apply-btn");
         const updateFilterSaveBtn = document.getElementById("genesys-update-filter-save-btn");
         const updateFilterDeleteBtn = document.getElementById("genesys-update-filter-delete-btn");
+        const updateFilterNameEl = document.getElementById("genesys-update-filter-name");
         let lastUserRows = [];
         let updateCatalogLoaded = false;
         let updateCatalogCache = { divisions: [], skills: [], queues: [] };
@@ -15062,8 +15072,8 @@ def genesys_admin_placeholder(request: Request):
           keys.sort(function (a, b) {
             const left = divisionFilterMap[a] || {};
             const right = divisionFilterMap[b] || {};
-            const leftName = String(left.division_name || a || "").toLowerCase();
-            const rightName = String(right.division_name || b || "").toLowerCase();
+            const leftName = String(left.filter_name || left.division_name || a || "").toLowerCase();
+            const rightName = String(right.filter_name || right.division_name || b || "").toLowerCase();
             if (leftName < rightName) return -1;
             if (leftName > rightName) return 1;
             return 0;
@@ -15072,10 +15082,11 @@ def genesys_admin_placeholder(request: Request):
             const row = divisionFilterMap[divisionId] || {};
             const option = document.createElement("option");
             option.value = divisionId;
+            const filterName = String(row.filter_name || row.division_name || divisionId || "").trim();
             const divisionName = String(row.division_name || divisionId || "").trim();
             const skillCount = Array.isArray(row.skill_ids) ? row.skill_ids.length : 0;
             const queueCount = Array.isArray(row.queue_ids) ? row.queue_ids.length : 0;
-            option.textContent = divisionName + " | Skills " + skillCount + " | Queues " + queueCount;
+            option.textContent = filterName + " | Division " + divisionName + " | Skills " + skillCount + " | Queues " + queueCount;
             updateSavedFilterSelectEl.appendChild(option);
           });
           if (previous) {
@@ -15137,6 +15148,7 @@ def genesys_admin_placeholder(request: Request):
                 return;
               }
               divisionFilterMap[divisionId] = {
+                filter_name: String((row && row.filter_name) || (row && row.division_name) || divisionId).trim(),
                 division_id: divisionId,
                 division_name: String((row && row.division_name) || "").trim(),
                 skill_ids: Array.isArray(row && row.skill_ids) ? row.skill_ids.map(function (id) { return String(id || "").trim(); }).filter(Boolean) : [],
@@ -15164,11 +15176,13 @@ def genesys_admin_placeholder(request: Request):
             return;
           }
           const divisionName = _findDivisionNameById(divisionId) || divisionId;
+          const filterName = String((updateFilterNameEl && updateFilterNameEl.value) || "").trim() || divisionName;
           const skillIds = _selectedValues(updateSkillsSelect);
           const queueIds = _selectedValues(updateQueuesSelect);
 
           const formData = new FormData();
           formData.append("division_id", divisionId);
+          formData.append("filter_name", filterName);
           formData.append("division_name", divisionName);
           formData.append("skill_ids_json", JSON.stringify(skillIds));
           formData.append("queue_ids_json", JSON.stringify(queueIds));
@@ -15183,7 +15197,7 @@ def genesys_admin_placeholder(request: Request):
             if (!response.ok || !payload.ok) {
               throw new Error((payload && payload.error) || "Unable to save division filter.");
             }
-            _setDivisionFilterStatus("Saved filter for " + divisionName + " (Skills " + skillIds.length + ", Queues " + queueIds.length + ").", false);
+            _setDivisionFilterStatus("Saved filter '" + filterName + "' for " + divisionName + " (Skills " + skillIds.length + ", Queues " + queueIds.length + ").", false);
             await _loadDivisionFilters();
             if (updateSavedFilterSelectEl) {
               updateSavedFilterSelectEl.value = divisionId;
@@ -18295,13 +18309,14 @@ def genesys_division_filters_route():
       continue
     rows.append({
       "division_id": str(division_id or "").strip(),
+      "filter_name": str(item.get("filter_name", "") or item.get("division_name", "") or "").strip(),
       "division_name": str(item.get("division_name", "") or "").strip(),
       "skill_ids": list(item.get("skill_ids", []) if isinstance(item.get("skill_ids"), list) else []),
       "queue_ids": list(item.get("queue_ids", []) if isinstance(item.get("queue_ids"), list) else []),
       "enabled": bool(item.get("enabled", True)),
       "updated_at": str(item.get("updated_at", "") or "").strip(),
     })
-  rows.sort(key=lambda row: (str(row.get("division_name", "") or "").lower(), str(row.get("division_id", "") or "").lower()))
+  rows.sort(key=lambda row: (str(row.get("filter_name", "") or row.get("division_name", "") or "").lower(), str(row.get("division_id", "") or "").lower()))
   return JSONResponse({
     "ok": True,
     "filters": rows,
@@ -18312,13 +18327,17 @@ def genesys_division_filters_route():
 @app.post("/genesys/division-filters/save")
 def genesys_division_filters_save_route(
   division_id: str = Form(""),
+  filter_name: str = Form(""),
   division_name: str = Form(""),
   skill_ids_json: str = Form("[]"),
   queue_ids_json: str = Form("[]"),
   enabled: str = Form("true"),
 ):
   clean_division_id = str(division_id or "").strip()
+  clean_filter_name = str(filter_name or "").strip()
   clean_division_name = str(division_name or "").strip()
+  if not clean_filter_name:
+    clean_filter_name = clean_division_name
   if not clean_division_id:
     return JSONResponse({"ok": False, "error": "division_id is required."}, status_code=400)
 
@@ -18335,15 +18354,6 @@ def genesys_division_filters_save_route(
     skill_ids = []
   if not isinstance(queue_ids, list):
     queue_ids = []
-
-  # Defensive server-side inference: if selections are present, treat as selected
-  # even if the checkbox flag was not posted correctly.
-  if not apply_division and clean_division_id:
-    apply_division = True
-  if not apply_skills and any(str(item or "").strip() for item in skill_ids):
-    apply_skills = True
-  if not apply_queues and any(str(item or "").strip() for item in queue_ids):
-    apply_queues = True
 
   clean_skill_ids = []
   clean_queue_ids = []
@@ -18364,6 +18374,7 @@ def genesys_division_filters_save_route(
     payload["filters"] = filters
   filters[clean_division_id] = {
     "division_id": clean_division_id,
+    "filter_name": clean_filter_name,
     "division_name": clean_division_name,
     "skill_ids": clean_skill_ids,
     "queue_ids": clean_queue_ids,
@@ -18377,6 +18388,7 @@ def genesys_division_filters_save_route(
   return JSONResponse({
     "ok": True,
     "division_id": clean_division_id,
+    "filter_name": clean_filter_name,
     "division_name": clean_division_name,
     "skill_ids": clean_skill_ids,
     "queue_ids": clean_queue_ids,
