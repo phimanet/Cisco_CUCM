@@ -13781,9 +13781,9 @@ def genesys_admin_placeholder(request: Request):
                   <input id="genesys-update-filter-name" placeholder="Example: B4 Queue Set A" style="width:100%;" />
                 </div>
                 <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-                  <button type="button" id="genesys-update-filter-apply-btn" style="background:#2d7a43;" onclick="if (window.runGenesysDivisionFilterApply) { return window.runGenesysDivisionFilterApply(); } return false;">Apply Saved Filter</button>
-                  <button type="button" id="genesys-update-filter-save-btn" style="background:#385977;" onclick="if (window.runGenesysDivisionFilterSave) { return window.runGenesysDivisionFilterSave(); } return false;">Save Current Selection</button>
-                  <button type="button" id="genesys-update-filter-delete-btn" style="background:#8a2d2d;" onclick="if (window.runGenesysDivisionFilterDelete) { return window.runGenesysDivisionFilterDelete(); } return false;">Delete Saved Filter</button>
+                  <button type="button" id="genesys-update-filter-apply-btn" style="background:#2d7a43;">Apply Saved Filter</button>
+                  <button type="button" id="genesys-update-filter-save-btn" style="background:#385977;">Save Current Selection</button>
+                  <button type="button" id="genesys-update-filter-delete-btn" style="background:#8a2d2d;">Delete Saved Filter</button>
                 </div>
               </div>
               <p id="genesys-update-filter-status" style="margin:8px 0 0 0; color:#2c5c8a; min-height:18px;">Saved filters not loaded yet.</p>
@@ -13795,7 +13795,7 @@ def genesys_admin_placeholder(request: Request):
                 <textarea id="genesys-update-batch-emails" placeholder="Paste one or more emails (one per line, comma, or space separated)." style="width:100%; min-height:110px; resize:vertical; padding:10px; border-radius:10px; border:1px solid var(--amn-border);"></textarea>
               </div>
               <div class="search-filter-row">
-                <button type="button" id="genesys-update-batch-btn" style="background:#2d7a43;">Run Batch User Update</button>
+                <button type="button" id="genesys-update-batch-btn" style="background:#2d7a43;" onclick="if (window.runGenesysUpdateBatchSubmit) { return window.runGenesysUpdateBatchSubmit(); } var s=document.getElementById('genesys-update-status'); if (s) { s.textContent='Batch update handler missing (JS did not load).'; } return false;">Run Batch User Update</button>
                 <span id="genesys-update-batch-count" style="font-size:12px; color:#4e6a84;">No users queued.</span>
               </div>
             </div>
@@ -15215,11 +15215,13 @@ def genesys_admin_placeholder(request: Request):
           }
         }
 
-        function _applyDivisionScopeToSelections() {
+        function _applyDivisionScopeToSelections(options) {
+          const scopeOptions = (options && typeof options === "object") ? options : {};
+          const preserveSelections = scopeOptions.preserveSelections !== false;
           const selectedDivisionId = _getSelectedDivisionId();
           const useSavedFilter = Boolean(updateUseDivisionFilterEl && updateUseDivisionFilterEl.checked);
-          const selectedSkillIds = _selectedValues(updateSkillsSelect);
-          const selectedQueueIds = _selectedValues(updateQueuesSelect);
+          const selectedSkillIds = preserveSelections ? _selectedValues(updateSkillsSelect) : [];
+          const selectedQueueIds = preserveSelections ? _selectedValues(updateQueuesSelect) : [];
 
           let skills = Array.isArray(updateCatalogCache.skills) ? updateCatalogCache.skills.slice() : [];
           let queues = Array.isArray(updateCatalogCache.queues) ? updateCatalogCache.queues.slice() : [];
@@ -15375,7 +15377,7 @@ def genesys_admin_placeholder(request: Request):
           if (updateUseDivisionFilterEl) {
             updateUseDivisionFilterEl.checked = true;
           }
-          _applyDivisionScopeToSelections();
+          _applyDivisionScopeToSelections({ preserveSelections: true });
         }
 
         async function _loadUpdateCatalog() {
@@ -15430,7 +15432,7 @@ def genesys_admin_placeholder(request: Request):
               updateStatusEl.textContent += " Warnings: " + warnings.join(" | ");
             }
             await _loadDivisionFilters();
-            _applyDivisionScopeToSelections();
+            _applyDivisionScopeToSelections({ preserveSelections: true });
             loadedOk = true;
           } catch (err) {
             updateStatusEl.textContent = "Catalog load failed: " + ((err && err.message) || "Unknown error.");
@@ -15488,7 +15490,7 @@ def genesys_admin_placeholder(request: Request):
             }
 
             _setSelectedOptions(updateDivisionSelect, payload.division_id ? [payload.division_id] : []);
-            _applyDivisionScopeToSelections();
+            _applyDivisionScopeToSelections({ preserveSelections: true });
             _setSelectedOptions(updateSkillsSelect, Array.isArray(payload.skill_ids) ? payload.skill_ids : []);
             _setSelectedOptions(updateQueuesSelect, Array.isArray(payload.queue_ids) ? payload.queue_ids : []);
 
@@ -15665,6 +15667,10 @@ def genesys_admin_placeholder(request: Request):
           if (!updateStatusEl) {
             return;
           }
+          if (window.__genesysBatchUpdateInFlight) {
+            updateStatusEl.textContent = "Batch user update is already running. Please wait.";
+            return;
+          }
           if (!updateCatalogLoaded) {
             updateStatusEl.textContent = "Load catalog first.";
             return;
@@ -15696,6 +15702,7 @@ def genesys_admin_placeholder(request: Request):
           }
 
           const originalText = updateBatchBtn ? updateBatchBtn.textContent : "";
+          window.__genesysBatchUpdateInFlight = true;
           if (updateBatchBtn) {
             updateBatchBtn.disabled = true;
             updateBatchBtn.textContent = "Running...";
@@ -15749,6 +15756,7 @@ def genesys_admin_placeholder(request: Request):
               updateBatchBtn.disabled = false;
               updateBatchBtn.textContent = originalText || "Run Batch User Update";
             }
+            window.__genesysBatchUpdateInFlight = false;
           }
         }
 
@@ -16140,6 +16148,11 @@ def genesys_admin_placeholder(request: Request):
           return false;
         };
 
+        window.runGenesysUpdateBatchSubmit = function () {
+          _runBatchUserUpdate();
+          return false;
+        };
+
         if (updateSingleLookupBtn) {
           updateSingleLookupBtn.addEventListener("click", function () {
             _lookupSingleUserProfile();
@@ -16172,35 +16185,39 @@ def genesys_admin_placeholder(request: Request):
 
         if (updateDivisionSelect) {
           updateDivisionSelect.addEventListener("change", function () {
-            _applyDivisionScopeToSelections();
+            _applyDivisionScopeToSelections({ preserveSelections: false });
           });
         }
 
         if (updateUseDivisionFilterEl) {
           updateUseDivisionFilterEl.addEventListener("change", function () {
-            _applyDivisionScopeToSelections();
+            _applyDivisionScopeToSelections({ preserveSelections: true });
           });
         }
 
-        if (updateFilterReloadBtn) {
+        if (updateFilterReloadBtn && String(updateFilterReloadBtn.dataset.bound || "") !== "1") {
+          updateFilterReloadBtn.dataset.bound = "1";
           updateFilterReloadBtn.addEventListener("click", function () {
             _loadDivisionFilters();
           });
         }
 
-        if (updateFilterSaveBtn) {
+        if (updateFilterSaveBtn && String(updateFilterSaveBtn.dataset.bound || "") !== "1") {
+          updateFilterSaveBtn.dataset.bound = "1";
           updateFilterSaveBtn.addEventListener("click", function () {
             _saveCurrentDivisionFilter();
           });
         }
 
-        if (updateFilterDeleteBtn) {
+        if (updateFilterDeleteBtn && String(updateFilterDeleteBtn.dataset.bound || "") !== "1") {
+          updateFilterDeleteBtn.dataset.bound = "1";
           updateFilterDeleteBtn.addEventListener("click", function () {
             _deleteSelectedDivisionFilter();
           });
         }
 
-        if (updateFilterApplyBtn) {
+        if (updateFilterApplyBtn && String(updateFilterApplyBtn.dataset.bound || "") !== "1") {
+          updateFilterApplyBtn.dataset.bound = "1";
           updateFilterApplyBtn.addEventListener("click", function () {
             _applySelectedSavedDivisionFilter();
           });
@@ -18465,7 +18482,7 @@ def genesys_division_filters_save_route(
   queue_ids_json: str = Form("[]"),
   enabled: str = Form("true"),
 ):
-  clean_filter_id = str(filter_id or "").strip() or str(uuid4())
+  clean_filter_id = str(filter_id or "").strip()
   clean_division_id = str(division_id or "").strip()
   clean_filter_name = str(filter_name or "").strip()
   clean_division_name = str(division_name or "").strip()
@@ -18505,6 +18522,21 @@ def genesys_division_filters_save_route(
   if not isinstance(filters, dict):
     filters = {}
     payload["filters"] = filters
+  # De-duplicate no-op saves caused by duplicate click paths (same division/name/skills/queues).
+  if not clean_filter_id:
+    for existing_id, existing in filters.items():
+      if not isinstance(existing, dict):
+        continue
+      same_division = str(existing.get("division_id", "") or "").strip() == clean_division_id
+      same_name = str(existing.get("filter_name", "") or "").strip().lower() == clean_filter_name.lower()
+      existing_skills = [str(v or "").strip() for v in (existing.get("skill_ids", []) if isinstance(existing.get("skill_ids"), list) else []) if str(v or "").strip()]
+      existing_queues = [str(v or "").strip() for v in (existing.get("queue_ids", []) if isinstance(existing.get("queue_ids"), list) else []) if str(v or "").strip()]
+      if same_division and same_name and existing_skills == clean_skill_ids and existing_queues == clean_queue_ids:
+        clean_filter_id = str(existing_id or "").strip()
+        break
+  if not clean_filter_id:
+    clean_filter_id = str(uuid4())
+
   filters[clean_filter_id] = {
     "filter_id": clean_filter_id,
     "division_id": clean_division_id,
@@ -18605,14 +18637,6 @@ def genesys_user_search_update_route(
     skill_ids = []
   if not isinstance(queue_ids, list):
     queue_ids = []
-
-  # Defensive server-side inference for batch flow.
-  if not apply_division and clean_division_id:
-    apply_division = True
-  if not apply_skills and any(str(item or "").strip() for item in skill_ids):
-    apply_skills = True
-  if not apply_queues and any(str(item or "").strip() for item in queue_ids):
-    apply_queues = True
 
   token_result = _genesys_get_queue_access_token(clean_region)
   if not token_result.get("ok"):
