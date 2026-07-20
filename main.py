@@ -3195,6 +3195,7 @@ def _genesys_remove_user_from_queue(
     if not target_present and not expect_present:
       return True, "not_member"
 
+    retained_members = []
     retained_ids = []
     for member in members_snapshot:
       if not isinstance(member, dict):
@@ -3206,10 +3207,22 @@ def _genesys_remove_user_from_queue(
       if member_id and member_id not in retained_ids:
         retained_ids.append(member_id)
 
-    replace_payload = [{"id": member_id} for member_id in retained_ids]
+      # Some tenants require `joined` on queue-member replace payloads.
+      joined_value = member.get("joined", True)
+      retained_members.append({
+        "id": member_id,
+        "joined": bool(joined_value),
+      })
+
+    replace_payload_ids_only = [{"id": member_id} for member_id in retained_ids]
     replace_attempts = [
-      ("PUT", f"/api/v2/routing/queues/{clean_queue_id}/members", replace_payload),
-      ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", replace_payload),
+      ("PUT", f"/api/v2/routing/queues/{clean_queue_id}/members", retained_members),
+      ("PUT", f"/api/v2/routing/queues/{clean_queue_id}/members", {"members": retained_members}),
+      ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", retained_members),
+      ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", {"members": retained_members}),
+      # Backward-compatible fallback variants for tenants that accept id-only.
+      ("PUT", f"/api/v2/routing/queues/{clean_queue_id}/members", replace_payload_ids_only),
+      ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", replace_payload_ids_only),
     ]
     for method, path, payload in replace_attempts:
       ok_replace, _, replace_err, _ = _genesys_send_json(method, api_base, access_token, path, payload=payload)
