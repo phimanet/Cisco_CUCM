@@ -160,6 +160,11 @@ SMTP_USE_STARTTLS = (os.getenv("SMTP_USE_STARTTLS", "false") or "false").strip()
 }
 SMTP_DEFAULT_FROM = (os.getenv("SMTP_DEFAULT_FROM", "") or "").strip()
 AUDIT_LOG_EMAIL_DOMAIN = (os.getenv("AUDIT_LOG_EMAIL_DOMAIN", "amnhealthcare.com") or "amnhealthcare.com").strip().lstrip("@")
+GENESYS_UPDATE_NOTIFY_RECIPIENTS = [
+  item.strip()
+  for item in (os.getenv("GENESYS_UPDATE_NOTIFY_RECIPIENTS", "") or "").split(",")
+  if item.strip()
+]
 TWILIO_ACCOUNT_SID = (os.getenv("TWILIO_ACCOUNT_SID", "") or "").strip()
 TWILIO_AUTH_TOKEN = (os.getenv("TWILIO_AUTH_TOKEN", "") or "").strip()
 TWILIO_SUBACCOUNT_SID = (os.getenv("TWILIO_SUBACCOUNT_SID", "") or "").strip()
@@ -8783,6 +8788,19 @@ def _derive_admin_audit_email(username: str) -> str:
   clean_user = (username or "").strip()
   if not clean_user:
     return ""
+  if "@" in clean_user:
+    local_part, domain_part = clean_user.split("@", 1)
+    local_clean = local_part.strip()
+    lowered_local = local_clean.lower()
+    if lowered_local.endswith(".adm"):
+      local_clean = local_clean[:-4]
+    elif lowered_local.endswith(".ad"):
+      local_clean = local_clean[:-3]
+    local_clean = local_clean.strip()
+    domain_clean = domain_part.strip()
+    if not local_clean or not domain_clean:
+      return ""
+    return f"{local_clean}@{domain_clean}"
   lowered = clean_user.lower()
   if lowered.endswith(".adm"):
     clean_user = clean_user[:-4]
@@ -8816,8 +8834,16 @@ def _genesys_send_update_completion_email(
     if isinstance(session, dict):
       operator = str(session.get("username", "") or "").strip()
 
-  recipient = _derive_admin_audit_email(operator)
-  if not recipient:
+  recipient_list = []
+  derived = _derive_admin_audit_email(operator)
+  if derived:
+    recipient_list.append(derived)
+  for extra in GENESYS_UPDATE_NOTIFY_RECIPIENTS:
+    if extra not in recipient_list:
+      recipient_list.append(extra)
+
+  if not recipient_list:
+    logger.warning("genesys completion email skipped for %s: no recipient resolved (operator=%s)", operation, operator)
     return
 
   clean_status = str(status or "").strip().lower()
@@ -8888,7 +8914,7 @@ def _genesys_send_update_completion_email(
   try:
     _send_smtp_email(
       sender="noreply@amnhealthcare.com",
-      recipients=[recipient],
+      recipients=recipient_list,
       subject=subject,
       body=plain_body,
       html_body=html_body,
@@ -8896,7 +8922,7 @@ def _genesys_send_update_completion_email(
       use_starttls=SMTP_USE_STARTTLS,
     )
   except Exception as exc:
-    logger.warning("genesys completion email failed for %s: %s", operation, exc)
+    logger.warning("genesys completion email failed for %s (recipients=%s): %s", operation, ",".join(recipient_list), exc)
 
 
 def _normalize_phone_to_e164(phone_number: str) -> str:
@@ -14085,7 +14111,7 @@ def genesys_admin_placeholder(request: Request):
 
             <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f4f9ff;">
               <h4 style="margin:0 0 8px 0;">Find Person in CUCM (Optional)</h4>
-              <p style="margin:0 0 8px 0; color:#4e6a84; font-size:12px;">Search CUCM by last name (optional first name), then choose the person to auto-fill Single User Proof email for Genesys lookup.</p>
+              <p style="margin:0 0 8px 0; color:#4e6a84; font-size:12px;">Search CUCM by last name (optional first name), then choose the person to auto-fill Email of User Lookup for Genesys lookup.</p>
               <div class="search-filter-row">
                 <input id="genesys-update-name-last" placeholder="Last Name *" style="width:220px;" />
                 <input id="genesys-update-name-first" placeholder="First Name (optional)" style="width:220px;" />
@@ -14096,11 +14122,11 @@ def genesys_admin_placeholder(request: Request):
             </div>
 
             <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f8fcff;">
-              <h4 style="margin:0 0 8px 0;">Single User Proof</h4>
+              <h4 style="margin:0 0 8px 0;">Email of User Lookup</h4>
               <div class="search-filter-row">
                 <input id="genesys-update-single-email" placeholder="User email (e.g. jane.doe@amnhealthcare.com)" style="width:360px;" />
                 <button type="button" id="genesys-update-single-lookup-btn" style="background:#385977;" onclick="if (window.runGenesysUpdateSingleLookup) { return window.runGenesysUpdateSingleLookup(); } var s=document.getElementById('genesys-update-status'); if (s) { s.textContent='Lookup handler missing (JS did not load).'; } return false;">Lookup User</button>
-                <button type="button" id="genesys-update-single-btn" style="background:#2d7a43;">Update 1 User</button>
+                <button type="button" id="genesys-update-single-btn" style="background:#2d7a43;">Change/Update 1 User</button>
               </div>
               <div id="genesys-update-single-profile" style="font-size:20px; font-weight:900; line-height:1.35; color:#12304a; margin-top:8px;">No user loaded.</div>
               <div id="genesys-update-single-actions" style="margin-top:6px;"></div>
@@ -14316,7 +14342,7 @@ def genesys_admin_placeholder(request: Request):
                       emailEl.value = selectedEmail;
                     }
                     if (nameSearchStatusEl) {
-                      nameSearchStatusEl.textContent = "Selected " + selectedEmail + " for Single User Proof.";
+                      nameSearchStatusEl.textContent = "Selected " + selectedEmail + " for Email of User Lookup.";
                     }
                   });
                 });
@@ -14633,7 +14659,7 @@ def genesys_admin_placeholder(request: Request):
                   return false;
                 }
 
-                const originalText = updateBtn ? updateBtn.textContent : "Update 1 User";
+                const originalText = updateBtn ? updateBtn.textContent : "Change/Update 1 User";
                 if (updateBtn) {
                   updateBtn.disabled = true;
                   updateBtn.textContent = "Updating...";
@@ -15693,7 +15719,7 @@ def genesys_admin_placeholder(request: Request):
                 updateSingleEmailEl.value = selectedEmail;
               }
               if (updateNameSearchStatusEl) {
-                updateNameSearchStatusEl.textContent = "Selected " + selectedEmail + " for Single User Proof.";
+                updateNameSearchStatusEl.textContent = "Selected " + selectedEmail + " for Email of User Lookup.";
               }
             });
           });
@@ -16259,7 +16285,7 @@ def genesys_admin_placeholder(request: Request):
           } finally {
             if (updateSingleBtn) {
               updateSingleBtn.disabled = false;
-              updateSingleBtn.textContent = originalText || "Update 1 User";
+              updateSingleBtn.textContent = originalText || "Change/Update 1 User";
             }
           }
         }
