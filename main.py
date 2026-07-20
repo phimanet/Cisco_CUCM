@@ -3751,18 +3751,51 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict], 
     queues_text = ""
     queue_resolution_source = "none"
 
-    if verify_queue_err:
-      queue_errors.append(f"verification failed: {verify_queue_err}")
     if verify_set != desired_set:
-      if not queue_errors:
-        missing_adds = sorted(list(desired_set - verify_set))
-        unexpected = sorted(list(verify_set - desired_set))
-        queue_errors.append(
-          "final queue verification mismatch"
-          + (f"; missing={','.join(missing_adds)}" if missing_adds else "")
-          + (f"; unexpected={','.join(unexpected)}" if unexpected else "")
-        )
-      return {"ok": False, "error": "Queue update failed: " + " | ".join(queue_errors)}
+      # Fallback reconcile: some orgs reject member add/remove endpoints but allow
+      # setting user queue membership via user-scoped queue update payloads.
+      desired_queue_objs = [{"id": qid} for qid in desired_queue_ids]
+      reconcile_attempts = [
+        ("PUT", f"/api/v2/users/{clean_user_id}/queues", desired_queue_objs),
+        ("POST", f"/api/v2/users/{clean_user_id}/queues", desired_queue_objs),
+        ("PUT", f"/api/v2/users/{clean_user_id}/queues", {"queues": desired_queue_objs}),
+        ("POST", f"/api/v2/users/{clean_user_id}/queues", {"queues": desired_queue_objs}),
+        ("PUT", f"/api/v2/users/{clean_user_id}/queues", {"queueIds": desired_queue_ids}),
+        ("POST", f"/api/v2/users/{clean_user_id}/queues", {"queueIds": desired_queue_ids}),
+      ]
+      reconcile_errors = []
+      for method, path, payload in reconcile_attempts:
+        ok_reconcile, _, reconcile_err, _ = _genesys_send_json(method, api_base, access_token, path, payload=payload)
+        if ok_reconcile:
+          break
+        reconcile_errors.append(f"{path}: {str(reconcile_err or 'unknown').strip()}")
+
+      # Re-verify after reconcile attempts.
+      verify_queue_err = ""
+      verify_set = set()
+      for attempt in range(4):
+        verify_queue_ids, verify_queue_err = _genesys_get_user_queue_ids(api_base, access_token, clean_user_id)
+        if not verify_queue_err:
+          verify_set = set(verify_queue_ids)
+          if verify_set == desired_set:
+            break
+        if attempt < 3:
+          time.sleep(1.0)
+
+      if verify_set != desired_set:
+        if verify_queue_err:
+          queue_errors.append(f"verification failed: {verify_queue_err}")
+        if reconcile_errors:
+          queue_errors.append("reconcile attempts: " + " | ".join(reconcile_errors))
+        if not queue_errors:
+          missing_adds = sorted(list(desired_set - verify_set))
+          unexpected = sorted(list(verify_set - desired_set))
+          queue_errors.append(
+            "final queue verification mismatch"
+            + (f"; missing={','.join(missing_adds)}" if missing_adds else "")
+            + (f"; unexpected={','.join(unexpected)}" if unexpected else "")
+          )
+        return {"ok": False, "error": "Queue update failed: " + " | ".join(queue_errors)}
 
     if queue_errors:
       queues_status = (
