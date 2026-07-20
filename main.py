@@ -3590,23 +3590,30 @@ def _genesys_apply_user_search_update(
         queue_errors.append(str(queue_state or "unknown error"))
 
     if queue_errors:
-      # Genesys queue APIs can return HTTP 400 on one endpoint even when another
-      # backend path has already applied membership. Verify final state before failing.
-      verify_queue_ids, verify_queue_err = _genesys_get_user_queue_ids(api_base, access_token, clean_user_id)
-      if not verify_queue_err:
-        verify_set = set(verify_queue_ids)
-        if verify_set == desired_set:
-          queues_status = (
-            f"updated (verified after endpoint errors; added={queue_add_count}, "
-            f"removed={queue_remove_count}, already={queue_existing_count}, target={len(desired_queue_ids)})"
-          )
-          return {
-            "ok": True,
-            "region": clean_region,
-            "division_status": division_status,
-            "skills_status": skills_status,
-            "queues_status": queues_status,
-          }
+      # Genesys queue writes can return transient HTTP 400 while membership still
+      # converges moments later. Re-check final state with a short retry window.
+      verify_queue_err = ""
+      verify_set = set()
+      for attempt in range(4):
+        verify_queue_ids, verify_queue_err = _genesys_get_user_queue_ids(api_base, access_token, clean_user_id)
+        if not verify_queue_err:
+          verify_set = set(verify_queue_ids)
+          if verify_set == desired_set:
+            queues_status = (
+              f"updated (verified after endpoint errors; added={queue_add_count}, "
+              f"removed={queue_remove_count}, already={queue_existing_count}, target={len(desired_queue_ids)})"
+            )
+            return {
+              "ok": True,
+              "region": clean_region,
+              "division_status": division_status,
+              "skills_status": skills_status,
+              "queues_status": queues_status,
+            }
+        if attempt < 3:
+          time.sleep(1.0)
+      if verify_queue_err:
+        queue_errors.append(f"verification failed: {verify_queue_err}")
       return {"ok": False, "error": "Queue update failed: " + " | ".join(queue_errors)}
     queues_status = f"updated (added={queue_add_count}, removed={queue_remove_count}, already={queue_existing_count}, target={len(desired_queue_ids)})"
 
