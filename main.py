@@ -3025,8 +3025,17 @@ def _genesys_remove_user_from_queue(
 ) -> tuple[bool, str]:
   clean_user_id = str(user_id or "").strip()
   clean_queue_id = str(queue_id or "").strip()
+  clean_user_email = str(user_email or "").strip().lower()
+  clean_user_name = str(user_name or "").strip()
   if not clean_user_id or not clean_queue_id:
     return False, "User ID and queue ID are required."
+
+  logger.info(
+    "genesys queue remove start: user_id=%s user_email=%s queue_id=%s",
+    clean_user_id,
+    clean_user_email,
+    clean_queue_id,
+  )
 
   # First try authoritative member-id deletion. In many Genesys tenants,
   # /members/{id} expects queue-member record id (not user id).
@@ -3040,13 +3049,19 @@ def _genesys_remove_user_from_queue(
     for member in members_snapshot:
       if not isinstance(member, dict):
         continue
-      if not _genesys_queue_member_matches_user(member, clean_user_id, user_email, user_name):
+      if not _genesys_queue_member_matches_user(member, clean_user_id, clean_user_email, clean_user_name):
         continue
       member_record_id = str(member.get("id", "") or "").strip()
       if member_record_id and member_record_id not in matched_member_ids:
         matched_member_ids.append(member_record_id)
 
     if matched_member_ids:
+      logger.info(
+        "genesys queue remove member-id candidates: user_id=%s queue_id=%s member_ids=%s",
+        clean_user_id,
+        clean_queue_id,
+        ",".join(matched_member_ids),
+      )
       delete_errors = []
       for member_record_id in matched_member_ids:
         ok_delete_member, _, delete_member_err, _ = _genesys_send_json(
@@ -3057,6 +3072,12 @@ def _genesys_remove_user_from_queue(
           payload=None,
         )
         if ok_delete_member:
+          logger.info(
+            "genesys queue remove success via member-id delete: user_id=%s queue_id=%s member_id=%s",
+            clean_user_id,
+            clean_queue_id,
+            member_record_id,
+          )
           return True, "removed"
         delete_errors.append(f"member-id {member_record_id}: {delete_member_err}")
 
@@ -3065,6 +3086,12 @@ def _genesys_remove_user_from_queue(
         pass
     else:
       # We successfully read members and user was not present using full identity matching.
+      logger.info(
+        "genesys queue remove not_member after snapshot match: user_id=%s user_email=%s queue_id=%s",
+        clean_user_id,
+        clean_user_email,
+        clean_queue_id,
+      )
       return True, "not_member"
 
   attempts = [
@@ -3088,6 +3115,13 @@ def _genesys_remove_user_from_queue(
   for method, path, payload in attempts:
     ok, _, err, status_code = _genesys_send_json(method, api_base, access_token, path, payload=payload)
     if ok:
+      logger.info(
+        "genesys queue remove success via fallback endpoint: method=%s path=%s user_id=%s queue_id=%s",
+        method,
+        path,
+        clean_user_id,
+        clean_queue_id,
+      )
       return True, "removed"
 
     err_text = str(err or "").strip()
@@ -3137,8 +3171,20 @@ def _genesys_remove_user_from_queue(
       errors.append("members snapshot empty; cannot prove remove")
 
   if permission_errors:
+    logger.warning(
+      "genesys queue remove permission error: user_id=%s queue_id=%s detail=%s",
+      clean_user_id,
+      clean_queue_id,
+      permission_errors[0],
+    )
     return False, permission_errors[0]
 
+  logger.warning(
+    "genesys queue remove failed: user_id=%s queue_id=%s errors=%s",
+    clean_user_id,
+    clean_queue_id,
+    " | ".join(errors) if errors else "none",
+  )
   return False, " | ".join(errors) if errors else "Queue membership remove failed."
 
 
@@ -3900,6 +3946,14 @@ def _genesys_apply_user_search_update(
     desired_set = set(desired_queue_ids)
     queue_to_add = sorted(desired_set - current_set)
     queue_to_remove = sorted(current_set - desired_set)
+    logger.info(
+      "genesys queue sync start: user_id=%s desired=%s current=%s to_add=%s to_remove=%s",
+      clean_user_id,
+      ",".join(desired_queue_ids),
+      ",".join(sorted(list(current_set))),
+      ",".join(queue_to_add),
+      ",".join(queue_to_remove),
+    )
 
     queue_errors = []
     queue_add_count = 0
@@ -4209,15 +4263,32 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict], 
         return {"ok": False, "error": "Queue update failed: " + " | ".join(queue_errors)}
 
     if touched_queue_errors:
+      logger.warning(
+        "genesys queue sync touched-queue verify failed: user_id=%s errors=%s",
+        clean_user_id,
+        " | ".join(touched_queue_errors),
+      )
       return {"ok": False, "error": "Queue update failed: " + " | ".join(touched_queue_errors)}
 
     if queue_errors:
+      logger.warning(
+        "genesys queue sync endpoint errors but final verified match: user_id=%s status=%s errors=%s",
+        clean_user_id,
+        queues_status,
+        " | ".join(queue_errors),
+      )
       queues_status = (
         f"updated (verified after endpoint errors; added={queue_add_count}, "
         f"removed={queue_remove_count}, already={queue_existing_count}, target={len(desired_queue_ids)})"
       )
     else:
       queues_status = f"updated (added={queue_add_count}, removed={queue_remove_count}, already={queue_existing_count}, target={len(desired_queue_ids)})"
+
+    logger.info(
+      "genesys queue sync success: user_id=%s status=%s",
+      clean_user_id,
+      queues_status,
+    )
       webrtc_phone = _genesys_extract_webrtc_phone(
         user_payload if ok_user else {},
         routing_payload if ok_routing else {},
