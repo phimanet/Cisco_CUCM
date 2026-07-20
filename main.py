@@ -3021,6 +3021,45 @@ def _genesys_remove_user_from_queue(api_base: str, access_token: str, user_id: s
   if not clean_user_id or not clean_queue_id:
     return False, "User ID and queue ID are required."
 
+  # First try authoritative member-id deletion. In many Genesys tenants,
+  # /members/{id} expects queue-member record id (not user id).
+  members_snapshot, snapshot_diag, snapshot_err = _genesys_get_queue_members_with_diagnostics(
+    api_base,
+    access_token,
+    clean_queue_id,
+  )
+  if not snapshot_err and members_snapshot:
+    matched_member_ids = []
+    for member in members_snapshot:
+      if not isinstance(member, dict):
+        continue
+      if not _genesys_queue_member_matches_user(member, clean_user_id, "", ""):
+        continue
+      member_record_id = str(member.get("id", "") or "").strip()
+      if member_record_id and member_record_id not in matched_member_ids:
+        matched_member_ids.append(member_record_id)
+
+    if matched_member_ids:
+      delete_errors = []
+      for member_record_id in matched_member_ids:
+        ok_delete_member, _, delete_member_err, _ = _genesys_send_json(
+          "DELETE",
+          api_base,
+          access_token,
+          f"/api/v2/routing/queues/{clean_queue_id}/members/{member_record_id}",
+          payload=None,
+        )
+        if ok_delete_member:
+          return True, "removed"
+        delete_errors.append(f"member-id {member_record_id}: {delete_member_err}")
+
+      if delete_errors:
+        # Continue to fallback attempts below, but keep diagnostics.
+        pass
+    else:
+      # We successfully read members and user was not present.
+      return True, "not_member"
+
   attempts = [
     ("DELETE", f"/api/v2/routing/queues/{clean_queue_id}/members/{clean_user_id}", None),
     ("PUT", f"/api/v2/routing/queues/{clean_queue_id}/members", [{"id": clean_user_id, "delete": True}]),
@@ -3033,6 +3072,12 @@ def _genesys_remove_user_from_queue(api_base: str, access_token: str, user_id: s
 
   errors = []
   permission_errors = []
+
+  if snapshot_err:
+    errors.append(f"members snapshot failed: {snapshot_err}")
+  elif not members_snapshot and snapshot_diag:
+    errors.append("members snapshot empty; membership could not be confirmed")
+
   for method, path, payload in attempts:
     ok, _, err, status_code = _genesys_send_json(method, api_base, access_token, path, payload=payload)
     if ok:
@@ -3050,14 +3095,7 @@ def _genesys_remove_user_from_queue(api_base: str, access_token: str, user_id: s
         continue
 
   # Fallback for tenants where queue membership is managed via full-member-set replace.
-  members_snapshot, snapshot_diag, snapshot_err = _genesys_get_queue_members_with_diagnostics(
-    api_base,
-    access_token,
-    clean_queue_id,
-  )
-  if snapshot_err:
-    errors.append(f"members snapshot failed: {snapshot_err}")
-  elif members_snapshot:
+  if members_snapshot:
     target_present = any(
       _genesys_queue_member_matches_user(member, clean_user_id, "", "")
       for member in members_snapshot
