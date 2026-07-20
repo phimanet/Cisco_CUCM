@@ -3095,6 +3095,45 @@ def _genesys_remove_user_from_queue(
       )
       delete_errors = []
       for member_record_id in matched_member_ids:
+        # Some Genesys tenants require updating queue-member records instead of
+        # DELETE. Try joined=false on the member record first.
+        member_update_attempts = [
+          ("PATCH", f"/api/v2/routing/queues/{clean_queue_id}/members/{member_record_id}", {"joined": False}),
+          ("PUT", f"/api/v2/routing/queues/{clean_queue_id}/members/{member_record_id}", {"joined": False}),
+          ("PUT", f"/api/v2/routing/queues/{clean_queue_id}/members/{member_record_id}", {"id": member_record_id, "joined": False}),
+          ("PATCH", f"/api/v2/routing/queues/{clean_queue_id}/members/{member_record_id}", {"id": member_record_id, "joined": False}),
+        ]
+        member_updated = False
+        for method_update, path_update, payload_update in member_update_attempts:
+          ok_update, _, update_err, _ = _genesys_send_json(
+            method_update,
+            api_base,
+            access_token,
+            path_update,
+            payload=payload_update,
+          )
+          if not ok_update:
+            delete_errors.append(f"member-id {member_record_id}: {path_update}: {update_err}")
+            continue
+
+          verified_absent, verify_state = _verify_absent_after_mutation()
+          if verified_absent:
+            logger.info(
+              "genesys queue remove success via member joined=false: user_id=%s queue_id=%s member_id=%s",
+              clean_user_id,
+              clean_queue_id,
+              member_record_id,
+            )
+            return True, "removed"
+          delete_errors.append(f"member-id {member_record_id}: post-update verify failed ({verify_state})")
+          member_updated = True
+          break
+
+        if member_updated:
+          # A mutation was accepted but did not remove membership; continue to
+          # explicit delete fallback for this member id.
+          pass
+
         ok_delete_member, _, delete_member_err, _ = _genesys_send_json(
           "DELETE",
           api_base,
