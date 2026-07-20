@@ -3589,6 +3589,19 @@ def _genesys_apply_user_search_update(
       else:
         queue_errors.append(str(queue_state or "unknown error"))
 
+    # Always verify final queue set after mutations. Some endpoints can return
+    # misleading "not found"/400 responses per route while membership still differs.
+    verify_queue_err = ""
+    verify_set = set()
+    for attempt in range(4):
+      verify_queue_ids, verify_queue_err = _genesys_get_user_queue_ids(api_base, access_token, clean_user_id)
+      if not verify_queue_err:
+        verify_set = set(verify_queue_ids)
+        if verify_set == desired_set:
+          break
+      if attempt < 3:
+        time.sleep(1.0)
+
     if queue_errors:
       # Genesys queue writes can return transient HTTP 400 while membership still
       # converges moments later. Re-check final state with a short retry window.
@@ -3738,34 +3751,26 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict], 
     queues_text = ""
     queue_resolution_source = "none"
 
-    if user_id:
-      user_payload = {}
-      routing_payload = {}
-      skills_payload = {}
-      queues_payload = {}
-      station_associations_payload = {}
-      phone_management_payload = {}
+    if verify_queue_err:
+      queue_errors.append(f"verification failed: {verify_queue_err}")
+    if verify_set != desired_set:
+      if not queue_errors:
+        missing_adds = sorted(list(desired_set - verify_set))
+        unexpected = sorted(list(verify_set - desired_set))
+        queue_errors.append(
+          "final queue verification mismatch"
+          + (f"; missing={','.join(missing_adds)}" if missing_adds else "")
+          + (f"; unexpected={','.join(unexpected)}" if unexpected else "")
+        )
+      return {"ok": False, "error": "Queue update failed: " + " | ".join(queue_errors)}
 
-      ok_user, user_payload, err_user = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}")
-      if ok_user:
-        division = user_payload.get("division") or {}
-        if isinstance(division, dict):
-          division_name = str(division.get("name", "") or "").strip()
-      elif err_user:
-        warnings.append(f"{row.get('name', user_id)} user profile: {err_user}")
-
-      ok_routing, routing_payload, err_routing = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}/routingstatus")
-      if not ok_routing and err_routing:
-        warnings.append(f"{row.get('name', user_id)} routing status: {err_routing}")
-
-      ok_station_assoc, station_associations_payload, err_station_assoc = _genesys_get_json(
-        api_base,
-        access_token,
-        f"/api/v2/users/{user_id}/stationassociations",
+    if queue_errors:
+      queues_status = (
+        f"updated (verified after endpoint errors; added={queue_add_count}, "
+        f"removed={queue_remove_count}, already={queue_existing_count}, target={len(desired_queue_ids)})"
       )
-      if not ok_station_assoc and err_station_assoc:
-        warnings.append(f"{row.get('name', user_id)} station associations: {err_station_assoc}")
-
+    else:
+      queues_status = f"updated (added={queue_add_count}, removed={queue_remove_count}, already={queue_existing_count}, target={len(desired_queue_ids)})"
       webrtc_phone = _genesys_extract_webrtc_phone(
         user_payload if ok_user else {},
         routing_payload if ok_routing else {},
