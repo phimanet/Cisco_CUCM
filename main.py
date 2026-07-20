@@ -3159,6 +3159,67 @@ def _genesys_sync_user_queues_via_alternate_clients(
   return False, "No alternate queue client succeeded."
 
 
+def _genesys_verify_queue_membership_across_clients(
+  region: str,
+  queue_id: str,
+  user_id: str,
+  user_email: str,
+  user_name: str,
+  preferred_access_token: str = "",
+) -> tuple[bool | None, str]:
+  """Return (is_member, detail). is_member=None when no client could verify."""
+  clean_region = str(region or "").strip().lower() or "usw2"
+  clean_queue_id = str(queue_id or "").strip()
+  clean_user_id = str(user_id or "").strip()
+  if not clean_queue_id or not clean_user_id:
+    return None, "queue_id and user_id are required"
+
+  clients, clients_err = _genesys_collect_queue_membership_clients(clean_region)
+  if clients_err:
+    return None, clients_err
+
+  ordered_clients = []
+  preferred = str(preferred_access_token or "").strip()
+  if preferred:
+    for client in clients:
+      token = str(client.get("access_token", "") or "").strip()
+      if token == preferred:
+        ordered_clients.append(client)
+    for client in clients:
+      token = str(client.get("access_token", "") or "").strip()
+      if token != preferred:
+        ordered_clients.append(client)
+  else:
+    ordered_clients = list(clients)
+
+  errors = []
+  verified_any = False
+  for client in ordered_clients:
+    token = str(client.get("access_token", "") or "").strip()
+    token_source = str(client.get("token_source", "") or "default-client").strip() or "default-client"
+    client_region = str(client.get("region", clean_region) or clean_region).strip() or clean_region
+    if not token:
+      continue
+    _, _, api_base = _genesys_region_to_urls(client_region)
+    members, err_members = _genesys_get_queue_members(api_base, token, clean_queue_id)
+    if err_members:
+      errors.append(f"[{token_source}] {err_members}")
+      continue
+
+    verified_any = True
+    found = any(
+      _genesys_queue_member_matches_user(member, clean_user_id, user_email, user_name)
+      for member in (members or [])
+      if isinstance(member, dict)
+    )
+    if found:
+      return True, f"verified via {token_source}"
+
+  if verified_any:
+    return False, "verified not present"
+  return None, " | ".join(errors) if errors else "no client could verify queue membership"
+
+
 def _genesys_get_user_skill_ids(api_base: str, access_token: str, user_id: str) -> tuple[list[str], str]:
   clean_user_id = str(user_id or "").strip()
   if not clean_user_id:
@@ -3576,6 +3637,8 @@ def _genesys_apply_user_search_update(
   division_id: str,
   skill_ids: list[str],
   queue_ids: list[str],
+  user_email: str = "",
+  user_name: str = "",
   update_division: bool = True,
   update_skills: bool = True,
   update_queues: bool = True,
@@ -3716,6 +3779,35 @@ def _genesys_apply_user_search_update(
           break
       if attempt < 3:
         time.sleep(1.0)
+
+    # Authoritative per-queue verification for the exact touched queues.
+    touched_queue_errors = []
+    for queue_id in queue_to_add:
+      is_member, verify_detail = _genesys_verify_queue_membership_across_clients(
+        clean_region,
+        queue_id,
+        clean_user_id,
+        user_email,
+        user_name,
+        preferred_access_token=access_token,
+      )
+      if is_member is not True:
+        touched_queue_errors.append(
+          f"queue add verification failed for {queue_id}: {verify_detail}"
+        )
+    for queue_id in queue_to_remove:
+      is_member, verify_detail = _genesys_verify_queue_membership_across_clients(
+        clean_region,
+        queue_id,
+        clean_user_id,
+        user_email,
+        user_name,
+        preferred_access_token=access_token,
+      )
+      if is_member is not False:
+        touched_queue_errors.append(
+          f"queue remove verification failed for {queue_id}: {verify_detail}"
+        )
 
     if queue_errors:
       # Genesys queue writes can return transient HTTP 400 while membership still
@@ -3923,6 +4015,7 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict], 
           queue_errors.append("reconcile attempts: " + " | ".join(reconcile_errors))
         if alt_state:
           queue_errors.append("alternate clients: " + str(alt_state))
+        queue_errors.extend(touched_queue_errors)
         if not queue_errors:
           missing_adds = sorted(list(desired_set - verify_set))
           unexpected = sorted(list(verify_set - desired_set))
@@ -3932,6 +4025,9 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict], 
             + (f"; unexpected={','.join(unexpected)}" if unexpected else "")
           )
         return {"ok": False, "error": "Queue update failed: " + " | ".join(queue_errors)}
+
+    if touched_queue_errors:
+      return {"ok": False, "error": "Queue update failed: " + " | ".join(touched_queue_errors)}
 
     if queue_errors:
       queues_status = (
@@ -19758,6 +19854,8 @@ def genesys_user_search_update_route(
     clean_division_id,
     skill_ids,
     queue_ids,
+    user_email=clean_user_email,
+    user_name=str(user_lookup.get("display_name", "") or user_lookup.get("user_name", "") or "").strip(),
     update_division=apply_division,
     update_skills=apply_skills,
     update_queues=apply_queues,
@@ -19985,6 +20083,8 @@ def genesys_user_search_update_batch_route(
         clean_division_id,
         skill_ids,
         queue_ids,
+        user_email=email,
+        user_name=str(user_lookup.get("display_name", "") or user_lookup.get("user_name", "") or "").strip(),
         update_division=apply_division,
         update_skills=apply_skills,
         update_queues=apply_queues,
