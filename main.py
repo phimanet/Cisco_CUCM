@@ -3022,6 +3022,7 @@ def _genesys_remove_user_from_queue(
   queue_id: str,
   user_email: str = "",
   user_name: str = "",
+  expect_present: bool = False,
 ) -> tuple[bool, str]:
   clean_user_id = str(user_id or "").strip()
   clean_queue_id = str(queue_id or "").strip()
@@ -3088,7 +3089,7 @@ def _genesys_remove_user_from_queue(
       # Only trust an immediate "not_member" result when member paging was not truncated.
       # Truncated snapshots can miss the target user and cause false remove success.
       snapshot_truncated = any("truncated at page" in str(item or "").lower() for item in (snapshot_diag or []))
-      if not snapshot_truncated:
+      if not snapshot_truncated and not expect_present:
         logger.info(
           "genesys queue remove not_member after snapshot match: user_id=%s user_email=%s queue_id=%s",
           clean_user_id,
@@ -3137,7 +3138,10 @@ def _genesys_remove_user_from_queue(
       errors.append(f"{path}: {err_text}")
       lower_err = err_text.lower()
       if "not found" in lower_err or "does not exist" in lower_err:
-        return True, "not_member"
+        if not expect_present:
+          return True, "not_member"
+        errors.append(f"{path}: not found while expect_present=true")
+        continue
       if "insufficient permissions assigned" in lower_err or "permission" in lower_err and "queue" in lower_err:
         permission_errors.append(f"{path}: {err_text}")
       if int(status_code or 0) == 405:
@@ -3150,7 +3154,7 @@ def _genesys_remove_user_from_queue(
       for member in members_snapshot
       if isinstance(member, dict)
     )
-    if not target_present:
+    if not target_present and not expect_present:
       return True, "not_member"
 
     retained_ids = []
@@ -3281,6 +3285,7 @@ def _genesys_sync_user_queues_via_alternate_clients(
         queue_id,
         user_email=user_email,
         user_name=user_name,
+        expect_present=True,
       )
       if not ok_remove:
         per_client_errors.append(f"remove {queue_id}: {remove_state}")
@@ -3986,6 +3991,7 @@ def _genesys_apply_user_search_update(
         queue_id,
         user_email=user_email,
         user_name=user_name,
+        expect_present=True,
       )
       if ok_queue:
         if queue_state == "removed":
