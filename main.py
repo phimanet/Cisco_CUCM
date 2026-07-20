@@ -1312,6 +1312,42 @@ def _genesys_get_json(api_base: str, access_token: str, path: str, params: dict 
   return True, payload if isinstance(payload, dict) else {}, ""
 
 
+def _genesys_extract_error_text(body: dict, status_code: int) -> str:
+  if not isinstance(body, dict):
+    return f"HTTP {int(status_code or 0)}"
+
+  direct_candidates = [
+    body.get("message", ""),
+    body.get("error", ""),
+    body.get("errorMessage", ""),
+    body.get("details", ""),
+  ]
+  for candidate in direct_candidates:
+    text = str(candidate or "").strip()
+    if text:
+      return text
+
+  errors_value = body.get("errors")
+  if isinstance(errors_value, list):
+    extracted = []
+    for item in errors_value:
+      if isinstance(item, dict):
+        msg = str(item.get("message", "") or item.get("error", "") or item.get("detail", "")).strip()
+        code = str(item.get("code", "")).strip()
+        if msg and code:
+          extracted.append(f"{code}: {msg}")
+        elif msg:
+          extracted.append(msg)
+      elif item is not None:
+        text = str(item).strip()
+        if text:
+          extracted.append(text)
+    if extracted:
+      return " | ".join(extracted)
+
+  return f"HTTP {int(status_code or 0)}"
+
+
 def _genesys_send_json(
   method: str,
   api_base: str,
@@ -1340,7 +1376,7 @@ def _genesys_send_json(
 
   success_codes = {200, 201, 202, 204}
   if response.status_code not in success_codes:
-    message = str(body.get("message", "") or body.get("error", "")).strip() or f"HTTP {response.status_code}"
+    message = _genesys_extract_error_text(body if isinstance(body, dict) else {}, response.status_code)
     return False, body if isinstance(body, dict) else {}, message, response.status_code
 
   return True, body if isinstance(body, dict) else {}, "", response.status_code
@@ -2987,6 +3023,10 @@ def _genesys_remove_user_from_queue(api_base: str, access_token: str, user_id: s
 
   attempts = [
     ("DELETE", f"/api/v2/routing/queues/{clean_queue_id}/members/{clean_user_id}", None),
+    ("PUT", f"/api/v2/routing/queues/{clean_queue_id}/members", [{"id": clean_user_id, "delete": True}]),
+    ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", [{"id": clean_user_id, "delete": True}]),
+    ("PATCH", f"/api/v2/routing/queues/{clean_queue_id}/members", [{"id": clean_user_id, "operation": "remove"}]),
+    ("PATCH", f"/api/v2/routing/queues/{clean_queue_id}/members", {"id": clean_user_id, "operation": "remove"}),
     ("DELETE", f"/api/v2/routing/queues/{clean_queue_id}/users/{clean_user_id}", None),
     ("DELETE", f"/api/v2/users/{clean_user_id}/queues/{clean_queue_id}", None),
   ]
