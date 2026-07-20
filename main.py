@@ -3049,6 +3049,48 @@ def _genesys_remove_user_from_queue(api_base: str, access_token: str, user_id: s
       if int(status_code or 0) == 405:
         continue
 
+  # Fallback for tenants where queue membership is managed via full-member-set replace.
+  members_snapshot, snapshot_diag, snapshot_err = _genesys_get_queue_members_with_diagnostics(
+    api_base,
+    access_token,
+    clean_queue_id,
+  )
+  if snapshot_err:
+    errors.append(f"members snapshot failed: {snapshot_err}")
+  elif members_snapshot:
+    target_present = any(
+      _genesys_queue_member_matches_user(member, clean_user_id, "", "")
+      for member in members_snapshot
+      if isinstance(member, dict)
+    )
+    if not target_present:
+      return True, "not_member"
+
+    retained_ids = []
+    for member in members_snapshot:
+      if not isinstance(member, dict):
+        continue
+      if _genesys_queue_member_matches_user(member, clean_user_id, "", ""):
+        continue
+      user_obj = member.get("user") if isinstance(member.get("user"), dict) else {}
+      member_id = str(user_obj.get("id", "") or member.get("id", "") or "").strip()
+      if member_id and member_id not in retained_ids:
+        retained_ids.append(member_id)
+
+    replace_payload = [{"id": member_id} for member_id in retained_ids]
+    replace_attempts = [
+      ("PUT", f"/api/v2/routing/queues/{clean_queue_id}/members", replace_payload),
+      ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", replace_payload),
+    ]
+    for method, path, payload in replace_attempts:
+      ok_replace, _, replace_err, _ = _genesys_send_json(method, api_base, access_token, path, payload=payload)
+      if ok_replace:
+        return True, "removed"
+      errors.append(f"{path}: {replace_err}")
+  else:
+    if snapshot_diag:
+      errors.append("members snapshot empty; cannot prove remove")
+
   if permission_errors:
     return False, permission_errors[0]
 
@@ -3201,9 +3243,13 @@ def _genesys_verify_queue_membership_across_clients(
     if not token:
       continue
     _, _, api_base = _genesys_region_to_urls(client_region)
-    members, err_members = _genesys_get_queue_members(api_base, token, clean_queue_id)
+    members, _diag_members, err_members = _genesys_get_queue_members_with_diagnostics(api_base, token, clean_queue_id)
     if err_members:
       errors.append(f"[{token_source}] {err_members}")
+      continue
+
+    if not members:
+      errors.append(f"[{token_source}] empty member list returned")
       continue
 
     verified_any = True
