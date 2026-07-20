@@ -3266,6 +3266,63 @@ def _genesys_verify_queue_membership_across_clients(
   return None, " | ".join(errors) if errors else "no client could verify queue membership"
 
 
+def _genesys_check_user_queue_presence_across_clients(
+  region: str,
+  user_id: str,
+  queue_id: str,
+  preferred_access_token: str = "",
+) -> tuple[bool | None, str]:
+  """Return whether queue_id appears in user queue list across available clients.
+
+  Returns:
+    (True, detail): at least one client reports queue is present
+    (False, detail): one or more clients verified queue is absent
+    (None, detail): no client could verify
+  """
+  clean_region = str(region or "").strip().lower() or "usw2"
+  clean_user_id = str(user_id or "").strip()
+  clean_queue_id = str(queue_id or "").strip()
+  if not clean_user_id or not clean_queue_id:
+    return None, "user_id and queue_id are required"
+
+  clients, clients_err = _genesys_collect_queue_membership_clients(clean_region)
+  if clients_err:
+    return None, clients_err
+
+  preferred = str(preferred_access_token or "").strip()
+  ordered_clients = []
+  if preferred:
+    ordered_clients.extend([c for c in clients if str(c.get("access_token", "") or "").strip() == preferred])
+    ordered_clients.extend([c for c in clients if str(c.get("access_token", "") or "").strip() != preferred])
+  else:
+    ordered_clients = list(clients)
+
+  verified_sources = []
+  errors = []
+  seen_tokens = set()
+  for client in ordered_clients:
+    token = str(client.get("access_token", "") or "").strip()
+    token_source = str(client.get("token_source", "") or "default-client").strip() or "default-client"
+    client_region = str(client.get("region", clean_region) or clean_region).strip() or clean_region
+    if not token or token in seen_tokens:
+      continue
+    seen_tokens.add(token)
+
+    _, _, api_base = _genesys_region_to_urls(client_region)
+    queue_ids, queue_err = _genesys_get_user_queue_ids(api_base, token, clean_user_id)
+    if queue_err:
+      errors.append(f"[{token_source}] {queue_err}")
+      continue
+
+    verified_sources.append(token_source)
+    if clean_queue_id in set(queue_ids):
+      return True, f"present via {token_source}"
+
+  if verified_sources:
+    return False, "absent via " + ", ".join(verified_sources)
+  return None, " | ".join(errors) if errors else "no client could verify queue presence"
+
+
 def _genesys_get_user_skill_ids(api_base: str, access_token: str, user_id: str) -> tuple[list[str], str]:
   clean_user_id = str(user_id or "").strip()
   if not clean_user_id:
@@ -3853,6 +3910,22 @@ def _genesys_apply_user_search_update(
       if is_member is not False:
         touched_queue_errors.append(
           f"queue remove verification failed for {queue_id}: {verify_detail}"
+        )
+
+      # Secondary check using user-queue listing APIs across clients.
+      queue_present, present_detail = _genesys_check_user_queue_presence_across_clients(
+        clean_region,
+        clean_user_id,
+        queue_id,
+        preferred_access_token=access_token,
+      )
+      if queue_present is True:
+        touched_queue_errors.append(
+          f"queue still present for {queue_id}: {present_detail}"
+        )
+      elif queue_present is None:
+        touched_queue_errors.append(
+          f"queue presence could not be verified for {queue_id}: {present_detail}"
         )
 
     if queue_errors:
