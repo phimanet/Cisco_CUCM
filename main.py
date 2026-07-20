@@ -3084,6 +3084,81 @@ def _genesys_collect_queue_membership_clients(clean_region: str) -> tuple[list[d
   return clients, ""
 
 
+def _genesys_sync_user_queues_via_alternate_clients(
+  region: str,
+  user_id: str,
+  desired_queue_ids: list[str],
+  primary_access_token: str,
+) -> tuple[bool, str]:
+  """Try queue reconciliation with alternate configured clients when primary client fails."""
+  clean_region = str(region or "").strip().lower() or "usw2"
+  clean_user_id = str(user_id or "").strip()
+  desired_set = set([str(q or "").strip() for q in (desired_queue_ids or []) if str(q or "").strip()])
+  if not clean_user_id:
+    return False, "user_id is required for alternate queue sync"
+
+  clients, clients_err = _genesys_collect_queue_membership_clients(clean_region)
+  if clients_err:
+    return False, clients_err
+
+  seen_tokens = set()
+  alt_errors = []
+  for client in clients:
+    token = str(client.get("access_token", "") or "").strip()
+    token_source = str(client.get("token_source", "") or "default-client").strip() or "default-client"
+    client_region = str(client.get("region", clean_region) or clean_region).strip() or clean_region
+    if not token:
+      continue
+    if token == str(primary_access_token or "").strip():
+      continue
+    if token in seen_tokens:
+      continue
+    seen_tokens.add(token)
+
+    _, _, api_base = _genesys_region_to_urls(client_region)
+    current_queue_ids, current_err = _genesys_get_user_queue_ids(api_base, token, clean_user_id)
+    if current_err:
+      alt_errors.append(f"[{token_source}] queue read failed: {current_err}")
+      continue
+
+    current_set = set(current_queue_ids)
+    queue_to_add = sorted(list(desired_set - current_set))
+    queue_to_remove = sorted(list(current_set - desired_set))
+
+    per_client_errors = []
+    for queue_id in queue_to_add:
+      ok_add, add_state = _genesys_add_user_to_queue(api_base, token, clean_user_id, queue_id)
+      if not ok_add:
+        per_client_errors.append(f"add {queue_id}: {add_state}")
+    for queue_id in queue_to_remove:
+      ok_remove, remove_state = _genesys_remove_user_from_queue(api_base, token, clean_user_id, queue_id)
+      if not ok_remove:
+        per_client_errors.append(f"remove {queue_id}: {remove_state}")
+
+    # Verify after mutation attempts.
+    final_ids, final_err = _genesys_get_user_queue_ids(api_base, token, clean_user_id)
+    if final_err:
+      per_client_errors.append(f"final verify: {final_err}")
+    else:
+      final_set = set(final_ids)
+      if final_set == desired_set:
+        return True, f"queue sync succeeded via {token_source}"
+      missing = sorted(list(desired_set - final_set))
+      unexpected = sorted(list(final_set - desired_set))
+      per_client_errors.append(
+        "final mismatch"
+        + (f" missing={','.join(missing)}" if missing else "")
+        + (f" unexpected={','.join(unexpected)}" if unexpected else "")
+      )
+
+    if per_client_errors:
+      alt_errors.append(f"[{token_source}] " + " | ".join(per_client_errors))
+
+  if alt_errors:
+    return False, " | ".join(alt_errors)
+  return False, "No alternate queue client succeeded."
+
+
 def _genesys_get_user_skill_ids(api_base: str, access_token: str, user_id: str) -> tuple[list[str], str]:
   clean_user_id = str(user_id or "").strip()
   if not clean_user_id:
@@ -3823,10 +3898,31 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict], 
           time.sleep(1.0)
 
       if verify_set != desired_set:
+        alt_ok, alt_state = _genesys_sync_user_queues_via_alternate_clients(
+          clean_region,
+          clean_user_id,
+          desired_queue_ids,
+          access_token,
+        )
+        if alt_ok:
+          queues_status = (
+            f"updated (verified via alternate client; added={queue_add_count}, "
+            f"removed={queue_remove_count}, already={queue_existing_count}, target={len(desired_queue_ids)})"
+          )
+          return {
+            "ok": True,
+            "region": clean_region,
+            "division_status": division_status,
+            "skills_status": skills_status,
+            "queues_status": queues_status,
+          }
+
         if verify_queue_err:
           queue_errors.append(f"verification failed: {verify_queue_err}")
         if reconcile_errors:
           queue_errors.append("reconcile attempts: " + " | ".join(reconcile_errors))
+        if alt_state:
+          queue_errors.append("alternate clients: " + str(alt_state))
         if not queue_errors:
           missing_adds = sorted(list(desired_set - verify_set))
           unexpected = sorted(list(verify_set - desired_set))
