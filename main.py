@@ -14487,6 +14487,7 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn active" data-panel-target="genesys-user-update-panel" onclick="(function(){var id='genesys-user-update-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Search and Update</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-panel" onclick="(function(){var id='genesys-user-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User WebRTC Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-bulk-email-panel" onclick="(function(){var id='genesys-bulk-email-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Bulk WebRTC build</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-queue-remove-panel" onclick="(function(){var id='genesys-user-queue-remove-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Lookup + Remove (User)</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel" onclick="(function(){var id='genesys-queue-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Info</button>
         </aside>
 
@@ -15867,6 +15868,247 @@ def genesys_admin_placeholder(request: Request):
                 }, 700);
               };
               scheduleFallbackCatalogAutoload();
+            })();
+          </script>
+
+          <div id="genesys-user-queue-remove-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
+            <h3 style="margin-top:0;">Queue Lookup + Remove (User)</h3>
+            <p style="margin-top:0; color:#4e6a84;">Use this dedicated workflow to lookup one user and remove selected queue memberships with explicit per-queue verification.</p>
+            <div class="search-filter-row" style="align-items:flex-start;">
+              <input id="genesys-user-queue-email" placeholder="User email (e.g. jane.doe@amnhealthcare.com)" style="width:360px;">
+              <button type="button" id="genesys-user-queue-lookup-btn" style="background:#385977;" onclick="if (window.runGenesysUserQueueLookup) { return window.runGenesysUserQueueLookup(); } return false;">Lookup User Queues</button>
+              <button type="button" id="genesys-user-queue-remove-btn" style="background:#8a2d2d;" onclick="if (window.runGenesysUserQueueRemoveSelected) { return window.runGenesysUserQueueRemoveSelected(); } return false;">Remove Selected Queues</button>
+            </div>
+            <p id="genesys-user-queue-status" style="color:#2c5c8a; min-height:18px;">Ready.</p>
+            <div id="genesys-user-queue-profile" style="font-size:14px; font-weight:700; color:#12304a; margin:6px 0 8px 0;">No user loaded.</div>
+            <div id="genesys-user-queue-results" style="overflow-x:auto;"></div>
+            <div id="genesys-user-queue-summary" style="display:none; margin-top:10px; border:1px solid #c8dbee; border-radius:8px; background:#f8fcff; padding:10px;"></div>
+          </div>
+          <script>
+            (function () {
+              const panel = document.getElementById("genesys-user-queue-remove-panel");
+              if (!panel) {
+                return;
+              }
+              if (String(panel.dataset.bound || "") === "1") {
+                return;
+              }
+              panel.dataset.bound = "1";
+
+              const emailEl = document.getElementById("genesys-user-queue-email");
+              const lookupBtn = document.getElementById("genesys-user-queue-lookup-btn");
+              const removeBtn = document.getElementById("genesys-user-queue-remove-btn");
+              const statusEl = document.getElementById("genesys-user-queue-status");
+              const profileEl = document.getElementById("genesys-user-queue-profile");
+              const resultsEl = document.getElementById("genesys-user-queue-results");
+              const summaryEl = document.getElementById("genesys-user-queue-summary");
+
+              if (!emailEl || !lookupBtn || !removeBtn || !statusEl || !resultsEl || !profileEl) {
+                return;
+              }
+
+              let currentUserId = "";
+              let currentUserEmail = "";
+              let currentUserName = "";
+              let currentQueueRows = [];
+
+              function esc(value) {
+                return String(value || "")
+                  .replace(/&/g, "&amp;")
+                  .replace(/</g, "&lt;")
+                  .replace(/>/g, "&gt;")
+                  .replace(/\"/g, "&quot;")
+                  .replace(/'/g, "&#39;");
+              }
+
+              function setSummary(html, show) {
+                if (!summaryEl) {
+                  return;
+                }
+                summaryEl.innerHTML = String(html || "");
+                summaryEl.style.display = show ? "block" : "none";
+              }
+
+              function renderQueueRows(rows) {
+                const items = Array.isArray(rows) ? rows : [];
+                if (!items.length) {
+                  resultsEl.innerHTML = "<p style='color:#4e6a84;'>No queues currently assigned for this user.</p>";
+                  return;
+                }
+
+                let html = "<table><thead><tr>";
+                html += "<th>Select</th><th>Queue Name</th><th>Queue ID</th>";
+                html += "</tr></thead><tbody>";
+                items.forEach(function (row, i) {
+                  const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                  const queueId = String((row && row.id) || "").trim();
+                  const queueName = String((row && row.name) || queueId || "").trim();
+                  html += "<tr style='background:" + bg + ";'>";
+                  html += "<td><input type='checkbox' class='genesys-user-queue-remove-check' data-queue-id='" + esc(queueId) + "'></td>";
+                  html += "<td>" + esc(queueName) + "</td>";
+                  html += "<td style='font-family:Consolas,monospace;'>" + esc(queueId) + "</td>";
+                  html += "</tr>";
+                });
+                html += "</tbody></table>";
+                resultsEl.innerHTML = html;
+              }
+
+              async function lookupUserQueues() {
+                const email = String(emailEl.value || "").trim().toLowerCase();
+                if (!email || email.indexOf("@") < 0) {
+                  statusEl.textContent = "Enter a valid user email.";
+                  return false;
+                }
+
+                const originalLookupText = lookupBtn.textContent;
+                lookupBtn.disabled = true;
+                removeBtn.disabled = true;
+                lookupBtn.textContent = "Looking up...";
+                statusEl.textContent = "Looking up queue memberships for " + email + "...";
+                setSummary("", false);
+                resultsEl.innerHTML = "";
+
+                try {
+                  const formData = new FormData();
+                  formData.append("user_email", email);
+                  const response = await fetch("/genesys/users/queue-memberships", {
+                    method: "POST",
+                    body: formData,
+                  });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || "Queue membership lookup failed.");
+                  }
+
+                  currentUserId = String(payload.user_id || "").trim();
+                  currentUserEmail = String(payload.user_email || email).trim().toLowerCase();
+                  currentUserName = String(payload.user_name || "").trim();
+                  currentQueueRows = Array.isArray(payload.queue_memberships) ? payload.queue_memberships : [];
+
+                  profileEl.textContent = "User: " + (currentUserName || currentUserEmail || currentUserId) + " | User ID: " + (currentUserId || "(not returned)");
+                  statusEl.textContent = "Found " + currentQueueRows.length + " queue membership(s) for " + currentUserEmail + ".";
+                  renderQueueRows(currentQueueRows);
+                  removeBtn.disabled = currentQueueRows.length === 0;
+                } catch (err) {
+                  currentUserId = "";
+                  currentUserEmail = "";
+                  currentUserName = "";
+                  currentQueueRows = [];
+                  profileEl.textContent = "No user loaded.";
+                  statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+                  renderQueueRows([]);
+                  removeBtn.disabled = true;
+                } finally {
+                  lookupBtn.disabled = false;
+                  lookupBtn.textContent = originalLookupText;
+                }
+                return false;
+              }
+
+              async function removeSelectedQueues() {
+                const selected = Array.from(resultsEl.querySelectorAll(".genesys-user-queue-remove-check:checked") || []);
+                if (!currentUserId || !currentUserEmail) {
+                  statusEl.textContent = "Lookup a user first.";
+                  return false;
+                }
+                if (!selected.length) {
+                  statusEl.textContent = "Select one or more queues to remove.";
+                  return false;
+                }
+
+                const queueIds = selected
+                  .map(function (node) { return String(node.getAttribute("data-queue-id") || "").trim(); })
+                  .filter(Boolean);
+                if (!queueIds.length) {
+                  statusEl.textContent = "No valid queue IDs selected.";
+                  return false;
+                }
+
+                if (!window.confirm("Remove " + queueIds.length + " queue membership(s) for " + currentUserEmail + "?")) {
+                  return false;
+                }
+
+                const originalRemoveText = removeBtn.textContent;
+                removeBtn.disabled = true;
+                lookupBtn.disabled = true;
+                removeBtn.textContent = "Removing...";
+                statusEl.textContent = "Removing selected queue memberships...";
+                setSummary("", false);
+
+                const succeeded = [];
+                const failed = [];
+                for (const queueId of queueIds) {
+                  try {
+                    const formData = new FormData();
+                    formData.append("queue_id", queueId);
+                    formData.append("user_id", currentUserId);
+                    formData.append("user_email", currentUserEmail);
+                    const response = await fetch("/genesys/queues/member-remove", {
+                      method: "POST",
+                      body: formData,
+                    });
+                    const payload = await response.json();
+                    if (!response.ok || !payload.ok) {
+                      throw new Error((payload && payload.error) || "Queue remove failed.");
+                    }
+                    succeeded.push({
+                      id: queueId,
+                      name: String(payload.queue_name || queueId),
+                      result: String(payload.result || "removed"),
+                    });
+                  } catch (err) {
+                    failed.push({
+                      id: queueId,
+                      error: String((err && err.message) || "Unknown error."),
+                    });
+                  }
+                }
+
+                if (succeeded.length) {
+                  const removedSet = new Set(succeeded.map(function (row) { return String(row.id || "").trim(); }));
+                  currentQueueRows = currentQueueRows.filter(function (row) {
+                    return !removedSet.has(String((row && row.id) || "").trim());
+                  });
+                  renderQueueRows(currentQueueRows);
+                }
+
+                const summaryParts = [
+                  "<strong>Queue Remove Result</strong>",
+                  "<div style='margin-top:6px;'>Requested: " + queueIds.length + " | Removed: " + succeeded.length + " | Failed: " + failed.length + "</div>",
+                ];
+                if (failed.length) {
+                  summaryParts.push("<div style='margin-top:8px;'><strong>Failures</strong><ul style='margin:6px 0 0 18px;'>"
+                    + failed.map(function (row) {
+                      return "<li><strong>" + esc(row.id) + "</strong>: " + esc(row.error) + "</li>";
+                    }).join("")
+                    + "</ul></div>");
+                }
+                setSummary(summaryParts.join(""), true);
+
+                statusEl.textContent = "Queue remove complete: Removed " + succeeded.length + " of " + queueIds.length + " selected queue(s).";
+                removeBtn.disabled = currentQueueRows.length === 0;
+                lookupBtn.disabled = false;
+                removeBtn.textContent = originalRemoveText;
+                return false;
+              }
+
+              lookupBtn.addEventListener("click", function () {
+                lookupUserQueues();
+              });
+
+              removeBtn.addEventListener("click", function () {
+                removeSelectedQueues();
+              });
+
+              window.runGenesysUserQueueLookup = function () {
+                lookupUserQueues();
+                return false;
+              };
+
+              window.runGenesysUserQueueRemoveSelected = function () {
+                removeSelectedQueues();
+                return false;
+              };
             })();
           </script>
 
@@ -19755,6 +19997,65 @@ def genesys_user_queues_by_id_route(
     "queues": queue_names,
     "queue_resolution_source": queue_resolution_source,
     "queue_diagnostics": fallback_queue_diag if isinstance(locals().get("fallback_queue_diag"), dict) else {},
+    "warnings": warnings,
+  })
+
+
+@app.post("/genesys/users/queue-memberships")
+def genesys_user_queue_memberships_route(user_email: str = Form("")):
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  clean_user_email = str(user_email or "").strip().lower()
+  if not clean_user_email or "@" not in clean_user_email:
+    return JSONResponse({"ok": False, "error": "A valid user email is required."}, status_code=400)
+
+  token_result = _genesys_get_queue_access_token(clean_region)
+  if not token_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": token_result.get("error", "Genesys token request failed."),
+    }, status_code=400)
+
+  region = str(token_result.get("region", clean_region) or clean_region).strip() or clean_region
+  access_token = str(token_result.get("access_token", "") or "").strip()
+  _, _, api_base = _genesys_region_to_urls(region)
+
+  user_lookup = _genesys_lookup_user_by_email(region, access_token, clean_user_email)
+  if not user_lookup.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": user_lookup.get("error", "Unable to find user by email."),
+    }, status_code=400)
+
+  resolved_user_id = str(user_lookup.get("user_id", "") or "").strip()
+  profile_result = _genesys_get_user_search_profile(region, access_token, resolved_user_id, clean_user_email)
+  if not profile_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": profile_result.get("error", "Queue membership lookup failed."),
+    }, status_code=400)
+
+  queue_ids = [str(item or "").strip() for item in (profile_result.get("queue_ids", []) or []) if str(item or "").strip()]
+  unique_queue_ids = sorted(set(queue_ids))
+  queue_memberships = []
+  warnings = []
+  for queue_id in unique_queue_ids:
+    queue_name = str(_genesys_get_queue_name(api_base, access_token, queue_id) or "").strip()
+    if not queue_name:
+      queue_name = queue_id
+      warnings.append(f"Queue name unresolved for {queue_id}; using ID")
+    queue_memberships.append({
+      "id": queue_id,
+      "name": queue_name,
+    })
+
+  return JSONResponse({
+    "ok": True,
+    "region": region,
+    "user_id": resolved_user_id,
+    "user_name": str(profile_result.get("user_name", "") or user_lookup.get("display_name", "") or "").strip(),
+    "user_email": str(profile_result.get("user_email", "") or clean_user_email).strip().lower(),
+    "queue_memberships": queue_memberships,
+    "queue_count": len(queue_memberships),
     "warnings": warnings,
   })
 
