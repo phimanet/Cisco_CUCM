@@ -3015,7 +3015,14 @@ def _genesys_add_user_to_queue(api_base: str, access_token: str, user_id: str, q
   return False, " | ".join(errors) if errors else "Queue membership update failed."
 
 
-def _genesys_remove_user_from_queue(api_base: str, access_token: str, user_id: str, queue_id: str) -> tuple[bool, str]:
+def _genesys_remove_user_from_queue(
+  api_base: str,
+  access_token: str,
+  user_id: str,
+  queue_id: str,
+  user_email: str = "",
+  user_name: str = "",
+) -> tuple[bool, str]:
   clean_user_id = str(user_id or "").strip()
   clean_queue_id = str(queue_id or "").strip()
   if not clean_user_id or not clean_queue_id:
@@ -3033,7 +3040,7 @@ def _genesys_remove_user_from_queue(api_base: str, access_token: str, user_id: s
     for member in members_snapshot:
       if not isinstance(member, dict):
         continue
-      if not _genesys_queue_member_matches_user(member, clean_user_id, "", ""):
+      if not _genesys_queue_member_matches_user(member, clean_user_id, user_email, user_name):
         continue
       member_record_id = str(member.get("id", "") or "").strip()
       if member_record_id and member_record_id not in matched_member_ids:
@@ -3057,7 +3064,7 @@ def _genesys_remove_user_from_queue(api_base: str, access_token: str, user_id: s
         # Continue to fallback attempts below, but keep diagnostics.
         pass
     else:
-      # We successfully read members and user was not present.
+      # We successfully read members and user was not present using full identity matching.
       return True, "not_member"
 
   attempts = [
@@ -3097,7 +3104,7 @@ def _genesys_remove_user_from_queue(api_base: str, access_token: str, user_id: s
   # Fallback for tenants where queue membership is managed via full-member-set replace.
   if members_snapshot:
     target_present = any(
-      _genesys_queue_member_matches_user(member, clean_user_id, "", "")
+      _genesys_queue_member_matches_user(member, clean_user_id, user_email, user_name)
       for member in members_snapshot
       if isinstance(member, dict)
     )
@@ -3169,6 +3176,8 @@ def _genesys_sync_user_queues_via_alternate_clients(
   user_id: str,
   desired_queue_ids: list[str],
   primary_access_token: str,
+  user_email: str = "",
+  user_name: str = "",
 ) -> tuple[bool, str]:
   """Try queue reconciliation with alternate configured clients when primary client fails."""
   clean_region = str(region or "").strip().lower() or "usw2"
@@ -3211,7 +3220,14 @@ def _genesys_sync_user_queues_via_alternate_clients(
       if not ok_add:
         per_client_errors.append(f"add {queue_id}: {add_state}")
     for queue_id in queue_to_remove:
-      ok_remove, remove_state = _genesys_remove_user_from_queue(api_base, token, clean_user_id, queue_id)
+      ok_remove, remove_state = _genesys_remove_user_from_queue(
+        api_base,
+        token,
+        clean_user_id,
+        queue_id,
+        user_email=user_email,
+        user_name=user_name,
+      )
       if not ok_remove:
         per_client_errors.append(f"remove {queue_id}: {remove_state}")
 
@@ -3901,7 +3917,14 @@ def _genesys_apply_user_search_update(
         queue_errors.append(str(queue_state or "unknown error"))
 
     for queue_id in queue_to_remove:
-      ok_queue, queue_state = _genesys_remove_user_from_queue(api_base, access_token, clean_user_id, queue_id)
+      ok_queue, queue_state = _genesys_remove_user_from_queue(
+        api_base,
+        access_token,
+        clean_user_id,
+        queue_id,
+        user_email=user_email,
+        user_name=user_name,
+      )
       if ok_queue:
         if queue_state == "removed":
           queue_remove_count += 1
@@ -4152,6 +4175,8 @@ def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict], 
           clean_user_id,
           desired_queue_ids,
           access_token,
+          user_email=user_email,
+          user_name=user_name,
         )
         if alt_ok:
           queues_status = (
@@ -19035,7 +19060,14 @@ def genesys_queue_member_remove_route(
       failures.append(f"[{token_source}] Resolved user id is empty.")
       continue
 
-    ok_remove, remove_state = _genesys_remove_user_from_queue(api_base, access_token, resolved_user_id, clean_queue_id)
+    ok_remove, remove_state = _genesys_remove_user_from_queue(
+      api_base,
+      access_token,
+      resolved_user_id,
+      clean_queue_id,
+      user_email=str(user_resolved.get("user_email", "") or "").strip().lower(),
+      user_name=str(user_resolved.get("user_name", "") or "").strip(),
+    )
     if ok_remove:
       queue_name = _genesys_get_queue_name(api_base, access_token, clean_queue_id)
       _genesys_send_update_completion_email(
