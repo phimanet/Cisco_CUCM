@@ -3085,14 +3085,22 @@ def _genesys_remove_user_from_queue(
         # Continue to fallback attempts below, but keep diagnostics.
         pass
     else:
-      # We successfully read members and user was not present using full identity matching.
+      # Only trust an immediate "not_member" result when member paging was not truncated.
+      # Truncated snapshots can miss the target user and cause false remove success.
+      snapshot_truncated = any("truncated at page" in str(item or "").lower() for item in (snapshot_diag or []))
+      if not snapshot_truncated:
+        logger.info(
+          "genesys queue remove not_member after snapshot match: user_id=%s user_email=%s queue_id=%s",
+          clean_user_id,
+          clean_user_email,
+          clean_queue_id,
+        )
+        return True, "not_member"
       logger.info(
-        "genesys queue remove not_member after snapshot match: user_id=%s user_email=%s queue_id=%s",
+        "genesys queue remove snapshot truncated; skipping early not_member: user_id=%s queue_id=%s",
         clean_user_id,
-        clean_user_email,
         clean_queue_id,
       )
-      return True, "not_member"
 
   attempts = [
     ("DELETE", f"/api/v2/routing/queues/{clean_queue_id}/members/{clean_user_id}", None),
@@ -4085,11 +4093,21 @@ def _genesys_apply_user_search_update(
         ("POST", f"/api/v2/users/{clean_user_id}/queues", {"queueIds": desired_queue_ids}),
       ]
       reconcile_errors = []
+      reconcile_405_count = 0
       for method, path, payload in reconcile_attempts:
-        ok_reconcile, _, reconcile_err, _ = _genesys_send_json(method, api_base, access_token, path, payload=payload)
+        ok_reconcile, _, reconcile_err, reconcile_status_code = _genesys_send_json(method, api_base, access_token, path, payload=payload)
         if ok_reconcile:
           break
+        if int(reconcile_status_code or 0) == 405:
+          reconcile_405_count += 1
+          continue
         reconcile_errors.append(f"{path}: {str(reconcile_err or 'unknown').strip()}")
+
+      if reconcile_405_count == len(reconcile_attempts):
+        logger.info(
+          "genesys queue reconcile user-scoped endpoint unsupported (405): user_id=%s",
+          clean_user_id,
+        )
 
       # Re-verify after reconcile attempts.
       verify_queue_err = ""
