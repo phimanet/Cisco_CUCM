@@ -3038,6 +3038,36 @@ def _genesys_remove_user_from_queue(
     clean_queue_id,
   )
 
+  def _verify_absent_after_mutation() -> tuple[bool, str]:
+    """Verify user is absent from queue after a remove mutation attempt."""
+    verify_errors = []
+    for attempt in range(3):
+      verify_members, verify_diag, verify_err = _genesys_get_queue_members_with_diagnostics(
+        api_base,
+        access_token,
+        clean_queue_id,
+      )
+      if verify_err:
+        verify_errors.append(str(verify_err or "verify failed"))
+      else:
+        still_present = any(
+          _genesys_queue_member_matches_user(member, clean_user_id, clean_user_email, clean_user_name)
+          for member in verify_members
+          if isinstance(member, dict)
+        )
+        if not still_present:
+          return True, "verified_absent"
+
+        verify_truncated = any("truncated at page" in str(item or "").lower() for item in (verify_diag or []))
+        if not verify_truncated:
+          return False, "still_present"
+        verify_errors.append("verify snapshot truncated")
+
+      if attempt < 2:
+        time.sleep(0.6)
+
+    return False, " | ".join(verify_errors) if verify_errors else "remove verification failed"
+
   # First try authoritative member-id deletion. In many Genesys tenants,
   # /members/{id} expects queue-member record id (not user id).
   members_snapshot, snapshot_diag, snapshot_err = _genesys_get_queue_members_with_diagnostics(
@@ -3073,13 +3103,17 @@ def _genesys_remove_user_from_queue(
           payload=None,
         )
         if ok_delete_member:
-          logger.info(
-            "genesys queue remove success via member-id delete: user_id=%s queue_id=%s member_id=%s",
-            clean_user_id,
-            clean_queue_id,
-            member_record_id,
-          )
-          return True, "removed"
+          verified_absent, verify_state = _verify_absent_after_mutation()
+          if verified_absent:
+            logger.info(
+              "genesys queue remove success via member-id delete: user_id=%s queue_id=%s member_id=%s",
+              clean_user_id,
+              clean_queue_id,
+              member_record_id,
+            )
+            return True, "removed"
+          delete_errors.append(f"member-id {member_record_id}: post-delete verify failed ({verify_state})")
+          continue
         delete_errors.append(f"member-id {member_record_id}: {delete_member_err}")
 
       if delete_errors:
@@ -3124,14 +3158,18 @@ def _genesys_remove_user_from_queue(
   for method, path, payload in attempts:
     ok, _, err, status_code = _genesys_send_json(method, api_base, access_token, path, payload=payload)
     if ok:
-      logger.info(
-        "genesys queue remove success via fallback endpoint: method=%s path=%s user_id=%s queue_id=%s",
-        method,
-        path,
-        clean_user_id,
-        clean_queue_id,
-      )
-      return True, "removed"
+      verified_absent, verify_state = _verify_absent_after_mutation()
+      if verified_absent:
+        logger.info(
+          "genesys queue remove success via fallback endpoint: method=%s path=%s user_id=%s queue_id=%s",
+          method,
+          path,
+          clean_user_id,
+          clean_queue_id,
+        )
+        return True, "removed"
+      errors.append(f"{path}: post-remove verify failed ({verify_state})")
+      continue
 
     err_text = str(err or "").strip()
     if err_text:
@@ -3176,7 +3214,11 @@ def _genesys_remove_user_from_queue(
     for method, path, payload in replace_attempts:
       ok_replace, _, replace_err, _ = _genesys_send_json(method, api_base, access_token, path, payload=payload)
       if ok_replace:
-        return True, "removed"
+        verified_absent, verify_state = _verify_absent_after_mutation()
+        if verified_absent:
+          return True, "removed"
+        errors.append(f"{path}: post-replace verify failed ({verify_state})")
+        continue
       errors.append(f"{path}: {replace_err}")
   else:
     if snapshot_diag:
