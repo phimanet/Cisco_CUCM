@@ -19376,72 +19376,68 @@ def opentext_numbers_list_route(request: Request, number: str = Form(""), limit:
 
 @app.post("/opentext/upload-csv")
 async def opentext_upload_csv_route(request: Request, csv_file: UploadFile = File(...)):
-  session = _get_auth_session(request) or {}
-  session_username = str(session.get("username", "") or "").strip()
-  if not session_username:
-    return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
-  if not _is_admin_user(session_username):
-    return JSONResponse({"ok": False, "error": "Not authorized"}, status_code=403)
-
+  import traceback
+  import sys
+  
   try:
+    session = _get_auth_session(request) or {}
+    session_username = str(session.get("username", "") or "").strip()
+    if not session_username:
+      return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+    if not _is_admin_user(session_username):
+      return JSONResponse({"ok": False, "error": "Not authorized"}, status_code=403)
+
     csv_content = (await csv_file.read()).decode("utf-8")
-  except Exception as e:
-    import traceback
-    tb = traceback.format_exc()
-    return JSONResponse({"ok": False, "error": f"Failed to read file: {str(e)}", "traceback": tb}, status_code=400)
-
-  # Parse CSV
-  try:
-    parse_result = _parse_opentext_usage_csv(csv_content)
-  except Exception as e:
-    import traceback
-    tb = traceback.format_exc()
-    return JSONResponse({"ok": False, "error": f"Parse exception: {str(e)}", "traceback": tb}, status_code=500)
+    print(f"[OpenText CSV Upload] Read {len(csv_content)} bytes", file=sys.stderr)
     
-  if not parse_result.get("ok"):
-    return JSONResponse({"ok": False, "error": parse_result.get("error", "Parse failed")}, status_code=400)
+    # Parse CSV
+    parse_result = _parse_opentext_usage_csv(csv_content)
+    print(f"[OpenText CSV Upload] Parse result ok={parse_result.get('ok')}, count={parse_result.get('count')}", file=sys.stderr)
+    
+    if not parse_result.get("ok"):
+      error_msg = parse_result.get("error", "Parse failed")
+      print(f"[OpenText CSV Upload] Parse error: {error_msg}", file=sys.stderr)
+      return JSONResponse({"ok": False, "error": error_msg}, status_code=400)
 
-  # Load existing data and merge
-  existing_data = _load_opentext_usage_data()
-  new_records = parse_result.get("records", [])
-  
-  # Save CSV file to disk with timestamp
-  csv_dir = os.path.join(os.path.dirname(__file__), ".opentext-csv-uploads")
-  os.makedirs(csv_dir, exist_ok=True)
-  timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-  original_name = csv_file.filename or "upload.csv"
-  csv_filename = f"opentext_{timestamp}_{original_name}"
-  csv_filepath = os.path.join(csv_dir, csv_filename)
-  
-  try:
+    # Load existing data and merge
+    existing_data = _load_opentext_usage_data()
+    new_records = parse_result.get("records", [])
+    
+    # Save CSV file to disk with timestamp
+    csv_dir = os.path.join(os.path.dirname(__file__), ".opentext-csv-uploads")
+    os.makedirs(csv_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    original_name = csv_file.filename or "upload.csv"
+    csv_filename = f"opentext_{timestamp}_{original_name}"
+    csv_filepath = os.path.join(csv_dir, csv_filename)
+    
     with open(csv_filepath, "w") as f:
       f.write(csv_content)
+    
+    # Merge with tracking
+    updated_data = _merge_opentext_usage(existing_data, new_records, csv_filename)
+    
+    # Save tracking data
+    _save_opentext_usage_data(updated_data)
+    
+    # Clean up old CSV files (keep only last 10)
+    try:
+      csv_files = sorted([f for f in os.listdir(csv_dir) if f.startswith("opentext_")], reverse=True)
+      for old_csv in csv_files[10:]:
+        try:
+          os.remove(os.path.join(csv_dir, old_csv))
+        except:
+          pass
+    except:
+      pass
+    
+    print(f"[OpenText CSV Upload] Success: {len(new_records)} records", file=sys.stderr)
+    return JSONResponse({"ok": True, "count": len(new_records), "message": f"Imported {len(new_records)} zero-usage fax entries"})
+  
   except Exception as e:
-    return JSONResponse({"ok": False, "error": f"Failed to save CSV file: {str(e)}"}, status_code=500)
-  
-  # Merge with tracking
-  updated_data = _merge_opentext_usage(existing_data, new_records, csv_filename)
-  
-  # Save tracking data
-  if not _save_opentext_usage_data(updated_data):
-    return JSONResponse({"ok": False, "error": "Failed to save tracking data"}, status_code=500)
-  
-  # Clean up old CSV files (keep only last 10)
-  try:
-    csv_files = sorted([f for f in os.listdir(csv_dir) if f.startswith("opentext_")], reverse=True)
-    for old_csv in csv_files[10:]:
-      try:
-        os.remove(os.path.join(csv_dir, old_csv))
-      except:
-        pass
-  except:
-    pass
-
-  return JSONResponse({
-    "ok": True,
-    "count": len(new_records),
-    "message": f"Successfully parsed {len(new_records)} zero-usage fax entries",
-  })
+    tb = traceback.format_exc()
+    print(f"[OpenText CSV Upload] Exception: {tb}", file=sys.stderr)
+    return JSONResponse({"ok": False, "error": f"Upload failed: {str(e)}", "traceback": tb}, status_code=500)
 
 
 @app.post("/opentext/mark-removed")
