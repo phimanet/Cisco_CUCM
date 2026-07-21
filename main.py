@@ -18958,7 +18958,7 @@ def _save_opentext_usage_data(data: dict) -> bool:
   """Save fax usage tracking data to JSON file."""
   try:
     data_file = os.path.join(os.path.dirname(__file__), ".opentext-fax-usage.json")
-    data["last_updated"] = datetime.now().isoformat()
+    data["last_updated"] = datetime.datetime.now().isoformat()
     with open(data_file, "w") as f:
       json.dump(data, f, indent=2, default=str)
     return True
@@ -18976,7 +18976,7 @@ def _merge_opentext_usage(existing_data: dict, new_records: list, csv_filename: 
     if fax not in existing_data["fax_numbers"]:
       existing_data["fax_numbers"][fax] = {
         "email": email,
-        "created_date": datetime.now().isoformat()[:10],
+        "created_date": datetime.datetime.now().isoformat()[:10],
         "months": {},
         "removal_status": "active",
         "removal_date": None,
@@ -18999,7 +18999,7 @@ def _merge_opentext_usage(existing_data: dict, new_records: list, csv_filename: 
     csv_uploads = existing_data.get("csv_uploads", [])
     csv_uploads.append({
       "filename": csv_filename,
-      "timestamp": datetime.now().isoformat(),
+      "timestamp": datetime.datetime.now().isoformat(),
       "count": len(new_records),
     })
     
@@ -19465,7 +19465,7 @@ async def opentext_mark_removed_route(request: Request):
     return JSONResponse({"ok": False, "error": "Fax number not found"}, status_code=404)
 
   usage_data["fax_numbers"][fax_number]["removal_status"] = "removed"
-  usage_data["fax_numbers"][fax_number]["removal_date"] = datetime.now().isoformat()[:10]
+  usage_data["fax_numbers"][fax_number]["removal_date"] = datetime.datetime.now().isoformat()[:10]
 
   if not _save_opentext_usage_data(usage_data):
     return JSONResponse({"ok": False, "error": "Failed to save"}, status_code=500)
