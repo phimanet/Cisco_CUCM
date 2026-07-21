@@ -18961,7 +18961,13 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
         "has_activity": data["activity"],
       })
   
-  return {"ok": True, "records": result_records, "count": len(result_records)}
+  return {"ok": True, "records": result_records, "count": len(result_records), "debug": {
+    "fieldnames": list(fieldnames) if fieldnames else [],
+    "col_map": col_map,
+    "total_rows_processed": row_count,
+    "subtotal_lines_found": subtotal_count,
+    "fax_entries_with_zero_usage": len(records),
+  }}
 
 
 def _load_opentext_usage_data() -> dict:
