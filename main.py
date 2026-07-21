@@ -19206,6 +19206,12 @@ def opentext_admin_page(request: Request):
       </div>
 
       <div class="panel">
+        <h3 style="margin-top:0;">Debug Output</h3>
+        <p style="margin:0 0 10px 0;color:#4e6a84;font-size:11px;">Raw server response (copy/paste this if there's an error):</p>
+        <pre id="debug-output" style="background:#f5f5f5;border:1px solid #ccc;padding:8px;border-radius:6px;max-height:200px;overflow-y:auto;font-size:11px;margin:0;color:#333;">Ready for upload...</pre>
+      </div>
+
+      <div class="panel">
         <h3 style="margin-top:0;">Tracked Fax Numbers (Last 10 Months)</h3>
         <p style="margin:0 0 10px 0;color:#4e6a84;">Green dots (✓) = has usage. Orange dots (⊘) = zero usage month.</p>
         <div style="overflow-x:auto;">
@@ -19219,6 +19225,7 @@ def opentext_admin_page(request: Request):
         const form = document.getElementById("csv-upload-form");
         const fileEl = document.getElementById("csv-file");
         const statusEl = document.getElementById("upload-status");
+        const debugEl = document.getElementById("debug-output");
         const markedRemovedBtns = document.querySelectorAll(".mark-removed-btn");
 
         if (form) {{
@@ -19236,11 +19243,23 @@ def opentext_admin_page(request: Request):
             try {{
               statusEl.textContent = "Uploading and parsing CSV...";
               statusEl.style.display = "block";
+              debugEl.textContent = "Sending request...";
+              
               const response = await fetch("/opentext/upload-csv", {{
                 method: "POST",
                 body: formData,
               }});
-              const result = await response.json();
+              
+              const responseText = await response.text();
+              debugEl.textContent = responseText;
+              
+              let result;
+              try {{
+                result = JSON.parse(responseText);
+              }} catch(parseErr) {{
+                throw new Error(`Server returned non-JSON: ${{responseText.substring(0, 500)}}`);
+              }}
+              
               if (!response.ok || !result.ok) {{
                 throw new Error(result.error || "Upload failed");
               }}
