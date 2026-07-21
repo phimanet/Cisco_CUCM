@@ -19241,6 +19241,10 @@ def opentext_admin_page(request: Request):
       <div class="panel">
         <h3 style="margin-top:0;">Debug Output</h3>
         <p style="margin:0 0 10px 0;color:#4e6a84;font-size:11px;">Raw server response (copy/paste this if there's an error):</p>
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
+          <button id="copy-debug-btn" style="padding:6px 12px;background:#0078d4;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:12px;font-weight:600;">📋 Copy Output</button>
+          <span id="copy-status" style="font-size:11px;color:#2e7d32;display:none;align-self:center;">✓ Copied!</span>
+        </div>
         <pre id="debug-output" style="background:#f5f5f5;border:1px solid #ccc;padding:8px;border-radius:6px;max-height:400px;overflow-y:auto;font-size:10px;margin:0;color:#333;word-break:break-all;">Ready for upload...</pre>
       </div>
 
@@ -19259,7 +19263,20 @@ def opentext_admin_page(request: Request):
         const fileEl = document.getElementById("csv-file");
         const statusEl = document.getElementById("upload-status");
         const debugEl = document.getElementById("debug-output");
+        const copyBtn = document.getElementById("copy-debug-btn");
+        const copyStatus = document.getElementById("copy-status");
         const markedRemovedBtns = document.querySelectorAll(".mark-removed-btn");
+
+        // Copy debug output
+        if (copyBtn) {{
+          copyBtn.addEventListener("click", function() {{
+            const text = debugEl.textContent;
+            navigator.clipboard.writeText(text).then(() => {{
+              copyStatus.style.display = "inline";
+              setTimeout(() => {{ copyStatus.style.display = "none"; }}, 2000);
+            }});
+          }});
+        }}
 
         if (form) {{
           form.addEventListener("submit", async function(e) {{
@@ -19299,7 +19316,8 @@ def opentext_admin_page(request: Request):
               statusEl.innerHTML = `✅ CSV parsed successfully! Found ${{result.count}} zero-usage fax entries.`;
               statusEl.style.background = "#e8f8e8";
               statusEl.style.borderColor = "#2e7d32";
-              setTimeout(() => location.reload(), 1500);
+              // Don't auto-reload - let user copy debug output if needed
+              // setTimeout(() => location.reload(), 1500);
             }} catch(err) {{
               statusEl.textContent = "❌ " + (err.message || "Upload failed");
               statusEl.style.background = "#ffe8e8";
