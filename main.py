@@ -18782,6 +18782,238 @@ def genesys_admin_placeholder(request: Request):
   )
 
 
+# OpenText Fax Usage Tracking Helpers
+def _parse_opentext_usage_csv(csv_content: str) -> dict:
+  """Parse OpenText usage CSV and extract fax numbers with zero usage (subtotal = monthly fees only)."""
+  lines = csv_content.strip().split('\n')
+  if not lines:
+    return {"ok": False, "error": "Empty CSV", "records": []}
+  
+  # Find header row
+  header_line = lines[0]
+  try:
+    headers = [h.strip() for h in header_line.split(',')]
+  except:
+    return {"ok": False, "error": "Cannot parse CSV header", "records": []}
+  
+  # Column indices
+  col_dnis = None
+  col_email = None
+  col_start_date = None
+  col_cost = None
+  col_service_type = None
+  col_pages = None
+  
+  try:
+    col_dnis = headers.index("DNIS Fax")
+    col_email = headers.index("Email Address of User")
+    col_start_date = headers.index("Job Start Date")
+    col_cost = headers.index("Cost")
+    col_service_type = headers.index("Service Type")
+    col_pages = headers.index("Pages")
+  except ValueError as e:
+    return {"ok": False, "error": f"Missing required columns: {str(e)}", "records": []}
+  
+  records = {}  # { fax_number: { email, month, subtotal, monthly_fee_total, has_activity } }
+  current_fax = None
+  current_email = None
+  current_month = None
+  current_subtotal = 0.0
+  current_monthly_fees = 0.0
+  current_has_activity = False
+  
+  for line_idx, line in enumerate(lines[1:], start=2):
+    line = line.strip()
+    if not line or line.startswith(",,"):
+      continue
+    
+    # Check for subtotal line
+    if line.startswith("Subtotal for"):
+      if current_fax and current_month:
+        if current_fax not in records:
+          records[current_fax] = {}
+        # Only track if zero usage (subtotal == monthly fees only)
+        if current_subtotal == current_monthly_fees and not current_has_activity:
+          records[current_fax][current_month] = {
+            "email": current_email,
+            "subtotal": current_subtotal,
+            "monthly_fees": current_monthly_fees,
+            "has_activity": False,
+          }
+        current_fax = None
+        current_email = None
+        current_month = None
+        current_subtotal = 0.0
+        current_monthly_fees = 0.0
+        current_has_activity = False
+      continue
+    
+    try:
+      parts = [p.strip() for p in line.split(',')]
+      if len(parts) <= max(col_cost, col_dnis, col_email):
+        continue
+      
+      dnis = parts[col_dnis]
+      email = parts[col_email]
+      start_date = parts[col_start_date]
+      cost_str = parts[col_cost]
+      service_type = parts[col_service_type] if col_service_type < len(parts) else ""
+      pages_str = parts[col_pages] if col_pages < len(parts) else ""
+      
+      if not dnis or not email:
+        continue
+      
+      # Extract month from date (e.g., "5/15/2026" -> "2026-05")
+      month = None
+      try:
+        if start_date and "/" in start_date:
+          date_parts = start_date.split("/")
+          if len(date_parts) >= 3:
+            month = f"{date_parts[2]}-{int(date_parts[0]):02d}"
+      except:
+        pass
+      
+      if not month:
+        continue
+      
+      # Parse cost
+      try:
+        cost = float(cost_str.replace("$", "").strip())
+      except:
+        cost = 0.0
+      
+      # Parse pages to detect activity
+      has_pages = False
+      try:
+        if pages_str and pages_str.strip():
+          pages = int(pages_str.strip())
+          has_pages = pages > 0
+      except:
+        pass
+      
+      current_fax = dnis
+      current_email = email
+      current_month = month
+      current_subtotal += cost
+      
+      # Track monthly fees separately
+      if "Monthly Fee" in service_type or "PDFpkg Monthly Fee" in service_type:
+        current_monthly_fees += cost
+      else:
+        # Any non-fee transaction indicates activity
+        current_has_activity = True
+        if has_pages:
+          current_has_activity = True
+      
+    except:
+      continue
+  
+  # Convert to list format with only zero-usage fax numbers
+  result_records = []
+  for fax_number, months_data in records.items():
+    for month, data in months_data.items():
+      result_records.append({
+        "fax_number": fax_number,
+        "email": data["email"],
+        "month": month,
+        "subtotal": data["subtotal"],
+        "monthly_fees": data["monthly_fees"],
+      })
+  
+  return {"ok": True, "records": result_records, "count": len(result_records)}
+
+
+def _load_opentext_usage_data() -> dict:
+  """Load fax usage tracking data from JSON file."""
+  data_file = os.path.join(os.path.dirname(__file__), ".opentext-fax-usage.json")
+  if os.path.exists(data_file):
+    try:
+      with open(data_file, "r") as f:
+        return json.load(f)
+    except:
+      pass
+  
+  return {
+    "fax_numbers": {},
+    "csv_uploads": [],  # Track uploaded CSVs: [{"filename": "...", "timestamp": "...", "count": N}, ...]
+    "last_updated": None,
+  }
+
+
+def _save_opentext_usage_data(data: dict) -> bool:
+  """Save fax usage tracking data to JSON file."""
+  try:
+    data_file = os.path.join(os.path.dirname(__file__), ".opentext-fax-usage.json")
+    data["last_updated"] = datetime.now().isoformat()
+    with open(data_file, "w") as f:
+      json.dump(data, f, indent=2, default=str)
+    return True
+  except:
+    return False
+
+
+def _merge_opentext_usage(existing_data: dict, new_records: list, csv_filename: str = "") -> dict:
+  """Merge new CSV records into existing tracking data, keeping last 10 months and last 10 CSV uploads."""
+  for record in new_records:
+    fax = record["fax_number"]
+    month = record["month"]
+    email = record["email"]
+    
+    if fax not in existing_data["fax_numbers"]:
+      existing_data["fax_numbers"][fax] = {
+        "email": email,
+        "created_date": datetime.now().isoformat()[:10],
+        "months": {},
+        "removal_status": "active",
+        "removal_date": None,
+        "removal_notes": "",
+      }
+    
+    existing_data["fax_numbers"][fax]["months"][month] = {
+      "usage": False,
+      "cost": 0.75,
+      "has_activity": False,
+    }
+  
+  # Keep only last 10 months per fax
+  for fax, fax_data in existing_data["fax_numbers"].items():
+    months = sorted(fax_data["months"].keys(), reverse=True)[:10]
+    fax_data["months"] = {m: fax_data["months"][m] for m in months}
+  
+  # Track CSV upload
+  if csv_filename:
+    csv_uploads = existing_data.get("csv_uploads", [])
+    csv_uploads.append({
+      "filename": csv_filename,
+      "timestamp": datetime.now().isoformat(),
+      "count": len(new_records),
+    })
+    
+    # Keep only last 10 CSV uploads
+    if len(csv_uploads) > 10:
+      csv_uploads = csv_uploads[-10:]
+    
+    existing_data["csv_uploads"] = csv_uploads
+  
+  # Auto-flag numbers with 3+ consecutive zero months
+  for fax, fax_data in existing_data["fax_numbers"].items():
+    if fax_data["removal_status"] != "active":
+      continue
+    
+    sorted_months = sorted(fax_data["months"].keys(), reverse=True)
+    zero_count = 0
+    for month in sorted_months:
+      if not fax_data["months"][month].get("has_activity"):
+        zero_count += 1
+        if zero_count >= 3:
+          fax_data["removal_status"] = "flagged_for_removal"
+          break
+      else:
+        zero_count = 0
+  
+  return existing_data
+
+
 @app.get("/opentext-admin", response_class=HTMLResponse)
 def opentext_admin_page(request: Request):
   session = _get_auth_session(request) or {}
@@ -18793,26 +19025,72 @@ def opentext_admin_page(request: Request):
     )
 
   auth_user = escape(session_username)
-  html = """
+  
+  # Load existing tracking data
+  usage_data = _load_opentext_usage_data()
+  
+  # Build fax table HTML
+  fax_html = ""
+  if usage_data.get("fax_numbers"):
+    fax_html += "<table><thead><tr><th>Fax Number</th><th>Email</th><th>Status</th><th>10-Month History</th><th>Actions</th></tr></thead><tbody>"
+    
+    for fax_number, fax_data in sorted(usage_data["fax_numbers"].items()):
+      email = fax_data.get("email", "")
+      status = fax_data.get("removal_status", "active")
+      status_badge = "🟢 Active" if status == "active" else "🟡 Flagged" if status == "flagged_for_removal" else "🔴 Removed"
+      
+      # Build 10-month grid
+      months_sorted = sorted(fax_data.get("months", {}).keys(), reverse=True)[:10]
+      month_cells = ""
+      zero_count = 0
+      for month in months_sorted:
+        month_data = fax_data["months"][month]
+        if not month_data.get("has_activity"):
+          zero_count += 1
+          month_cells += f"<td style='background:#ffd9b3;text-align:center;' title='{month}: Zero usage'>⊘</td>"
+        else:
+          zero_count = 0
+          month_cells += f"<td style='background:#d9f0ff;text-align:center;' title='{month}: Has usage'>✓</td>"
+      
+      removal_date = fax_data.get("removal_date", "")
+      removal_str = f" (Removed: {removal_date})" if removal_date else ""
+      
+      fax_html += f"""
+      <tr style="background:{'#f0f0f0' if status != 'active' else '#fff'};">
+        <td>{fax_number}</td>
+        <td>{email}</td>
+        <td>{status_badge}</td>
+        <td style='display:flex;gap:2px;'>{month_cells}</td>
+        <td>
+          <button type="button" data-fax="{fax_number}" class="mark-removed-btn" style="background:#c41e3a;color:#fff;padding:5px 8px;border:none;border-radius:6px;cursor:pointer;">Mark Removed</button>
+        </td>
+      </tr>
+      """
+    
+    fax_html += "</tbody></table>"
+  else:
+    fax_html = "<p style='color:#666;'>No fax data yet. Upload a CSV to get started.</p>"
+
+  html = f"""
 <html>
   <head>
-    <title>OpenText Admin - Voice Operations Portal</title>
+    <title>OpenText Fax Usage - Voice Operations Portal</title>
     <style>
-      body {
+      body {{
         font-family: "Segoe UI", Tahoma, Arial, sans-serif;
         margin: 0;
         background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
         color: #12304a;
-      }
-      .topbar {
+      }}
+      .topbar {{
         display: flex;
         align-items: center;
         justify-content: space-between;
         padding: 10px 14px;
         background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94));
         color: #fff;
-      }
-      .topbar a {
+      }}
+      .topbar a {{
         color: #fff;
         text-decoration: none;
         border: 1px solid rgba(255,255,255,0.65);
@@ -18820,228 +19098,193 @@ def opentext_admin_page(request: Request):
         border-radius: 8px;
         font-size: 12px;
         font-weight: 700;
-      }
-      .content {
-        max-width: 1200px;
+      }}
+      .content {{
+        max-width: 1400px;
         margin: 14px auto;
         padding: 0 12px 16px 12px;
-      }
-      .shell {
-        display: grid;
-        grid-template-columns: 220px minmax(0, 1fr);
-        gap: 12px;
-      }
-      .sidebar {
-        background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
-        border-radius: 12px;
-        padding: 10px;
-      }
-      .sidebar h4 {
-        margin: 4px 6px 10px 6px;
-        color: #fff;
-        font-size: 13px;
-      }
-      .nav-btn {
-        width: 100%;
-        text-align: left;
-        border-radius: 8px;
-        border: 1px solid rgba(255, 255, 255, 0.85);
-        background: linear-gradient(90deg, #ffffff, #ecf6ff);
-        color: #002f6c;
-        padding: 8px 9px;
-        font-size: 12px;
-        line-height: 1.25;
-        font-weight: 700;
-        cursor: pointer;
-      }
-      .panel {
+      }}
+      .panel {{
         background: #fff;
         border: 1px solid #c8dbee;
         border-radius: 12px;
         padding: 12px;
         box-shadow: 0 12px 24px rgba(0, 47, 108, 0.1);
-      }
-      .row {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        flex-wrap: wrap;
-        margin-bottom: 10px;
-      }
-      input, button {
+        margin-bottom: 12px;
+      }}
+      input, button {{
         border-radius: 10px;
-      }
-      input {
-        min-height: 34px;
+      }}
+      input[type="file"] {{
         border: 1px solid #c8dbee;
         padding: 6px 10px;
-      }
-      button {
+        min-height: 34px;
+      }}
+      input[type="text"] {{
+        border: 1px solid #c8dbee;
+        padding: 6px 10px;
+        min-height: 34px;
+      }}
+      button {{
         border: none;
         background: linear-gradient(180deg, #0c77d8, #005eb8);
         color: #fff;
         padding: 8px 12px;
         font-weight: 700;
         cursor: pointer;
-      }
-      table {
+        font-size: 13px;
+      }}
+      button:hover {{
+        background: linear-gradient(180deg, #0a5aad, #0047a0);
+      }}
+      table {{
         width: 100%;
         border-collapse: collapse;
-        font-size: 13px;
-      }
-      th, td {
+        font-size: 12px;
+      }}
+      th, td {{
         padding: 7px 9px;
         border-bottom: 1px solid #c8dbee;
         text-align: left;
         vertical-align: top;
-      }
-      thead tr {
+      }}
+      thead tr {{
         background: #005eb8;
         color: #fff;
-      }
-      pre {
-        white-space: pre-wrap;
-        font-size: 12px;
-        background: #f7fbff;
-        border: 1px solid #d7e3ee;
-        border-radius: 8px;
+      }}
+      tbody tr:nth-child(even) {{
+        background: #f9f9f9;
+      }}
+      tbody tr:hover {{
+        background: #fffacd;
+      }}
+      .status-msg {{
         padding: 8px;
-      }
+        margin: 8px 0;
+        border-radius: 8px;
+        background: #e8f4f8;
+        border-left: 4px solid #0c77d8;
+        color: #2c5c8a;
+      }}
+      .mark-removed-btn {{
+        background: #c41e3a;
+        padding: 5px 8px;
+        font-size: 11px;
+      }}
+      .mark-removed-btn:hover {{
+        background: #a01829;
+      }}
     </style>
   </head>
   <body>
     <header class="topbar">
-      <strong>OpenText Admin</strong>
+      <strong>OpenText Fax Usage Tracking</strong>
       <div>
-        <span style="margin-right:10px;font-size:12px;opacity:0.9;">Operator: __AUTH_USER__</span>
+        <span style="margin-right:10px;font-size:12px;opacity:0.9;">Operator: {auth_user}</span>
         <a href="/page2">Administrative Items</a>
       </div>
     </header>
     <main class="content">
-      <div class="shell">
-        <aside class="sidebar">
-          <h4>OpenText Menu</h4>
-          <button type="button" class="nav-btn">OpenTxt Numbers List</button>
-        </aside>
-        <section class="panel">
-          <h3 style="margin-top:0;">OpenTxt Numbers List</h3>
-          <p style="margin-top:0;color:#4e6a84;">List numbers from OpenText, or search by 10-digit number (portal auto-prefixes with 1).</p>
-          <form id="opentext-numbers-form">
-            <div class="row">
-              <input id="opentext-number" name="number" placeholder="Optional 10-digit number" style="width:260px;" />
-              <input id="opentext-limit" name="limit" type="number" min="1" max="500" value="100" style="width:110px;" />
-              <button type="button" id="opentext-list-btn" style="background:#455a64;">List Numbers</button>
-              <button type="submit">Lookup Number</button>
-            </div>
-          </form>
-          <p id="opentext-status" style="color:#2c5c8a;min-height:18px;">Ready.</p>
-          <div id="opentext-results" style="overflow-x:auto;"></div>
-          <details style="margin-top:10px;">
-            <summary style="cursor:pointer;font-weight:700;">Raw API Payload</summary>
-            <pre id="opentext-raw"></pre>
-          </details>
-        </section>
+      <div class="panel">
+        <h3 style="margin-top:0;">Upload OpenText Report CSV</h3>
+        <p style="margin:0 0 10px 0;color:#4e6a84;">Upload OpenText usage reports to track fax numbers with zero usage. Zero usage (subtotal = monthly fee only) numbers are auto-flagged after 3+ consecutive months.</p>
+        <form id="csv-upload-form" enctype="multipart/form-data">
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+            <input type="file" id="csv-file" name="csv_file" accept=".csv" required />
+            <button type="submit">Upload CSV</button>
+          </div>
+        </form>
+        <div id="upload-status" class="status-msg" style="display:none;"></div>
+      </div>
+
+      <div class="panel">
+        <h3 style="margin-top:0;">Tracked Fax Numbers (Last 10 Months)</h3>
+        <p style="margin:0 0 10px 0;color:#4e6a84;">Green dots (✓) = has usage. Orange dots (⊘) = zero usage month.</p>
+        <div style="overflow-x:auto;">
+          {fax_html}
+        </div>
       </div>
     </main>
+
     <script>
-      (function () {
-        const form = document.getElementById("opentext-numbers-form");
-        const listBtn = document.getElementById("opentext-list-btn");
-        const numberEl = document.getElementById("opentext-number");
-        const limitEl = document.getElementById("opentext-limit");
-        const statusEl = document.getElementById("opentext-status");
-        const resultsEl = document.getElementById("opentext-results");
-        const rawEl = document.getElementById("opentext-raw");
+      (function() {{
+        const form = document.getElementById("csv-upload-form");
+        const fileEl = document.getElementById("csv-file");
+        const statusEl = document.getElementById("upload-status");
+        const markedRemovedBtns = document.querySelectorAll(".mark-removed-btn");
 
-        if (!form || !statusEl || !resultsEl) {
-          return;
-        }
-
-        function esc(value) {
-          return String(value || "")
-            .replace(/&/g, "&amp;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-            .replace(/\"/g, "&quot;")
-            .replace(/'/g, "&#39;");
-        }
-
-        async function runLookup(isListMode) {
-          statusEl.textContent = isListMode ? "Listing numbers from OpenText..." : "Looking up number in OpenText...";
-          resultsEl.innerHTML = "";
-          if (rawEl) {
-            rawEl.textContent = "";
-          }
-
-          try {
-            const formData = new FormData();
-            formData.append("number", isListMode ? "" : String((numberEl && numberEl.value) || "").trim());
-            formData.append("limit", String((limitEl && limitEl.value) || "100"));
-
-            const response = await fetch("/opentext/numbers/list", {
-              method: "POST",
-              body: formData,
-            });
-            const payload = await response.json();
-            if (!response.ok || !payload.ok) {
-              throw new Error((payload && payload.error) || "OpenText request failed.");
-            }
-
-            const rows = Array.isArray(payload.rows) ? payload.rows : [];
-            const warnings = Array.isArray(payload.warnings) ? payload.warnings : [];
-            const normalized = String(payload.normalized_query || "").trim();
-            statusEl.textContent = "Source: " + String(payload.source_base || "") + String(payload.source_path || "") + " | Rows: " + rows.length + (normalized ? (" | Normalized: " + normalized) : "") + (warnings.length ? (" | Warnings: " + warnings.join(" | ")) : "");
-
-            if (!rows.length) {
-              resultsEl.innerHTML = "<p style='color:#4e6a84;'>No numbers returned.</p>";
-              if (rawEl) {
-                rawEl.textContent = JSON.stringify(payload.raw || {}, null, 2);
-              }
+        if (form) {{
+          form.addEventListener("submit", async function(e) {{
+            e.preventDefault();
+            if (!fileEl.files || !fileEl.files[0]) {{
+              statusEl.textContent = "Please select a file.";
+              statusEl.style.display = "block";
               return;
-            }
+            }}
 
-            let html = "<table><thead><tr>";
-            html += "<th>Number</th><th>ID</th><th>Name</th><th>Status</th><th>Details</th>";
-            html += "</tr></thead><tbody>";
-            rows.forEach(function (row, idx) {
-              const bg = idx % 2 === 0 ? "#f7fbff" : "#ffffff";
-              html += "<tr style='background:" + bg + ";'>";
-              html += "<td>" + esc(row.number) + "</td>";
-              html += "<td style='font-family:Consolas,monospace;'>" + esc(row.id) + "</td>";
-              html += "<td>" + esc(row.name) + "</td>";
-              html += "<td>" + esc(row.status) + "</td>";
-              html += "<td><details><summary style='cursor:pointer;'>View</summary><pre>" + esc(row.raw_json) + "</pre></details></td>";
-              html += "</tr>";
-            });
-            html += "</tbody></table>";
-            resultsEl.innerHTML = html;
+            const formData = new FormData();
+            formData.append("csv_file", fileEl.files[0]);
 
-            if (rawEl) {
-              rawEl.textContent = JSON.stringify(payload.raw || {}, null, 2);
-            }
-          } catch (err) {
-            statusEl.textContent = "OpenText request failed: " + ((err && err.message) || "Unknown error.");
-          }
-        }
+            try {{
+              statusEl.textContent = "Uploading and parsing CSV...";
+              statusEl.style.display = "block";
+              const response = await fetch("/opentext/upload-csv", {{
+                method: "POST",
+                body: formData,
+              }});
+              const result = await response.json();
+              if (!response.ok || !result.ok) {{
+                throw new Error(result.error || "Upload failed");
+              }}
+              statusEl.innerHTML = `✅ CSV parsed successfully! Found ${{result.count}} zero-usage fax entries.`;
+              statusEl.style.background = "#e8f8e8";
+              statusEl.style.borderColor = "#2e7d32";
+              setTimeout(() => location.reload(), 1500);
+            }} catch(err) {{
+              statusEl.textContent = "❌ " + (err.message || "Upload failed");
+              statusEl.style.background = "#ffe8e8";
+              statusEl.style.borderColor = "#c41e3a";
+              statusEl.style.display = "block";
+            }}
+          }});
+        }}
 
-        form.addEventListener("submit", function (event) {
-          if (event && typeof event.preventDefault === "function") {
-            event.preventDefault();
-          }
-          runLookup(false);
-        });
+        // Mark as removed buttons
+        markedRemovedBtns.forEach(btn => {{
+          btn.addEventListener("click", async function() {{
+            const faxNumber = this.getAttribute("data-fax");
+            if (!confirm(`Mark fax number ${{faxNumber}} as removed?\n\nYou will need to manually delete it from OpenText.`)) {{
+              return;
+            }}
 
-        if (listBtn) {
-          listBtn.addEventListener("click", function () {
-            runLookup(true);
-          });
-        }
-      })();
+            try {{
+              const response = await fetch("/opentext/mark-removed", {{
+                method: "POST",
+                headers: {{"Content-Type": "application/json"}},
+                body: JSON.stringify({{fax_number: faxNumber}}),
+              }});
+              const result = await response.json();
+              if (!response.ok || !result.ok) {{
+                throw new Error(result.error || "Failed to mark removed");
+              }}
+              statusEl.textContent = `✅ Fax ${{faxNumber}} marked as removed.`;
+              statusEl.style.background = "#e8f8e8";
+              statusEl.style.borderColor = "#2e7d32";
+              statusEl.style.display = "block";
+              setTimeout(() => location.reload(), 1500);
+            }} catch(err) {{
+              statusEl.textContent = "❌ " + (err.message || "Failed");
+              statusEl.style.background = "#ffe8e8";
+              statusEl.style.borderColor = "#c41e3a";
+              statusEl.style.display = "block";
+            }}
+          }});
+        }});
+      }})();
     </script>
   </body>
 </html>
 """
-  html = html.replace("__AUTH_USER__", auth_user)
   return HTMLResponse(html)
 
 
@@ -19095,6 +19338,105 @@ def opentext_numbers_list_route(request: Request, number: str = Form(""), limit:
     "rows": rows,
     "warnings": lookup_result.get("warnings", []),
     "raw": lookup_result.get("raw", {}),
+  })
+
+
+@app.post("/opentext/upload-csv")
+def opentext_upload_csv_route(request: Request, csv_file: UploadFile = File(...)):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", "") or "").strip()
+  if not session_username:
+    return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+  if not _is_admin_user(session_username):
+    return JSONResponse({"ok": False, "error": "Not authorized"}, status_code=403)
+
+  try:
+    csv_content = csv_file.file.read().decode("utf-8")
+  except Exception as e:
+    return JSONResponse({"ok": False, "error": f"Failed to read file: {str(e)}"}, status_code=400)
+
+  # Parse CSV
+  parse_result = _parse_opentext_usage_csv(csv_content)
+  if not parse_result.get("ok"):
+    return JSONResponse({"ok": False, "error": parse_result.get("error", "Parse failed")}, status_code=400)
+
+  # Load existing data and merge
+  existing_data = _load_opentext_usage_data()
+  new_records = parse_result.get("records", [])
+  
+  # Save CSV file to disk with timestamp
+  csv_dir = os.path.join(os.path.dirname(__file__), ".opentext-csv-uploads")
+  os.makedirs(csv_dir, exist_ok=True)
+  timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+  original_name = csv_file.filename or "upload.csv"
+  csv_filename = f"opentext_{timestamp}_{original_name}"
+  csv_filepath = os.path.join(csv_dir, csv_filename)
+  
+  try:
+    with open(csv_filepath, "w") as f:
+      f.write(csv_content)
+  except Exception as e:
+    return JSONResponse({"ok": False, "error": f"Failed to save CSV file: {str(e)}"}, status_code=500)
+  
+  # Merge with tracking
+  updated_data = _merge_opentext_usage(existing_data, new_records, csv_filename)
+  
+  # Save tracking data
+  if not _save_opentext_usage_data(updated_data):
+    return JSONResponse({"ok": False, "error": "Failed to save tracking data"}, status_code=500)
+  
+  # Clean up old CSV files (keep only last 10)
+  try:
+    csv_files = sorted([f for f in os.listdir(csv_dir) if f.startswith("opentext_")], reverse=True)
+    for old_csv in csv_files[10:]:
+      try:
+        os.remove(os.path.join(csv_dir, old_csv))
+      except:
+        pass
+  except:
+    pass
+
+  return JSONResponse({
+    "ok": True,
+    "count": len(new_records),
+    "message": f"Successfully parsed {len(new_records)} zero-usage fax entries",
+  })
+
+
+@app.post("/opentext/mark-removed")
+async def opentext_mark_removed_route(request: Request):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", "") or "").strip()
+  if not session_username:
+    return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+  if not _is_admin_user(session_username):
+    return JSONResponse({"ok": False, "error": "Not authorized"}, status_code=403)
+
+  # Parse JSON body
+  try:
+    body_dict = await request.json()
+  except:
+    body_dict = {}
+
+  fax_number = str(body_dict.get("fax_number", "")).strip() if body_dict else ""
+  if not fax_number:
+    return JSONResponse({"ok": False, "error": "Missing fax_number"}, status_code=400)
+
+  # Load, update, save
+  usage_data = _load_opentext_usage_data()
+  if fax_number not in usage_data["fax_numbers"]:
+    return JSONResponse({"ok": False, "error": "Fax number not found"}, status_code=404)
+
+  usage_data["fax_numbers"][fax_number]["removal_status"] = "removed"
+  usage_data["fax_numbers"][fax_number]["removal_date"] = datetime.now().isoformat()[:10]
+
+  if not _save_opentext_usage_data(usage_data):
+    return JSONResponse({"ok": False, "error": "Failed to save"}, status_code=500)
+
+  return JSONResponse({
+    "ok": True,
+    "fax_number": fax_number,
+    "message": "Marked as removed. Remember to manually delete from OpenText.",
   })
 
 
