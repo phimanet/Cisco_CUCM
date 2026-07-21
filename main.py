@@ -18782,9 +18782,8 @@ def genesys_admin_placeholder(request: Request):
   )
 
 
-# OpenText Fax Usage Tracking Helpers
 def _parse_opentext_usage_csv(csv_content: str) -> dict:
-  """Parse OpenText usage CSV and extract fax numbers with zero usage (subtotal = monthly fees only)."""
+  """Parse OpenText usage CSV and extract fax numbers with zero usage (Pages = 0 in subtotal)."""
   import csv as csv_module
   import io as io_module
   import sys
@@ -18803,170 +18802,126 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
     if not fieldnames:
       return {"ok": False, "error": "Cannot parse CSV header", "records": []}
     
-    print(f"[OpenText Parse] Fieldnames: {fieldnames}", file=sys.stderr)
-    
     # Find required columns (case-insensitive)
     fieldnames_lower = {name.lower().strip(): name for name in fieldnames}
     
-    required_cols = {
-      "dnis_fax": "DNIS Fax",
-      "email": "Email Address of User", 
-      "date": "Job Start Date",
-      "cost": "Cost",
-      "service_type": "Service Type",
-      "pages": "Pages"
-    }
-    
     col_map = {}
-    for key, display_name in required_cols.items():
-      found = False
-      for fname_lower, fname in fieldnames_lower.items():
-        if key in fname_lower or display_name.lower() in fname_lower:
-          col_map[key] = fname
-          found = True
-          break
-      if not found:
-        # Try partial match
-        for fname_lower, fname in fieldnames_lower.items():
-          if any(part in fname_lower for part in key.split("_")):
-            col_map[key] = fname
-            found = True
-            break
-      if not found:
-        return {"ok": False, "error": f"Missing column: {display_name}", "records": []}
+    col_map["user_name"] = next((n for n_lower, n in fieldnames_lower.items() if "user name" in n_lower), "User Name")
+    col_map["email"] = next((n for n_lower, n in fieldnames_lower.items() if "email address of user" in n_lower), "Email Address of User")
+    col_map["dnis_fax"] = next((n for n_lower, n in fieldnames_lower.items() if "dnis fax" in n_lower), "DNIS Fax")
+    col_map["cost"] = next((n for n_lower, n in fieldnames_lower.items() if "cost" in n_lower), "Cost")
+    col_map["pages"] = next((n for n_lower, n in fieldnames_lower.items() if "pages" in n_lower), "Pages")
+    col_map["date"] = next((n for n_lower, n in fieldnames_lower.items() if "job start date" in n_lower), "Job Start Date")
     
     print(f"[OpenText Parse] Column map: {col_map}", file=sys.stderr)
-    print(f"[OpenText Parse] Total data rows: {len(all_rows)}", file=sys.stderr)
   
   except Exception as e:
     import traceback
     tb = traceback.format_exc()
-    print(f"[OpenText Parse] Header error: {tb}", file=sys.stderr)
     return {"ok": False, "error": f"CSV header error: {str(e)}", "traceback": tb, "records": []}
   
-  # Parse data rows
-  records = {}  # {fax: {month: {email, subtotal, fees, activity}}}
-  current_fax = None
-  current_email = None
-  current_month = None
-  current_subtotal = 0.0
-  current_fees = 0.0
-  current_activity = False
+  # Parse rows and find subtotal lines with Pages = 0
+  records = {}
   row_count = 0
   subtotal_count = 0
+  zero_usage_count = 0
   
   try:
     for row in all_rows:
       row_count += 1
-      dnis = (row.get(col_map.get("dnis_fax")) or "").strip()
-      email = (row.get(col_map.get("email")) or "").strip()
-      date_str = (row.get(col_map.get("date")) or "").strip()
-      cost_str = (row.get(col_map.get("cost")) or "").strip()
-      service_str = (row.get(col_map.get("service_type")) or "").strip()
-      pages_str = (row.get(col_map.get("pages")) or "").strip()
+      user_name = (row.get(col_map["user_name"]) or "").strip()
       
-      # Debug first 5 rows
-      if row_count <= 5:
-        print(f"[OpenText Parse] Row {row_count}: dnis={dnis} email={email} date={date_str} cost={cost_str} service={service_str}", file=sys.stderr)
-      
-      # Check for subtotal line
-      if "Subtotal" in dnis or "Subtotal" in date_str or (dnis and "subtotal" in dnis.lower()):
+      # Check if this is a subtotal line
+      if "Subtotal for User" in user_name:
         subtotal_count += 1
-        if current_fax and current_month:
-          if current_fax not in records:
-            records[current_fax] = {}
-          # Zero usage = subtotal equals fees only
-          is_zero_usage = abs(current_subtotal - current_fees) < 0.01 and not current_activity
-          if is_zero_usage:
-            print(f"[OpenText Parse] Found zero-usage: fax={current_fax} month={current_month} subtotal={current_subtotal} fees={current_fees}", file=sys.stderr)
-            records[current_fax][current_month] = {
+        
+        # Get the pages and cost from this subtotal row
+        pages_str = (row.get(col_map["pages"]) or "").strip()
+        cost_str = (row.get(col_map["cost"]) or "").strip()
+        
+        pages = 0
+        cost = 0.0
+        
+        try:
+          pages = int(pages_str) if pages_str else 0
+          cost = float(cost_str.replace("$", "").replace(",", "").strip()) if cost_str else 0.0
+        except:
+          pass
+        
+        # Zero-usage = Pages = 0
+        if pages == 0:
+          zero_usage_count += 1
+          print(f"[OpenText Parse] Row {row_count}: Found zero-usage subtotal: {user_name} (cost={cost}, pages={pages})", file=sys.stderr)
+          
+          # Need to find the corresponding activity rows above this subtotal to get email, fax, date, user name
+          # For now, scan backwards to find the first non-subtotal row for this user block
+          current_fax = ""
+          current_email = ""
+          current_month = ""
+          current_user_display = ""
+          
+          # Scan backwards to find data from this user's activity rows
+          for prev_idx in range(row_count - 2, -1, -1):
+            prev_row = all_rows[prev_idx]
+            prev_user_name = (prev_row.get(col_map["user_name"]) or "").strip()
+            
+            # If we hit another subtotal, we've gone too far
+            if "Subtotal for User" in prev_user_name:
+              break
+            
+            # If it's blank or empty, skip
+            if not prev_user_name and not prev_row.get(col_map["email"]):
+              continue
+            
+            # Found a data row for this user
+            if not current_fax:
+              current_fax = (prev_row.get(col_map["dnis_fax"]) or "").strip() or "unknown"
+            if not current_email:
+              current_email = (prev_row.get(col_map["email"]) or "").strip() or "unknown"
+            if not current_month:
+              date_str = (prev_row.get(col_map["date"]) or "").strip()
+              if date_str and "/" in date_str:
+                try:
+                  parts = date_str.split("/")
+                  if len(parts) >= 3:
+                    current_month = f"{parts[2].strip()}-{int(parts[0].strip()):02d}"
+                except:
+                  pass
+            if not current_user_display:
+              current_user_display = prev_user_name
+            
+            # If we have all data, break
+            if current_fax and current_email and current_month:
+              break
+          
+          # Store the zero-usage record
+          if current_fax and current_email and current_month:
+            key = f"{current_fax}_{current_month}"
+            records[key] = {
+              "fax_number": current_fax,
               "email": current_email,
-              "subtotal": current_subtotal,
-              "fees": current_fees,
-              "activity": current_activity,
+              "user_name": current_user_display,
+              "month": current_month,
+              "subtotal": cost,
+              "pages": pages,
             }
-        current_fax = None
-        current_email = None
-        current_month = None
-        current_subtotal = 0.0
-        current_fees = 0.0
-        current_activity = False
-        continue
-      
-      if not dnis or not email:
-        continue
-      
-      # Extract month (M/D/YYYY -> YYYY-MM)
-      month = None
-      if date_str and "/" in date_str:
-        try:
-          parts = date_str.split("/")
-          if len(parts) >= 3:
-            month = f"{parts[2].strip()}-{int(parts[0].strip()):02d}"
-        except:
-          pass
-      
-      if not month:
-        continue
-      
-      # Parse cost
-      cost = 0.0
-      if cost_str:
-        try:
-          cost = float(cost_str.replace("$", "").replace(",", "").strip())
-        except:
-          pass
-      
-      # Check for activity (pages > 0)
-      has_pages = False
-      if pages_str:
-        try:
-          has_pages = int(pages_str.strip()) > 0
-        except:
-          pass
-      
-      # Accumulate for current fax/month
-      current_fax = dnis
-      current_email = email
-      current_month = month
-      current_subtotal += cost
-      
-      # Track fees vs activity
-      if "Monthly Fee" in service_str or "Fee" in service_str:
-        current_fees += cost
-      else:
-        current_activity = True
-      
-      if has_pages:
-        current_activity = True
   
   except Exception as e:
     import traceback
     tb = traceback.format_exc()
-    print(f"[OpenText Parse] Data error: {tb}", file=sys.stderr)
     return {"ok": False, "error": f"CSV parsing error: {str(e)}", "traceback": tb, "records": []}
   
-  print(f"[OpenText Parse] Processed {row_count} rows, found {subtotal_count} subtotal lines, {len(records)} zero-usage fax entries", file=sys.stderr)
+  print(f"[OpenText Parse] Processed {row_count} rows, found {subtotal_count} subtotal lines, {zero_usage_count} zero-usage entries", file=sys.stderr)
   
-  # Build result with only zero-usage entries
-  result_records = []
-  for fax, months in records.items():
-    for month, data in months.items():
-      result_records.append({
-        "fax_number": fax,
-        "email": data["email"],
-        "month": month,
-        "subtotal": data["subtotal"],
-        "monthly_fees": data["fees"],
-        "has_activity": data["activity"],
-      })
+  # Build result
+  result_records = list(records.values())
   
   return {"ok": True, "records": result_records, "count": len(result_records), "debug": {
     "fieldnames": list(fieldnames) if fieldnames else [],
     "col_map": col_map,
     "total_rows_processed": row_count,
     "subtotal_lines_found": subtotal_count,
-    "fax_entries_with_zero_usage": len(records),
+    "zero_usage_entries_found": zero_usage_count,
   }}
 
 
