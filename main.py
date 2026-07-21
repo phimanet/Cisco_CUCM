@@ -18789,19 +18789,21 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
   import io as io_module
   
   try:
-    lines = csv_content.strip().split('\n')
-    if not lines:
-      return {"ok": False, "error": "Empty CSV", "records": []}
-    
-    # Use csv.DictReader for more robust parsing
+    # Use csv.DictReader for robust parsing
     csv_file = io_module.StringIO(csv_content)
     reader = csv_module.DictReader(csv_file)
     
-    if not reader.fieldnames:
+    # Read all rows first to avoid iterator exhaustion
+    all_rows = list(reader)
+    if not all_rows:
+      return {"ok": False, "error": "No data rows in CSV", "records": []}
+    
+    fieldnames = reader.fieldnames
+    if not fieldnames:
       return {"ok": False, "error": "Cannot parse CSV header", "records": []}
     
     # Find required columns (case-insensitive)
-    fieldnames_lower = {name.lower().strip(): name for name in reader.fieldnames}
+    fieldnames_lower = {name.lower().strip(): name for name in fieldnames}
     
     required_cols = {
       "dnis_fax": "DNIS Fax",
@@ -18822,9 +18824,11 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
           break
       if not found:
         return {"ok": False, "error": f"Missing column: {display_name}", "records": []}
-    
+  
   except Exception as e:
-    return {"ok": False, "error": f"CSV header error: {str(e)}", "records": []}
+    import traceback
+    tb = traceback.format_exc()
+    return {"ok": False, "error": f"CSV header error: {str(e)}", "traceback": tb, "records": []}
   
   # Parse data rows
   records = {}  # {fax: {month: {email, subtotal, fees, activity}}}
@@ -18836,7 +18840,7 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
   current_activity = False
   
   try:
-    for row in reader:
+    for row in all_rows:
       dnis = (row.get(col_map.get("dnis_fax")) or "").strip()
       email = (row.get(col_map.get("email")) or "").strip()
       date_str = (row.get(col_map.get("date")) or "").strip()
@@ -18913,7 +18917,9 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
         current_activity = True
   
   except Exception as e:
-    return {"ok": False, "error": f"CSV parsing error: {str(e)}", "records": []}
+    import traceback
+    tb = traceback.format_exc()
+    return {"ok": False, "error": f"CSV parsing error: {str(e)}", "traceback": tb, "records": []}
   
   # Build result with only zero-usage entries
   result_records = []
@@ -19208,7 +19214,7 @@ def opentext_admin_page(request: Request):
       <div class="panel">
         <h3 style="margin-top:0;">Debug Output</h3>
         <p style="margin:0 0 10px 0;color:#4e6a84;font-size:11px;">Raw server response (copy/paste this if there's an error):</p>
-        <pre id="debug-output" style="background:#f5f5f5;border:1px solid #ccc;padding:8px;border-radius:6px;max-height:200px;overflow-y:auto;font-size:11px;margin:0;color:#333;">Ready for upload...</pre>
+        <pre id="debug-output" style="background:#f5f5f5;border:1px solid #ccc;padding:8px;border-radius:6px;max-height:400px;overflow-y:auto;font-size:10px;margin:0;color:#333;word-break:break-all;">Ready for upload...</pre>
       </div>
 
       <div class="panel">
