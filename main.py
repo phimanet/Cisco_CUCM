@@ -18787,6 +18787,7 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
   """Parse OpenText usage CSV and extract fax numbers with zero usage (subtotal = monthly fees only)."""
   import csv as csv_module
   import io as io_module
+  import sys
   
   try:
     # Use csv.DictReader for robust parsing
@@ -18801,6 +18802,8 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
     fieldnames = reader.fieldnames
     if not fieldnames:
       return {"ok": False, "error": "Cannot parse CSV header", "records": []}
+    
+    print(f"[OpenText Parse] Fieldnames: {fieldnames}", file=sys.stderr)
     
     # Find required columns (case-insensitive)
     fieldnames_lower = {name.lower().strip(): name for name in fieldnames}
@@ -18823,11 +18826,22 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
           found = True
           break
       if not found:
+        # Try partial match
+        for fname_lower, fname in fieldnames_lower.items():
+          if any(part in fname_lower for part in key.split("_")):
+            col_map[key] = fname
+            found = True
+            break
+      if not found:
         return {"ok": False, "error": f"Missing column: {display_name}", "records": []}
+    
+    print(f"[OpenText Parse] Column map: {col_map}", file=sys.stderr)
+    print(f"[OpenText Parse] Total data rows: {len(all_rows)}", file=sys.stderr)
   
   except Exception as e:
     import traceback
     tb = traceback.format_exc()
+    print(f"[OpenText Parse] Header error: {tb}", file=sys.stderr)
     return {"ok": False, "error": f"CSV header error: {str(e)}", "traceback": tb, "records": []}
   
   # Parse data rows
@@ -18838,9 +18852,12 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
   current_subtotal = 0.0
   current_fees = 0.0
   current_activity = False
+  row_count = 0
+  subtotal_count = 0
   
   try:
     for row in all_rows:
+      row_count += 1
       dnis = (row.get(col_map.get("dnis_fax")) or "").strip()
       email = (row.get(col_map.get("email")) or "").strip()
       date_str = (row.get(col_map.get("date")) or "").strip()
@@ -18848,13 +18865,20 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
       service_str = (row.get(col_map.get("service_type")) or "").strip()
       pages_str = (row.get(col_map.get("pages")) or "").strip()
       
+      # Debug first 5 rows
+      if row_count <= 5:
+        print(f"[OpenText Parse] Row {row_count}: dnis={dnis} email={email} date={date_str} cost={cost_str} service={service_str}", file=sys.stderr)
+      
       # Check for subtotal line
       if "Subtotal" in dnis or "Subtotal" in date_str or (dnis and "subtotal" in dnis.lower()):
+        subtotal_count += 1
         if current_fax and current_month:
           if current_fax not in records:
             records[current_fax] = {}
           # Zero usage = subtotal equals fees only
-          if abs(current_subtotal - current_fees) < 0.01 and not current_activity:
+          is_zero_usage = abs(current_subtotal - current_fees) < 0.01 and not current_activity
+          if is_zero_usage:
+            print(f"[OpenText Parse] Found zero-usage: fax={current_fax} month={current_month} subtotal={current_subtotal} fees={current_fees}", file=sys.stderr)
             records[current_fax][current_month] = {
               "email": current_email,
               "subtotal": current_subtotal,
@@ -18919,7 +18943,10 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
   except Exception as e:
     import traceback
     tb = traceback.format_exc()
+    print(f"[OpenText Parse] Data error: {tb}", file=sys.stderr)
     return {"ok": False, "error": f"CSV parsing error: {str(e)}", "traceback": tb, "records": []}
+  
+  print(f"[OpenText Parse] Processed {row_count} rows, found {subtotal_count} subtotal lines, {len(records)} zero-usage fax entries", file=sys.stderr)
   
   # Build result with only zero-usage entries
   result_records = []
