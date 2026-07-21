@@ -2986,8 +2986,12 @@ def _genesys_add_user_to_queue(api_base: str, access_token: str, user_id: str, q
     return False, "User ID and queue ID are required."
 
   attempts = [
-    ("PUT", f"/api/v2/routing/queues/{clean_queue_id}/members", [{"id": clean_user_id}]),
+    # Confirmed Genesys format: POST with joined:true (per developer docs)
+    ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", [{"id": clean_user_id, "joined": True}]),
+    ("PUT", f"/api/v2/routing/queues/{clean_queue_id}/members", [{"id": clean_user_id, "joined": True}]),
+    # Fallbacks without joined field
     ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", [{"id": clean_user_id}]),
+    ("PUT", f"/api/v2/routing/queues/{clean_queue_id}/members", [{"id": clean_user_id}]),
     ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", {"id": clean_user_id}),
     ("POST", f"/api/v2/routing/queues/{clean_queue_id}/members", {"member": {"id": clean_user_id}}),
     ("POST", f"/api/v2/routing/queues/{clean_queue_id}/users", {"id": clean_user_id}),
