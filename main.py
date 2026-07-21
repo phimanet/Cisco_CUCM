@@ -19342,7 +19342,7 @@ def opentext_numbers_list_route(request: Request, number: str = Form(""), limit:
 
 
 @app.post("/opentext/upload-csv")
-def opentext_upload_csv_route(request: Request, csv_file: UploadFile = File(...)):
+async def opentext_upload_csv_route(request: Request, csv_file: UploadFile = File(...)):
   session = _get_auth_session(request) or {}
   session_username = str(session.get("username", "") or "").strip()
   if not session_username:
@@ -19351,7 +19351,7 @@ def opentext_upload_csv_route(request: Request, csv_file: UploadFile = File(...)
     return JSONResponse({"ok": False, "error": "Not authorized"}, status_code=403)
 
   try:
-    csv_content = csv_file.file.read().decode("utf-8")
+    csv_content = (await csv_file.read()).decode("utf-8")
   except Exception as e:
     return JSONResponse({"ok": False, "error": f"Failed to read file: {str(e)}"}, status_code=400)
 
