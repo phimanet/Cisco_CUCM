@@ -15874,6 +15874,19 @@ def genesys_admin_placeholder(request: Request):
           <div id="genesys-user-queue-remove-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
             <h3 style="margin-top:0;">Queue Lookup + Remove (User)</h3>
             <p style="margin-top:0; color:#4e6a84;">Use this dedicated workflow to lookup one user and remove selected queue memberships with explicit per-queue verification.</p>
+
+            <div style="margin-bottom:10px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f4f9ff;">
+              <h4 style="margin:0 0 8px 0;">Find Person in CUCM (Optional)</h4>
+              <p style="margin:0 0 8px 0; color:#4e6a84; font-size:12px;">Search CUCM by last name (optional first name), then choose the person to auto-fill the email below.</p>
+              <div class="search-filter-row">
+                <input id="genesys-queue-remove-name-last" placeholder="Last Name *" style="width:220px;" />
+                <input id="genesys-queue-remove-name-first" placeholder="First Name (optional)" style="width:220px;" />
+                <button type="button" id="genesys-queue-remove-name-search-btn" style="background:#385977;">Search CUCM</button>
+              </div>
+              <p id="genesys-queue-remove-name-search-status" style="margin:8px 0 6px 0; color:#2c5c8a; min-height:18px;">Optional: search and choose a person to prefill email.</p>
+              <div id="genesys-queue-remove-name-search-results" style="overflow-x:auto;"></div>
+            </div>
+
             <div class="search-filter-row" style="align-items:flex-start;">
               <input id="genesys-user-queue-email" placeholder="User email (e.g. jane.doe@amnhealthcare.com)" style="width:360px;">
               <button type="button" id="genesys-user-queue-lookup-btn" style="background:#385977;" onclick="if (window.runGenesysUserQueueLookup) { return window.runGenesysUserQueueLookup(); } return false;">Lookup User Queues</button>
@@ -15902,6 +15915,11 @@ def genesys_admin_placeholder(request: Request):
               const profileEl = document.getElementById("genesys-user-queue-profile");
               const resultsEl = document.getElementById("genesys-user-queue-results");
               const summaryEl = document.getElementById("genesys-user-queue-summary");
+              const nameLastEl = document.getElementById("genesys-queue-remove-name-last");
+              const nameFirstEl = document.getElementById("genesys-queue-remove-name-first");
+              const nameSearchBtn = document.getElementById("genesys-queue-remove-name-search-btn");
+              const nameSearchStatusEl = document.getElementById("genesys-queue-remove-name-search-status");
+              const nameSearchResultsEl = document.getElementById("genesys-queue-remove-name-search-results");
 
               if (!emailEl || !lookupBtn || !removeBtn || !statusEl || !resultsEl || !profileEl) {
                 return;
@@ -15927,6 +15945,113 @@ def genesys_admin_placeholder(request: Request):
                 }
                 summaryEl.innerHTML = String(html || "");
                 summaryEl.style.display = show ? "block" : "none";
+              }
+
+              function renderCucmNameSearchResults(rows) {
+                if (!nameSearchResultsEl) {
+                  return;
+                }
+                const items = Array.isArray(rows) ? rows : [];
+                if (!items.length) {
+                  nameSearchResultsEl.innerHTML = "";
+                  return;
+                }
+                let html = "<table style='width:100%; border-collapse:collapse; font-size:12px;'><thead><tr style='background:#385977; color:#fff;'>";
+                html += "<th style='padding:6px 8px; text-align:left;'>Name</th>";
+                html += "<th style='padding:6px 8px; text-align:left;'>User ID</th>";
+                html += "<th style='padding:6px 8px; text-align:left;'>Email</th>";
+                html += "<th style='padding:6px 8px; text-align:left;'>Extension</th>";
+                html += "<th style='padding:6px 8px; text-align:left;'>Action</th>";
+                html += "</tr></thead><tbody>";
+                items.forEach(function (row, index) {
+                  const bg = index % 2 === 0 ? "#f7fbff" : "#ffffff";
+                  const displayName = String((row && row.display_name) || "").trim() || [String((row && row.first_name) || "").trim(), String((row && row.last_name) || "").trim()].filter(Boolean).join(" ") || String((row && row.userid) || "").trim();
+                  const email = String((row && row.email) || "").trim();
+                  const userId = String((row && row.userid) || "").trim();
+                  const ext = String((row && row.primary_extension) || "").trim();
+                  html += "<tr style='background:" + bg + ";'>";
+                  html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5;'>" + esc(displayName || "-") + "</td>";
+                  html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5;'>" + esc(userId || "-") + "</td>";
+                  html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5;'>" + esc(email || "-") + "</td>";
+                  html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5;'>" + esc(ext || "-") + "</td>";
+                  html += "<td style='padding:6px 8px; border-bottom:1px solid #e5edf5; white-space:nowrap;'>";
+                  html += email
+                    ? ("<button type='button' data-prefill-email='" + esc(email) + "' style='background:#2d7a43;color:#fff;border:none;border-radius:6px;padding:4px 8px;font-weight:700;cursor:pointer;'>Use Email</button>")
+                    : "<span style='color:#8a2d2d;'>No email</span>";
+                  html += "</td></tr>";
+                });
+                html += "</tbody></table>";
+                nameSearchResultsEl.innerHTML = html;
+                Array.from(nameSearchResultsEl.querySelectorAll("button[data-prefill-email]") || []).forEach(function (btn) {
+                  btn.addEventListener("click", function () {
+                    const selectedEmail = String(btn.getAttribute("data-prefill-email") || "").trim().toLowerCase();
+                    if (!selectedEmail) {
+                      return;
+                    }
+                    if (emailEl) {
+                      emailEl.value = selectedEmail;
+                    }
+                    if (nameSearchStatusEl) {
+                      nameSearchStatusEl.textContent = "Selected " + selectedEmail + " — click Lookup User Queues to continue.";
+                    }
+                  });
+                });
+              }
+
+              async function runCucmNameSearch() {
+                if (!nameSearchStatusEl) {
+                  return false;
+                }
+                const lastName = String((nameLastEl && nameLastEl.value) || "").trim();
+                const firstName = String((nameFirstEl && nameFirstEl.value) || "").trim();
+                if (!lastName) {
+                  nameSearchStatusEl.textContent = "Last Name is required for CUCM search.";
+                  return false;
+                }
+                const originalText = nameSearchBtn ? nameSearchBtn.textContent : "Search CUCM";
+                if (nameSearchBtn) {
+                  nameSearchBtn.disabled = true;
+                  nameSearchBtn.textContent = "Searching...";
+                }
+                nameSearchStatusEl.textContent = "Searching CUCM for " + lastName + (firstName ? (", " + firstName) : "") + "...";
+                try {
+                  const formData = new FormData();
+                  formData.append("last_name", lastName);
+                  formData.append("first_name", firstName);
+                  const response = await fetch("/lookup/person", { method: "POST", body: formData, credentials: "same-origin" });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error && payload.error.message) || (payload && payload.error) || "CUCM person search failed.");
+                  }
+                  const rows = Array.isArray(payload.results) ? payload.results : [];
+                  if (!rows.length) {
+                    nameSearchStatusEl.textContent = "No CUCM users found for that name.";
+                    renderCucmNameSearchResults([]);
+                    return true;
+                  }
+                  nameSearchStatusEl.textContent = "Found " + rows.length + " CUCM user(s). Click Use Email to prefill.";
+                  renderCucmNameSearchResults(rows);
+                  return true;
+                } catch (err) {
+                  nameSearchStatusEl.textContent = "CUCM person search failed: " + ((err && err.message) || "Unknown error.");
+                  renderCucmNameSearchResults([]);
+                  return false;
+                } finally {
+                  if (nameSearchBtn) {
+                    nameSearchBtn.disabled = false;
+                    nameSearchBtn.textContent = originalText;
+                  }
+                }
+              }
+
+              if (nameSearchBtn) {
+                nameSearchBtn.addEventListener("click", function () { runCucmNameSearch(); });
+              }
+              if (nameLastEl) {
+                nameLastEl.addEventListener("keydown", function (e) { if (e.key === "Enter") { runCucmNameSearch(); } });
+              }
+              if (nameFirstEl) {
+                nameFirstEl.addEventListener("keydown", function (e) { if (e.key === "Enter") { runCucmNameSearch(); } });
               }
 
               function renderQueueRows(rows) {
