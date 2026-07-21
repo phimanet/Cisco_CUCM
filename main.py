@@ -1356,18 +1356,24 @@ def _genesys_send_json(
   payload: dict | None = None,
   params: dict | None = None,
 ) -> tuple[bool, dict, str, int]:
+  clean_method = method.upper()
+  # For DELETE (and GET) with no payload, send no body and omit Content-Type.
+  # Sending json={} on a DELETE causes Genesys to return HTTP 400.
+  no_body_methods = {"DELETE", "GET"}
+  effective_payload = payload if payload is not None else (None if clean_method in no_body_methods else {})
   headers = {
     "Authorization": f"Bearer {access_token}",
-    "Content-Type": "application/json",
   }
+  if effective_payload is not None:
+    headers["Content-Type"] = "application/json"
   url = f"{api_base}{path}"
   try:
     response = requests.request(
-      method=method.upper(),
+      method=clean_method,
       url=url,
       headers=headers,
       params=params,
-      json=payload or {},
+      json=effective_payload,
       timeout=30,
     )
     body = response.json() if response.text else {}
