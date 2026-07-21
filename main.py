@@ -19406,7 +19406,7 @@ async def opentext_upload_csv_route(request: Request, csv_file: UploadFile = Fil
     # Save CSV file to disk with timestamp
     csv_dir = os.path.join(os.path.dirname(__file__), ".opentext-csv-uploads")
     os.makedirs(csv_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     original_name = csv_file.filename or "upload.csv"
     csv_filename = f"opentext_{timestamp}_{original_name}"
     csv_filepath = os.path.join(csv_dir, csv_filename)
