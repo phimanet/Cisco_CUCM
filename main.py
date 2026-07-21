@@ -19380,10 +19380,18 @@ async def opentext_upload_csv_route(request: Request, csv_file: UploadFile = Fil
   try:
     csv_content = (await csv_file.read()).decode("utf-8")
   except Exception as e:
-    return JSONResponse({"ok": False, "error": f"Failed to read file: {str(e)}"}, status_code=400)
+    import traceback
+    tb = traceback.format_exc()
+    return JSONResponse({"ok": False, "error": f"Failed to read file: {str(e)}", "traceback": tb}, status_code=400)
 
   # Parse CSV
-  parse_result = _parse_opentext_usage_csv(csv_content)
+  try:
+    parse_result = _parse_opentext_usage_csv(csv_content)
+  except Exception as e:
+    import traceback
+    tb = traceback.format_exc()
+    return JSONResponse({"ok": False, "error": f"Parse exception: {str(e)}", "traceback": tb}, status_code=500)
+    
   if not parse_result.get("ok"):
     return JSONResponse({"ok": False, "error": parse_result.get("error", "Parse failed")}, status_code=400)
 
