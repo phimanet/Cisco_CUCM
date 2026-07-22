@@ -18867,7 +18867,7 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
           # User data is in the row immediately above (subtotal row - 1)
           data_row = all_rows[row_idx - 1] if row_idx > 0 else {}
           
-          current_fax = (data_row.get(col_map["dnis_fax"]) or "").strip() or "unknown"
+          current_fax = (data_row.get(col_map["dnis_fax"]) or "").strip()
           current_email = (data_row.get(col_map["email"]) or "").strip() or "unknown"
           current_user_display = (data_row.get(col_map["user_name"]) or "").strip()
           
