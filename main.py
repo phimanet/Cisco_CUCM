@@ -18883,7 +18883,7 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
               pass
           
           if current_email and current_email != "unknown":
-            key = f"{current_fax}_{current_month}"
+            key = f"{current_email}_{current_month}"
             records[key] = {
               "fax_number": current_fax,
               "email": current_email,
