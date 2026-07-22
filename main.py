@@ -18809,6 +18809,7 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
     col_map["customer_name"] = next((n for n_lower, n in fieldnames_lower.items() if "customer name" in n_lower), "Customer Name")
     col_map["user_name"] = next((n for n_lower, n in fieldnames_lower.items() if "user name" in n_lower), "User Name")
     col_map["email"] = next((n for n_lower, n in fieldnames_lower.items() if "email address of user" in n_lower), "Email Address of User")
+    col_map["group"] = next((n for n_lower, n in fieldnames_lower.items() if n_lower.strip() == "group"), "Group")
     col_map["dnis_fax"] = next((n for n_lower, n in fieldnames_lower.items() if "dnis fax" in n_lower), "DNIS Fax")
     col_map["cost"] = next((n for n_lower, n in fieldnames_lower.items() if "cost" in n_lower), "Cost")
     col_map["pages"] = next((n for n_lower, n in fieldnames_lower.items() if "pages" in n_lower), "Pages")
@@ -18870,6 +18871,7 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
           current_fax = (data_row.get(col_map["dnis_fax"]) or "").strip()
           current_email = (data_row.get(col_map["email"]) or "").strip() or "unknown"
           current_user_display = (data_row.get(col_map["user_name"]) or "").strip()
+          current_group = (data_row.get(col_map["group"]) or "").strip()
           
           # Extract month from Job Start Date
           current_month = "unknown"
@@ -18888,6 +18890,7 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
               "fax_number": current_fax,
               "email": current_email,
               "user_name": current_user_display,
+              "group": current_group,
               "month": current_month,
               "subtotal": subtotal_cost,
             }
@@ -18946,25 +18949,38 @@ def _merge_opentext_usage(existing_data: dict, new_records: list, csv_filename: 
     fax = record["fax_number"]
     month = record["month"]
     email = record["email"]
+    user_name = record.get("user_name", "")
     
-    if fax not in existing_data["fax_numbers"]:
-      existing_data["fax_numbers"][fax] = {
+    # Use email as the primary key (fax may be blank for zero-usage users)
+    key = email if email and email != "unknown" else fax
+    
+    group = record.get("group", "")
+    
+    if key not in existing_data["fax_numbers"]:
+      existing_data["fax_numbers"][key] = {
         "email": email,
+        "fax_number": fax,
+        "user_name": user_name,
+        "group": group,
         "created_date": datetime.datetime.now().isoformat()[:10],
         "months": {},
         "removal_status": "active",
         "removal_date": None,
         "removal_notes": "",
       }
+    else:
+      # Update fax number if we now have one and didn't before
+      if fax and not existing_data["fax_numbers"][key].get("fax_number"):
+        existing_data["fax_numbers"][key]["fax_number"] = fax
     
-    existing_data["fax_numbers"][fax]["months"][month] = {
+    existing_data["fax_numbers"][key]["months"][month] = {
       "usage": False,
-      "cost": 0.75,
+      "cost": record.get("subtotal", 0.75),
       "has_activity": False,
     }
   
-  # Keep only last 10 months per fax
-  for fax, fax_data in existing_data["fax_numbers"].items():
+  # Keep only last 10 months per entry
+  for key, fax_data in existing_data["fax_numbers"].items():
     months = sorted(fax_data["months"].keys(), reverse=True)[:10]
     fax_data["months"] = {m: fax_data["months"][m] for m in months}
   
@@ -18984,7 +19000,7 @@ def _merge_opentext_usage(existing_data: dict, new_records: list, csv_filename: 
     existing_data["csv_uploads"] = csv_uploads
   
   # Auto-flag numbers with 3+ consecutive zero months
-  for fax, fax_data in existing_data["fax_numbers"].items():
+  for _key, fax_data in existing_data["fax_numbers"].items():
     if fax_data["removal_status"] != "active":
       continue
     
@@ -19017,46 +19033,32 @@ def opentext_admin_page(request: Request):
   # Load existing tracking data
   usage_data = _load_opentext_usage_data()
   
-  # Build fax table HTML
+  # Build table grouped by month
   fax_html = ""
   if usage_data.get("fax_numbers"):
-    fax_html += "<table><thead><tr><th>Fax Number</th><th>Email</th><th>Status</th><th>10-Month History</th><th>Actions</th></tr></thead><tbody>"
+    # Collect all records and group by month
+    by_month = {}
+    for entry_key, fax_data in usage_data["fax_numbers"].items():
+      for month in fax_data.get("months", {}):
+        if month not in by_month:
+          by_month[month] = []
+        by_month[month].append(fax_data)
     
-    for fax_number, fax_data in sorted(usage_data["fax_numbers"].items()):
-      email = fax_data.get("email", "")
-      status = fax_data.get("removal_status", "active")
-      status_badge = "🟢 Active" if status == "active" else "🟡 Flagged" if status == "flagged_for_removal" else "🔴 Removed"
-      
-      # Build 10-month grid
-      months_sorted = sorted(fax_data.get("months", {}).keys(), reverse=True)[:10]
-      month_cells = ""
-      zero_count = 0
-      for month in months_sorted:
-        month_data = fax_data["months"][month]
-        if not month_data.get("has_activity"):
-          zero_count += 1
-          month_cells += f"<td style='background:#ffd9b3;text-align:center;' title='{month}: Zero usage'>⊘</td>"
-        else:
-          zero_count = 0
-          month_cells += f"<td style='background:#d9f0ff;text-align:center;' title='{month}: Has usage'>✓</td>"
-      
-      removal_date = fax_data.get("removal_date", "")
-      removal_str = f" (Removed: {removal_date})" if removal_date else ""
-      
-      fax_html += f"""
-      <tr style="background:{'#f0f0f0' if status != 'active' else '#fff'};">
-        <td>{fax_number}</td>
-        <td>{email}</td>
-        <td>{status_badge}</td>
-        <td style='display:flex;gap:2px;'>{month_cells}</td>
-        <td>
-          <button type="button" data-fax="{fax_number}" class="mark-removed-btn" style="background:#c41e3a;color:#fff;padding:5px 8px;border:none;border-radius:6px;cursor:pointer;">Mark Removed</button>
-        </td>
-      </tr>
-      """
-    
-    fax_html += "</tbody></table>"
-  else:
+    for month in sorted(by_month.keys(), reverse=True):
+      entries = sorted(by_month[month], key=lambda x: x.get("user_name", ""))
+      fax_html += f"<h3 style='margin:18px 0 6px;color:#003580;'>Month: {month} &nbsp;<span style='font-size:13px;font-weight:normal;color:#666;'>({len(entries)} zero-usage users)</span></h3>"
+      fax_html += "<table style='width:100%;border-collapse:collapse;margin-bottom:6px;'><thead><tr style='background:#003580;color:#fff;'><th style='padding:7px 10px;text-align:left;'>User Name</th><th style='padding:7px 10px;text-align:left;'>Group</th><th style='padding:7px 10px;text-align:left;'>Email</th><th style='padding:7px 10px;text-align:left;'>Status</th></tr></thead><tbody>"
+      for i, fd in enumerate(entries):
+        uname = fd.get("user_name", "")
+        grp = fd.get("group", "")
+        em = fd.get("email", "")
+        st = fd.get("removal_status", "active")
+        st_badge = "<span style='color:#1a7a1a;'>● Active</span>" if st == "active" else "<span style='color:#c47000;'>● Flagged</span>" if st == "flagged_for_removal" else "<span style='color:#c41e3a;'>● Removed</span>"
+        row_bg = "#fff8f0" if st == "flagged_for_removal" else "#fafafa" if i % 2 == 0 else "#fff"
+        fax_html += f"<tr style='background:{row_bg};'><td style='padding:6px 10px;border-bottom:1px solid #e8e8e8;'>{uname}</td><td style='padding:6px 10px;border-bottom:1px solid #e8e8e8;'>{grp}</td><td style='padding:6px 10px;border-bottom:1px solid #e8e8e8;font-size:12px;'>{em}</td><td style='padding:6px 10px;border-bottom:1px solid #e8e8e8;'>{st_badge}</td></tr>"
+      fax_html += "</tbody></table>"
+  
+  if not fax_html:
     fax_html = "<p style='color:#666;'>No fax data yet. Upload a CSV to get started.</p>"
 
   html = f"""
