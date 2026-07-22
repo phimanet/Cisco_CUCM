@@ -18820,14 +18820,15 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
     tb = traceback.format_exc()
     return {"ok": False, "error": f"CSV header error: {str(e)}", "traceback": tb, "records": []}
   
-  # Parse rows and find subtotal lines with Pages = 0
+  # Parse rows: when we see "Subtotal for User", check if col R (Cost) == previous row col R (Cost)
+  # If equal -> only the monthly fee was charged -> zero usage
   records = {}
   row_count = 0
   subtotal_count = 0
   zero_usage_count = 0
   
   try:
-    for row in all_rows:
+    for row_idx, row in enumerate(all_rows):
       row_count += 1
       user_name = (row.get(col_map["user_name"]) or "").strip()
       
@@ -18835,49 +18836,50 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
       if "Subtotal for User" in user_name:
         subtotal_count += 1
         
-        # Get the pages and cost from this subtotal row
-        pages_str = (row.get(col_map["pages"]) or "").strip()
-        cost_str = (row.get(col_map["cost"]) or "").strip()
-        
-        pages = 0
-        cost = 0.0
-        
+        subtotal_cost_str = (row.get(col_map["cost"]) or "").strip()
+        subtotal_cost = 0.0
         try:
-          pages = int(pages_str) if pages_str else 0
-          cost = float(cost_str.replace("$", "").replace(",", "").strip()) if cost_str else 0.0
+          subtotal_cost = float(subtotal_cost_str.replace("$", "").replace(",", "")) if subtotal_cost_str else 0.0
         except:
           pass
         
-        # Zero-usage = Pages = 0
-        if pages == 0:
+        # Look at the row just before (row_idx - 1) and get its Cost (col R)
+        prev_row_cost = None
+        if row_idx > 0:
+          prev_row = all_rows[row_idx - 1]
+          prev_cost_str = (prev_row.get(col_map["cost"]) or "").strip()
+          try:
+            prev_row_cost = float(prev_cost_str.replace("$", "").replace(",", "")) if prev_cost_str else None
+          except:
+            pass
+        
+        # Zero-usage: subtotal cost == previous row cost (only one line item = monthly fee)
+        is_zero_usage = (prev_row_cost is not None) and (abs(subtotal_cost - prev_row_cost) < 0.001)
+        
+        print(f"[OpenText Parse] Subtotal row {row_count}: cost={subtotal_cost}, prev_row_cost={prev_row_cost}, zero={is_zero_usage}", file=sys.stderr)
+        
+        if is_zero_usage:
           zero_usage_count += 1
-          print(f"[OpenText Parse] Row {row_count}: Found zero-usage subtotal: {user_name} (cost={cost}, pages={pages})", file=sys.stderr)
           
-          # Need to find the corresponding activity rows above this subtotal to get email, fax, date, user name
-          # For now, scan backwards to find the first non-subtotal row for this user block
+          # Scan backwards to get fax, email, user name, month from this user's rows
           current_fax = ""
           current_email = ""
           current_month = ""
           current_user_display = ""
           
-          # Scan backwards to find data from this user's activity rows
-          for prev_idx in range(row_count - 2, -1, -1):
+          for prev_idx in range(row_idx - 1, -1, -1):
             prev_row = all_rows[prev_idx]
             prev_user_name = (prev_row.get(col_map["user_name"]) or "").strip()
             
-            # If we hit another subtotal, we've gone too far
             if "Subtotal for User" in prev_user_name:
               break
-            
-            # If it's blank or empty, skip
-            if not prev_user_name and not prev_row.get(col_map["email"]):
+            if not prev_user_name and not (prev_row.get(col_map["email"]) or "").strip():
               continue
             
-            # Found a data row for this user
+            if not current_email:
+              current_email = (prev_row.get(col_map["email"]) or "").strip()
             if not current_fax:
               current_fax = (prev_row.get(col_map["dnis_fax"]) or "").strip() or "unknown"
-            if not current_email:
-              current_email = (prev_row.get(col_map["email"]) or "").strip() or "unknown"
             if not current_month:
               date_str = (prev_row.get(col_map["date"]) or "").strip()
               if date_str and "/" in date_str:
@@ -18890,20 +18892,17 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
             if not current_user_display:
               current_user_display = prev_user_name
             
-            # If we have all data, break
-            if current_fax and current_email and current_month:
+            if current_email and current_month:
               break
           
-          # Store the zero-usage record
-          if current_fax and current_email and current_month:
+          if current_email and current_month:
             key = f"{current_fax}_{current_month}"
             records[key] = {
               "fax_number": current_fax,
               "email": current_email,
               "user_name": current_user_display,
               "month": current_month,
-              "subtotal": cost,
-              "pages": pages,
+              "subtotal": subtotal_cost,
             }
   
   except Exception as e:
