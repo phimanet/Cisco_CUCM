@@ -19438,7 +19438,7 @@ async def opentext_upload_csv_route(request: Request, csv_file: UploadFile = Fil
       pass
     
     print(f"[OpenText CSV Upload] Success: {len(new_records)} records", file=sys.stderr)
-    return JSONResponse({"ok": True, "count": len(new_records), "message": f"Imported {len(new_records)} zero-usage fax entries"})
+    return JSONResponse({"ok": True, "count": len(new_records), "message": f"Imported {len(new_records)} zero-usage fax entries", "debug": parse_result.get("debug", {})})
   
   except Exception as e:
     tb = traceback.format_exc()
