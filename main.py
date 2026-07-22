@@ -18864,42 +18864,25 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
         if is_zero_usage:
           zero_usage_count += 1
           
-          # Scan backwards to get fax, email, user name, month from this user's rows
-          current_fax = ""
-          current_email = ""
-          current_month = ""
-          current_user_display = ""
+          # User data is in the row immediately above (subtotal row - 1)
+          data_row = all_rows[row_idx - 1] if row_idx > 0 else {}
           
-          for prev_idx in range(row_idx - 1, -1, -1):
-            prev_row = all_rows[prev_idx]
-            prev_customer_name = (prev_row.get(col_map["customer_name"]) or "").strip()
-            prev_user_name = (prev_row.get(col_map["user_name"]) or "").strip()
-            
-            if "Subtotal for User" in prev_customer_name:
-              break
-            if not prev_customer_name and not (prev_row.get(col_map["email"]) or "").strip():
-              continue
-            
-            if not current_email:
-              current_email = (prev_row.get(col_map["email"]) or "").strip()
-            if not current_fax:
-              current_fax = (prev_row.get(col_map["dnis_fax"]) or "").strip() or "unknown"
-            if not current_month:
-              date_str = (prev_row.get(col_map["date"]) or "").strip()
-              if date_str and "/" in date_str:
-                try:
-                  parts = date_str.split("/")
-                  if len(parts) >= 3:
-                    current_month = f"{parts[2].strip()}-{int(parts[0].strip()):02d}"
-                except:
-                  pass
-            if not current_user_display:
-              current_user_display = prev_user_name
-            
-            if current_email and current_month:
-              break
+          current_fax = (data_row.get(col_map["dnis_fax"]) or "").strip() or "unknown"
+          current_email = (data_row.get(col_map["email"]) or "").strip() or "unknown"
+          current_user_display = (data_row.get(col_map["user_name"]) or "").strip()
           
-          if current_email and current_month:
+          # Extract month from Job Start Date
+          current_month = "unknown"
+          date_str = (data_row.get(col_map["date"]) or "").strip()
+          if date_str and "/" in date_str:
+            try:
+              parts = date_str.split("/")
+              if len(parts) >= 3:
+                current_month = f"{parts[2].strip()}-{int(parts[0].strip()):02d}"
+            except:
+              pass
+          
+          if current_email and current_email != "unknown":
             key = f"{current_fax}_{current_month}"
             records[key] = {
               "fax_number": current_fax,
