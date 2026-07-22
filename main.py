@@ -18806,6 +18806,7 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
     fieldnames_lower = {name.lower().strip(): name for name in fieldnames}
     
     col_map = {}
+    col_map["customer_name"] = next((n for n_lower, n in fieldnames_lower.items() if "customer name" in n_lower), "Customer Name")
     col_map["user_name"] = next((n for n_lower, n in fieldnames_lower.items() if "user name" in n_lower), "User Name")
     col_map["email"] = next((n for n_lower, n in fieldnames_lower.items() if "email address of user" in n_lower), "Email Address of User")
     col_map["dnis_fax"] = next((n for n_lower, n in fieldnames_lower.items() if "dnis fax" in n_lower), "DNIS Fax")
@@ -18830,10 +18831,12 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
   try:
     for row_idx, row in enumerate(all_rows):
       row_count += 1
+      # "Subtotal for User" appears in the Customer Name column (Column A), not User Name
+      customer_name = (row.get(col_map["customer_name"]) or "").strip()
       user_name = (row.get(col_map["user_name"]) or "").strip()
       
-      # Check if this is a subtotal line
-      if "Subtotal for User" in user_name:
+      # Check if this is a subtotal line (it lands in Customer Name / Column A)
+      if "Subtotal for User" in customer_name:
         subtotal_count += 1
         
         subtotal_cost_str = (row.get(col_map["cost"]) or "").strip()
@@ -18869,11 +18872,12 @@ def _parse_opentext_usage_csv(csv_content: str) -> dict:
           
           for prev_idx in range(row_idx - 1, -1, -1):
             prev_row = all_rows[prev_idx]
+            prev_customer_name = (prev_row.get(col_map["customer_name"]) or "").strip()
             prev_user_name = (prev_row.get(col_map["user_name"]) or "").strip()
             
-            if "Subtotal for User" in prev_user_name:
+            if "Subtotal for User" in prev_customer_name:
               break
-            if not prev_user_name and not (prev_row.get(col_map["email"]) or "").strip():
+            if not prev_customer_name and not (prev_row.get(col_map["email"]) or "").strip():
               continue
             
             if not current_email:
