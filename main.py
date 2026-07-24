@@ -259,6 +259,8 @@ INTELIQUENT_API_KEY = (os.getenv("INTELIQUENT_API_KEY", "") or "").strip()
 INTELIQUENT_API_SECRET = (os.getenv("INTELIQUENT_API_SECRET", "") or "").strip()
 INTELIQUENT_PRIVATE_KEY = (os.getenv("INTELIQUENT_PRIVATE_KEY", INTELIQUENT_API_KEY) or INTELIQUENT_API_KEY).strip()
 INTELIQUENT_API_TIMEOUT_SECONDS = int((os.getenv("INTELIQUENT_API_TIMEOUT_SECONDS", "20") or "20").strip())
+INTELIQUENT_ALL_TN_PAGE_SIZE = int((os.getenv("INTELIQUENT_ALL_TN_PAGE_SIZE", "500") or "500").strip())
+INTELIQUENT_ALL_TN_MAX_PAGES = int((os.getenv("INTELIQUENT_ALL_TN_MAX_PAGES", "20") or "20").strip())
 MOBILE_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 MOBILE_JABBER_EMAIL_SUBJECT = "Jabber on iPhone or Android - Ready to install"
 MOBILE_JABBER_EMAIL_BODY = (
@@ -1103,6 +1105,12 @@ def _inteliquent_extract_tn_rows(payload: dict) -> list[dict]:
     tn_items = tn_list.get("tnItem")
     if isinstance(tn_items, list):
       rows.extend([item for item in tn_items if isinstance(item, dict)])
+
+  tf_list = payload.get("tfList")
+  if isinstance(tf_list, dict):
+    tf_items = tf_list.get("tfItem")
+    if isinstance(tf_items, list):
+      rows.extend([item for item in tf_items if isinstance(item, dict)])
 
   for key in ["items", "results", "data"]:
     value = payload.get(key)
@@ -29257,6 +29265,7 @@ def sinch_admin_page(request: Request):
       </div>
       <div class="panel">
         <form id="inteliquent-inventory-form">
+          <input type="hidden" id="extract_all" name="extract_all" value="0" />
           <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
             <div>
               <label for="tn_wildcard" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN Wildcard</label>
@@ -29271,17 +29280,49 @@ def sinch_admin_page(request: Request):
               <input type="number" id="quantity" name="quantity" value="20" min="1" max="100" style="width:110px;" />
             </div>
             <button type="submit">Run Read-Only Extract</button>
+            <button type="button" id="extract-all-tn-btn">Extract All TN</button>
           </div>
         </form>
         <p id="inventory-status" class="status-msg"></p>
       </div>
       <div class="panel">
-        <h3 style="margin-bottom:10px;">Results</h3>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+          <h3 style="margin:0;">Results</h3>
+          <button type="button" id="tn-export-csv-btn" disabled>Export TN CSV</button>
+        </div>
         <div id="inventory-results" style="overflow-x:auto;"></div>
       </div>
       <div class="panel">
         <h3 style="margin-bottom:10px;">Debug Output</h3>
         <pre id="inventory-debug" style="background:#f5f5f5;border:1px solid #ccc;padding:8px;border-radius:6px;max-height:320px;overflow-y:auto;font-size:10px;margin:0;color:#333;word-break:break-all;">Ready.</pre>
+      </div>
+      <div class="panel">
+        <h3>Toll-Free Number Lookup</h3>
+        <form id="inteliquent-tf-form">
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+            <div>
+              <label for="tf_mask" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Toll-Free Number</label>
+              <input type="text" id="tf_mask" name="tf_mask" placeholder="8001234567" style="min-width:180px;" />
+            </div>
+            <div>
+              <label for="tf_quantity" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Quantity</label>
+              <input type="number" id="tf_quantity" name="tf_quantity" value="20" min="1" max="100" style="width:110px;" />
+            </div>
+            <button type="submit">Run Toll-Free Lookup</button>
+          </div>
+        </form>
+        <p id="tf-status" class="status-msg"></p>
+      </div>
+      <div class="panel">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+          <h3 style="margin:0;">Toll-Free Results</h3>
+          <button type="button" id="tf-export-csv-btn" disabled>Export TFN CSV</button>
+        </div>
+        <div id="tf-results" style="overflow-x:auto;"></div>
+      </div>
+      <div class="panel">
+        <h3 style="margin-bottom:10px;">Toll-Free Debug Output</h3>
+        <pre id="tf-debug" style="background:#f5f5f5;border:1px solid #ccc;padding:8px;border-radius:6px;max-height:320px;overflow-y:auto;font-size:10px;margin:0;color:#333;word-break:break-all;">Ready.</pre>
       </div>
     </main>
     <script>
@@ -29290,6 +29331,16 @@ def sinch_admin_page(request: Request):
         const statusEl = document.getElementById("inventory-status");
         const resultsEl = document.getElementById("inventory-results");
         const debugEl = document.getElementById("inventory-debug");
+        const tnExportBtn = document.getElementById("tn-export-csv-btn");
+        const extractAllBtn = document.getElementById("extract-all-tn-btn");
+        let extractAllMode = false;
+        let lastTnRows = [];
+        const tfForm = document.getElementById("inteliquent-tf-form");
+        const tfStatusEl = document.getElementById("tf-status");
+        const tfResultsEl = document.getElementById("tf-results");
+        const tfDebugEl = document.getElementById("tf-debug");
+        const tfExportBtn = document.getElementById("tf-export-csv-btn");
+        let lastTfRows = [];
 
         function escapeHtml(value) {{
           return String(value || "")
@@ -29300,9 +29351,46 @@ def sinch_admin_page(request: Request):
             .replace(/'/g, "&#39;");
         }}
 
-        function renderRows(rows) {{
+        function csvEscape(value) {{
+          const text = String(value || "");
+          return '"' + text.replace(/"/g, '""') + '"';
+        }}
+
+        function downloadCsv(filename, rows) {{
+          const header = [
+            "Telephone Number",
+            "Status",
+            "Routing Option",
+            "Trunk Group",
+            "Call Forwarding to",
+            "Note",
+          ];
+          const lines = [header.map(csvEscape).join(",")];
+          for (const row of rows || []) {{
+            lines.push([
+              row.number,
+              row.status,
+              row.routing_option,
+              row.trunk_group,
+              row.call_forwarding_to,
+              row.note,
+            ].map(csvEscape).join(","));
+          }}
+          const content = lines.join("\n");
+          const blob = new Blob([content], {{ type: "text/csv;charset=utf-8;" }});
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }}
+
+        function renderRows(targetEl, rows, emptyMessage) {{
           if (!rows || !rows.length) {{
-            resultsEl.innerHTML = '<p style="color:#4e6a84;">No inventory numbers returned.</p>';
+            targetEl.innerHTML = '<p style="color:#4e6a84;">' + escapeHtml(emptyMessage || 'No numbers returned.') + '</p>';
             return;
           }}
 
@@ -29326,20 +29414,27 @@ def sinch_admin_page(request: Request):
               + '</tr>';
           }}
           html += '</tbody></table>';
-          resultsEl.innerHTML = html;
+          targetEl.innerHTML = html;
         }}
 
         if (form) {{
           form.addEventListener("submit", async function (event) {{
             event.preventDefault();
-            statusEl.textContent = "Running Inteliquent read-only inventory lookup...";
+            statusEl.textContent = extractAllMode
+              ? "Running Inteliquent all-assigned TN extract..."
+              : "Running Inteliquent read-only inventory lookup...";
             resultsEl.innerHTML = "";
+            lastTnRows = [];
+            if (tnExportBtn) {{
+              tnExportBtn.disabled = true;
+            }}
 
             const formData = new FormData(form);
             const body = new URLSearchParams();
             body.set("tn_wildcard", String(formData.get("tn_wildcard") || ""));
             body.set("tn_mask", String(formData.get("tn_mask") || ""));
             body.set("quantity", String(formData.get("quantity") || "20"));
+            body.set("extract_all", extractAllMode ? "1" : "0");
 
             try {{
               const response = await fetch("/inteliquent/tn-inventory", {{
@@ -29352,15 +29447,92 @@ def sinch_admin_page(request: Request):
 
               if (!response.ok || !payload.ok) {{
                 statusEl.textContent = "Lookup failed: " + (payload.error || "Unknown error");
+                extractAllMode = false;
                 return;
               }}
 
-              statusEl.textContent = "Returned " + String(payload.count || 0) + " number(s).";
-              renderRows(payload.rows || []);
+              statusEl.textContent = "Returned " + String(payload.count || 0) + " number(s)."
+                + (payload.truncated ? " (truncated to configured page limit)" : "");
+              lastTnRows = Array.isArray(payload.rows) ? payload.rows : [];
+              renderRows(resultsEl, lastTnRows, "No inventory numbers returned.");
+              if (tnExportBtn) {{
+                tnExportBtn.disabled = !lastTnRows.length;
+              }}
+              extractAllMode = false;
             }} catch (err) {{
               debugEl.textContent = String(err && err.message ? err.message : err);
               statusEl.textContent = "Lookup failed: " + String(err && err.message ? err.message : err);
+              extractAllMode = false;
             }}
+          }});
+        }}
+
+        if (extractAllBtn && form) {{
+          extractAllBtn.addEventListener("click", function () {{
+            extractAllMode = true;
+            form.dispatchEvent(new Event("submit", {{ cancelable: true, bubbles: true }}));
+          }});
+        }}
+
+        if (tnExportBtn) {{
+          tnExportBtn.addEventListener("click", function () {{
+            if (!lastTnRows || !lastTnRows.length) {{
+              return;
+            }}
+            const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+            downloadCsv("sinch-tn-results-" + stamp + ".csv", lastTnRows);
+          }});
+        }}
+
+        if (tfForm) {{
+          tfForm.addEventListener("submit", async function (event) {{
+            event.preventDefault();
+            tfStatusEl.textContent = "Running Inteliquent toll-free detail lookup...";
+            tfResultsEl.innerHTML = "";
+            lastTfRows = [];
+            if (tfExportBtn) {{
+              tfExportBtn.disabled = true;
+            }}
+
+            const formData = new FormData(tfForm);
+            const body = new URLSearchParams();
+            body.set("tf_mask", String(formData.get("tf_mask") || ""));
+            body.set("quantity", String(formData.get("tf_quantity") || "20"));
+
+            try {{
+              const response = await fetch("/inteliquent/tf-detail", {{
+                method: "POST",
+                headers: {{ "Content-Type": "application/x-www-form-urlencoded" }},
+                body: body.toString(),
+              }});
+              const payload = await response.json();
+              tfDebugEl.textContent = JSON.stringify(payload, null, 2);
+
+              if (!response.ok || !payload.ok) {{
+                tfStatusEl.textContent = "Lookup failed: " + (payload.error || "Unknown error");
+                return;
+              }}
+
+              tfStatusEl.textContent = "Returned " + String(payload.count || 0) + " toll-free number(s).";
+              lastTfRows = Array.isArray(payload.rows) ? payload.rows : [];
+              renderRows(tfResultsEl, lastTfRows, "No toll-free numbers returned.");
+              if (tfExportBtn) {{
+                tfExportBtn.disabled = !lastTfRows.length;
+              }}
+            }} catch (err) {{
+              tfDebugEl.textContent = String(err && err.message ? err.message : err);
+              tfStatusEl.textContent = "Lookup failed: " + String(err && err.message ? err.message : err);
+            }}
+          }});
+        }}
+
+        if (tfExportBtn) {{
+          tfExportBtn.addEventListener("click", function () {{
+            if (!lastTfRows || !lastTfRows.length) {{
+              return;
+            }}
+            const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+            downloadCsv("sinch-tfn-results-" + stamp + ".csv", lastTfRows);
           }});
         }}
       }})();
@@ -29372,7 +29544,7 @@ def sinch_admin_page(request: Request):
 
 
 @app.post("/inteliquent/tn-inventory")
-def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form(""), tn_mask: str = Form(""), quantity: int = Form(20)):
+def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form(""), tn_mask: str = Form(""), quantity: int = Form(20), extract_all: str = Form("0")):
   session = _get_auth_session(request) or {}
   session_username = str(session.get("username", "") or "").strip()
   if not session_username:
@@ -29383,6 +29555,7 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
   clean_mask = str(tn_mask or "").strip()
   clean_wildcard = str(tn_wildcard or "").strip()
   safe_quantity = max(1, min(int(quantity or 20), 100))
+  extract_all_mode = str(extract_all or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
   default_wildcard = "xxxxxxxxxx"
   requested_private_key = INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY
@@ -29410,7 +29583,9 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
     payload_candidates.append(candidate)
 
   # Primary request: if tnMask is provided, avoid injecting the default wildcard.
-  if clean_mask:
+  if extract_all_mode:
+    _add_candidate(mask_value="xxxxxxxxxx")
+  elif clean_mask:
     if clean_wildcard and clean_wildcard != default_wildcard:
       _add_candidate(mask_value=clean_mask, wildcard_value=clean_wildcard)
     else:
@@ -29439,29 +29614,92 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
   raw_payload = {}
   tn_rows = []
   attempt_summaries = []
+  response_truncated = False
 
-  for candidate in payload_candidates:
-    call_result = _inteliquent_post_json("/tnInventory", candidate)
-    attempt_summaries.append(
-      {
-        "endpoint": "/tnInventory",
-        "tnMask": str(candidate.get("tnMask", "") or ""),
-        "tnWildcard": str(candidate.get("tnWildcard", "") or ""),
-        "quantity": int(candidate.get("quantity") or safe_quantity),
-        "ok": bool(call_result.get("ok")),
-        "status_code": int(call_result.get("status_code") or 0),
+  if extract_all_mode:
+    max_pages = max(1, min(int(INTELIQUENT_ALL_TN_MAX_PAGES or 20), 200))
+    page_size = max(1, min(int(INTELIQUENT_ALL_TN_PAGE_SIZE or 500), 1000))
+    collected_rows = []
+    seen_rows = set()
+    total_pages_seen = 0
+
+    for page_num in range(1, max_pages + 1):
+      page_payload = {
+        "privateKey": requested_private_key,
+        "tnSearchList": {"tnSearchItem": [{"tnMask": "xxxxxxxxxx"}]},
+        "pageSort": {
+          "page": page_num,
+          "size": page_size,
+          "direction": "asc",
+          "property": "tn",
+        },
       }
-    )
-    if not call_result.get("ok"):
-      break
-    raw_payload = call_result.get("raw", {}) or {}
-    tn_rows = _inteliquent_extract_tn_rows(raw_payload)
-    if tn_rows:
-      break
+      call_result = _inteliquent_post_json("/tnDetail", page_payload)
+      attempt_summaries.append(
+        {
+          "endpoint": "/tnDetail",
+          "page": page_num,
+          "size": page_size,
+          "ok": bool(call_result.get("ok")),
+          "status_code": int(call_result.get("status_code") or 0),
+        }
+      )
+      if not call_result.get("ok"):
+        break
+
+      raw_payload = call_result.get("raw", {}) or {}
+      page_rows = _inteliquent_extract_tn_rows(raw_payload)
+      if not page_rows:
+        break
+
+      for item in page_rows:
+        if not isinstance(item, dict):
+          continue
+        key = str(item.get("tn", "") or item.get("telephoneNumber", "") or item.get("number", "") or "").strip()
+        if not key:
+          key = json.dumps(item, sort_keys=True, default=str)[:300]
+        if key in seen_rows:
+          continue
+        seen_rows.add(key)
+        collected_rows.append(item)
+
+      total_pages_raw = str(raw_payload.get("totalPages", "") or "").strip()
+      try:
+        total_pages_seen = int(total_pages_raw) if total_pages_raw else 0
+      except Exception:
+        total_pages_seen = 0
+
+      if total_pages_seen and page_num >= total_pages_seen:
+        break
+
+    if call_result and call_result.get("ok"):
+      tn_rows = collected_rows
+      if total_pages_seen and total_pages_seen > max_pages:
+        response_truncated = True
+
+  if not extract_all_mode:
+    for candidate in payload_candidates:
+      call_result = _inteliquent_post_json("/tnInventory", candidate)
+      attempt_summaries.append(
+        {
+          "endpoint": "/tnInventory",
+          "tnMask": str(candidate.get("tnMask", "") or ""),
+          "tnWildcard": str(candidate.get("tnWildcard", "") or ""),
+          "quantity": int(candidate.get("quantity") or safe_quantity),
+          "ok": bool(call_result.get("ok")),
+          "status_code": int(call_result.get("status_code") or 0),
+        }
+      )
+      if not call_result.get("ok"):
+        break
+      raw_payload = call_result.get("raw", {}) or {}
+      tn_rows = _inteliquent_extract_tn_rows(raw_payload)
+      if tn_rows:
+        break
 
   data_source = "/tnInventory"
   # If inventory is empty but the search is an exact number, check assigned-number detail.
-  if call_result and call_result.get("ok") and not tn_rows and exact_10:
+  if not extract_all_mode and call_result and call_result.get("ok") and not tn_rows and exact_10:
     detail_result = _inteliquent_tn_detail_lookup(exact_10, quantity=safe_quantity)
     attempt_summaries.append(
       {
@@ -29550,10 +29788,98 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
       "status": str(raw_payload.get("status", "") or "").strip(),
       "statusCode": str(raw_payload.get("statusCode", "") or "").strip(),
       "dataSource": data_source,
+      "truncated": bool(response_truncated),
       "page": raw_payload.get("page"),
       "totalPages": raw_payload.get("totalPages"),
       "totalItems": raw_payload.get("totalItems"),
       "attempts": attempt_summaries,
+      "raw": raw_payload,
+    }
+  )
+
+
+@app.post("/inteliquent/tf-detail")
+def inteliquent_tf_detail_route(request: Request, tf_mask: str = Form(""), quantity: int = Form(20)):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", "") or "").strip()
+  if not session_username:
+    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
+  if not _is_admin_user(session_username):
+    return JSONResponse({"ok": False, "error": "Not authorized for Inteliquent Admin."}, status_code=403)
+
+  clean_mask = str(tf_mask or "").strip()
+  if not clean_mask:
+    return JSONResponse({"ok": False, "error": "Toll-free number is required."}, status_code=400)
+
+  safe_quantity = max(1, min(int(quantity or 20), 100))
+  payload = {
+    "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
+    "tfSearchList": {
+      "tfSearchItem": [
+        {
+          "tnMask": clean_mask,
+        }
+      ]
+    },
+    "pageSort": {
+      "page": 1,
+      "size": safe_quantity,
+      "direction": "asc",
+      "property": "tn",
+    },
+  }
+
+  call_result = _inteliquent_post_json("/tfDetail", payload)
+  if not call_result.get("ok"):
+    status_code = int(call_result.get("status_code") or 400)
+    if status_code < 400:
+      status_code = 400
+    return JSONResponse(
+      {
+        "ok": False,
+        "error": str(call_result.get("error") or "Inteliquent toll-free lookup failed."),
+        "raw": call_result.get("raw", {}),
+      },
+      status_code=status_code,
+    )
+
+  raw_payload = call_result.get("raw", {}) or {}
+  tf_rows = _inteliquent_extract_tn_rows(raw_payload)
+  rows = []
+  for item in tf_rows:
+    if not isinstance(item, dict):
+      continue
+
+    rows.append(
+      {
+        "number": str(item.get("tn", "") or item.get("telephoneNumber", "") or "").strip(),
+        "status": str(item.get("tnStatusName", "") or item.get("tnStatus", "") or item.get("status", "") or "").strip(),
+        "routing_option": str(item.get("routingLabel", "") or item.get("customerRoutingOption", "") or item.get("routingOption", "") or "").strip(),
+        "trunk_group": str(item.get("cicCompanyName", "") or item.get("cic", "") or item.get("trunkGroup", "") or "").strip(),
+        "call_forwarding_to": str(
+          item.get("callForwardingTo", "")
+          or item.get("callForwardTo", "")
+          or item.get("forwardTo", "")
+          or item.get("forwardingNumber", "")
+          or item.get("forwardingDestination", "")
+          or ""
+        ).strip(),
+        "note": str(item.get("tnNote", "") or item.get("note", "") or "").strip(),
+        "raw": item,
+      }
+    )
+
+  return JSONResponse(
+    {
+      "ok": True,
+      "count": len(rows),
+      "rows": rows,
+      "status": str(raw_payload.get("status", "") or "").strip(),
+      "statusCode": str(raw_payload.get("statusCode", "") or "").strip(),
+      "dataSource": "/tfDetail",
+      "page": raw_payload.get("page"),
+      "totalPages": raw_payload.get("totalPages"),
+      "totalItems": raw_payload.get("totalItems"),
       "raw": raw_payload,
     }
   )
