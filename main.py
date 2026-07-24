@@ -29375,7 +29375,7 @@ def sinch_admin_page(request: Request):
       <div class="panel">
         <h3>Toll-Free Number Lookup</h3>
         <form id="inteliquent-tf-form">
-          <input type="hidden" id="tf_extract_all" name="tf_extract_all" value="0" />
+          <input type="hidden" id="tf_extract_all" name="extract_all" value="0" />
           <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
             <div>
               <label for="tf_mask" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Toll-Free Number</label>
@@ -29619,7 +29619,7 @@ def sinch_admin_page(request: Request):
           tfForm.addEventListener("submit", async function (event) {{
             event.preventDefault();
             const formData = new FormData(tfForm);
-            const extractAllTfMode = String(formData.get("extract_all") || "0") === "1";
+            const extractAllTfMode = String(formData.get("extract_all") || formData.get("tf_extract_all") || "0") === "1";
 
             tfStatusEl.textContent = extractAllTfMode
               ? "Running Inteliquent all-assigned toll-free extract..."
