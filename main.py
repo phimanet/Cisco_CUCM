@@ -29464,7 +29464,6 @@ def sinch_admin_page(request: Request):
             "Telephone Number",
             "Status",
             "Routing Option",
-            "Trunk Group",
             "Call Forwarding to",
             "Note",
           ];
@@ -29474,7 +29473,6 @@ def sinch_admin_page(request: Request):
               row.number,
               row.status,
               row.routing_option,
-              row.trunk_group,
               row.call_forwarding_to,
               row.note,
             ].map(csvEscape).join(","));
@@ -29501,7 +29499,6 @@ def sinch_admin_page(request: Request):
             + '<th>Telephone Number</th>'
             + '<th>Status</th>'
             + '<th>Routing Option</th>'
-            + '<th>Trunk Group</th>'
             + '<th>Call Forwarding to</th>'
             + '<th>Note</th>'
             + '</tr></thead><tbody>';
@@ -29511,7 +29508,6 @@ def sinch_admin_page(request: Request):
               + '<td>' + escapeHtml(row.number) + '</td>'
               + '<td>' + escapeHtml(row.status) + '</td>'
               + '<td>' + escapeHtml(row.routing_option) + '</td>'
-              + '<td>' + escapeHtml(row.trunk_group) + '</td>'
               + '<td>' + escapeHtml(row.call_forwarding_to) + '</td>'
               + '<td>' + escapeHtml(row.note) + '</td>'
               + '</tr>';
@@ -29929,7 +29925,6 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
           or item.get("routingOption", "")
           or ""
         ).strip(),
-        "trunk_group": str(item.get("trunkGroup", "") or item.get("trunkGroupName", "") or "").strip(),
         "call_forwarding_to": str(
           item.get("callForwardingTo", "")
           or item.get("callForwardTo", "")
@@ -30086,7 +30081,6 @@ def inteliquent_tf_detail_route(request: Request, tf_mask: str = Form(""), quant
         "number": str(item.get("tn", "") or item.get("telephoneNumber", "") or "").strip(),
         "status": str(item.get("tnStatusName", "") or item.get("tnStatus", "") or item.get("status", "") or "").strip(),
         "routing_option": str(item.get("routingLabel", "") or item.get("customerRoutingOption", "") or item.get("routingOption", "") or "").strip(),
-        "trunk_group": str(item.get("cicCompanyName", "") or item.get("cic", "") or item.get("trunkGroup", "") or "").strip(),
         "call_forwarding_to": str(
           item.get("callForwardingTo", "")
           or item.get("callForwardTo", "")
