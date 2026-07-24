@@ -11847,6 +11847,85 @@ def _greenlight_parse_email_inputs(raw_value: str) -> list[str]:
   return emails
 
 
+def _greenlight_email_name_candidates(email: str) -> list[tuple[str, str]]:
+  """Build likely (last, first) candidates from email local-part tokens."""
+  clean = (email or "").strip().lower()
+  if "@" not in clean:
+    return []
+
+  local = clean.split("@", 1)[0]
+  # Handle common alias suffixes used in this environment.
+  if local.endswith(".ad"):
+    local = local[:-3]
+  if local.endswith(".adm"):
+    local = local[:-4]
+
+  local = local.replace("+", ".")
+  tokens = [t for t in re.split(r"[._-]+", local) if t]
+  if not tokens:
+    return []
+
+  candidates: list[tuple[str, str]] = []
+  seen = set()
+
+  def _add(last_name: str, first_name: str):
+    key = (last_name.strip().lower(), first_name.strip().lower())
+    if not key[0] or key in seen:
+      return
+    seen.add(key)
+    candidates.append((key[0], key[1]))
+
+  if len(tokens) == 1:
+    _add(tokens[0], "")
+    return candidates
+
+  # Typical pattern: first.last
+  _add(tokens[-1], tokens[0])
+  # Alternate without first-name filter.
+  _add(tokens[-1], "")
+
+  # If last token looks like a short alias/suffix, try previous token as last name.
+  if len(tokens[-1]) <= 3 and len(tokens) >= 3:
+    _add(tokens[-2], tokens[0])
+    _add(tokens[-2], "")
+
+  return candidates
+
+
+def _greenlight_userid_candidates(email: str) -> list[str]:
+  """Build likely CUCM userID candidates from email local-part."""
+  clean = (email or "").strip().lower()
+  if "@" not in clean:
+    return []
+
+  local = clean.split("@", 1)[0]
+  if local.endswith(".ad"):
+    local = local[:-3]
+  if local.endswith(".adm"):
+    local = local[:-4]
+
+  raw_tokens = [t for t in re.split(r"[._-]+", local) if t]
+
+  candidates: list[str] = []
+  seen = set()
+
+  def _add(value: str):
+    token = (value or "").strip().lower()
+    if not token or token in seen:
+      return
+    seen.add(token)
+    candidates.append(token)
+
+  _add(local)
+  _add(local.replace("-", "."))
+  _add(local.replace("_", "."))
+  _add(local.replace(".", ""))
+  if raw_tokens:
+    _add(".".join(raw_tokens))
+
+  return candidates
+
+
 def _greenlight_axl_post(session: requests.Session, cucm_host: str, soap_xml: str, operation: str) -> ET.Element:
   response = session.post(
     f"https://{cucm_host}:8443/axl/",
@@ -11860,9 +11939,9 @@ def _greenlight_axl_post(session: requests.Session, cucm_host: str, soap_xml: st
   return _parse_xml_or_runtime_error(response.text or "", operation)
 
 
-def _greenlight_list_users_by_email(cucm_host: str, cucm_user: str, cucm_pass: str, email: str) -> list[dict]:
-  clean_email = (email or "").strip().lower()
-  if not clean_email:
+def _greenlight_list_users_by_userid(cucm_host: str, cucm_user: str, cucm_pass: str, userid: str) -> list[dict]:
+  clean_userid = (userid or "").strip().lower()
+  if not clean_userid:
     return []
 
   session = requests.Session()
@@ -11876,7 +11955,7 @@ def _greenlight_list_users_by_email(cucm_host: str, cucm_user: str, cucm_pass: s
   <soapenv:Body>
     <axl:listUser sequence=\"1\">
       <searchCriteria>
-        <mailid>%{xml_escape(clean_email)}%</mailid>
+        <userid>{xml_escape(clean_userid)}</userid>
       </searchCriteria>
       <returnedTags>
         <userid/>
@@ -11888,7 +11967,7 @@ def _greenlight_list_users_by_email(cucm_host: str, cucm_user: str, cucm_pass: s
   </soapenv:Body>
 </soapenv:Envelope>"""
 
-  root = _greenlight_axl_post(session, cucm_host, soap, "listUser by mailid")
+  root = _greenlight_axl_post(session, cucm_host, soap, "listUser by userid")
   matches = []
   seen_userids = set()
   for elem in root.iter():
@@ -11910,7 +11989,7 @@ def _greenlight_list_users_by_email(cucm_host: str, cucm_user: str, cucm_pass: s
     userid_key = (row.get("userid") or "").strip().lower()
     if not userid_key or userid_key in seen_userids:
       continue
-    if (row.get("mailid") or "").strip().lower() != clean_email:
+    if userid_key != clean_userid:
       continue
     seen_userids.add(userid_key)
     matches.append(row)
@@ -12048,29 +12127,64 @@ def _greenlight_collect_people(cucm_host: str, cucm_user: str, cucm_pass: str, l
         people[uid_key] = person
 
   for email in emails:
-    matches = _greenlight_list_users_by_email(cucm_host, cucm_user, cucm_pass, email)
-    for match in matches:
-      uid = (match.get("userid") or "").strip()
-      first = (match.get("first_name") or "").strip()
-      last = (match.get("last_name") or "").strip()
-      uid_key = uid.lower()
-      if not uid_key:
+    email_lower = (email or "").strip().lower()
+    if not email_lower:
+      continue
+
+    # First pass: try exact userID lookups derived from email local-part.
+    userid_candidates = _greenlight_userid_candidates(email_lower)
+    for userid in userid_candidates:
+      try:
+        userid_rows = _greenlight_list_users_by_userid(cucm_host, cucm_user, cucm_pass, userid)
+      except Exception:
         continue
-      if uid_key in people:
-        continue
-      if last:
-        people_for_name = search_persons_by_name(cucm_host, cucm_user, cucm_pass, last, first)
-        chosen = None
+
+      for match in userid_rows:
+        row_uid = str(match.get("userid") or "").strip().lower()
+        row_first = str(match.get("first_name") or "").strip()
+        row_last = str(match.get("last_name") or "").strip()
+        if not row_uid or not row_last:
+          continue
+        try:
+          people_for_name = search_persons_by_name(cucm_host, cucm_user, cucm_pass, row_last, row_first)
+        except Exception:
+          continue
+
         for row in people_for_name:
-          row_uid = str(row.get("userid") or "").strip().lower()
-          row_email = str(row.get("email") or "").strip().lower()
-          if row_uid == uid_key:
-            chosen = row
-            break
-          if row_email and row_email == email:
-            chosen = row
-        if chosen:
-          people[uid_key] = chosen
+          person_uid = str(row.get("userid") or "").strip().lower()
+          person_email = str(row.get("email") or "").strip().lower()
+          if person_uid == row_uid:
+            people[person_uid] = row
+            continue
+          if person_email and person_email == email_lower:
+            people[person_uid] = row
+
+    candidates = _greenlight_email_name_candidates(email_lower)
+    for cand_last, cand_first in candidates:
+      try:
+        matched_rows = search_persons_by_name(cucm_host, cucm_user, cucm_pass, cand_last, cand_first)
+      except Exception:
+        continue
+
+      for row in matched_rows:
+        row_email = str(row.get("email") or "").strip().lower()
+        if row_email != email_lower:
+          continue
+        uid_key = str(row.get("userid") or "").strip().lower()
+        if not uid_key:
+          continue
+        people[uid_key] = row
+        
+    # If name parsing did not find an exact email row and last name is provided,
+    # do a second pass against existing name results.
+    if clean_last:
+      for row in list(people.values()):
+        row_email = str(row.get("email") or "").strip().lower()
+        if row_email != email_lower:
+          continue
+        uid_key = str(row.get("userid") or "").strip().lower()
+        if uid_key:
+          people[uid_key] = row
 
   rows = list(people.values())
   rows.sort(key=lambda item: ((item.get("display_name") or "").lower(), (item.get("userid") or "").lower()))
