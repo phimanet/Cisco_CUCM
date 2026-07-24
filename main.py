@@ -27657,10 +27657,14 @@ __GREENLIGHT_ADMIN_CARD__
         const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn[data-panel]"));
         const panels = Array.from(document.querySelectorAll(".tool-panel"));
 
+        console.log("[Greenlight] Found navButtons:", navButtons.length, "panels:", panels.length);
+
         function showPanel(panelKey) {
+          console.log("[Greenlight] showPanel called with:", panelKey);
           panels.forEach((panel) => {
             if (panel.dataset.panel === panelKey) {
               panel.classList.add("active");
+              console.log("[Greenlight] Activating panel:", panelKey);
             } else {
               panel.classList.remove("active");
             }
@@ -27668,6 +27672,7 @@ __GREENLIGHT_ADMIN_CARD__
           navButtons.forEach((btn) => {
             if (btn.dataset.panel === panelKey) {
               btn.classList.add("active");
+              console.log("[Greenlight] Activating button:", panelKey);
             } else {
               btn.classList.remove("active");
             }
@@ -27676,7 +27681,9 @@ __GREENLIGHT_ADMIN_CARD__
 
         navButtons.forEach((btn) => {
           btn.addEventListener("click", function () {
-            showPanel((btn.dataset.panel || "").trim());
+            const panelKey = (btn.dataset.panel || "").trim();
+            console.log("[Greenlight] Button clicked, panel key:", panelKey);
+            showPanel(panelKey);
           });
         });
 
