@@ -27373,6 +27373,7 @@ __GREENLIGHT_ADMIN_CARD__
           }
 
           let queuePollToken = 0;
+          let queuePollTimerId = null;
 
           function pollQueuedJob(statusUrl, token) {
             if (!statusUrl || token !== queuePollToken) {
@@ -27386,6 +27387,10 @@ __GREENLIGHT_ADMIN_CARD__
             })
               .then((response) => response.text().then((rawText) => ({ response, rawText })))
               .then(({ response, rawText }) => {
+                if (token !== queuePollToken) {
+                  return;
+                }
+
                 let payload = {};
                 try {
                   payload = rawText ? JSON.parse(rawText) : {};
@@ -27421,7 +27426,7 @@ __GREENLIGHT_ADMIN_CARD__
                 }
 
                 statusEl.textContent = "Queued lookup in progress (" + state + ") for " + emailCount + " emails using 3 workers...";
-                window.setTimeout(function () {
+                queuePollTimerId = window.setTimeout(function () {
                   pollQueuedJob(statusUrl, token);
                 }, 2000);
               })
@@ -27437,6 +27442,10 @@ __GREENLIGHT_ADMIN_CARD__
           form.addEventListener("submit", async function (event) {
             event.preventDefault();
             queuePollToken += 1;
+            if (queuePollTimerId) {
+              window.clearTimeout(queuePollTimerId);
+              queuePollTimerId = null;
+            }
             statusEl.textContent = "Searching...";
             resultsEl.innerHTML = "";
             downloadEl.style.display = "none";
