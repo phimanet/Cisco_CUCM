@@ -1127,6 +1127,32 @@ def _inteliquent_extract_tn_rows(payload: dict) -> list[dict]:
   return deduped
 
 
+def _inteliquent_tn_detail_lookup(number_value: str, quantity: int = 20) -> dict:
+  clean_number = re.sub(r"\D", "", str(number_value or ""))
+  if len(clean_number) == 11 and clean_number.startswith("1"):
+    clean_number = clean_number[1:]
+  if len(clean_number) != 10:
+    return {"ok": False, "error": "Invalid TN for tnDetail lookup.", "status_code": 400, "raw": {}}
+
+  payload = {
+    "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
+    "tnSearchList": {
+      "tnSearchItem": [
+        {
+          "tnMask": clean_number,
+        }
+      ]
+    },
+    "pageSort": {
+      "page": 1,
+      "size": max(1, min(int(quantity or 20), 100)),
+      "direction": "asc",
+      "property": "tn",
+    },
+  }
+  return _inteliquent_post_json("/tnDetail", payload)
+
+
 def _genesys_region_to_urls(region: str) -> tuple[str, str, str]:
   clean_region = (region or "").strip().lower() or GENESYS_CLOUD_REGION or "usw2"
   login_base = f"https://login.{clean_region}.pure.cloud"
@@ -29420,6 +29446,7 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
     call_result = _inteliquent_post_json("/tnInventory", candidate)
     attempt_summaries.append(
       {
+        "endpoint": "/tnInventory",
         "tnMask": str(candidate.get("tnMask", "") or ""),
         "tnWildcard": str(candidate.get("tnWildcard", "") or ""),
         "quantity": int(candidate.get("quantity") or safe_quantity),
@@ -29433,6 +29460,29 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
     tn_rows = _inteliquent_extract_tn_rows(raw_payload)
     if tn_rows:
       break
+
+  data_source = "/tnInventory"
+  # If inventory is empty but the search is an exact number, check assigned-number detail.
+  if call_result and call_result.get("ok") and not tn_rows and exact_10:
+    detail_result = _inteliquent_tn_detail_lookup(exact_10, quantity=safe_quantity)
+    attempt_summaries.append(
+      {
+        "endpoint": "/tnDetail",
+        "tnMask": exact_10,
+        "tnWildcard": "",
+        "quantity": safe_quantity,
+        "ok": bool(detail_result.get("ok")),
+        "status_code": int(detail_result.get("status_code") or 0),
+      }
+    )
+    if detail_result.get("ok"):
+      detail_payload = detail_result.get("raw", {}) or {}
+      detail_rows = _inteliquent_extract_tn_rows(detail_payload)
+      if detail_rows:
+        call_result = detail_result
+        raw_payload = detail_payload
+        tn_rows = detail_rows
+        data_source = "/tnDetail"
 
   if not call_result or not call_result.get("ok"):
     status_code = int(call_result.get("status_code") or 400)
@@ -29467,11 +29517,11 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
           or item.get("tnNumber", "")
           or ""
         ).strip(),
-        "status": status_text or str(item.get("status", "") or "").strip(),
+        "status": status_text or str(item.get("tnStatus", "") or item.get("status", "") or "").strip(),
         "rate_center": str(item.get("rateCenter", "") or item.get("rateCenterAbbr", "") or "").strip(),
-        "city": str(item.get("city", "") or "").strip(),
+        "city": str(item.get("city", "") or item.get("locName", "") or "").strip(),
         "state": str(item.get("province", "") or item.get("state", "") or "").strip(),
-        "routing_option": str(item.get("routingOption", "") or "").strip(),
+        "routing_option": str(item.get("routingOption", "") or item.get("customerRoutingOption", "") or "").strip(),
         "trunk_group": str(item.get("trunkGroup", "") or item.get("trunkGroupName", "") or "").strip(),
         "raw": item,
       }
@@ -29484,6 +29534,7 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
       "rows": rows,
       "status": str(raw_payload.get("status", "") or "").strip(),
       "statusCode": str(raw_payload.get("statusCode", "") or "").strip(),
+      "dataSource": data_source,
       "page": raw_payload.get("page"),
       "totalPages": raw_payload.get("totalPages"),
       "totalItems": raw_payload.get("totalItems"),
