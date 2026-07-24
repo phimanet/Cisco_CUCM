@@ -12115,6 +12115,68 @@ def _greenlight_find_translation_patterns(cucm_host: str, cucm_user: str, cucm_p
   return associated
 
 
+def _greenlight_resolve_sms_provider(*values: str) -> dict:
+  """Resolve SMS provider by trying normalized phone candidates from known row fields."""
+  candidates: list[str] = []
+  seen = set()
+
+  for raw in values:
+    value = str(raw or "").strip()
+    if not value:
+      continue
+
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if len(digits) == 10:
+      normalized = f"+1{digits}"
+    elif len(digits) == 11 and digits.startswith("1"):
+      normalized = f"+{digits}"
+    else:
+      continue
+
+    if normalized in seen:
+      continue
+    seen.add(normalized)
+    candidates.append(normalized)
+
+  if not candidates:
+    return {
+      "sms_number": "",
+      "sms_provider": "Not Found",
+      "sms_lookup_basis": "",
+    }
+
+  for candidate in candidates:
+    twilio_default = _lookup_twilio_number_by_phone(candidate, account="default")
+    if twilio_default.get("found"):
+      return {
+        "sms_number": str(twilio_default.get("phone_number") or candidate).strip(),
+        "sms_provider": "Twilio - AMIEWeb",
+        "sms_lookup_basis": candidate,
+      }
+
+    twilio_sfdc = _lookup_twilio_number_by_phone(candidate, account="salesforce")
+    if twilio_sfdc.get("found"):
+      return {
+        "sms_number": str(twilio_sfdc.get("phone_number") or candidate).strip(),
+        "sms_provider": "Twilio - Salesforce",
+        "sms_lookup_basis": candidate,
+      }
+
+    aerialink = _lookup_aerialink_account_code_by_phone(candidate)
+    if aerialink.get("provisioned"):
+      return {
+        "sms_number": str(aerialink.get("matched_number") or candidate).strip(),
+        "sms_provider": "Aerialink Classic",
+        "sms_lookup_basis": candidate,
+      }
+
+  return {
+    "sms_number": candidates[0],
+    "sms_provider": "Not Found",
+    "sms_lookup_basis": candidates[0],
+  }
+
+
 def _greenlight_collect_people(cucm_host: str, cucm_user: str, cucm_pass: str, last_name: str, first_name: str, emails: list[str]) -> list[dict]:
   people: dict[str, dict] = {}
 
@@ -12199,6 +12261,11 @@ def _greenlight_build_person_lookup_rows(cucm_host: str, cucm_user: str, cucm_pa
     devices = person.get("devices") or []
     csf_devices = [d for d in devices if str(d.get("name") or "").strip().upper().startswith("CSF")]
     if not csf_devices:
+      sms_lookup = _greenlight_resolve_sms_provider(
+        str(person.get("telephone") or "").strip(),
+        str(person.get("translated_number") or "").strip(),
+        str(person.get("primary_extension") or "").strip(),
+      )
       output_rows.append(
         {
           "userid": str(person.get("userid") or "").strip(),
@@ -12210,6 +12277,9 @@ def _greenlight_build_person_lookup_rows(cucm_host: str, cucm_user: str, cucm_pa
           "translated_number": str(person.get("translated_number") or "").strip(),
           "associated_translation_patterns": "",
           "translation_details": "",
+          "sms_number": str(sms_lookup.get("sms_number") or "").strip(),
+          "sms_provider": str(sms_lookup.get("sms_provider") or "").strip(),
+          "sms_lookup_basis": str(sms_lookup.get("sms_lookup_basis") or "").strip(),
         }
       )
       continue
@@ -12224,6 +12294,11 @@ def _greenlight_build_person_lookup_rows(cucm_host: str, cucm_user: str, cucm_pa
           ext = str(ext_list[0] or "").strip()
         ext = ext or str(person.get("primary_extension") or "").strip()
         tps = _greenlight_find_translation_patterns(cucm_host, cucm_user, cucm_pass, person, ext)
+        sms_lookup = _greenlight_resolve_sms_provider(
+          str(person.get("telephone") or "").strip(),
+          str(person.get("translated_number") or "").strip(),
+          ext,
+        )
         output_rows.append(
           {
             "userid": str(person.get("userid") or "").strip(),
@@ -12238,6 +12313,9 @@ def _greenlight_build_person_lookup_rows(cucm_host: str, cucm_user: str, cucm_pa
               f"{r.get('pattern', '')}/{r.get('route_partition', '')}: mask={r.get('called_party_transform_mask', '')} desc={r.get('description', '')}"
               for r in tps
             ]),
+            "sms_number": str(sms_lookup.get("sms_number") or "").strip(),
+            "sms_provider": str(sms_lookup.get("sms_provider") or "").strip(),
+            "sms_lookup_basis": str(sms_lookup.get("sms_lookup_basis") or "").strip(),
           }
         )
         continue
@@ -12245,6 +12323,12 @@ def _greenlight_build_person_lookup_rows(cucm_host: str, cucm_user: str, cucm_pa
       for line in csf_lines:
         ext = str(line.get("pattern") or "").strip()
         tps = _greenlight_find_translation_patterns(cucm_host, cucm_user, cucm_pass, person, ext)
+        sms_lookup = _greenlight_resolve_sms_provider(
+          str(person.get("telephone") or "").strip(),
+          str(line.get("line_mask") or "").strip(),
+          str(person.get("translated_number") or "").strip(),
+          ext,
+        )
         output_rows.append(
           {
             "userid": str(person.get("userid") or "").strip(),
@@ -12259,6 +12343,9 @@ def _greenlight_build_person_lookup_rows(cucm_host: str, cucm_user: str, cucm_pa
               f"{r.get('pattern', '')}/{r.get('route_partition', '')}: mask={r.get('called_party_transform_mask', '')} desc={r.get('description', '')}"
               for r in tps
             ]),
+            "sms_number": str(sms_lookup.get("sms_number") or "").strip(),
+            "sms_provider": str(sms_lookup.get("sms_provider") or "").strip(),
+            "sms_lookup_basis": str(sms_lookup.get("sms_lookup_basis") or "").strip(),
           }
         )
 
@@ -27137,6 +27224,8 @@ __GREENLIGHT_ADMIN_CARD__
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Line Mask</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Translation Patterns</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">SMS Number</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">SMS Provider</th>';
             html += '</tr></thead><tbody>';
 
             rows.forEach(function (row, idx) {
@@ -27149,6 +27238,8 @@ __GREENLIGHT_ADMIN_CARD__
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + toCell(row.extension) + '</td>';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + toCell(row.line_mask) + '</td>';
               html += '<td style="padding:7px 10px;">' + toCell(row.associated_translation_patterns) + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + toCell(row.sms_number) + '</td>';
+              html += '<td style="padding:7px 10px;">' + toCell(row.sms_provider) + '</td>';
               html += '</tr>';
             });
 
@@ -37775,6 +37866,9 @@ def project_greenlight_person_lookup_route(
       "translated_number",
       "associated_translation_patterns",
       "translation_details",
+      "sms_number",
+      "sms_provider",
+      "sms_lookup_basis",
     ])
     for row in rows:
       writer.writerow([
@@ -37787,6 +37881,9 @@ def project_greenlight_person_lookup_route(
         row.get("translated_number", ""),
         row.get("associated_translation_patterns", ""),
         row.get("translation_details", ""),
+        row.get("sms_number", ""),
+        row.get("sms_provider", ""),
+        row.get("sms_lookup_basis", ""),
       ])
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
