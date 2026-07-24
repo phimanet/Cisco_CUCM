@@ -261,6 +261,8 @@ INTELIQUENT_PRIVATE_KEY = (os.getenv("INTELIQUENT_PRIVATE_KEY", INTELIQUENT_API_
 INTELIQUENT_API_TIMEOUT_SECONDS = int((os.getenv("INTELIQUENT_API_TIMEOUT_SECONDS", "20") or "20").strip())
 INTELIQUENT_ALL_TN_PAGE_SIZE = int((os.getenv("INTELIQUENT_ALL_TN_PAGE_SIZE", "500") or "500").strip())
 INTELIQUENT_ALL_TN_MAX_PAGES = int((os.getenv("INTELIQUENT_ALL_TN_MAX_PAGES", "20") or "20").strip())
+INTELIQUENT_ALL_TF_PAGE_SIZE = int((os.getenv("INTELIQUENT_ALL_TF_PAGE_SIZE", "500") or "500").strip())
+INTELIQUENT_ALL_TF_MAX_PAGES = int((os.getenv("INTELIQUENT_ALL_TF_MAX_PAGES", "20") or "20").strip())
 MOBILE_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 MOBILE_JABBER_EMAIL_SUBJECT = "Jabber on iPhone or Android - Ready to install"
 MOBILE_JABBER_EMAIL_BODY = (
@@ -29248,6 +29250,27 @@ def sinch_admin_page(request: Request):
         min-height: 18px;
         color: #2c5c8a;
       }}
+      .sinch-menu-grid {{
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        gap: 8px;
+      }}
+      .sinch-menu-btn {{
+        text-align: left;
+        border-radius: 8px;
+        border: 1px solid #9bbfe3;
+        background: #f2f8ff;
+        color: #0b3f76;
+        padding: 8px 10px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }}
+      .sinch-menu-btn.active {{
+        background: linear-gradient(180deg, #0c77d8, #005eb8);
+        color: #fff;
+        border-color: #005eb8;
+      }}
     </style>
   </head>
   <body>
@@ -29263,6 +29286,14 @@ def sinch_admin_page(request: Request):
         <h3>Sinch Admin Page</h3>
         <p>Read-only lookup against Inteliquent tnInventory. No create, update, reserve, or disconnect actions are included here.</p>
       </div>
+      <div class="panel">
+        <h3 style="margin-bottom:10px;">Menu</h3>
+        <div class="sinch-menu-grid">
+          <button type="button" id="sinch-menu-tn" class="sinch-menu-btn active">Extract TN</button>
+          <button type="button" id="sinch-menu-tf" class="sinch-menu-btn">Toll-Free Extract</button>
+        </div>
+      </div>
+      <div id="sinch-tn-section">
       <div class="panel">
         <form id="inteliquent-inventory-form">
           <input type="hidden" id="extract_all" name="extract_all" value="0" />
@@ -29296,9 +29327,12 @@ def sinch_admin_page(request: Request):
         <h3 style="margin-bottom:10px;">Debug Output</h3>
         <pre id="inventory-debug" style="background:#f5f5f5;border:1px solid #ccc;padding:8px;border-radius:6px;max-height:320px;overflow-y:auto;font-size:10px;margin:0;color:#333;word-break:break-all;">Ready.</pre>
       </div>
+      </div>
+      <div id="sinch-tf-section" style="display:none;">
       <div class="panel">
         <h3>Toll-Free Number Lookup</h3>
         <form id="inteliquent-tf-form">
+          <input type="hidden" id="tf_extract_all" name="tf_extract_all" value="0" />
           <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
             <div>
               <label for="tf_mask" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Toll-Free Number</label>
@@ -29309,6 +29343,7 @@ def sinch_admin_page(request: Request):
               <input type="number" id="tf_quantity" name="tf_quantity" value="20" min="1" max="100" style="width:110px;" />
             </div>
             <button type="submit">Run Toll-Free Lookup</button>
+            <button type="button" id="extract-all-tf-btn">Extract All Toll-Free</button>
           </div>
         </form>
         <p id="tf-status" class="status-msg"></p>
@@ -29324,9 +29359,14 @@ def sinch_admin_page(request: Request):
         <h3 style="margin-bottom:10px;">Toll-Free Debug Output</h3>
         <pre id="tf-debug" style="background:#f5f5f5;border:1px solid #ccc;padding:8px;border-radius:6px;max-height:320px;overflow-y:auto;font-size:10px;margin:0;color:#333;word-break:break-all;">Ready.</pre>
       </div>
+      </div>
     </main>
     <script>
       (function () {{
+        const menuTnBtn = document.getElementById("sinch-menu-tn");
+        const menuTfBtn = document.getElementById("sinch-menu-tf");
+        const tnSection = document.getElementById("sinch-tn-section");
+        const tfSection = document.getElementById("sinch-tf-section");
         const form = document.getElementById("inteliquent-inventory-form");
         const statusEl = document.getElementById("inventory-status");
         const resultsEl = document.getElementById("inventory-results");
@@ -29336,11 +29376,29 @@ def sinch_admin_page(request: Request):
         let extractAllMode = false;
         let lastTnRows = [];
         const tfForm = document.getElementById("inteliquent-tf-form");
+        const extractAllTfBtn = document.getElementById("extract-all-tf-btn");
+        let extractAllTfMode = false;
         const tfStatusEl = document.getElementById("tf-status");
         const tfResultsEl = document.getElementById("tf-results");
         const tfDebugEl = document.getElementById("tf-debug");
         const tfExportBtn = document.getElementById("tf-export-csv-btn");
         let lastTfRows = [];
+
+        function setSinchMenu(section) {{
+          const showTn = section === "tn";
+          if (tnSection) tnSection.style.display = showTn ? "block" : "none";
+          if (tfSection) tfSection.style.display = showTn ? "none" : "block";
+          if (menuTnBtn) menuTnBtn.classList.toggle("active", showTn);
+          if (menuTfBtn) menuTfBtn.classList.toggle("active", !showTn);
+        }}
+
+        if (menuTnBtn) {{
+          menuTnBtn.addEventListener("click", function () {{ setSinchMenu("tn"); }});
+        }}
+        if (menuTfBtn) {{
+          menuTfBtn.addEventListener("click", function () {{ setSinchMenu("tf"); }});
+        }}
+        setSinchMenu("tn");
 
         function escapeHtml(value) {{
           return String(value || "")
@@ -29487,7 +29545,9 @@ def sinch_admin_page(request: Request):
         if (tfForm) {{
           tfForm.addEventListener("submit", async function (event) {{
             event.preventDefault();
-            tfStatusEl.textContent = "Running Inteliquent toll-free detail lookup...";
+            tfStatusEl.textContent = extractAllTfMode
+              ? "Running Inteliquent all-assigned toll-free extract..."
+              : "Running Inteliquent toll-free detail lookup...";
             tfResultsEl.innerHTML = "";
             lastTfRows = [];
             if (tfExportBtn) {{
@@ -29498,6 +29558,7 @@ def sinch_admin_page(request: Request):
             const body = new URLSearchParams();
             body.set("tf_mask", String(formData.get("tf_mask") || ""));
             body.set("quantity", String(formData.get("tf_quantity") || "20"));
+            body.set("extract_all", extractAllTfMode ? "1" : "0");
 
             try {{
               const response = await fetch("/inteliquent/tf-detail", {{
@@ -29510,19 +29571,30 @@ def sinch_admin_page(request: Request):
 
               if (!response.ok || !payload.ok) {{
                 tfStatusEl.textContent = "Lookup failed: " + (payload.error || "Unknown error");
+                extractAllTfMode = false;
                 return;
               }}
 
-              tfStatusEl.textContent = "Returned " + String(payload.count || 0) + " toll-free number(s).";
+              tfStatusEl.textContent = "Returned " + String(payload.count || 0) + " toll-free number(s)."
+                + (payload.truncated ? " (truncated to configured page limit)" : "");
               lastTfRows = Array.isArray(payload.rows) ? payload.rows : [];
               renderRows(tfResultsEl, lastTfRows, "No toll-free numbers returned.");
               if (tfExportBtn) {{
                 tfExportBtn.disabled = !lastTfRows.length;
               }}
+              extractAllTfMode = false;
             }} catch (err) {{
               tfDebugEl.textContent = String(err && err.message ? err.message : err);
               tfStatusEl.textContent = "Lookup failed: " + String(err && err.message ? err.message : err);
+              extractAllTfMode = false;
             }}
+          }});
+        }}
+
+        if (extractAllTfBtn && tfForm) {{
+          extractAllTfBtn.addEventListener("click", function () {{
+            extractAllTfMode = true;
+            tfForm.dispatchEvent(new Event("submit", {{ cancelable: true, bubbles: true }}));
           }});
         }}
 
@@ -29799,7 +29871,7 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
 
 
 @app.post("/inteliquent/tf-detail")
-def inteliquent_tf_detail_route(request: Request, tf_mask: str = Form(""), quantity: int = Form(20)):
+def inteliquent_tf_detail_route(request: Request, tf_mask: str = Form(""), quantity: int = Form(20), extract_all: str = Form("0")):
   session = _get_auth_session(request) or {}
   session_username = str(session.get("username", "") or "").strip()
   if not session_username:
@@ -29808,28 +29880,96 @@ def inteliquent_tf_detail_route(request: Request, tf_mask: str = Form(""), quant
     return JSONResponse({"ok": False, "error": "Not authorized for Inteliquent Admin."}, status_code=403)
 
   clean_mask = str(tf_mask or "").strip()
-  if not clean_mask:
+  extract_all_mode = str(extract_all or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+  if not clean_mask and not extract_all_mode:
     return JSONResponse({"ok": False, "error": "Toll-free number is required."}, status_code=400)
 
   safe_quantity = max(1, min(int(quantity or 20), 100))
-  payload = {
-    "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
-    "tfSearchList": {
-      "tfSearchItem": [
-        {
-          "tnMask": clean_mask,
-        }
-      ]
-    },
-    "pageSort": {
-      "page": 1,
-      "size": safe_quantity,
-      "direction": "asc",
-      "property": "tn",
-    },
-  }
+  call_result = None
+  raw_payload = {}
+  tf_rows = []
+  response_truncated = False
 
-  call_result = _inteliquent_post_json("/tfDetail", payload)
+  if extract_all_mode:
+    max_pages = max(1, min(int(INTELIQUENT_ALL_TF_MAX_PAGES or 20), 200))
+    page_size = max(1, min(int(INTELIQUENT_ALL_TF_PAGE_SIZE or 500), 1000))
+    collected_rows = []
+    seen_rows = set()
+    total_pages_seen = 0
+
+    for page_num in range(1, max_pages + 1):
+      page_payload = {
+        "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
+        "tfSearchList": {
+          "tfSearchItem": [
+            {
+              "tnMask": "xxxxxxxxxx",
+            }
+          ]
+        },
+        "pageSort": {
+          "page": page_num,
+          "size": page_size,
+          "direction": "asc",
+          "property": "tn",
+        },
+      }
+      call_result = _inteliquent_post_json("/tfDetail", page_payload)
+      if not call_result.get("ok"):
+        break
+
+      raw_payload = call_result.get("raw", {}) or {}
+      page_rows = _inteliquent_extract_tn_rows(raw_payload)
+      if not page_rows:
+        break
+
+      for item in page_rows:
+        if not isinstance(item, dict):
+          continue
+        key = str(item.get("tn", "") or item.get("telephoneNumber", "") or item.get("number", "") or "").strip()
+        if not key:
+          key = json.dumps(item, sort_keys=True, default=str)[:300]
+        if key in seen_rows:
+          continue
+        seen_rows.add(key)
+        collected_rows.append(item)
+
+      total_pages_raw = str(raw_payload.get("totalPages", "") or "").strip()
+      try:
+        total_pages_seen = int(total_pages_raw) if total_pages_raw else 0
+      except Exception:
+        total_pages_seen = 0
+
+      if total_pages_seen and page_num >= total_pages_seen:
+        break
+
+    if call_result and call_result.get("ok"):
+      tf_rows = collected_rows
+      if total_pages_seen and total_pages_seen > max_pages:
+        response_truncated = True
+  else:
+    payload = {
+      "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
+      "tfSearchList": {
+        "tfSearchItem": [
+          {
+            "tnMask": clean_mask,
+          }
+        ]
+      },
+      "pageSort": {
+        "page": 1,
+        "size": safe_quantity,
+        "direction": "asc",
+        "property": "tn",
+      },
+    }
+
+    call_result = _inteliquent_post_json("/tfDetail", payload)
+    if call_result.get("ok"):
+      raw_payload = call_result.get("raw", {}) or {}
+      tf_rows = _inteliquent_extract_tn_rows(raw_payload)
+
   if not call_result.get("ok"):
     status_code = int(call_result.get("status_code") or 400)
     if status_code < 400:
@@ -29843,8 +29983,6 @@ def inteliquent_tf_detail_route(request: Request, tf_mask: str = Form(""), quant
       status_code=status_code,
     )
 
-  raw_payload = call_result.get("raw", {}) or {}
-  tf_rows = _inteliquent_extract_tn_rows(raw_payload)
   rows = []
   for item in tf_rows:
     if not isinstance(item, dict):
@@ -29877,6 +30015,7 @@ def inteliquent_tf_detail_route(request: Request, tf_mask: str = Form(""), quant
       "status": str(raw_payload.get("status", "") or "").strip(),
       "statusCode": str(raw_payload.get("statusCode", "") or "").strip(),
       "dataSource": "/tfDetail",
+      "truncated": bool(response_truncated),
       "page": raw_payload.get("page"),
       "totalPages": raw_payload.get("totalPages"),
       "totalItems": raw_payload.get("totalItems"),
