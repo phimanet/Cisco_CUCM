@@ -274,6 +274,9 @@ Priority keys:
 - WebRTC build helper now uses the official Genesys default-station flow after phone creation and can resolve the target user by email when that is the available identifier.
 - Genesys fallback renderer now exposes explicit queue checkboxes, queued build actions, and richer debug JSON for copy/paste when the richer JS path does not bind.
 
+### 2026-07-24
+- Sinch TN order and TN termination now email the submitter after successful completion, including the submitted TN list in the notification.
+
 ### 2026-06-25
 - Fixed `/healthz` telemetry `git_commit` reporting with robust commit resolution fallback; commit `0c59386`.
 - Verified LAB parity after pull/restart: `/healthz` now returns `git_commit":"0c59386"` and service is healthy.

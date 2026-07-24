@@ -29966,6 +29966,74 @@ def _inteliquent_parse_tn_list(raw_text: str) -> list[str]:
   return numbers
 
 
+def _inteliquent_send_tn_action_email(
+    request: Request,
+    action_label: str,
+    numbers: list[str],
+    api_status: str = "",
+    api_status_code: str = "",
+    api_message: str = "",
+):
+  session = _get_auth_session(request) or {}
+  username = str(session.get("username", "") or "").strip()
+  recipient = _derive_admin_audit_email(username)
+  if not recipient:
+    logger.warning("inteliquent tn action email skipped for %s: no recipient resolved (username=%s)", action_label, username)
+    return
+
+  clean_numbers = [str(item or "").strip() for item in (numbers or []) if str(item or "").strip()]
+  if not clean_numbers:
+    logger.warning("inteliquent tn action email skipped for %s: no numbers provided (recipient=%s)", action_label, recipient)
+    return
+
+  subject = f"[CUCM][Sinch] {action_label} completed"
+  timestamp = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+  number_list = "\n".join(f"- {number}" for number in clean_numbers)
+  body = (
+    f"{action_label} completed for the Sinch/Inteliquent Admin Page.\n\n"
+    f"Submitted by: {username or 'unknown'}\n"
+    f"Completed at: {timestamp}\n"
+    f"Count: {len(clean_numbers)}\n"
+    f"API status: {api_status or 'n/a'}\n"
+    f"API status code: {api_status_code or 'n/a'}\n"
+    f"API message: {api_message or 'n/a'}\n\n"
+    f"Telephone numbers:\n{number_list}\n"
+  )
+  html_body = f"""
+<html>
+  <body style="font-family:Segoe UI,Arial,sans-serif;color:#12304a;">
+    <h3 style="margin-bottom:8px;">Sinch/Inteliquent Admin Notification</h3>
+    <p style="margin-top:0;"><strong>{escape(action_label)} completed</strong></p>
+    <table style="border-collapse:collapse;font-size:14px;">
+      <tr><td style="padding:4px 10px 4px 0;"><strong>Submitted by</strong></td><td>{escape(username or 'unknown')}</td></tr>
+      <tr><td style="padding:4px 10px 4px 0;"><strong>Completed at</strong></td><td>{escape(timestamp)}</td></tr>
+      <tr><td style="padding:4px 10px 4px 0;"><strong>Count</strong></td><td>{len(clean_numbers)}</td></tr>
+      <tr><td style="padding:4px 10px 4px 0;"><strong>API status</strong></td><td>{escape(api_status or 'n/a')}</td></tr>
+      <tr><td style="padding:4px 10px 4px 0;"><strong>API status code</strong></td><td>{escape(api_status_code or 'n/a')}</td></tr>
+      <tr><td style="padding:4px 10px 4px 0;"><strong>API message</strong></td><td>{escape(api_message or 'n/a')}</td></tr>
+    </table>
+    <h4 style="margin:12px 0 6px 0;">Telephone numbers</h4>
+    <ul>
+      {''.join(f'<li>{escape(number)}</li>' for number in clean_numbers)}
+    </ul>
+  </body>
+</html>
+"""
+
+  try:
+    _send_smtp_email(
+      sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com",
+      recipients=[recipient],
+      subject=subject,
+      body=body,
+      html_body=html_body,
+      smtp_port=SMTP_PORT,
+      use_starttls=SMTP_USE_STARTTLS,
+    )
+  except Exception as exc:
+    logger.warning("inteliquent tn action email failed for %s (recipient=%s): %s", action_label, recipient, exc)
+
+
 @app.post("/inteliquent/tn-inventory")
 def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form(""), tn_area_code: str = Form(""), tn_mask: str = Form(""), quantity: int = Form(20), extract_all: str = Form("0")):
   session = _get_auth_session(request) or {}
@@ -30271,6 +30339,14 @@ def inteliquent_tn_order_route(request: Request, order_tn_list: str = Form(""), 
     )
 
   raw_payload = call_result.get("raw", {}) or {}
+  _inteliquent_send_tn_action_email(
+    request=request,
+    action_label="TN Order",
+    numbers=numbers,
+    api_status=str(raw_payload.get("status", "") or "").strip(),
+    api_status_code=str(raw_payload.get("statusCode", "") or "").strip(),
+    api_message=str(raw_payload.get("message", "") or "").strip(),
+  )
   return JSONResponse(
     {
       "ok": True,
@@ -30340,6 +30416,14 @@ def inteliquent_tn_disconnect_route(
     )
 
   raw_payload = call_result.get("raw", {}) or {}
+  _inteliquent_send_tn_action_email(
+    request=request,
+    action_label="TN Termination",
+    numbers=numbers,
+    api_status=str(raw_payload.get("status", "") or "").strip(),
+    api_status_code=str(raw_payload.get("statusCode", "") or "").strip(),
+    api_message=str(raw_payload.get("message", "") or "").strip(),
+  )
   return JSONResponse(
     {
       "ok": True,
