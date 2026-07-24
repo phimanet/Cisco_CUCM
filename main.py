@@ -25500,75 +25500,103 @@ __ADMIN_CARD__
     </section>
 
     <script>
-      // Standalone, isolated Batch LDAP handler (independent of other page scripts).
+      // Standalone ES5 Batch LDAP handler (works on any browser; independent of other page scripts).
       (function () {
+        function byId(id) { return document.getElementById(id); }
+
         function dbg(msg) {
           try {
-            var box = document.getElementById("page1-batch-ldap-debug");
-            var stamp = new Date().toISOString().split("T")[1].replace("Z", "");
+            var box = byId("page1-batch-ldap-debug");
+            var stamp = "";
+            try { stamp = new Date().toISOString().split("T")[1].replace("Z", ""); } catch (e0) { stamp = ""; }
             var line = "[" + stamp + "] " + msg;
             if (box) { box.value += (box.value ? "\n" : "") + line; box.scrollTop = box.scrollHeight; }
-            if (window.console) { console.log("[BatchLDAP]", msg); }
+            if (window.console && window.console.log) { window.console.log("[BatchLDAP] " + msg); }
           } catch (e) { /* ignore */ }
         }
 
+        function trim(s) { return String(s == null ? "" : s).replace(/^\s+|\s+$/g, ""); }
+
         function parseCsvStatus(outputText) {
-          var lines = String(outputText || "").trim().split("\n");
+          var text = String(outputText == null ? "" : outputText).replace(/\r/g, "");
+          var lines = text.split("\n");
           if (lines.length < 2) { return { status: "Unknown", details: "No response rows." }; }
           var line = lines[1];
-          var parts = [], cur = "", inQ = false;
+          var parts = [], cur = "", inQ = false, ch;
           for (var c = 0; c < line.length; c++) {
-            var ch = line[c];
+            ch = line.charAt(c);
             if (ch === '"') { inQ = !inQ; }
             else if (ch === "," && !inQ) { parts.push(cur); cur = ""; }
             else { cur += ch; }
           }
           parts.push(cur);
-          for (var p = 0; p < parts.length; p++) { parts[p] = parts[p].trim(); }
+          for (var p = 0; p < parts.length; p++) { parts[p] = trim(parts[p]); }
           return { status: (parts[1] || "Unknown"), details: (parts[2] || "") };
         }
 
-        window.runPage1BatchLdap = async function () {
+        function encodeForm(obj) {
+          var pairs = [];
+          for (var k in obj) {
+            if (obj.hasOwnProperty(k)) { pairs.push(encodeURIComponent(k) + "=" + encodeURIComponent(obj[k])); }
+          }
+          return pairs.join("&");
+        }
+
+        function rowId(i) { return "p1bl-row-" + i; }
+
+        function setRow(i, statusText, statusColor, bgColor, details) {
+          var tr = byId(rowId(i));
+          if (!tr) { return; }
+          tr.style.background = bgColor;
+          var stList = tr.getElementsByClassName("p1bl-status");
+          var dtList = tr.getElementsByClassName("p1bl-details");
+          if (stList && stList[0]) { stList[0].textContent = statusText; stList[0].style.color = statusColor; }
+          if (dtList && dtList[0]) { dtList[0].textContent = details || ""; }
+        }
+
+        window.runPage1BatchLdap = function () {
           dbg("runPage1BatchLdap() called (button click received).");
-          var emailsEl = document.getElementById("page1-batch-ldap-emails");
-          var phoneEl = document.getElementById("page1-batch-ldap-phone");
-          var submitBtn = document.getElementById("page1-batch-ldap-submit");
-          var statusEl = document.getElementById("page1-batch-ldap-status");
-          var progressEl = document.getElementById("page1-batch-ldap-progress");
-          var resultsEl = document.getElementById("page1-batch-ldap-results");
-          var downloadEl = document.getElementById("page1-batch-ldap-download");
+          var emailsEl = byId("page1-batch-ldap-emails");
+          var phoneEl = byId("page1-batch-ldap-phone");
+          var submitBtn = byId("page1-batch-ldap-submit");
+          var statusEl = byId("page1-batch-ldap-status");
+          var progressEl = byId("page1-batch-ldap-progress");
+          var resultsEl = byId("page1-batch-ldap-results");
+          var downloadEl = byId("page1-batch-ldap-download");
 
           dbg("Elements: emails=" + (!!emailsEl) + " phone=" + (!!phoneEl) + " submit=" + (!!submitBtn) +
               " status=" + (!!statusEl) + " progress=" + (!!progressEl) + " results=" + (!!resultsEl) + " download=" + (!!downloadEl));
 
-          if (!emailsEl || !phoneEl || !statusEl || !resultsEl) {
-            dbg("ABORT: required elements missing.");
-            return;
-          }
+          if (!emailsEl || !phoneEl || !statusEl || !resultsEl) { dbg("ABORT: required elements missing."); return; }
 
-          var emailsText = (emailsEl.value || "").trim();
-          var phoneNumber = (phoneEl.value || "").trim();
+          var emailsText = trim(emailsEl.value);
+          var phoneNumber = trim(phoneEl.value);
           dbg("emails length=" + emailsText.length + " phone='" + phoneNumber + "'");
-
           if (!emailsText) { statusEl.textContent = "Email addresses are required."; dbg("FAIL: no emails."); return; }
           if (!phoneNumber) { statusEl.textContent = "Phone number is required."; dbg("FAIL: no phone."); return; }
 
-          var emails = emailsText.split("\n").map(function (e) { return e.trim(); }).filter(function (e) { return e.length > 0; });
-          dbg("parsed " + emails.length + " email(s): " + JSON.stringify(emails));
+          var rawLines = emailsText.split("\n");
+          var emails = [];
+          for (var r = 0; r < rawLines.length; r++) {
+            var v = trim(rawLines[r]);
+            if (v.length > 0) { emails.push(v); }
+          }
+          dbg("parsed " + emails.length + " email(s).");
           if (emails.length === 0) { statusEl.textContent = "Please enter at least one email address."; dbg("FAIL: zero emails."); return; }
 
-          var tasks = emails.map(function (email, idx) {
+          var tasks = [];
+          for (var ti = 0; ti < emails.length; ti++) {
+            var email = emails[ti];
             var at = email.indexOf("@");
-            var userid = at > 0 ? email.slice(0, at) : email;
-            return { idx: idx, email: email, userid: userid };
-          });
+            var userid = at > 0 ? email.substring(0, at) : email;
+            tasks.push({ idx: ti, email: email, userid: userid });
+          }
 
           statusEl.textContent = "";
           if (progressEl) { progressEl.style.display = "block"; }
           if (downloadEl) { downloadEl.style.display = "none"; }
           if (submitBtn) { submitBtn.disabled = true; }
 
-          function rowId(i) { return "p1bl-row-" + i; }
           var html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
           html += '<thead><tr style="background:#005eb8; color:#fff;">';
           html += '<th style="padding:8px 10px; text-align:left;">#</th>';
@@ -25577,116 +25605,108 @@ __ADMIN_CARD__
           html += '<th style="padding:8px 10px; text-align:left;">Status</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Details</th>';
           html += '</tr></thead><tbody>';
-          tasks.forEach(function (t) {
-            html += '<tr id="' + rowId(t.idx) + '" style="background:#fffef0; border-bottom:1px solid #ddd;">';
-            html += '<td style="padding:8px 10px;">' + (t.idx + 1) + "</td>";
-            html += '<td style="padding:8px 10px;">' + t.email + "</td>";
-            html += '<td style="padding:8px 10px;">' + t.userid + "</td>";
+          for (var qi = 0; qi < tasks.length; qi++) {
+            html += '<tr id="' + rowId(tasks[qi].idx) + '" style="background:#fffef0; border-bottom:1px solid #ddd;">';
+            html += '<td style="padding:8px 10px;">' + (tasks[qi].idx + 1) + '</td>';
+            html += '<td style="padding:8px 10px;">' + tasks[qi].email + '</td>';
+            html += '<td style="padding:8px 10px;">' + tasks[qi].userid + '</td>';
             html += '<td style="padding:8px 10px; color:#9a7d00; font-weight:600;" class="p1bl-status">Queued</td>';
             html += '<td style="padding:8px 10px;" class="p1bl-details"></td>';
-            html += "</tr>";
-          });
-          html += "</tbody></table>";
-          resultsEl.innerHTML = html;
-
-          function setRow(i, statusText, statusColor, bgColor, details) {
-            var tr = document.getElementById(rowId(i));
-            if (!tr) { return; }
-            tr.style.background = bgColor;
-            var st = tr.querySelector(".p1bl-status");
-            var dt = tr.querySelector(".p1bl-details");
-            if (st) { st.textContent = statusText; st.style.color = statusColor; }
-            if (dt) { dt.textContent = details || ""; }
+            html += '</tr>';
           }
+          html += '</tbody></table>';
+          resultsEl.innerHTML = html;
 
           var completed = 0, successCount = 0, failedCount = 0, nextIndex = 0;
           var total = tasks.length;
           var WORKER_COUNT = 3;
+          var activeWorkers = 0;
 
           function updateStatusLine() {
-            statusEl.textContent = "Processing " + completed + " / " + total +
-              "  (Success: " + successCount + ", Failed: " + failedCount + ")";
+            statusEl.textContent = "Processing " + completed + " / " + total + "  (Success: " + successCount + ", Failed: " + failedCount + ")";
           }
           updateStatusLine();
 
-          async function processOne(task) {
-            dbg("START userid='" + task.userid + "' (email=" + task.email + ")");
-            setRow(task.idx, "Updating...", "#1d5490", "#eef6ff", "");
-            try {
-              var body = new URLSearchParams();
-              body.append("target_user", task.userid);
-              body.append("phone_number", phoneNumber);
-              var response = await fetch("/update/ad-phone-fields?inline=true", {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/x-www-form-urlencoded",
-                  "Accept": "application/json",
-                  "X-Requested-With": "XMLHttpRequest"
-                },
-                credentials: "same-origin",
-                body: body.toString()
-              });
-              var rawText = await response.text();
-              dbg("DONE userid='" + task.userid + "' HTTP=" + response.status + " body(300)=" + rawText.slice(0, 300));
-              if (!response.ok) { throw new Error("HTTP " + response.status + ": " + rawText.slice(0, 200)); }
-              var payload = {};
-              try { payload = rawText ? JSON.parse(rawText) : {}; }
-              catch (pe) { throw new Error("Bad JSON: " + rawText.slice(0, 200)); }
-              var parsed = parseCsvStatus(payload.output_text);
-              var isSuccess = String(parsed.status).toLowerCase() === "success";
-              if (isSuccess) { successCount++; setRow(task.idx, "Success", "#2d7d2d", "#f0f8ff", parsed.details); }
-              else { failedCount++; setRow(task.idx, parsed.status || "Failed", "#c41e3a", "#fff5f5", parsed.details); }
-            } catch (err) {
-              failedCount++;
-              var emsg = String(err && err.message ? err.message : err);
-              dbg("ERROR userid='" + task.userid + "': " + emsg);
-              setRow(task.idx, "Failed", "#c41e3a", "#fff5f5", emsg);
-            } finally {
-              completed++;
-              updateStatusLine();
-            }
-          }
-
-          async function worker(workerId) {
-            dbg("Worker " + workerId + " started.");
-            while (true) {
-              var i = nextIndex;
-              if (i >= tasks.length) { break; }
-              nextIndex++;
-              await processOne(tasks[i]);
-            }
-            dbg("Worker " + workerId + " finished.");
-          }
-
-          try {
-            var workers = [];
-            for (var w = 1; w <= WORKER_COUNT; w++) { workers.push(worker(w)); }
-            await Promise.all(workers);
+          function finishAll() {
             statusEl.textContent = "Completed " + total + " user(s). Success: " + successCount + ", Failed: " + failedCount + ".";
             dbg("ALL DONE. Success=" + successCount + " Failed=" + failedCount);
-          } catch (err2) {
-            var emsg2 = String(err2 && err2.message ? err2.message : err2);
-            dbg("FATAL: " + emsg2);
-            statusEl.textContent = "Batch update encountered an error: " + emsg2;
-          } finally {
             if (progressEl) { progressEl.style.display = "none"; }
             if (submitBtn) { submitBtn.disabled = false; }
             dbg("runPage1BatchLdap() finished.");
           }
+
+          function processTask(task, done) {
+            dbg("START userid='" + task.userid + "' (email=" + task.email + ")");
+            setRow(task.idx, "Updating...", "#1d5490", "#eef6ff", "");
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", "/update/ad-phone-fields?inline=true", true);
+            xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+            xhr.setRequestHeader("Accept", "application/json");
+            xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+            xhr.onreadystatechange = function () {
+              if (xhr.readyState !== 4) { return; }
+              var rawText = xhr.responseText || "";
+              dbg("DONE userid='" + task.userid + "' HTTP=" + xhr.status + " body(300)=" + rawText.substring(0, 300));
+              try {
+                if (xhr.status < 200 || xhr.status >= 300) { throw new Error("HTTP " + xhr.status + ": " + rawText.substring(0, 200)); }
+                var payload = {};
+                try { payload = rawText ? JSON.parse(rawText) : {}; } catch (pe) { throw new Error("Bad JSON: " + rawText.substring(0, 200)); }
+                var parsed = parseCsvStatus(payload.output_text);
+                var isSuccess = String(parsed.status).toLowerCase() === "success";
+                if (isSuccess) { successCount++; setRow(task.idx, "Success", "#2d7d2d", "#f0f8ff", parsed.details); }
+                else { failedCount++; setRow(task.idx, parsed.status || "Failed", "#c41e3a", "#fff5f5", parsed.details); }
+              } catch (err) {
+                failedCount++;
+                var emsg = String(err && err.message ? err.message : err);
+                dbg("ERROR userid='" + task.userid + "': " + emsg);
+                setRow(task.idx, "Failed", "#c41e3a", "#fff5f5", emsg);
+              }
+              completed++;
+              updateStatusLine();
+              done();
+            };
+            try {
+              xhr.send(encodeForm({ target_user: task.userid, phone_number: phoneNumber }));
+            } catch (sendErr) {
+              failedCount++;
+              dbg("SEND ERROR userid='" + task.userid + "': " + String(sendErr));
+              setRow(task.idx, "Failed", "#c41e3a", "#fff5f5", String(sendErr));
+              completed++;
+              updateStatusLine();
+              done();
+            }
+          }
+
+          function workerNext() {
+            if (nextIndex >= tasks.length) {
+              activeWorkers--;
+              if (activeWorkers <= 0) { finishAll(); }
+              return;
+            }
+            var i = nextIndex;
+            nextIndex++;
+            processTask(tasks[i], function () { workerNext(); });
+          }
+
+          var startCount = Math.min(WORKER_COUNT, tasks.length);
+          for (var wkr = 0; wkr < startCount; wkr++) {
+            activeWorkers++;
+            dbg("Worker " + (wkr + 1) + " started.");
+            workerNext();
+          }
         };
 
         function wireCopyButton() {
-          var copyBtn = document.getElementById("page1-batch-ldap-copy-debug");
-          if (copyBtn && !copyBtn.dataset.bound) {
-            copyBtn.dataset.bound = "1";
-            copyBtn.addEventListener("click", function () {
-              var box = document.getElementById("page1-batch-ldap-debug");
+          var copyBtn = byId("page1-batch-ldap-copy-debug");
+          if (copyBtn && copyBtn.getAttribute("data-bound") !== "1") {
+            copyBtn.setAttribute("data-bound", "1");
+            copyBtn.onclick = function () {
+              var box = byId("page1-batch-ldap-debug");
               if (box) {
                 box.select();
-                try { document.execCommand("copy"); copyBtn.textContent = "Copied!"; setTimeout(function () { copyBtn.textContent = "Copy Debug Output"; }, 1500); }
-                catch (e) { /* ignore */ }
+                try { document.execCommand("copy"); copyBtn.textContent = "Copied!"; setTimeout(function () { copyBtn.textContent = "Copy Debug Output"; }, 1500); } catch (e) { /* ignore */ }
               }
-            });
+            };
           }
         }
 
