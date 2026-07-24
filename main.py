@@ -29346,6 +29346,10 @@ def sinch_admin_page(request: Request):
               <input type="text" id="tn_wildcard" name="tn_wildcard" placeholder="858xxxxxxx" style="min-width:180px;" />
             </div>
             <div>
+              <label for="tn_area_code" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Area Code (NPA)</label>
+              <input type="text" id="tn_area_code" name="tn_area_code" placeholder="858" style="min-width:110px;" maxlength="3" />
+            </div>
+            <div>
               <label for="tn_mask" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN Mask (optional)</label>
               <input type="text" id="tn_mask" name="tn_mask" placeholder="312xxx1x2x" style="min-width:180px;" />
             </div>
@@ -29533,6 +29537,7 @@ def sinch_admin_page(request: Request):
 
             const body = new URLSearchParams();
             body.set("tn_wildcard", String(formData.get("tn_wildcard") || ""));
+            body.set("tn_area_code", String(formData.get("tn_area_code") || ""));
             body.set("tn_mask", String(formData.get("tn_mask") || ""));
             body.set("quantity", String(formData.get("quantity") || "20"));
             body.set("extract_all", extractAllMode ? "1" : "0");
@@ -29705,7 +29710,7 @@ def sinch_admin_page(request: Request):
 
 
 @app.post("/inteliquent/tn-inventory")
-def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form(""), tn_mask: str = Form(""), quantity: int = Form(20), extract_all: str = Form("0")):
+def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form(""), tn_area_code: str = Form(""), tn_mask: str = Form(""), quantity: int = Form(20), extract_all: str = Form("0")):
   session = _get_auth_session(request) or {}
   session_username = str(session.get("username", "") or "").strip()
   if not session_username:
@@ -29715,8 +29720,13 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
 
   clean_mask = str(tn_mask or "").strip()
   clean_wildcard = str(tn_wildcard or "").strip()
+  clean_area_code = re.sub(r"\D", "", str(tn_area_code or ""))
   safe_quantity = max(1, min(int(quantity or 20), 100))
   extract_all_mode = str(extract_all or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+  # Area-code search helper: if only NPA is provided, search available TNs in that NPA.
+  if not extract_all_mode and not clean_mask and not clean_wildcard and len(clean_area_code) == 3:
+    clean_wildcard = f"{clean_area_code}xxxxxxx"
 
   default_wildcard = "xxxxxxxxxx"
   requested_private_key = INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY
