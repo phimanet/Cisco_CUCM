@@ -1028,34 +1028,53 @@ def _inteliquent_post_json(path: str, payload: dict) -> dict:
     clean_path = "/" + clean_path
   url = f"{INTELIQUENT_BASE_URL}{clean_path}"
   body = dict(payload or {})
-  body["privateKey"] = str(body.get("privateKey") or INTELIQUENT_PRIVATE_KEY).strip()
 
-  try:
+  def _send_with_private_key(private_key_value: str):
+    req_body = dict(body)
+    req_body["privateKey"] = str(private_key_value or "").strip()
     response = requests.post(
       url,
-      json=body,
+      json=req_body,
       headers={"Accept": "application/json", "Content-Type": "application/json"},
       auth=HTTPBasicAuth(INTELIQUENT_API_KEY, INTELIQUENT_API_SECRET),
       timeout=INTELIQUENT_API_TIMEOUT_SECONDS,
     )
+
+    parsed_local = {}
+    body_text = response.text or ""
+    if body_text:
+      try:
+        parsed_local = response.json()
+        if not isinstance(parsed_local, dict):
+          parsed_local = {"data": parsed_local}
+      except Exception:
+        parsed_local = {"raw": body_text[:500]}
+    return response, parsed_local, req_body
+
+  configured_private_key = str(body.get("privateKey") or INTELIQUENT_PRIVATE_KEY or INTELIQUENT_API_KEY).strip()
+  fallback_private_key = str(INTELIQUENT_API_KEY or "").strip()
+
+  try:
+    response, parsed, payload_used = _send_with_private_key(configured_private_key)
   except Exception as exc:
     return {"ok": False, "error": f"Inteliquent request failed: {exc}", "status_code": 0, "raw": {}}
 
-  parsed = {}
-  body_text = response.text or ""
-  if body_text:
+  initial_code = str(parsed.get("statusCode", "") or "").strip()
+  initial_message = str(parsed.get("message", "") or parsed.get("status", "")).lower()
+  private_key_mismatch = initial_code == "400001" or "private key" in initial_message and "match" in initial_message
+  if response.status_code != 200 and private_key_mismatch and fallback_private_key and fallback_private_key != configured_private_key:
     try:
-      parsed = response.json()
-      if not isinstance(parsed, dict):
-        parsed = {"data": parsed}
-    except Exception:
-      parsed = {"raw": body_text[:500]}
+      response, parsed, payload_used = _send_with_private_key(fallback_private_key)
+    except Exception as exc:
+      return {"ok": False, "error": f"Inteliquent request failed on retry: {exc}", "status_code": 0, "raw": {}}
 
   if response.status_code != 200:
     message = str(parsed.get("status", "") or parsed.get("message", "")).strip() or f"HTTP {response.status_code}"
     code = str(parsed.get("statusCode", "") or "").strip()
     if code:
       message = f"{message} (statusCode {code})"
+    if code == "400001":
+      message = f"{message}. Set INTELIQUENT_PRIVATE_KEY to the same value as INTELIQUENT_API_KEY."
     return {
       "ok": False,
       "error": message,
@@ -29342,7 +29361,7 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
   safe_quantity = max(1, min(int(quantity or 20), 100))
 
   payload = {
-    "privateKey": INTELIQUENT_PRIVATE_KEY,
+    "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
     "quantity": safe_quantity,
   }
   if clean_mask:
