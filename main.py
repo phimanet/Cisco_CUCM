@@ -86,6 +86,9 @@ JOB_OUTPUTS = {}
 VERASMART_QUEUE_RUNS = {}
 VERASMART_QUEUE_LOCK = threading.Lock()
 VERASMART_QUEUE_MAX_RUNS = 50
+GREENLIGHT_LOOKUP_RUNS = {}
+GREENLIGHT_LOOKUP_RUNS_LOCK = threading.Lock()
+GREENLIGHT_LOOKUP_MAX_RUNS = 200
 STRIKE_MASK_OPERATIONS = {}
 STRIKE_MASK_LOCK = threading.Lock()
 STRIKE_MASK_MAX_OPERATIONS = 200
@@ -12177,6 +12180,56 @@ def _greenlight_resolve_sms_provider(*values: str) -> dict:
   }
 
 
+def _greenlight_collect_people_from_email(cucm_host: str, cucm_user: str, cucm_pass: str, email: str) -> dict[str, dict]:
+  """Collect exact-email person matches for one email input."""
+  matches: dict[str, dict] = {}
+  email_lower = (email or "").strip().lower()
+  if not email_lower:
+    return matches
+
+  userid_candidates = _greenlight_userid_candidates(email_lower)
+  for userid in userid_candidates:
+    try:
+      userid_rows = _greenlight_list_users_by_userid(cucm_host, cucm_user, cucm_pass, userid)
+    except Exception:
+      continue
+
+    for match in userid_rows:
+      row_uid = str(match.get("userid") or "").strip().lower()
+      row_first = str(match.get("first_name") or "").strip()
+      row_last = str(match.get("last_name") or "").strip()
+      if not row_uid or not row_last:
+        continue
+      try:
+        people_for_name = search_persons_by_name(cucm_host, cucm_user, cucm_pass, row_last, row_first)
+      except Exception:
+        continue
+
+      for row in people_for_name:
+        person_uid = str(row.get("userid") or "").strip().lower()
+        person_email = str(row.get("email") or "").strip().lower()
+        if person_uid == row_uid or (person_email and person_email == email_lower):
+          if person_uid:
+            matches[person_uid] = row
+
+  candidates = _greenlight_email_name_candidates(email_lower)
+  for cand_last, cand_first in candidates:
+    try:
+      matched_rows = search_persons_by_name(cucm_host, cucm_user, cucm_pass, cand_last, cand_first)
+    except Exception:
+      continue
+
+    for row in matched_rows:
+      row_email = str(row.get("email") or "").strip().lower()
+      if row_email != email_lower:
+        continue
+      uid_key = str(row.get("userid") or "").strip().lower()
+      if uid_key:
+        matches[uid_key] = row
+
+  return matches
+
+
 def _greenlight_collect_people(cucm_host: str, cucm_user: str, cucm_pass: str, last_name: str, first_name: str, emails: list[str]) -> list[dict]:
   people: dict[str, dict] = {}
 
@@ -12188,63 +12241,25 @@ def _greenlight_collect_people(cucm_host: str, cucm_user: str, cucm_pass: str, l
       if uid_key:
         people[uid_key] = person
 
-  for email in emails:
-    email_lower = (email or "").strip().lower()
-    if not email_lower:
-      continue
-
-    # First pass: try exact userID lookups derived from email local-part.
-    userid_candidates = _greenlight_userid_candidates(email_lower)
-    for userid in userid_candidates:
-      try:
-        userid_rows = _greenlight_list_users_by_userid(cucm_host, cucm_user, cucm_pass, userid)
-      except Exception:
-        continue
-
-      for match in userid_rows:
-        row_uid = str(match.get("userid") or "").strip().lower()
-        row_first = str(match.get("first_name") or "").strip()
-        row_last = str(match.get("last_name") or "").strip()
-        if not row_uid or not row_last:
-          continue
+  clean_emails = [str(e or "").strip().lower() for e in emails if str(e or "").strip()]
+  if len(clean_emails) > 5:
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+      futures = [
+        executor.submit(_greenlight_collect_people_from_email, cucm_host, cucm_user, cucm_pass, email)
+        for email in clean_emails
+      ]
+      for future in concurrent.futures.as_completed(futures):
         try:
-          people_for_name = search_persons_by_name(cucm_host, cucm_user, cucm_pass, row_last, row_first)
+          partial = future.result() or {}
         except Exception:
-          continue
-
-        for row in people_for_name:
-          person_uid = str(row.get("userid") or "").strip().lower()
-          person_email = str(row.get("email") or "").strip().lower()
-          if person_uid == row_uid:
-            people[person_uid] = row
-            continue
-          if person_email and person_email == email_lower:
-            people[person_uid] = row
-
-    candidates = _greenlight_email_name_candidates(email_lower)
-    for cand_last, cand_first in candidates:
-      try:
-        matched_rows = search_persons_by_name(cucm_host, cucm_user, cucm_pass, cand_last, cand_first)
-      except Exception:
-        continue
-
-      for row in matched_rows:
-        row_email = str(row.get("email") or "").strip().lower()
-        if row_email != email_lower:
-          continue
-        uid_key = str(row.get("userid") or "").strip().lower()
-        if not uid_key:
-          continue
-        people[uid_key] = row
-        
-    # If name parsing did not find an exact email row and last name is provided,
-    # do a second pass against existing name results.
-    if clean_last:
-      for row in list(people.values()):
-        row_email = str(row.get("email") or "").strip().lower()
-        if row_email != email_lower:
-          continue
-        uid_key = str(row.get("userid") or "").strip().lower()
+          partial = {}
+        for uid_key, row in partial.items():
+          if uid_key:
+            people[uid_key] = row
+  else:
+    for email in clean_emails:
+      partial = _greenlight_collect_people_from_email(cucm_host, cucm_user, cucm_pass, email)
+      for uid_key, row in partial.items():
         if uid_key:
           people[uid_key] = row
 
@@ -12269,6 +12284,8 @@ def _greenlight_build_person_lookup_rows(cucm_host: str, cucm_user: str, cucm_pa
       output_rows.append(
         {
           "userid": str(person.get("userid") or "").strip(),
+          "first_name": str(person.get("first_name") or "").strip(),
+          "last_name": str(person.get("last_name") or "").strip(),
           "display_name": str(person.get("display_name") or "").strip(),
           "email": str(person.get("email") or "").strip(),
           "jabber_csf_device": "",
@@ -12302,6 +12319,8 @@ def _greenlight_build_person_lookup_rows(cucm_host: str, cucm_user: str, cucm_pa
         output_rows.append(
           {
             "userid": str(person.get("userid") or "").strip(),
+            "first_name": str(person.get("first_name") or "").strip(),
+            "last_name": str(person.get("last_name") or "").strip(),
             "display_name": str(person.get("display_name") or "").strip(),
             "email": str(person.get("email") or "").strip(),
             "jabber_csf_device": csf_name,
@@ -12332,6 +12351,8 @@ def _greenlight_build_person_lookup_rows(cucm_host: str, cucm_user: str, cucm_pa
         output_rows.append(
           {
             "userid": str(person.get("userid") or "").strip(),
+            "first_name": str(person.get("first_name") or "").strip(),
+            "last_name": str(person.get("last_name") or "").strip(),
             "display_name": str(person.get("display_name") or "").strip(),
             "email": str(person.get("email") or "").strip(),
             "jabber_csf_device": csf_name,
@@ -12351,6 +12372,106 @@ def _greenlight_build_person_lookup_rows(cucm_host: str, cucm_user: str, cucm_pa
 
   output_rows.sort(key=lambda item: ((item.get("display_name") or "").lower(), (item.get("jabber_csf_device") or "").lower(), (item.get("extension") or "").lower()))
   return output_rows
+
+
+def _greenlight_rows_to_csv_bytes(rows: list[dict]) -> bytes:
+  output = io.StringIO()
+  writer = csv.writer(output)
+  writer.writerow([
+    "userid",
+    "first_name",
+    "last_name",
+    "display_name",
+    "email",
+    "jabber_csf_device",
+    "extension",
+    "line_mask",
+    "translated_number",
+    "associated_translation_patterns",
+    "translation_details",
+    "sms_number",
+    "sms_provider",
+    "sms_lookup_basis",
+  ])
+  for row in rows:
+    writer.writerow([
+      row.get("userid", ""),
+      row.get("first_name", ""),
+      row.get("last_name", ""),
+      row.get("display_name", ""),
+      row.get("email", ""),
+      row.get("jabber_csf_device", ""),
+      row.get("extension", ""),
+      row.get("line_mask", ""),
+      row.get("translated_number", ""),
+      row.get("associated_translation_patterns", ""),
+      row.get("translation_details", ""),
+      row.get("sms_number", ""),
+      row.get("sms_provider", ""),
+      row.get("sms_lookup_basis", ""),
+    ])
+  return output.getvalue().encode("utf-8")
+
+
+def _greenlight_queue_store(entry: dict) -> None:
+  with GREENLIGHT_LOOKUP_RUNS_LOCK:
+    GREENLIGHT_LOOKUP_RUNS[str(entry.get("job_id", ""))] = entry
+    if len(GREENLIGHT_LOOKUP_RUNS) > GREENLIGHT_LOOKUP_MAX_RUNS:
+      oldest_key = next(iter(GREENLIGHT_LOOKUP_RUNS))
+      GREENLIGHT_LOOKUP_RUNS.pop(oldest_key, None)
+
+
+def _greenlight_queue_get(job_id: str) -> dict:
+  with GREENLIGHT_LOOKUP_RUNS_LOCK:
+    return dict(GREENLIGHT_LOOKUP_RUNS.get(job_id, {}) or {})
+
+
+def _greenlight_queue_update(job_id: str, **values) -> None:
+  with GREENLIGHT_LOOKUP_RUNS_LOCK:
+    current = GREENLIGHT_LOOKUP_RUNS.get(job_id)
+    if not current:
+      return
+    current.update(values)
+    GREENLIGHT_LOOKUP_RUNS[job_id] = current
+
+
+def _greenlight_run_queued_lookup(job_id: str, cucm_host: str, cucm_user: str, cucm_pass: str, clean_last: str, clean_first: str, emails: list[str]) -> None:
+  started_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+  _greenlight_queue_update(job_id, status="running", started_at=started_at)
+
+  try:
+    rows = _greenlight_build_person_lookup_rows(
+      cucm_host=cucm_host,
+      cucm_user=cucm_user,
+      cucm_pass=cucm_pass,
+      last_name=clean_last,
+      first_name=clean_first,
+      emails=emails,
+    )
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"project_greenlight_person_lookup_{timestamp}.csv"
+    csv_bytes = _greenlight_rows_to_csv_bytes(rows)
+    job_output = _prepare_job_output(csv_bytes, filename)
+    completed_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    _greenlight_queue_update(
+      job_id,
+      status="completed",
+      completed_at=completed_at,
+      count=len(rows),
+      filename=job_output.get("filename", filename),
+      download_url=f"/download/job-output/{job_output['job_id']}",
+      error="",
+    )
+  except Exception as exc:
+    failed_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    _greenlight_queue_update(
+      job_id,
+      status="failed",
+      completed_at=failed_at,
+      error=str(exc),
+    )
 
 
 def _parse_verasmart_queue_rows(csv_text: str) -> list[dict]:
@@ -27218,6 +27339,8 @@ __GREENLIGHT_ADMIN_CARD__
             let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
             html += '<thead><tr style="background:#005eb8;color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">First Name</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Last Name</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">CSF Device</th>';
@@ -27232,6 +27355,8 @@ __GREENLIGHT_ADMIN_CARD__
               const bg = idx % 2 === 0 ? "#f7fbff" : "#ffffff";
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + toCell(row.userid) + '</td>';
+              html += '<td style="padding:7px 10px;">' + toCell(row.first_name) + '</td>';
+              html += '<td style="padding:7px 10px;">' + toCell(row.last_name) + '</td>';
               html += '<td style="padding:7px 10px;">' + toCell(row.display_name) + '</td>';
               html += '<td style="padding:7px 10px;">' + toCell(row.email) + '</td>';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + toCell(row.jabber_csf_device) + '</td>';
@@ -27247,8 +27372,71 @@ __GREENLIGHT_ADMIN_CARD__
             resultsEl.innerHTML = html;
           }
 
+          let queuePollToken = 0;
+
+          function pollQueuedJob(statusUrl, token) {
+            if (!statusUrl || token !== queuePollToken) {
+              return;
+            }
+
+            fetch(statusUrl, {
+              method: "GET",
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+            })
+              .then((response) => response.text().then((rawText) => ({ response, rawText })))
+              .then(({ response, rawText }) => {
+                let payload = {};
+                try {
+                  payload = rawText ? JSON.parse(rawText) : {};
+                } catch (_parseErr) {
+                  payload = { ok: false, error: { message: rawText || "Unexpected queue status response." } };
+                }
+
+                if (!response.ok || payload.ok === false) {
+                  const detail = (payload.error && payload.error.message) || payload.detail || payload.message || ("Queue status failed (HTTP " + response.status + ")");
+                  throw new Error(String(detail));
+                }
+
+                const run = payload.run || {};
+                const state = String(run.status || "").toLowerCase();
+                const count = Number(run.count || 0);
+                const emailCount = Number(run.email_count || 0);
+
+                if (state === "completed") {
+                  statusEl.textContent = "Queued lookup completed. Rows: " + count + ". Download CSV.";
+                  resultsEl.innerHTML = "";
+                  if (run.download_url) {
+                    downloadEl.href = run.download_url;
+                    downloadEl.style.display = "inline";
+                  }
+                  return;
+                }
+
+                if (state === "failed") {
+                  const errText = String(run.error || "Unknown error.");
+                  statusEl.textContent = "Queued lookup failed.";
+                  resultsEl.innerHTML = "<p style='margin:0;color:#a42323; font-weight:700;">" + escapeHtml(errText) + "</p>";
+                  return;
+                }
+
+                statusEl.textContent = "Queued lookup in progress (" + state + ") for " + emailCount + " emails using 3 workers...";
+                window.setTimeout(function () {
+                  pollQueuedJob(statusUrl, token);
+                }, 2000);
+              })
+              .catch((err) => {
+                if (token !== queuePollToken) {
+                  return;
+                }
+                statusEl.textContent = "Queue status failed.";
+                resultsEl.innerHTML = "<p style='margin:0;color:#a42323; font-weight:700;'>" + escapeHtml(String(err && err.message ? err.message : err)) + "</p>";
+              });
+          }
+
           form.addEventListener("submit", async function (event) {
             event.preventDefault();
+            queuePollToken += 1;
             statusEl.textContent = "Searching...";
             resultsEl.innerHTML = "";
             downloadEl.style.display = "none";
@@ -27272,6 +27460,18 @@ __GREENLIGHT_ADMIN_CARD__
               if (!response.ok || payload.ok === false) {
                 const detail = (payload.error && payload.error.message) || payload.detail || payload.message || ("Request failed (HTTP " + response.status + ")");
                 throw new Error(String(detail));
+              }
+
+              if (payload.queued === true && payload.status_url) {
+                const emailCount = Number(payload.email_count || 0);
+                statusEl.textContent = "Queued lookup started for " + emailCount + " emails using 3 workers. CSV will be available when complete.";
+                resultsEl.innerHTML = "";
+                downloadEl.style.display = "none";
+                const pollToken = queuePollToken;
+                window.setTimeout(function () {
+                  pollQueuedJob(payload.status_url, pollToken);
+                }, 1200);
+                return;
               }
 
               const total = Number(payload.count || 0);
@@ -37845,6 +38045,51 @@ def project_greenlight_person_lookup_route(
         status_code=400,
       )
 
+    if len(emails) > 5:
+      queue_job_id = str(uuid4())
+      created_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+      queue_entry = {
+        "job_id": queue_job_id,
+        "status": "queued",
+        "created_at": created_at,
+        "started_at": "",
+        "completed_at": "",
+        "email_count": len(emails),
+        "worker_count": 3,
+        "count": 0,
+        "filename": "",
+        "download_url": "",
+        "error": "",
+      }
+      _greenlight_queue_store(queue_entry)
+
+      worker = threading.Thread(
+        target=_greenlight_run_queued_lookup,
+        args=(queue_job_id, cucm_host, cucm_user, cucm_pass, clean_last, clean_first, emails),
+        daemon=True,
+      )
+      worker.start()
+
+      _append_audit_event(
+        action="project_greenlight_person_lookup_queued",
+        cucm_host=cucm_host,
+        operator=cucm_user,
+        target=f"last={clean_last or '-'};emails={len(emails)}",
+        output_filename=f"queue:{queue_job_id}",
+        inline_mode=True,
+      )
+
+      return JSONResponse(
+        {
+          "ok": True,
+          "queued": True,
+          "job_id": queue_job_id,
+          "email_count": len(emails),
+          "worker_count": 3,
+          "status_url": f"/project-greenlight/person-lookup/status/{queue_job_id}",
+        }
+      )
+
     rows = _greenlight_build_person_lookup_rows(
       cucm_host=cucm_host,
       cucm_user=cucm_user,
@@ -37854,41 +38099,9 @@ def project_greenlight_person_lookup_route(
       emails=emails,
     )
 
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow([
-      "userid",
-      "display_name",
-      "email",
-      "jabber_csf_device",
-      "extension",
-      "line_mask",
-      "translated_number",
-      "associated_translation_patterns",
-      "translation_details",
-      "sms_number",
-      "sms_provider",
-      "sms_lookup_basis",
-    ])
-    for row in rows:
-      writer.writerow([
-        row.get("userid", ""),
-        row.get("display_name", ""),
-        row.get("email", ""),
-        row.get("jabber_csf_device", ""),
-        row.get("extension", ""),
-        row.get("line_mask", ""),
-        row.get("translated_number", ""),
-        row.get("associated_translation_patterns", ""),
-        row.get("translation_details", ""),
-        row.get("sms_number", ""),
-        row.get("sms_provider", ""),
-        row.get("sms_lookup_basis", ""),
-      ])
-
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"project_greenlight_person_lookup_{timestamp}.csv"
-    job_output = _prepare_job_output(output.getvalue().encode("utf-8"), filename)
+    job_output = _prepare_job_output(_greenlight_rows_to_csv_bytes(rows), filename)
 
     _append_audit_event(
       action="project_greenlight_person_lookup",
@@ -37914,6 +38127,19 @@ def project_greenlight_person_lookup_route(
     raise
   except Exception as exc:
     raise RuntimeError(f"Project Greenlight person lookup failed: {exc}") from exc
+
+
+@app.get("/project-greenlight/person-lookup/status/{job_id}")
+def project_greenlight_person_lookup_status_route(job_id: str):
+  clean_job_id = (job_id or "").strip()
+  if not clean_job_id:
+    return JSONResponse({"ok": False, "error": {"message": "job_id is required."}}, status_code=400)
+
+  run = _greenlight_queue_get(clean_job_id)
+  if not run:
+    return JSONResponse({"ok": False, "error": {"message": "Queued job not found."}}, status_code=404)
+
+  return JSONResponse({"ok": True, "run": run})
 
 
 @app.post("/lookup/twilio-by-number")
