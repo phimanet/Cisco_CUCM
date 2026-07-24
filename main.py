@@ -29806,6 +29806,10 @@ def menu_admin_page(request: Request):
             <strong>SMS Item Menu</strong>
             <span>Manage Twilio number verification and lookup operations.</span>
           </a>
+          <a class="hero-link-card" href="/sinch-work">
+            <strong>Sinch Work</strong>
+            <span>Sinch (Inteliquent) admin workspace.</span>
+          </a>
           <a class="hero-link-card" href="/opentext-admin">
             <strong>OpenText Admin</strong>
             <span>OpenTxt Numbers List and number lookup tools.</span>
@@ -29847,6 +29851,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/opentext-admin'">OpenText Admin</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/sinch-work'">Sinch Work (Inteliquent)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">SMS Item Menu (Page 3)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
