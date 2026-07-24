@@ -28985,6 +28985,89 @@ async def cert_manager_lab_inventory_sync(request: Request):
   return HTMLResponse(content=html)
 
 
+@app.get("/sinch-work", response_class=HTMLResponse)
+@app.get("/inteliquent", response_class=HTMLResponse)
+@app.get("/sinch-admin", response_class=HTMLResponse)
+def sinch_admin_page(request: Request):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", "") or "").strip()
+  if not _is_admin_user(session_username):
+    return HTMLResponse(
+      content="<h3>403 Forbidden</h3><p>You are not authorized to access Sinch Admin.</p>",
+      status_code=403,
+    )
+
+  auth_user = escape(session_username)
+  html = f"""
+<html>
+  <head>
+    <title>Sinch Work (Inteliquent) - Voice Operations Portal</title>
+    <style>
+      body {{
+        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        margin: 0;
+        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+        color: #12304a;
+      }}
+      .topbar {{
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 10px 14px;
+        background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94));
+        color: #fff;
+      }}
+      .topbar a {{
+        color: #fff;
+        text-decoration: none;
+        border: 1px solid rgba(255,255,255,0.65);
+        padding: 6px 10px;
+        border-radius: 8px;
+        font-size: 12px;
+        font-weight: 700;
+      }}
+      .content {{
+        max-width: 1200px;
+        margin: 14px auto;
+        padding: 0 12px 16px 12px;
+      }}
+      .panel {{
+        background: #fff;
+        border: 1px solid #c8dbee;
+        border-radius: 12px;
+        padding: 14px;
+        box-shadow: 0 12px 24px rgba(0, 47, 108, 0.1);
+      }}
+      h3 {{
+        margin: 0 0 8px 0;
+        color: #003580;
+      }}
+      p {{
+        margin: 0;
+        color: #4e6a84;
+      }}
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <strong>Sinch Work (Inteliquent)</strong>
+      <div>
+        <span style="margin-right:10px;font-size:12px;opacity:0.9;">Operator: {auth_user}</span>
+        <a href="/page2">Administrative Items</a>
+      </div>
+    </header>
+    <main class="content">
+      <div class="panel">
+        <h3>Sinch Work</h3>
+        <p>This page is reserved for Sinch administration workflows. Sinch is also called Inteliquent. No actions are enabled yet.</p>
+      </div>
+    </main>
+  </body>
+</html>
+"""
+  return HTMLResponse(content=html)
+
+
 @app.post("/cert-manager/lab/renewal/run/create")
 async def cert_manager_lab_renewal_create_run(request: Request):
   session, username = _require_admin_session(request)
