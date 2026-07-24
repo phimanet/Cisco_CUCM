@@ -25484,7 +25484,7 @@ __ADMIN_CARD__
           <label style="display:block; margin-bottom:6px; font-weight:600;">Phone Number to Assign:</label>
           <input id="page1-batch-ldap-phone" name="phone_number" type="tel" placeholder="2025551234" />
         </div>
-        <button type="button" id="page1-batch-ldap-submit" style="background:linear-gradient(180deg,#1d5490,#0d3b73); color:#fff; padding:8px 16px; border:1px solid #0d3b73; border-radius:6px; cursor:pointer; font-weight:600;">Start Batch Update</button>
+        <button type="button" id="page1-batch-ldap-submit" onclick="if(window.runPage1BatchLdap){window.runPage1BatchLdap();}else{var b=document.getElementById('page1-batch-ldap-debug'); if(b){b.value+=(b.value?String.fromCharCode(10):'')+'[inline] handler not loaded yet';}}" style="background:linear-gradient(180deg,#1d5490,#0d3b73); color:#fff; padding:8px 16px; border:1px solid #0d3b73; border-radius:6px; cursor:pointer; font-weight:600;">Start Batch Update</button>
       </form>
       <div class="result-card" style="margin-top:12px;">
         <p id="page1-batch-ldap-status" class="status-line">Paste emails and phone number, then click Start Batch Update.</p>
@@ -25498,6 +25498,206 @@ __ADMIN_CARD__
         <button type="button" id="page1-batch-ldap-copy-debug" style="margin-top:6px; background:#555; color:#fff; padding:5px 12px; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Copy Debug Output</button>
       </div>
     </section>
+
+    <script>
+      // Standalone, isolated Batch LDAP handler (independent of other page scripts).
+      (function () {
+        function dbg(msg) {
+          try {
+            var box = document.getElementById("page1-batch-ldap-debug");
+            var stamp = new Date().toISOString().split("T")[1].replace("Z", "");
+            var line = "[" + stamp + "] " + msg;
+            if (box) { box.value += (box.value ? "\n" : "") + line; box.scrollTop = box.scrollHeight; }
+            if (window.console) { console.log("[BatchLDAP]", msg); }
+          } catch (e) { /* ignore */ }
+        }
+
+        function parseCsvStatus(outputText) {
+          var lines = String(outputText || "").trim().split("\n");
+          if (lines.length < 2) { return { status: "Unknown", details: "No response rows." }; }
+          var line = lines[1];
+          var parts = [], cur = "", inQ = false;
+          for (var c = 0; c < line.length; c++) {
+            var ch = line[c];
+            if (ch === '"') { inQ = !inQ; }
+            else if (ch === "," && !inQ) { parts.push(cur); cur = ""; }
+            else { cur += ch; }
+          }
+          parts.push(cur);
+          for (var p = 0; p < parts.length; p++) { parts[p] = parts[p].trim(); }
+          return { status: (parts[1] || "Unknown"), details: (parts[2] || "") };
+        }
+
+        window.runPage1BatchLdap = async function () {
+          dbg("runPage1BatchLdap() called (button click received).");
+          var emailsEl = document.getElementById("page1-batch-ldap-emails");
+          var phoneEl = document.getElementById("page1-batch-ldap-phone");
+          var submitBtn = document.getElementById("page1-batch-ldap-submit");
+          var statusEl = document.getElementById("page1-batch-ldap-status");
+          var progressEl = document.getElementById("page1-batch-ldap-progress");
+          var resultsEl = document.getElementById("page1-batch-ldap-results");
+          var downloadEl = document.getElementById("page1-batch-ldap-download");
+
+          dbg("Elements: emails=" + (!!emailsEl) + " phone=" + (!!phoneEl) + " submit=" + (!!submitBtn) +
+              " status=" + (!!statusEl) + " progress=" + (!!progressEl) + " results=" + (!!resultsEl) + " download=" + (!!downloadEl));
+
+          if (!emailsEl || !phoneEl || !statusEl || !resultsEl) {
+            dbg("ABORT: required elements missing.");
+            return;
+          }
+
+          var emailsText = (emailsEl.value || "").trim();
+          var phoneNumber = (phoneEl.value || "").trim();
+          dbg("emails length=" + emailsText.length + " phone='" + phoneNumber + "'");
+
+          if (!emailsText) { statusEl.textContent = "Email addresses are required."; dbg("FAIL: no emails."); return; }
+          if (!phoneNumber) { statusEl.textContent = "Phone number is required."; dbg("FAIL: no phone."); return; }
+
+          var emails = emailsText.split("\n").map(function (e) { return e.trim(); }).filter(function (e) { return e.length > 0; });
+          dbg("parsed " + emails.length + " email(s): " + JSON.stringify(emails));
+          if (emails.length === 0) { statusEl.textContent = "Please enter at least one email address."; dbg("FAIL: zero emails."); return; }
+
+          var tasks = emails.map(function (email, idx) {
+            var at = email.indexOf("@");
+            var userid = at > 0 ? email.slice(0, at) : email;
+            return { idx: idx, email: email, userid: userid };
+          });
+
+          statusEl.textContent = "";
+          if (progressEl) { progressEl.style.display = "block"; }
+          if (downloadEl) { downloadEl.style.display = "none"; }
+          if (submitBtn) { submitBtn.disabled = true; }
+
+          function rowId(i) { return "p1bl-row-" + i; }
+          var html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+          html += '<thead><tr style="background:#005eb8; color:#fff;">';
+          html += '<th style="padding:8px 10px; text-align:left;">#</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Email</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Status</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Details</th>';
+          html += '</tr></thead><tbody>';
+          tasks.forEach(function (t) {
+            html += '<tr id="' + rowId(t.idx) + '" style="background:#fffef0; border-bottom:1px solid #ddd;">';
+            html += '<td style="padding:8px 10px;">' + (t.idx + 1) + "</td>";
+            html += '<td style="padding:8px 10px;">' + t.email + "</td>";
+            html += '<td style="padding:8px 10px;">' + t.userid + "</td>";
+            html += '<td style="padding:8px 10px; color:#9a7d00; font-weight:600;" class="p1bl-status">Queued</td>';
+            html += '<td style="padding:8px 10px;" class="p1bl-details"></td>';
+            html += "</tr>";
+          });
+          html += "</tbody></table>";
+          resultsEl.innerHTML = html;
+
+          function setRow(i, statusText, statusColor, bgColor, details) {
+            var tr = document.getElementById(rowId(i));
+            if (!tr) { return; }
+            tr.style.background = bgColor;
+            var st = tr.querySelector(".p1bl-status");
+            var dt = tr.querySelector(".p1bl-details");
+            if (st) { st.textContent = statusText; st.style.color = statusColor; }
+            if (dt) { dt.textContent = details || ""; }
+          }
+
+          var completed = 0, successCount = 0, failedCount = 0, nextIndex = 0;
+          var total = tasks.length;
+          var WORKER_COUNT = 3;
+
+          function updateStatusLine() {
+            statusEl.textContent = "Processing " + completed + " / " + total +
+              "  (Success: " + successCount + ", Failed: " + failedCount + ")";
+          }
+          updateStatusLine();
+
+          async function processOne(task) {
+            dbg("START userid='" + task.userid + "' (email=" + task.email + ")");
+            setRow(task.idx, "Updating...", "#1d5490", "#eef6ff", "");
+            try {
+              var body = new URLSearchParams();
+              body.append("target_user", task.userid);
+              body.append("phone_number", phoneNumber);
+              var response = await fetch("/update/ad-phone-fields?inline=true", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/x-www-form-urlencoded",
+                  "Accept": "application/json",
+                  "X-Requested-With": "XMLHttpRequest"
+                },
+                credentials: "same-origin",
+                body: body.toString()
+              });
+              var rawText = await response.text();
+              dbg("DONE userid='" + task.userid + "' HTTP=" + response.status + " body(300)=" + rawText.slice(0, 300));
+              if (!response.ok) { throw new Error("HTTP " + response.status + ": " + rawText.slice(0, 200)); }
+              var payload = {};
+              try { payload = rawText ? JSON.parse(rawText) : {}; }
+              catch (pe) { throw new Error("Bad JSON: " + rawText.slice(0, 200)); }
+              var parsed = parseCsvStatus(payload.output_text);
+              var isSuccess = String(parsed.status).toLowerCase() === "success";
+              if (isSuccess) { successCount++; setRow(task.idx, "Success", "#2d7d2d", "#f0f8ff", parsed.details); }
+              else { failedCount++; setRow(task.idx, parsed.status || "Failed", "#c41e3a", "#fff5f5", parsed.details); }
+            } catch (err) {
+              failedCount++;
+              var emsg = String(err && err.message ? err.message : err);
+              dbg("ERROR userid='" + task.userid + "': " + emsg);
+              setRow(task.idx, "Failed", "#c41e3a", "#fff5f5", emsg);
+            } finally {
+              completed++;
+              updateStatusLine();
+            }
+          }
+
+          async function worker(workerId) {
+            dbg("Worker " + workerId + " started.");
+            while (true) {
+              var i = nextIndex;
+              if (i >= tasks.length) { break; }
+              nextIndex++;
+              await processOne(tasks[i]);
+            }
+            dbg("Worker " + workerId + " finished.");
+          }
+
+          try {
+            var workers = [];
+            for (var w = 1; w <= WORKER_COUNT; w++) { workers.push(worker(w)); }
+            await Promise.all(workers);
+            statusEl.textContent = "Completed " + total + " user(s). Success: " + successCount + ", Failed: " + failedCount + ".";
+            dbg("ALL DONE. Success=" + successCount + " Failed=" + failedCount);
+          } catch (err2) {
+            var emsg2 = String(err2 && err2.message ? err2.message : err2);
+            dbg("FATAL: " + emsg2);
+            statusEl.textContent = "Batch update encountered an error: " + emsg2;
+          } finally {
+            if (progressEl) { progressEl.style.display = "none"; }
+            if (submitBtn) { submitBtn.disabled = false; }
+            dbg("runPage1BatchLdap() finished.");
+          }
+        };
+
+        function wireCopyButton() {
+          var copyBtn = document.getElementById("page1-batch-ldap-copy-debug");
+          if (copyBtn && !copyBtn.dataset.bound) {
+            copyBtn.dataset.bound = "1";
+            copyBtn.addEventListener("click", function () {
+              var box = document.getElementById("page1-batch-ldap-debug");
+              if (box) {
+                box.select();
+                try { document.execCommand("copy"); copyBtn.textContent = "Copied!"; setTimeout(function () { copyBtn.textContent = "Copy Debug Output"; }, 1500); }
+                catch (e) { /* ignore */ }
+              }
+            });
+          }
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", function () { wireCopyButton(); dbg("Standalone Batch LDAP handler ready (DOMContentLoaded)."); });
+        } else {
+          wireCopyButton();
+          dbg("Standalone Batch LDAP handler ready.");
+        }
+      })();
+    </script>
 
     <script>
       const hasCachedCucmPassword = __HAS_CACHED_CUCM_PASS__;
@@ -26805,8 +27005,9 @@ __ADMIN_CARD__
         });
       })();
 
-      // Batch LDAP Phone Update Handler for Page 1
+      // Batch LDAP Phone Update Handler for Page 1 (moved to standalone block below; neutralized here)
       (function () {
+        return;
         function dbgWrite(msg) {
           try {
             const box = document.getElementById("page1-batch-ldap-debug");
