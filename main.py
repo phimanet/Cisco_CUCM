@@ -25492,6 +25492,11 @@ __ADMIN_CARD__
         <div id="page1-batch-ldap-results" style="overflow-x:auto;"></div>
         <p><a id="page1-batch-ldap-download" href="#" style="display:none; font-weight:700; margin-top:12px; color:#1d5490;">Download Results CSV</a></p>
       </div>
+      <div style="margin-top:12px;">
+        <label style="display:block; margin-bottom:6px; font-weight:600; color:#a42323;">Debug Output (copy this and send to support):</label>
+        <textarea id="page1-batch-ldap-debug" readonly style="width:100%; height:180px; font-family:monospace; font-size:11px; padding:8px; border:1px solid #a42323; border-radius:4px; box-sizing:border-box; background:#fff8f8;" placeholder="Debug messages will appear here when you click Start Batch Update."></textarea>
+        <button type="button" id="page1-batch-ldap-copy-debug" style="margin-top:6px; background:#555; color:#fff; padding:5px 12px; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Copy Debug Output</button>
+      </div>
     </section>
 
     <script>
@@ -26802,6 +26807,19 @@ __ADMIN_CARD__
 
       // Batch LDAP Phone Update Handler for Page 1
       (function () {
+        function dbgWrite(msg) {
+          try {
+            const box = document.getElementById("page1-batch-ldap-debug");
+            const stamp = new Date().toISOString().split("T")[1].replace("Z", "");
+            const line = "[" + stamp + "] " + msg;
+            if (box) {
+              box.value += (box.value ? "\n" : "") + line;
+              box.scrollTop = box.scrollHeight;
+            }
+            console.log("[BatchLDAP]", msg);
+          } catch (_e) { /* ignore */ }
+        }
+
         const form = document.getElementById("page1-batch-ldap-form");
         const emailsEl = document.getElementById("page1-batch-ldap-emails");
         const phoneEl = document.getElementById("page1-batch-ldap-phone");
@@ -26811,21 +26829,37 @@ __ADMIN_CARD__
         const resultsEl = document.getElementById("page1-batch-ldap-results");
         const downloadEl = document.getElementById("page1-batch-ldap-download");
 
+        dbgWrite(
+          "Init: form=" + (!!form) +
+          " emailsEl=" + (!!emailsEl) +
+          " phoneEl=" + (!!phoneEl) +
+          " submitBtn=" + (!!submitBtn) +
+          " statusEl=" + (!!statusEl) +
+          " progressEl=" + (!!progressEl) +
+          " resultsEl=" + (!!resultsEl) +
+          " downloadEl=" + (!!downloadEl)
+        );
+
         if (!form || !submitBtn || !statusEl || !resultsEl) {
+          dbgWrite("ABORT: One or more required elements not found. Handler not bound.");
           return;
         }
 
         async function runBatchUpdate() {
+          dbgWrite("runBatchUpdate() called (button click received).");
           const emailsText = (emailsEl?.value || "").trim();
           const phoneNumber = (phoneEl?.value || "").trim();
+          dbgWrite("Raw emails length=" + emailsText.length + " phone='" + phoneNumber + "'");
 
           if (!emailsText) {
             statusEl.textContent = "Email addresses are required.";
+            dbgWrite("VALIDATION FAIL: no emails entered.");
             return;
           }
 
           if (!phoneNumber) {
             statusEl.textContent = "Phone number is required.";
+            dbgWrite("VALIDATION FAIL: no phone number entered.");
             return;
           }
 
@@ -26833,86 +26867,190 @@ __ADMIN_CARD__
             .split("\n")
             .map((e) => e.trim())
             .filter((e) => e.length > 0);
+          dbgWrite("Parsed " + emails.length + " email(s): " + JSON.stringify(emails));
 
           if (emails.length === 0) {
             statusEl.textContent = "Please enter at least one email address.";
+            dbgWrite("VALIDATION FAIL: parsed zero emails.");
             return;
           }
 
+          // Build task list: derive user ID from email (portion before @)
+          const tasks = emails.map((email, idx) => {
+            const at = email.indexOf("@");
+            const userid = at > 0 ? email.slice(0, at) : email;
+            return { idx: idx, email: email, userid: userid };
+          });
+
           statusEl.textContent = "";
           progressEl.style.display = "block";
-          resultsEl.innerHTML = "";
           downloadEl.style.display = "none";
+          submitBtn.disabled = true;
+
+          // Render initial table with all rows Pending
+          function rowId(i) { return "p1bl-row-" + i; }
+          let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+          html += '<thead><tr style="background:#005eb8; color:#fff;">';
+          html += '<th style="padding:8px 10px; text-align:left;">#</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Email</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Status</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Details</th>';
+          html += '</tr></thead><tbody>';
+          tasks.forEach((t) => {
+            html += '<tr id="' + rowId(t.idx) + '" style="background:#fffef0; border-bottom:1px solid #ddd;">';
+            html += '<td style="padding:8px 10px;">' + (t.idx + 1) + "</td>";
+            html += '<td style="padding:8px 10px;">' + t.email + "</td>";
+            html += '<td style="padding:8px 10px;">' + t.userid + "</td>";
+            html += '<td style="padding:8px 10px; color:#9a7d00; font-weight:600;" class="p1bl-status">Queued</td>';
+            html += '<td style="padding:8px 10px;" class="p1bl-details"></td>';
+            html += "</tr>";
+          });
+          html += "</tbody></table>";
+          resultsEl.innerHTML = html;
+
+          function setRow(i, statusText, statusColor, bgColor, details) {
+            const tr = document.getElementById(rowId(i));
+            if (!tr) return;
+            tr.style.background = bgColor;
+            const st = tr.querySelector(".p1bl-status");
+            const dt = tr.querySelector(".p1bl-details");
+            if (st) { st.textContent = statusText; st.style.color = statusColor; }
+            if (dt) { dt.textContent = details || ""; }
+          }
+
+          function parseCsvStatus(outputText) {
+            // CSV format: header row, then "Step,Status,Details"
+            const lines = String(outputText || "").trim().split("\n");
+            if (lines.length < 2) return { status: "Unknown", details: "No response rows." };
+            // Parse row 2 respecting simple quoted CSV
+            const parseLine = (line) => {
+              const parts = [];
+              let cur = "", inQ = false;
+              for (let c = 0; c < line.length; c++) {
+                const ch = line[c];
+                if (ch === '"') { inQ = !inQ; }
+                else if (ch === "," && !inQ) { parts.push(cur); cur = ""; }
+                else { cur += ch; }
+              }
+              parts.push(cur);
+              return parts.map((p) => p.trim());
+            };
+            const row = parseLine(lines[1]);
+            return { status: (row[1] || "Unknown"), details: (row[2] || "") };
+          }
+
+          let completed = 0;
+          let successCount = 0;
+          let failedCount = 0;
+          const total = tasks.length;
+          let nextIndex = 0;
+          const WORKER_COUNT = 3;
+
+          function updateStatusLine() {
+            statusEl.textContent = "Processing " + completed + " / " + total +
+              "  (Success: " + successCount + ", Failed: " + failedCount + ")";
+          }
+          updateStatusLine();
+
+          async function processOne(task) {
+            dbgWrite("START userid='" + task.userid + "' (email=" + task.email + ")");
+            setRow(task.idx, "Updating...", "#1d5490", "#eef6ff", "");
+            try {
+              const body = new URLSearchParams();
+              body.append("target_user", task.userid);
+              body.append("phone_number", phoneNumber);
+
+              const response = await fetch("/update/ad-phone-fields?inline=true", {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/x-www-form-urlencoded",
+                  "Accept": "application/json",
+                  "X-Requested-With": "XMLHttpRequest",
+                },
+                credentials: "same-origin",
+                body: body.toString(),
+              });
+              const rawText = await response.text();
+              dbgWrite("DONE userid='" + task.userid + "' HTTP=" + response.status +
+                " body(300)=" + rawText.slice(0, 300));
+
+              if (!response.ok) {
+                throw new Error("HTTP " + response.status + ": " + rawText.slice(0, 200));
+              }
+
+              let payload = {};
+              try { payload = rawText ? JSON.parse(rawText) : {}; }
+              catch (_pe) { throw new Error("Bad JSON: " + rawText.slice(0, 200)); }
+
+              const parsed = parseCsvStatus(payload.output_text);
+              const isSuccess = String(parsed.status).toLowerCase() === "success";
+              if (isSuccess) {
+                successCount++;
+                setRow(task.idx, "Success", "#2d7d2d", "#f0f8ff", parsed.details);
+              } else {
+                failedCount++;
+                setRow(task.idx, parsed.status || "Failed", "#c41e3a", "#fff5f5", parsed.details);
+              }
+            } catch (err) {
+              failedCount++;
+              const emsg = String(err && err.message ? err.message : err);
+              dbgWrite("ERROR userid='" + task.userid + "': " + emsg);
+              setRow(task.idx, "Failed", "#c41e3a", "#fff5f5", emsg);
+            } finally {
+              completed++;
+              updateStatusLine();
+            }
+          }
+
+          async function worker(workerId) {
+            dbgWrite("Worker " + workerId + " started.");
+            while (true) {
+              const i = nextIndex;
+              if (i >= tasks.length) break;
+              nextIndex++;
+              await processOne(tasks[i]);
+            }
+            dbgWrite("Worker " + workerId + " finished.");
+          }
 
           try {
-            const body = new URLSearchParams();
-            body.append("emails_text", emails.join("\n"));
-            body.append("phone_number", phoneNumber);
-
-            const response = await fetch("/project-greenlight/batch-ldap-phone-update", {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/x-www-form-urlencoded",
-                "Accept": "application/json",
-                "X-Requested-With": "XMLHttpRequest",
-              },
-              credentials: "same-origin",
-              body: body.toString(),
-            });
-
-            const rawText = await response.text();
-            let payload = {};
-            try {
-              payload = rawText ? JSON.parse(rawText) : {};
-            } catch (_parseErr) {
-              payload = { ok: false, error: rawText || "Unexpected server response." };
+            const workers = [];
+            for (let w = 1; w <= WORKER_COUNT; w++) {
+              workers.push(worker(w));
             }
-
-            if (!response.ok || payload.ok === false) {
-              const detail = (payload.error && payload.error.message) || payload.error || payload.detail || payload.message || ("Request failed (HTTP " + response.status + ")");
-              throw new Error(String(detail));
-            }
-
-            statusEl.textContent = payload.summary || ("Processed " + Number(payload.email_count || 0) + " user(s).");
-
-            if (payload.results && payload.results.length > 0) {
-              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
-              html += '<thead><tr style="background:#005eb8; color:#fff;">';
-              html += '<th style="padding:8px 10px; text-align:left;">Email</th>';
-              html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
-              html += '<th style="padding:8px 10px; text-align:left;">Status</th>';
-              html += '<th style="padding:8px 10px; text-align:left;">Details</th>';
-              html += '</tr></thead><tbody>';
-
-              payload.results.forEach((row) => {
-                const isSuccess = String(row.status || "").toLowerCase() === "success";
-                const bgColor = isSuccess ? "#f0f8ff" : "#fff5f5";
-                const statusColor = isSuccess ? "#2d7d2d" : "#c41e3a";
-                html += '<tr style="background:' + bgColor + '; border-bottom:1px solid #ddd;">';
-                html += '<td style="padding:8px 10px;">' + (row.email || "") + "</td>";
-                html += '<td style="padding:8px 10px;">' + (row.userid || "") + "</td>";
-                html += '<td style="padding:8px 10px; color:' + statusColor + '; font-weight:600;">' + (row.status || "") + "</td>";
-                html += '<td style="padding:8px 10px;">' + (row.details || "") + "</td>";
-                html += "</tr>";
-              });
-
-              html += "</tbody></table>";
-              resultsEl.innerHTML = html;
-            }
-
-            if (payload.download_url) {
-              downloadEl.href = payload.download_url;
-              downloadEl.style.display = "inline";
-            }
+            await Promise.all(workers);
+            statusEl.textContent = "Completed " + total + " user(s). Success: " +
+              successCount + ", Failed: " + failedCount + ".";
+            dbgWrite("ALL DONE. Success=" + successCount + " Failed=" + failedCount);
           } catch (err) {
-            statusEl.textContent = "Batch update failed.";
-            resultsEl.innerHTML = "<p style='margin:0;color:#a42323; font-weight:700;'>" + String(err && err.message ? err.message : err) + "</p>";
+            const emsg = String(err && err.message ? err.message : err);
+            dbgWrite("FATAL: " + emsg);
+            statusEl.textContent = "Batch update encountered an error: " + emsg;
           } finally {
             progressEl.style.display = "none";
+            submitBtn.disabled = false;
+            dbgWrite("runBatchUpdate() finished.");
           }
         }
 
         submitBtn.addEventListener("click", runBatchUpdate);
+        dbgWrite("Click listener attached to Start Batch Update button.");
+
+        const copyBtn = document.getElementById("page1-batch-ldap-copy-debug");
+        if (copyBtn) {
+          copyBtn.addEventListener("click", function () {
+            const box = document.getElementById("page1-batch-ldap-debug");
+            if (box) {
+              box.select();
+              try {
+                document.execCommand("copy");
+                copyBtn.textContent = "Copied!";
+                setTimeout(function () { copyBtn.textContent = "Copy Debug Output"; }, 1500);
+              } catch (_e) { /* ignore */ }
+            }
+          });
+        }
       })();
 
       const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
