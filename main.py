@@ -29336,7 +29336,7 @@ def sinch_admin_page(request: Request):
           <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
             <div>
               <label for="tn_wildcard" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN Wildcard</label>
-              <input type="text" id="tn_wildcard" name="tn_wildcard" value="xxxxxxxxxx" placeholder="858xxxxxxx" style="min-width:180px;" />
+              <input type="text" id="tn_wildcard" name="tn_wildcard" placeholder="858xxxxxxx" style="min-width:180px;" />
             </div>
             <div>
               <label for="tn_mask" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN Mask (optional)</label>
@@ -29372,7 +29372,7 @@ def sinch_admin_page(request: Request):
           <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
             <div>
               <label for="tf_mask" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Toll-Free Number</label>
-              <input type="text" id="tf_mask" name="tf_mask" placeholder="8001234567" style="min-width:180px;" />
+              <input type="text" id="tf_mask" name="tf_mask" placeholder="800xxxxxxx" style="min-width:180px;" />
             </div>
             <div>
               <label for="tf_quantity" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Quantity</label>
