@@ -249,6 +249,16 @@ AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aeria
 AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
 AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
 AERIALINK_ACCOUNT_CODE_LOOKUP_PATH = (os.getenv("AERIALINK_ACCOUNT_CODE_LOOKUP_PATH", "/codes") or "/codes").strip()
+INTELIQUENT_API_ENV = (os.getenv("INTELIQUENT_API_ENV", "production") or "production").strip().lower()
+_inteliquent_base_default = "https://services.inteliquent.com/Services/1.0.0"
+if INTELIQUENT_API_ENV == "sandbox":
+  _inteliquent_base_default = "https://services-sandbox.inteliquent.com/Services/1.0.0"
+INTELIQUENT_BASE_URL = (os.getenv("INTELIQUENT_BASE_URL", _inteliquent_base_default) or _inteliquent_base_default).strip().rstrip("/")
+INTELIQUENT_AUTH_MODE = (os.getenv("INTELIQUENT_AUTH_MODE", "basic") or "basic").strip().lower()
+INTELIQUENT_API_KEY = (os.getenv("INTELIQUENT_API_KEY", "") or "").strip()
+INTELIQUENT_API_SECRET = (os.getenv("INTELIQUENT_API_SECRET", "") or "").strip()
+INTELIQUENT_PRIVATE_KEY = (os.getenv("INTELIQUENT_PRIVATE_KEY", INTELIQUENT_API_KEY) or INTELIQUENT_API_KEY).strip()
+INTELIQUENT_API_TIMEOUT_SECONDS = int((os.getenv("INTELIQUENT_API_TIMEOUT_SECONDS", "20") or "20").strip())
 MOBILE_JABBER_EMAIL_FROM = "noreply@amnhealthcare.com"
 MOBILE_JABBER_EMAIL_SUBJECT = "Jabber on iPhone or Android - Ready to install"
 MOBILE_JABBER_EMAIL_BODY = (
@@ -1001,6 +1011,101 @@ def _opentext_numbers_lookup(number_query: str = "", limit: int = 200) -> dict:
     "normalized_query": normalized_query,
     "warnings": warnings,
   }
+
+
+def _inteliquent_post_json(path: str, payload: dict) -> dict:
+  if not INTELIQUENT_BASE_URL:
+    return {"ok": False, "error": "Inteliquent base URL is not configured."}
+  if INTELIQUENT_AUTH_MODE != "basic":
+    return {"ok": False, "error": "Only basic auth mode is currently enabled for Inteliquent in this portal."}
+  if not INTELIQUENT_API_KEY or not INTELIQUENT_API_SECRET:
+    return {"ok": False, "error": "Inteliquent API key and API secret are required."}
+  if not INTELIQUENT_PRIVATE_KEY:
+    return {"ok": False, "error": "Inteliquent private key is required (set it equal to API key if only key/secret were provided)."}
+
+  clean_path = str(path or "").strip()
+  if not clean_path.startswith("/"):
+    clean_path = "/" + clean_path
+  url = f"{INTELIQUENT_BASE_URL}{clean_path}"
+  body = dict(payload or {})
+  body["privateKey"] = str(body.get("privateKey") or INTELIQUENT_PRIVATE_KEY).strip()
+
+  try:
+    response = requests.post(
+      url,
+      json=body,
+      headers={"Accept": "application/json", "Content-Type": "application/json"},
+      auth=HTTPBasicAuth(INTELIQUENT_API_KEY, INTELIQUENT_API_SECRET),
+      timeout=INTELIQUENT_API_TIMEOUT_SECONDS,
+    )
+  except Exception as exc:
+    return {"ok": False, "error": f"Inteliquent request failed: {exc}", "status_code": 0, "raw": {}}
+
+  parsed = {}
+  body_text = response.text or ""
+  if body_text:
+    try:
+      parsed = response.json()
+      if not isinstance(parsed, dict):
+        parsed = {"data": parsed}
+    except Exception:
+      parsed = {"raw": body_text[:500]}
+
+  if response.status_code != 200:
+    message = str(parsed.get("status", "") or parsed.get("message", "")).strip() or f"HTTP {response.status_code}"
+    code = str(parsed.get("statusCode", "") or "").strip()
+    if code:
+      message = f"{message} (statusCode {code})"
+    return {
+      "ok": False,
+      "error": message,
+      "status_code": int(response.status_code or 0),
+      "raw": parsed,
+    }
+
+  return {
+    "ok": True,
+    "status_code": 200,
+    "raw": parsed,
+  }
+
+
+def _inteliquent_extract_tn_rows(payload: dict) -> list[dict]:
+  if not isinstance(payload, dict):
+    return []
+
+  rows = []
+  direct = payload.get("tnResult")
+  if isinstance(direct, list):
+    rows.extend([item for item in direct if isinstance(item, dict)])
+
+  tn_list = payload.get("tnList")
+  if isinstance(tn_list, dict):
+    tn_items = tn_list.get("tnItem")
+    if isinstance(tn_items, list):
+      rows.extend([item for item in tn_items if isinstance(item, dict)])
+
+  for key in ["items", "results", "data"]:
+    value = payload.get(key)
+    if isinstance(value, list):
+      rows.extend([item for item in value if isinstance(item, dict)])
+
+  deduped = []
+  seen = set()
+  for row in rows:
+    number = str(
+      row.get("tn", "")
+      or row.get("number", "")
+      or row.get("telephoneNumber", "")
+      or row.get("tnNumber", "")
+      or ""
+    ).strip()
+    key = (number, json.dumps(row, sort_keys=True, default=str)[:300])
+    if key in seen:
+      continue
+    seen.add(key)
+    deduped.append(row)
+  return deduped
 
 
 def _genesys_region_to_urls(region: str) -> tuple[str, str, str]:
@@ -29001,7 +29106,7 @@ def sinch_admin_page(request: Request):
   html = f"""
 <html>
   <head>
-    <title>Sinch Work (Inteliquent) - Voice Operations Portal</title>
+    <title>Telephone Number Extract - Inteliquent (Sinch)</title>
     <style>
       body {{
         font-family: "Segoe UI", Tahoma, Arial, sans-serif;
@@ -29037,6 +29142,7 @@ def sinch_admin_page(request: Request):
         border-radius: 12px;
         padding: 14px;
         box-shadow: 0 12px 24px rgba(0, 47, 108, 0.1);
+        margin-bottom: 12px;
       }}
       h3 {{
         margin: 0 0 8px 0;
@@ -29046,11 +29152,54 @@ def sinch_admin_page(request: Request):
         margin: 0;
         color: #4e6a84;
       }}
+      input, button {{
+        border-radius: 10px;
+      }}
+      input[type="text"], input[type="number"] {{
+        border: 1px solid #c8dbee;
+        padding: 6px 10px;
+        min-height: 34px;
+      }}
+      button {{
+        border: none;
+        background: linear-gradient(180deg, #0c77d8, #005eb8);
+        color: #fff;
+        padding: 8px 12px;
+        font-weight: 700;
+        cursor: pointer;
+        font-size: 13px;
+      }}
+      button:hover {{
+        background: linear-gradient(180deg, #0a5aad, #0047a0);
+      }}
+      table {{
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+      }}
+      th, td {{
+        padding: 7px 9px;
+        border-bottom: 1px solid #c8dbee;
+        text-align: left;
+        vertical-align: top;
+      }}
+      thead tr {{
+        background: #005eb8;
+        color: #fff;
+      }}
+      tbody tr:nth-child(even) {{
+        background: #f9f9f9;
+      }}
+      .status-msg {{
+        margin-top: 8px;
+        min-height: 18px;
+        color: #2c5c8a;
+      }}
     </style>
   </head>
   <body>
     <header class="topbar">
-      <strong>Sinch Work (Inteliquent)</strong>
+      <strong>Telephone Number Extract</strong>
       <div>
         <span style="margin-right:10px;font-size:12px;opacity:0.9;">Operator: {auth_user}</span>
         <a href="/page2">Administrative Items</a>
@@ -29058,14 +29207,209 @@ def sinch_admin_page(request: Request):
     </header>
     <main class="content">
       <div class="panel">
-        <h3>Sinch Work</h3>
-        <p>This page is reserved for Sinch administration workflows. Sinch is also called Inteliquent. No actions are enabled yet.</p>
+        <h3>Inteliquent (Sinch) Telephone Number Inventory</h3>
+        <p>Read-only lookup against Inteliquent tnInventory. No create, update, reserve, or disconnect actions are included here.</p>
+      </div>
+      <div class="panel">
+        <form id="inteliquent-inventory-form">
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+            <div>
+              <label for="tn_wildcard" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN Wildcard</label>
+              <input type="text" id="tn_wildcard" name="tn_wildcard" value="xxxxxxxxxx" placeholder="xxxxxxxxxx" style="min-width:180px;" />
+            </div>
+            <div>
+              <label for="tn_mask" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN Mask (optional)</label>
+              <input type="text" id="tn_mask" name="tn_mask" placeholder="312xxx1x2x" style="min-width:180px;" />
+            </div>
+            <div>
+              <label for="quantity" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Quantity</label>
+              <input type="number" id="quantity" name="quantity" value="20" min="1" max="100" style="width:110px;" />
+            </div>
+            <button type="submit">Run Read-Only Extract</button>
+          </div>
+        </form>
+        <p id="inventory-status" class="status-msg"></p>
+      </div>
+      <div class="panel">
+        <h3 style="margin-bottom:10px;">Results</h3>
+        <div id="inventory-results" style="overflow-x:auto;"></div>
+      </div>
+      <div class="panel">
+        <h3 style="margin-bottom:10px;">Debug Output</h3>
+        <pre id="inventory-debug" style="background:#f5f5f5;border:1px solid #ccc;padding:8px;border-radius:6px;max-height:320px;overflow-y:auto;font-size:10px;margin:0;color:#333;word-break:break-all;">Ready.</pre>
       </div>
     </main>
+    <script>
+      (function () {{
+        const form = document.getElementById("inteliquent-inventory-form");
+        const statusEl = document.getElementById("inventory-status");
+        const resultsEl = document.getElementById("inventory-results");
+        const debugEl = document.getElementById("inventory-debug");
+
+        function escapeHtml(value) {{
+          return String(value || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }}
+
+        function renderRows(rows) {{
+          if (!rows || !rows.length) {{
+            resultsEl.innerHTML = '<p style="color:#4e6a84;">No inventory numbers returned.</p>';
+            return;
+          }}
+
+          let html = '<table><thead><tr>'
+            + '<th>Telephone Number</th>'
+            + '<th>Status</th>'
+            + '<th>Rate Center</th>'
+            + '<th>City</th>'
+            + '<th>State</th>'
+            + '<th>Routing Option</th>'
+            + '<th>Trunk Group</th>'
+            + '</tr></thead><tbody>';
+
+          for (const row of rows) {{
+            html += '<tr>'
+              + '<td>' + escapeHtml(row.number) + '</td>'
+              + '<td>' + escapeHtml(row.status) + '</td>'
+              + '<td>' + escapeHtml(row.rate_center) + '</td>'
+              + '<td>' + escapeHtml(row.city) + '</td>'
+              + '<td>' + escapeHtml(row.state) + '</td>'
+              + '<td>' + escapeHtml(row.routing_option) + '</td>'
+              + '<td>' + escapeHtml(row.trunk_group) + '</td>'
+              + '</tr>';
+          }}
+          html += '</tbody></table>';
+          resultsEl.innerHTML = html;
+        }}
+
+        if (form) {{
+          form.addEventListener("submit", async function (event) {{
+            event.preventDefault();
+            statusEl.textContent = "Running Inteliquent read-only inventory lookup...";
+            resultsEl.innerHTML = "";
+
+            const formData = new FormData(form);
+            const body = new URLSearchParams();
+            body.set("tn_wildcard", String(formData.get("tn_wildcard") || ""));
+            body.set("tn_mask", String(formData.get("tn_mask") || ""));
+            body.set("quantity", String(formData.get("quantity") || "20"));
+
+            try {{
+              const response = await fetch("/inteliquent/tn-inventory", {{
+                method: "POST",
+                headers: {{ "Content-Type": "application/x-www-form-urlencoded" }},
+                body: body.toString(),
+              }});
+              const payload = await response.json();
+              debugEl.textContent = JSON.stringify(payload, null, 2);
+
+              if (!response.ok || !payload.ok) {{
+                statusEl.textContent = "Lookup failed: " + (payload.error || "Unknown error");
+                return;
+              }}
+
+              statusEl.textContent = "Returned " + String(payload.count || 0) + " number(s).";
+              renderRows(payload.rows || []);
+            }} catch (err) {{
+              debugEl.textContent = String(err && err.message ? err.message : err);
+              statusEl.textContent = "Lookup failed: " + String(err && err.message ? err.message : err);
+            }}
+          }});
+        }}
+      }})();
+    </script>
   </body>
 </html>
 """
   return HTMLResponse(content=html)
+
+
+@app.post("/inteliquent/tn-inventory")
+def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form(""), tn_mask: str = Form(""), quantity: int = Form(20)):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", "") or "").strip()
+  if not session_username:
+    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
+  if not _is_admin_user(session_username):
+    return JSONResponse({"ok": False, "error": "Not authorized for Inteliquent Admin."}, status_code=403)
+
+  clean_mask = str(tn_mask or "").strip()
+  clean_wildcard = str(tn_wildcard or "").strip()
+  safe_quantity = max(1, min(int(quantity or 20), 100))
+
+  payload = {
+    "privateKey": INTELIQUENT_PRIVATE_KEY,
+    "quantity": safe_quantity,
+  }
+  if clean_mask:
+    payload["tnMask"] = clean_mask
+  if clean_wildcard:
+    payload["tnWildcard"] = clean_wildcard
+  if not clean_mask and not clean_wildcard:
+    payload["tnWildcard"] = "xxxxxxxxxx"
+
+  call_result = _inteliquent_post_json("/tnInventory", payload)
+  if not call_result.get("ok"):
+    status_code = int(call_result.get("status_code") or 400)
+    if status_code < 400:
+      status_code = 400
+    return JSONResponse(
+      {
+        "ok": False,
+        "error": str(call_result.get("error") or "Inteliquent lookup failed."),
+        "raw": call_result.get("raw", {}),
+      },
+      status_code=status_code,
+    )
+
+  raw_payload = call_result.get("raw", {}) or {}
+  tn_rows = _inteliquent_extract_tn_rows(raw_payload)
+  rows = []
+  for item in tn_rows:
+    if not isinstance(item, dict):
+      continue
+
+    status_obj = item.get("typeTnStatusReference")
+    status_text = ""
+    if isinstance(status_obj, dict):
+      status_text = str(status_obj.get("name", "") or status_obj.get("description", "")).strip()
+
+    rows.append(
+      {
+        "number": str(
+          item.get("tn", "")
+          or item.get("number", "")
+          or item.get("telephoneNumber", "")
+          or item.get("tnNumber", "")
+          or ""
+        ).strip(),
+        "status": status_text or str(item.get("status", "") or "").strip(),
+        "rate_center": str(item.get("rateCenter", "") or item.get("rateCenterAbbr", "") or "").strip(),
+        "city": str(item.get("city", "") or "").strip(),
+        "state": str(item.get("province", "") or item.get("state", "") or "").strip(),
+        "routing_option": str(item.get("routingOption", "") or "").strip(),
+        "trunk_group": str(item.get("trunkGroup", "") or item.get("trunkGroupName", "") or "").strip(),
+        "raw": item,
+      }
+    )
+
+  return JSONResponse(
+    {
+      "ok": True,
+      "count": len(rows),
+      "rows": rows,
+      "status": str(raw_payload.get("status", "") or "").strip(),
+      "statusCode": str(raw_payload.get("statusCode", "") or "").strip(),
+      "page": raw_payload.get("page"),
+      "totalPages": raw_payload.get("totalPages"),
+      "totalItems": raw_payload.get("totalItems"),
+      "raw": raw_payload,
+    }
+  )
 
 
 @app.post("/cert-manager/lab/renewal/run/create")
@@ -29807,8 +30151,8 @@ def menu_admin_page(request: Request):
             <span>Manage Twilio number verification and lookup operations.</span>
           </a>
           <a class="hero-link-card" href="/sinch-work">
-            <strong>Sinch Work</strong>
-            <span>Sinch (Inteliquent) admin workspace.</span>
+            <strong>Telephone Number Extract</strong>
+            <span>Read-only Inteliquent (Sinch) telephone number inventory lookup.</span>
           </a>
           <a class="hero-link-card" href="/opentext-admin">
             <strong>OpenText Admin</strong>
@@ -29851,7 +30195,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/opentext-admin'">OpenText Admin</button>
-            <button type="button" class="portal-nav-btn" onclick="window.location.href='/sinch-work'">Sinch Work (Inteliquent)</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/sinch-work'">Telephone Number Extract</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">SMS Item Menu (Page 3)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
