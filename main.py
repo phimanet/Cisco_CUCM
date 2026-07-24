@@ -29336,7 +29336,7 @@ def sinch_admin_page(request: Request):
           <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
             <div>
               <label for="tn_wildcard" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN Wildcard</label>
-              <input type="text" id="tn_wildcard" name="tn_wildcard" value="xxxxxxxxxx" placeholder="xxxxxxxxxx" style="min-width:180px;" />
+              <input type="text" id="tn_wildcard" name="tn_wildcard" value="xxxxxxxxxx" placeholder="858xxxxxxx" style="min-width:180px;" />
             </div>
             <div>
               <label for="tn_mask" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN Mask (optional)</label>
@@ -29346,7 +29346,7 @@ def sinch_admin_page(request: Request):
               <label for="quantity" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Quantity</label>
               <input type="number" id="quantity" name="quantity" value="20" min="1" max="100" style="width:110px;" />
             </div>
-            <button type="submit">Run Read-Only Extract</button>
+            <button type="submit" id="run-tn-btn">Run Read-Only Extract</button>
             <button type="button" id="extract-all-tn-btn">Extract All TN</button>
           </div>
         </form>
@@ -29378,7 +29378,7 @@ def sinch_admin_page(request: Request):
               <label for="tf_quantity" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Quantity</label>
               <input type="number" id="tf_quantity" name="tf_quantity" value="20" min="1" max="100" style="width:110px;" />
             </div>
-            <button type="submit">Run Toll-Free Lookup</button>
+            <button type="submit" id="run-tf-btn">Run Toll-Free Lookup</button>
             <button type="button" id="extract-all-tf-btn">Extract All Toll-Free</button>
           </div>
         </form>
@@ -29411,11 +29411,13 @@ def sinch_admin_page(request: Request):
         const debugEl = document.getElementById("inventory-debug");
         const tnExportBtn = document.getElementById("tn-export-csv-btn");
         const extractAllBtn = document.getElementById("extract-all-tn-btn");
-        let extractAllMode = false;
+        const extractAllInput = document.getElementById("extract_all");
+        const runTnBtn = document.getElementById("run-tn-btn");
         let lastTnRows = [];
         const tfForm = document.getElementById("inteliquent-tf-form");
         const extractAllTfBtn = document.getElementById("extract-all-tf-btn");
-        let extractAllTfMode = false;
+        const tfExtractAllInput = document.getElementById("tf_extract_all");
+        const runTfBtn = document.getElementById("run-tf-btn");
         const tfStatusEl = document.getElementById("tf-status");
         const tfResultsEl = document.getElementById("tf-results");
         const tfDebugEl = document.getElementById("tf-debug");
@@ -29516,6 +29518,9 @@ def sinch_admin_page(request: Request):
         if (form) {{
           form.addEventListener("submit", async function (event) {{
             event.preventDefault();
+            const formData = new FormData(form);
+            const extractAllMode = String(formData.get("extract_all") || "0") === "1";
+
             statusEl.textContent = extractAllMode
               ? "Running Inteliquent all-assigned TN extract..."
               : "Running Inteliquent read-only inventory lookup...";
@@ -29525,7 +29530,6 @@ def sinch_admin_page(request: Request):
               tnExportBtn.disabled = true;
             }}
 
-            const formData = new FormData(form);
             const body = new URLSearchParams();
             body.set("tn_wildcard", String(formData.get("tn_wildcard") || ""));
             body.set("tn_mask", String(formData.get("tn_mask") || ""));
@@ -29543,7 +29547,9 @@ def sinch_admin_page(request: Request):
 
               if (!response.ok || !payload.ok) {{
                 statusEl.textContent = "Lookup failed: " + (payload.error || "Unknown error");
-                extractAllMode = false;
+                if (extractAllInput) {{
+                  extractAllInput.value = "0";
+                }}
                 return;
               }}
 
@@ -29554,19 +29560,35 @@ def sinch_admin_page(request: Request):
               if (tnExportBtn) {{
                 tnExportBtn.disabled = !lastTnRows.length;
               }}
-              extractAllMode = false;
+              if (extractAllInput) {{
+                extractAllInput.value = "0";
+              }}
             }} catch (err) {{
               debugEl.textContent = String(err && err.message ? err.message : err);
               statusEl.textContent = "Lookup failed: " + String(err && err.message ? err.message : err);
-              extractAllMode = false;
+              if (extractAllInput) {{
+                extractAllInput.value = "0";
+              }}
             }}
+          }});
+        }}
+
+        if (runTnBtn && extractAllInput) {{
+          runTnBtn.addEventListener("click", function () {{
+            extractAllInput.value = "0";
           }});
         }}
 
         if (extractAllBtn && form) {{
           extractAllBtn.addEventListener("click", function () {{
-            extractAllMode = true;
-            form.dispatchEvent(new Event("submit", {{ cancelable: true, bubbles: true }}));
+            if (extractAllInput) {{
+              extractAllInput.value = "1";
+            }}
+            if (typeof form.requestSubmit === "function") {{
+              form.requestSubmit();
+            }} else {{
+              form.dispatchEvent(new Event("submit", {{ cancelable: true, bubbles: true }}));
+            }}
           }});
         }}
 
@@ -29583,6 +29605,9 @@ def sinch_admin_page(request: Request):
         if (tfForm) {{
           tfForm.addEventListener("submit", async function (event) {{
             event.preventDefault();
+            const formData = new FormData(tfForm);
+            const extractAllTfMode = String(formData.get("extract_all") || "0") === "1";
+
             tfStatusEl.textContent = extractAllTfMode
               ? "Running Inteliquent all-assigned toll-free extract..."
               : "Running Inteliquent toll-free detail lookup...";
@@ -29592,7 +29617,6 @@ def sinch_admin_page(request: Request):
               tfExportBtn.disabled = true;
             }}
 
-            const formData = new FormData(tfForm);
             const body = new URLSearchParams();
             body.set("tf_mask", String(formData.get("tf_mask") || ""));
             body.set("quantity", String(formData.get("tf_quantity") || "20"));
@@ -29609,7 +29633,9 @@ def sinch_admin_page(request: Request):
 
               if (!response.ok || !payload.ok) {{
                 tfStatusEl.textContent = "Lookup failed: " + (payload.error || "Unknown error");
-                extractAllTfMode = false;
+                if (tfExtractAllInput) {{
+                  tfExtractAllInput.value = "0";
+                }}
                 return;
               }}
 
@@ -29620,19 +29646,35 @@ def sinch_admin_page(request: Request):
               if (tfExportBtn) {{
                 tfExportBtn.disabled = !lastTfRows.length;
               }}
-              extractAllTfMode = false;
+              if (tfExtractAllInput) {{
+                tfExtractAllInput.value = "0";
+              }}
             }} catch (err) {{
               tfDebugEl.textContent = String(err && err.message ? err.message : err);
               tfStatusEl.textContent = "Lookup failed: " + String(err && err.message ? err.message : err);
-              extractAllTfMode = false;
+              if (tfExtractAllInput) {{
+                tfExtractAllInput.value = "0";
+              }}
             }}
+          }});
+        }}
+
+        if (runTfBtn && tfExtractAllInput) {{
+          runTfBtn.addEventListener("click", function () {{
+            tfExtractAllInput.value = "0";
           }});
         }}
 
         if (extractAllTfBtn && tfForm) {{
           extractAllTfBtn.addEventListener("click", function () {{
-            extractAllTfMode = true;
-            tfForm.dispatchEvent(new Event("submit", {{ cancelable: true, bubbles: true }}));
+            if (tfExtractAllInput) {{
+              tfExtractAllInput.value = "1";
+            }}
+            if (typeof tfForm.requestSubmit === "function") {{
+              tfForm.requestSubmit();
+            }} else {{
+              tfForm.dispatchEvent(new Event("submit", {{ cancelable: true, bubbles: true }}));
+            }}
           }});
         }}
 
