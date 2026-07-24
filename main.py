@@ -27182,6 +27182,13 @@ __GREENLIGHT_ADMIN_CARD__
               <p id="greenlight-person-status" class="status-line">Enter Last Name and/or one or more emails, then Search.</p>
               <p><a id="greenlight-person-download" href="#" style="display:none; font-weight:700;">Download Full CSV</a></p>
               <div id="greenlight-person-results" style="overflow-x:auto;"></div>
+              <div style="margin-top:12px; border-top:1px dashed #bfd3e6; padding-top:10px;">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;">
+                  <strong style="font-size:12px; color:#234d72; letter-spacing:0.03em; text-transform:uppercase;">Greenlight Debug</strong>
+                  <button type="button" id="greenlight-person-debug-clear" style="font-size:12px; padding:4px 8px;">Clear Debug</button>
+                </div>
+                <pre id="greenlight-person-debug" style="margin:0; max-height:220px; overflow:auto; background:#0f2235; color:#d7ecff; border-radius:8px; padding:10px; font-size:12px; line-height:1.4;">Debug events will appear here.</pre>
+              </div>
             </div>
           </section>
 
@@ -27322,8 +27329,42 @@ __GREENLIGHT_ADMIN_CARD__
           const statusEl = document.getElementById("greenlight-person-status");
           const resultsEl = document.getElementById("greenlight-person-results");
           const downloadEl = document.getElementById("greenlight-person-download");
+          const debugEl = document.getElementById("greenlight-person-debug");
+          const debugClearBtn = document.getElementById("greenlight-person-debug-clear");
           if (!form || !statusEl || !resultsEl || !downloadEl) {
             return;
+          }
+
+          function debugLog(eventName, detail) {
+            if (!debugEl) {
+              return;
+            }
+
+            const now = new Date();
+            const stamp = now.toLocaleTimeString();
+            let line = "[" + stamp + "] " + String(eventName || "event");
+
+            if (detail !== undefined && detail !== null) {
+              let text = "";
+              try {
+                text = typeof detail === "string" ? detail : JSON.stringify(detail);
+              } catch (_jsonErr) {
+                text = String(detail);
+              }
+              line += " :: " + text;
+            }
+
+            const prior = String(debugEl.textContent || "").trim();
+            debugEl.textContent = prior ? (prior + "\\n" + line) : line;
+            debugEl.scrollTop = debugEl.scrollHeight;
+          }
+
+          if (debugClearBtn) {
+            debugClearBtn.addEventListener("click", function () {
+              if (debugEl) {
+                debugEl.textContent = "Debug log cleared.";
+              }
+            });
           }
 
           function toCell(value) {
@@ -27377,8 +27418,11 @@ __GREENLIGHT_ADMIN_CARD__
 
           function pollQueuedJob(statusUrl, token) {
             if (!statusUrl || token !== queuePollToken) {
+              debugLog("poll-skipped", { token: token, activeToken: queuePollToken, statusUrl: statusUrl || "" });
               return;
             }
+
+            debugLog("poll-start", { token: token, statusUrl: statusUrl });
 
             fetch(statusUrl, {
               method: "GET",
@@ -27388,6 +27432,7 @@ __GREENLIGHT_ADMIN_CARD__
               .then((response) => response.text().then((rawText) => ({ response, rawText })))
               .then(({ response, rawText }) => {
                 if (token !== queuePollToken) {
+                  debugLog("poll-response-ignored-stale", { token: token, activeToken: queuePollToken });
                   return;
                 }
 
@@ -27408,6 +27453,14 @@ __GREENLIGHT_ADMIN_CARD__
                 const count = Number(run.count || 0);
                 const emailCount = Number(run.email_count || 0);
 
+                debugLog("poll-response", {
+                  token: token,
+                  http: response.status,
+                  state: state,
+                  rows: count,
+                  email_count: emailCount,
+                });
+
                 if (state === "completed") {
                   statusEl.textContent = "Queued lookup completed. Rows: " + count + ". Download CSV.";
                   resultsEl.innerHTML = "";
@@ -27415,6 +27468,7 @@ __GREENLIGHT_ADMIN_CARD__
                     downloadEl.href = run.download_url;
                     downloadEl.style.display = "inline";
                   }
+                  debugLog("poll-completed", { token: token, download_url: run.download_url || "" });
                   return;
                 }
 
@@ -27422,6 +27476,7 @@ __GREENLIGHT_ADMIN_CARD__
                   const errText = String(run.error || "Unknown error.");
                   statusEl.textContent = "Queued lookup failed.";
                   resultsEl.innerHTML = "<p style='margin:0;color:#a42323; font-weight:700;">" + escapeHtml(errText) + "</p>";
+                  debugLog("poll-failed", { token: token, error: errText });
                   return;
                 }
 
@@ -27429,13 +27484,16 @@ __GREENLIGHT_ADMIN_CARD__
                 queuePollTimerId = window.setTimeout(function () {
                   pollQueuedJob(statusUrl, token);
                 }, 2000);
+                debugLog("poll-next-scheduled", { token: token, delay_ms: 2000 });
               })
               .catch((err) => {
                 if (token !== queuePollToken) {
+                  debugLog("poll-error-ignored-stale", { token: token, activeToken: queuePollToken });
                   return;
                 }
                 statusEl.textContent = "Queue status failed.";
                 resultsEl.innerHTML = "<p style='margin:0;color:#a42323; font-weight:700;'>" + escapeHtml(String(err && err.message ? err.message : err)) + "</p>";
+                debugLog("poll-error", { token: token, error: String(err && err.message ? err.message : err) });
               });
           }
 
@@ -27451,6 +27509,21 @@ __GREENLIGHT_ADMIN_CARD__
             downloadEl.style.display = "none";
             downloadEl.href = "#";
 
+            const formDataForDebug = new FormData(form);
+            const lastName = String(formDataForDebug.get("last_name") || "").trim();
+            const firstName = String(formDataForDebug.get("first_name") || "").trim();
+            const emailsText = String(formDataForDebug.get("emails_text") || "");
+            const emailTokens = emailsText
+              .split(/[\\s,;]+/)
+              .map(function (v) { return String(v || "").trim(); })
+              .filter(function (v) { return !!v; });
+            debugLog("submit-start", {
+              token: queuePollToken,
+              last_name: lastName,
+              first_name: firstName,
+              email_count_estimate: emailTokens.length,
+            });
+
             try {
               const response = await fetch("/project-greenlight/person-lookup", {
                 method: "POST",
@@ -27459,6 +27532,11 @@ __GREENLIGHT_ADMIN_CARD__
                 headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
               });
               const rawText = await response.text();
+              debugLog("submit-response-raw", {
+                token: queuePollToken,
+                http: response.status,
+                body_preview: String(rawText || "").slice(0, 280),
+              });
               let payload = {};
               try {
                 payload = rawText ? JSON.parse(rawText) : {};
@@ -27477,6 +27555,7 @@ __GREENLIGHT_ADMIN_CARD__
                 resultsEl.innerHTML = "";
                 downloadEl.style.display = "none";
                 const pollToken = queuePollToken;
+                debugLog("submit-queued", { token: pollToken, email_count: emailCount, status_url: payload.status_url });
                 window.setTimeout(function () {
                   pollQueuedJob(payload.status_url, pollToken);
                 }, 1200);
@@ -27487,6 +27566,12 @@ __GREENLIGHT_ADMIN_CARD__
               const previewCount = Number(payload.preview_count || 0);
               statusEl.textContent = "Found " + total + " row(s). Showing first " + previewCount + " on page.";
               renderPreview(payload.preview_results || []);
+              debugLog("submit-completed", {
+                token: queuePollToken,
+                rows: total,
+                preview_rows: previewCount,
+                has_download: !!payload.download_url,
+              });
               if (payload.download_url) {
                 downloadEl.href = payload.download_url;
                 downloadEl.style.display = "inline";
@@ -27494,6 +27579,7 @@ __GREENLIGHT_ADMIN_CARD__
             } catch (err) {
               statusEl.textContent = "Lookup failed.";
               resultsEl.innerHTML = "<p style='margin:0;color:#a42323; font-weight:700;'>" + escapeHtml(String(err && err.message ? err.message : err)) + "</p>";
+              debugLog("submit-error", { token: queuePollToken, error: String(err && err.message ? err.message : err) });
             }
           });
         })();
