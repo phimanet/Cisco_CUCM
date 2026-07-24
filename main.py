@@ -89,6 +89,7 @@ VERASMART_QUEUE_MAX_RUNS = 50
 GREENLIGHT_LOOKUP_RUNS = {}
 GREENLIGHT_LOOKUP_RUNS_LOCK = threading.Lock()
 GREENLIGHT_LOOKUP_MAX_RUNS = 200
+GREENLIGHT_LOOKUP_MAX_EMAILS = int((os.getenv("GREENLIGHT_LOOKUP_MAX_EMAILS", "2000") or "2000").strip())
 STRIKE_MASK_OPERATIONS = {}
 STRIKE_MASK_LOCK = threading.Lock()
 STRIKE_MASK_MAX_OPERATIONS = 200
@@ -12230,7 +12231,15 @@ def _greenlight_collect_people_from_email(cucm_host: str, cucm_user: str, cucm_p
   return matches
 
 
-def _greenlight_collect_people(cucm_host: str, cucm_user: str, cucm_pass: str, last_name: str, first_name: str, emails: list[str]) -> list[dict]:
+def _greenlight_collect_people(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  last_name: str,
+  first_name: str,
+  emails: list[str],
+  progress_callback=None,
+) -> list[dict]:
   people: dict[str, dict] = {}
 
   clean_last = (last_name or "").strip()
@@ -12243,12 +12252,20 @@ def _greenlight_collect_people(cucm_host: str, cucm_user: str, cucm_pass: str, l
 
   clean_emails = [str(e or "").strip().lower() for e in emails if str(e or "").strip()]
   if len(clean_emails) > 5:
+    completed = 0
+    total = len(clean_emails)
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
       futures = [
         executor.submit(_greenlight_collect_people_from_email, cucm_host, cucm_user, cucm_pass, email)
         for email in clean_emails
       ]
       for future in concurrent.futures.as_completed(futures):
+        completed += 1
+        if progress_callback:
+          try:
+            progress_callback(completed, total)
+          except Exception:
+            pass
         try:
           partial = future.result() or {}
         except Exception:
@@ -12257,8 +12274,16 @@ def _greenlight_collect_people(cucm_host: str, cucm_user: str, cucm_pass: str, l
           if uid_key:
             people[uid_key] = row
   else:
+    total = len(clean_emails)
+    completed = 0
     for email in clean_emails:
       partial = _greenlight_collect_people_from_email(cucm_host, cucm_user, cucm_pass, email)
+      completed += 1
+      if progress_callback:
+        try:
+          progress_callback(completed, total)
+        except Exception:
+          pass
       for uid_key, row in partial.items():
         if uid_key:
           people[uid_key] = row
@@ -12268,8 +12293,24 @@ def _greenlight_collect_people(cucm_host: str, cucm_user: str, cucm_pass: str, l
   return rows
 
 
-def _greenlight_build_person_lookup_rows(cucm_host: str, cucm_user: str, cucm_pass: str, last_name: str, first_name: str, emails: list[str]) -> list[dict]:
-  people = _greenlight_collect_people(cucm_host, cucm_user, cucm_pass, last_name, first_name, emails)
+def _greenlight_build_person_lookup_rows(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  last_name: str,
+  first_name: str,
+  emails: list[str],
+  progress_callback=None,
+) -> list[dict]:
+  people = _greenlight_collect_people(
+    cucm_host,
+    cucm_user,
+    cucm_pass,
+    last_name,
+    first_name,
+    emails,
+    progress_callback=progress_callback,
+  )
   output_rows = []
 
   for person in people:
@@ -12415,6 +12456,10 @@ def _greenlight_rows_to_csv_bytes(rows: list[dict]) -> bytes:
 
 def _greenlight_queue_store(entry: dict) -> None:
   with GREENLIGHT_LOOKUP_RUNS_LOCK:
+    now_text = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    if not entry.get("created_at"):
+      entry["created_at"] = now_text
+    entry["updated_at"] = now_text
     GREENLIGHT_LOOKUP_RUNS[str(entry.get("job_id", ""))] = entry
     if len(GREENLIGHT_LOOKUP_RUNS) > GREENLIGHT_LOOKUP_MAX_RUNS:
       oldest_key = next(iter(GREENLIGHT_LOOKUP_RUNS))
@@ -12432,14 +12477,33 @@ def _greenlight_queue_update(job_id: str, **values) -> None:
     if not current:
       return
     current.update(values)
+    current["updated_at"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     GREENLIGHT_LOOKUP_RUNS[job_id] = current
+
+
+def _greenlight_queue_list(limit: int = 20) -> list[dict]:
+  safe_limit = max(1, min(int(limit or 20), 100))
+  with GREENLIGHT_LOOKUP_RUNS_LOCK:
+    runs = [dict(item or {}) for item in GREENLIGHT_LOOKUP_RUNS.values()]
+
+  runs.sort(
+    key=lambda row: (
+      str(row.get("updated_at") or row.get("completed_at") or row.get("started_at") or row.get("created_at") or ""),
+      str(row.get("job_id") or ""),
+    ),
+    reverse=True,
+  )
+  return runs[:safe_limit]
 
 
 def _greenlight_run_queued_lookup(job_id: str, cucm_host: str, cucm_user: str, cucm_pass: str, clean_last: str, clean_first: str, emails: list[str]) -> None:
   started_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-  _greenlight_queue_update(job_id, status="running", started_at=started_at)
+  _greenlight_queue_update(job_id, status="running", started_at=started_at, emails_completed=0, email_count=len(emails))
 
   try:
+    def _progress_update(done: int, total: int) -> None:
+      _greenlight_queue_update(job_id, status="running", emails_completed=max(0, int(done or 0)), email_count=max(0, int(total or 0)))
+
     rows = _greenlight_build_person_lookup_rows(
       cucm_host=cucm_host,
       cucm_user=cucm_user,
@@ -12447,6 +12511,7 @@ def _greenlight_run_queued_lookup(job_id: str, cucm_host: str, cucm_user: str, c
       last_name=clean_last,
       first_name=clean_first,
       emails=emails,
+      progress_callback=_progress_update,
     )
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -12460,6 +12525,7 @@ def _greenlight_run_queued_lookup(job_id: str, cucm_host: str, cucm_user: str, c
       status="completed",
       completed_at=completed_at,
       count=len(rows),
+      emails_completed=len(emails),
       filename=job_output.get("filename", filename),
       download_url=f"/download/job-output/{job_output['job_id']}",
       error="",
@@ -12470,6 +12536,7 @@ def _greenlight_run_queued_lookup(job_id: str, cucm_host: str, cucm_user: str, c
       job_id,
       status="failed",
       completed_at=failed_at,
+      emails_completed=0,
       error=str(exc),
     )
 
@@ -27184,6 +27251,17 @@ __GREENLIGHT_ADMIN_CARD__
               <div id="greenlight-person-results" style="overflow-x:auto;"></div>
               <div style="margin-top:12px; border-top:1px dashed #bfd3e6; padding-top:10px;">
                 <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;">
+                  <strong style="font-size:12px; color:#234d72; letter-spacing:0.03em; text-transform:uppercase;">Batch Job History</strong>
+                  <div style="display:flex; gap:6px; flex-wrap:wrap;">
+                    <button type="button" id="greenlight-history-refresh" style="font-size:12px; padding:4px 8px;">Refresh</button>
+                    <button type="button" id="greenlight-history-resume-last" style="font-size:12px; padding:4px 8px;">Resume Last Job</button>
+                  </div>
+                </div>
+                <div id="greenlight-history-status" style="font-size:12px; color:#355978; margin-bottom:6px;">No history loaded yet.</div>
+                <div id="greenlight-history-results" style="overflow:auto; max-height:220px;"></div>
+              </div>
+              <div style="margin-top:12px; border-top:1px dashed #bfd3e6; padding-top:10px;">
+                <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;">
                   <strong style="font-size:12px; color:#234d72; letter-spacing:0.03em; text-transform:uppercase;">Greenlight Debug</strong>
                   <button type="button" id="greenlight-person-debug-clear" style="font-size:12px; padding:4px 8px;">Clear Debug</button>
                 </div>
@@ -27331,9 +27409,15 @@ __GREENLIGHT_ADMIN_CARD__
           const downloadEl = document.getElementById("greenlight-person-download");
           const debugEl = document.getElementById("greenlight-person-debug");
           const debugClearBtn = document.getElementById("greenlight-person-debug-clear");
+          const historyRefreshBtn = document.getElementById("greenlight-history-refresh");
+          const historyResumeLastBtn = document.getElementById("greenlight-history-resume-last");
+          const historyStatusEl = document.getElementById("greenlight-history-status");
+          const historyResultsEl = document.getElementById("greenlight-history-results");
           if (!form || !statusEl || !resultsEl || !downloadEl) {
             return;
           }
+
+          const storageKeyStatusUrl = "greenlight_person_lookup_last_status_url";
 
           function debugLog(eventName, detail) {
             if (!debugEl) {
@@ -27416,6 +27500,167 @@ __GREENLIGHT_ADMIN_CARD__
           let queuePollToken = 0;
           let queuePollTimerId = null;
 
+          function saveLastStatusUrl(statusUrl) {
+            try {
+              if (!statusUrl) {
+                window.localStorage.removeItem(storageKeyStatusUrl);
+                return;
+              }
+              window.localStorage.setItem(storageKeyStatusUrl, String(statusUrl));
+            } catch (_storageErr) {
+              // ignore storage errors
+            }
+          }
+
+          function getLastStatusUrl() {
+            try {
+              return String(window.localStorage.getItem(storageKeyStatusUrl) || "").trim();
+            } catch (_storageErr) {
+              return "";
+            }
+          }
+
+          function formatState(state) {
+            const clean = String(state || "").toLowerCase();
+            if (!clean) {
+              return "Unknown";
+            }
+            return clean.charAt(0).toUpperCase() + clean.slice(1);
+          }
+
+          function renderQueueHistory(runs) {
+            if (!historyResultsEl) {
+              return;
+            }
+            const rows = Array.isArray(runs) ? runs : [];
+            if (!rows.length) {
+              historyResultsEl.innerHTML = "<p style='margin:0;color:#355978;'>No queued jobs yet.</p>";
+              return;
+            }
+
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:12px;">';
+            html += '<thead><tr style="background:#005eb8;color:#fff;">';
+            html += '<th style="padding:6px 8px; text-align:left;">Status</th>';
+            html += '<th style="padding:6px 8px; text-align:left;">Emails</th>';
+            html += '<th style="padding:6px 8px; text-align:left;">Rows</th>';
+            html += '<th style="padding:6px 8px; text-align:left;">Updated</th>';
+            html += '<th style="padding:6px 8px; text-align:left;">Action</th>';
+            html += '</tr></thead><tbody>';
+
+            rows.forEach(function (run, idx) {
+              const bg = idx % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const state = String((run && run.status) || "");
+              const emailTotal = Number((run && run.email_count) || 0);
+              const emailDone = Number((run && run.emails_completed) || 0);
+              const rowCount = Number((run && run.count) || 0);
+              const updated = String((run && (run.updated_at || run.completed_at || run.started_at || run.created_at)) || "");
+              const jobId = String((run && run.job_id) || "").trim();
+              const statusUrl = jobId ? ("/project-greenlight/person-lookup/status/" + encodeURIComponent(jobId)) : "";
+              const progressText = emailTotal > 0 ? (emailDone + "/" + emailTotal) : "0";
+
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:6px 8px;">' + escapeHtml(formatState(state)) + '</td>';
+              html += '<td style="padding:6px 8px; font-family:Consolas,monospace;">' + escapeHtml(progressText) + '</td>';
+              html += '<td style="padding:6px 8px; font-family:Consolas,monospace;">' + escapeHtml(String(rowCount)) + '</td>';
+              html += '<td style="padding:6px 8px;">' + escapeHtml(updated) + '</td>';
+              if (statusUrl) {
+                html += '<td style="padding:6px 8px;"><button type="button" class="greenlight-history-resume" data-status-url="' + escapeHtml(statusUrl) + '" style="font-size:11px; padding:3px 7px;">Track</button></td>';
+              } else {
+                html += '<td style="padding:6px 8px; color:#6b7785;">N/A</td>';
+              }
+              html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            historyResultsEl.innerHTML = html;
+
+            Array.from(historyResultsEl.querySelectorAll(".greenlight-history-resume")).forEach(function (btn) {
+              btn.addEventListener("click", function () {
+                const statusUrl = String(btn.getAttribute("data-status-url") || "").trim();
+                if (!statusUrl) {
+                  return;
+                }
+                queuePollToken += 1;
+                if (queuePollTimerId) {
+                  window.clearTimeout(queuePollTimerId);
+                  queuePollTimerId = null;
+                }
+                saveLastStatusUrl(statusUrl);
+                const pollToken = queuePollToken;
+                statusEl.textContent = "Resumed tracking existing queued job...";
+                debugLog("resume-job", { token: pollToken, status_url: statusUrl, source: "history-row" });
+                pollQueuedJob(statusUrl, pollToken);
+              });
+            });
+          }
+
+          async function refreshQueueHistory() {
+            if (historyStatusEl) {
+              historyStatusEl.textContent = "Refreshing history...";
+            }
+            try {
+              const response = await fetch("/project-greenlight/person-lookup/history?limit=20", {
+                method: "GET",
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+              });
+              const rawText = await response.text();
+              let payload = {};
+              try {
+                payload = rawText ? JSON.parse(rawText) : {};
+              } catch (_parseErr) {
+                payload = { ok: false, error: { message: rawText || "Unexpected history response." } };
+              }
+
+              if (!response.ok || payload.ok === false) {
+                const detail = (payload.error && payload.error.message) || payload.detail || payload.message || ("History failed (HTTP " + response.status + ")");
+                throw new Error(String(detail));
+              }
+
+              const runs = Array.isArray(payload.runs) ? payload.runs : [];
+              renderQueueHistory(runs);
+              if (historyStatusEl) {
+                historyStatusEl.textContent = "History loaded: " + runs.length + " job(s).";
+              }
+            } catch (err) {
+              if (historyStatusEl) {
+                historyStatusEl.textContent = "History refresh failed.";
+              }
+              if (historyResultsEl) {
+                historyResultsEl.innerHTML = "<p style='margin:0;color:#a42323; font-weight:700;'>" + escapeHtml(String(err && err.message ? err.message : err)) + "</p>";
+              }
+              debugLog("history-error", { error: String(err && err.message ? err.message : err) });
+            }
+          }
+
+          if (historyRefreshBtn) {
+            historyRefreshBtn.addEventListener("click", function () {
+              refreshQueueHistory();
+            });
+          }
+
+          if (historyResumeLastBtn) {
+            historyResumeLastBtn.addEventListener("click", function () {
+              const statusUrl = getLastStatusUrl();
+              if (!statusUrl) {
+                if (historyStatusEl) {
+                  historyStatusEl.textContent = "No previously tracked queued job found in this browser.";
+                }
+                return;
+              }
+
+              queuePollToken += 1;
+              if (queuePollTimerId) {
+                window.clearTimeout(queuePollTimerId);
+                queuePollTimerId = null;
+              }
+              const pollToken = queuePollToken;
+              statusEl.textContent = "Resuming last tracked queued job...";
+              debugLog("resume-job", { token: pollToken, status_url: statusUrl, source: "resume-last" });
+              pollQueuedJob(statusUrl, pollToken);
+            });
+          }
+
           function pollQueuedJob(statusUrl, token) {
             if (!statusUrl || token !== queuePollToken) {
               debugLog("poll-skipped", { token: token, activeToken: queuePollToken, statusUrl: statusUrl || "" });
@@ -27452,6 +27697,7 @@ __GREENLIGHT_ADMIN_CARD__
                 const state = String(run.status || "").toLowerCase();
                 const count = Number(run.count || 0);
                 const emailCount = Number(run.email_count || 0);
+                const emailsCompleted = Number(run.emails_completed || 0);
 
                 debugLog("poll-response", {
                   token: token,
@@ -27459,6 +27705,7 @@ __GREENLIGHT_ADMIN_CARD__
                   state: state,
                   rows: count,
                   email_count: emailCount,
+                  emails_completed: emailsCompleted,
                 });
 
                 if (state === "completed") {
@@ -27469,6 +27716,7 @@ __GREENLIGHT_ADMIN_CARD__
                     downloadEl.style.display = "inline";
                   }
                   debugLog("poll-completed", { token: token, download_url: run.download_url || "" });
+                  refreshQueueHistory();
                   return;
                 }
 
@@ -27477,10 +27725,11 @@ __GREENLIGHT_ADMIN_CARD__
                   statusEl.textContent = "Queued lookup failed.";
                   resultsEl.innerHTML = "<p style='margin:0;color:#a42323; font-weight:700;">" + escapeHtml(errText) + "</p>";
                   debugLog("poll-failed", { token: token, error: errText });
+                  refreshQueueHistory();
                   return;
                 }
 
-                statusEl.textContent = "Queued lookup in progress (" + state + ") for " + emailCount + " emails using 3 workers...";
+                statusEl.textContent = "Queued lookup in progress (" + state + ") " + emailsCompleted + "/" + emailCount + " emails checked using 3 workers...";
                 queuePollTimerId = window.setTimeout(function () {
                   pollQueuedJob(statusUrl, token);
                 }, 2000);
@@ -27555,10 +27804,12 @@ __GREENLIGHT_ADMIN_CARD__
                 resultsEl.innerHTML = "";
                 downloadEl.style.display = "none";
                 const pollToken = queuePollToken;
+                saveLastStatusUrl(payload.status_url);
                 debugLog("submit-queued", { token: pollToken, email_count: emailCount, status_url: payload.status_url });
                 window.setTimeout(function () {
                   pollQueuedJob(payload.status_url, pollToken);
                 }, 1200);
+                refreshQueueHistory();
                 return;
               }
 
@@ -27566,6 +27817,7 @@ __GREENLIGHT_ADMIN_CARD__
               const previewCount = Number(payload.preview_count || 0);
               statusEl.textContent = "Found " + total + " row(s). Showing first " + previewCount + " on page.";
               renderPreview(payload.preview_results || []);
+              saveLastStatusUrl("");
               debugLog("submit-completed", {
                 token: queuePollToken,
                 rows: total,
@@ -27582,6 +27834,19 @@ __GREENLIGHT_ADMIN_CARD__
               debugLog("submit-error", { token: queuePollToken, error: String(err && err.message ? err.message : err) });
             }
           });
+
+          refreshQueueHistory();
+
+          const resumeStatusUrlOnLoad = getLastStatusUrl();
+          if (resumeStatusUrlOnLoad) {
+            queuePollToken += 1;
+            const pollToken = queuePollToken;
+            debugLog("resume-job", { token: pollToken, status_url: resumeStatusUrlOnLoad, source: "page-load" });
+            statusEl.textContent = "Found previous queued job. Resuming tracking...";
+            window.setTimeout(function () {
+              pollQueuedJob(resumeStatusUrlOnLoad, pollToken);
+            }, 400);
+          }
         })();
 
         runLookup({
@@ -38131,6 +38396,17 @@ def project_greenlight_person_lookup_route(
     clean_last = (last_name or "").strip()
     clean_first = (first_name or "").strip()
     emails = _greenlight_parse_email_inputs(emails_text)
+    if len(emails) > GREENLIGHT_LOOKUP_MAX_EMAILS:
+      return JSONResponse(
+        {
+          "ok": False,
+          "error": {
+            "message": f"Too many emails in one request ({len(emails)}). Max allowed is {GREENLIGHT_LOOKUP_MAX_EMAILS}."
+          },
+        },
+        status_code=400,
+      )
+
     if not clean_last and not emails:
       return JSONResponse(
         {
@@ -38150,6 +38426,7 @@ def project_greenlight_person_lookup_route(
         "started_at": "",
         "completed_at": "",
         "email_count": len(emails),
+        "emails_completed": 0,
         "worker_count": 3,
         "count": 0,
         "filename": "",
@@ -38235,6 +38512,11 @@ def project_greenlight_person_lookup_status_route(job_id: str):
     return JSONResponse({"ok": False, "error": {"message": "Queued job not found."}}, status_code=404)
 
   return JSONResponse({"ok": True, "run": run})
+
+
+@app.get("/project-greenlight/person-lookup/history")
+def project_greenlight_person_lookup_history_route(limit: int = Query(20, ge=1, le=100)):
+  return JSONResponse({"ok": True, "runs": _greenlight_queue_list(limit=limit)})
 
 
 @app.post("/lookup/twilio-by-number")
