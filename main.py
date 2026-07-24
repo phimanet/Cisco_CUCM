@@ -29250,26 +29250,57 @@ def sinch_admin_page(request: Request):
         min-height: 18px;
         color: #2c5c8a;
       }}
-      .sinch-menu-grid {{
+      .portal-shell {{
         display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+        grid-template-columns: 240px minmax(0, 1fr);
+        gap: 14px;
+        align-items: start;
+      }}
+      .portal-sidebar {{
+        position: sticky;
+        top: 10px;
+        background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        box-shadow: 0 18px 36px rgba(0, 47, 108, 0.18);
+        padding: 10px;
+      }}
+      .portal-sidebar h4 {{
+        margin: 4px 6px 8px 6px;
+        color: #fff;
+        font-size: 13px;
+        letter-spacing: 0.3px;
+      }}
+      .portal-nav {{
+        display: grid;
         gap: 8px;
       }}
-      .sinch-menu-btn {{
+      .portal-nav-btn {{
         text-align: left;
         border-radius: 8px;
-        border: 1px solid #9bbfe3;
-        background: #f2f8ff;
-        color: #0b3f76;
-        padding: 8px 10px;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        background: rgba(255, 255, 255, 0.09);
+        color: rgba(255, 255, 255, 0.94);
+        padding: 7px 9px;
         font-size: 12px;
         font-weight: 700;
         cursor: pointer;
+        box-shadow: none;
+        transition: transform 0.18s ease, background 0.18s ease, border-color 0.18s ease;
       }}
-      .sinch-menu-btn.active {{
-        background: linear-gradient(180deg, #0c77d8, #005eb8);
-        color: #fff;
-        border-color: #005eb8;
+      .portal-nav-btn:hover {{
+        background: rgba(255, 255, 255, 0.16);
+        border-color: rgba(255, 255, 255, 0.24);
+        transform: translateX(2px);
+      }}
+      .portal-nav-btn.active {{
+        background: linear-gradient(90deg, #ffffff, #ecf6ff);
+        color: #003580;
+        border-color: rgba(255, 255, 255, 0.92);
+        box-shadow: 0 12px 24px rgba(0, 0, 0, 0.12);
+      }}
+      .portal-main {{
+        min-width: 0;
       }}
     </style>
   </head>
@@ -29287,15 +29318,17 @@ def sinch_admin_page(request: Request):
         <h3>Sinch Admin Page</h3>
         <p>Read-only lookup against Inteliquent tnInventory. No create, update, reserve, or disconnect actions are included here.</p>
       </div>
-      <div class="panel">
-        <h3 style="margin-bottom:10px;">Menu</h3>
-        <div class="sinch-menu-grid">
-          <button type="button" id="sinch-menu-tn" class="sinch-menu-btn active">Extract TN</button>
-          <button type="button" id="sinch-menu-tf" class="sinch-menu-btn">Toll-Free Extract</button>
-          <button type="button" id="sinch-menu-back-main" class="sinch-menu-btn" onclick="window.location.href='/menu'">Back to Main Operations</button>
-          <button type="button" id="sinch-menu-back-admin" class="sinch-menu-btn" onclick="window.location.href='/page2'">Back to Administrative Items</button>
+      <div class="portal-shell">
+      <aside class="portal-sidebar">
+        <h4>Sinch Menu</h4>
+        <div class="portal-nav">
+          <button type="button" id="sinch-menu-tn" class="portal-nav-btn active">Extract TN</button>
+          <button type="button" id="sinch-menu-tf" class="portal-nav-btn">Toll-Free Extract</button>
+          <button type="button" id="sinch-menu-back-main" class="portal-nav-btn" onclick="window.location.href='/menu'">Back to Main Operations</button>
+          <button type="button" id="sinch-menu-back-admin" class="portal-nav-btn" onclick="window.location.href='/page2'">Back to Administrative Items</button>
         </div>
-      </div>
+      </aside>
+      <section class="portal-main">
       <div id="sinch-tn-section">
       <div class="panel">
         <form id="inteliquent-inventory-form">
@@ -29362,6 +29395,8 @@ def sinch_admin_page(request: Request):
         <h3 style="margin-bottom:10px;">Toll-Free Debug Output</h3>
         <pre id="tf-debug" style="background:#f5f5f5;border:1px solid #ccc;padding:8px;border-radius:6px;max-height:320px;overflow-y:auto;font-size:10px;margin:0;color:#333;word-break:break-all;">Ready.</pre>
       </div>
+      </div>
+      </section>
       </div>
     </main>
     <script>
