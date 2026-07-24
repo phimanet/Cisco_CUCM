@@ -25742,11 +25742,6 @@ __ADMIN_CARD__
         <div id="page1-batch-ldap-results" style="overflow-x:auto;"></div>
         <p><a id="page1-batch-ldap-download" href="#" style="display:none; font-weight:700; margin-top:12px; color:#1d5490;">Download Results CSV</a></p>
       </div>
-      <div style="margin-top:12px;">
-        <label style="display:block; margin-bottom:6px; font-weight:600; color:#a42323;">Debug Output (copy this and send to support):</label>
-        <textarea id="page1-batch-ldap-debug" readonly style="width:100%; height:180px; font-family:monospace; font-size:11px; padding:8px; border:1px solid #a42323; border-radius:4px; box-sizing:border-box; background:#fff8f8;" placeholder="Debug messages will appear here when you click Start Batch Update."></textarea>
-        <button type="button" id="page1-batch-ldap-copy-debug" style="margin-top:6px; background:#555; color:#fff; padding:5px 12px; border:none; border-radius:4px; cursor:pointer; font-size:12px;">Copy Debug Output</button>
-      </div>
 
       <script>
       (function () {
@@ -28263,7 +28258,6 @@ __GREENLIGHT_ADMIN_CARD__
             <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="jabberstatus">Jabber Status Check</button>
             <button type="button" class="portal-nav-btn" data-panel="translationlookup">Translation Pattern Lookup</button>
-            <button type="button" class="portal-nav-btn" data-panel="batchldap">Batch LDAP Phone Update</button>
             <a class="portal-nav-link" href="/menu?panel=build">Open Build User (Page 1)</a>
             <a class="portal-nav-link" href="/menu?panel=offboard">Open Separate Employee (Page 1)</a>
           </div>
@@ -28299,13 +28293,6 @@ __GREENLIGHT_ADMIN_CARD__
                 </div>
                 <div id="greenlight-history-status" style="font-size:12px; color:#355978; margin-bottom:6px;">No history loaded yet.</div>
                 <div id="greenlight-history-results" style="overflow:auto; max-height:220px;"></div>
-              </div>
-              <div style="margin-top:12px; border-top:1px dashed #bfd3e6; padding-top:10px;">
-                <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:6px;">
-                  <strong style="font-size:12px; color:#234d72; letter-spacing:0.03em; text-transform:uppercase;">Greenlight Debug</strong>
-                  <button type="button" id="greenlight-person-debug-clear" style="font-size:12px; padding:4px 8px;">Clear Debug</button>
-                </div>
-                <pre id="greenlight-person-debug" style="margin:0; max-height:220px; overflow:auto; background:#0f2235; color:#d7ecff; border-radius:8px; padding:10px; font-size:12px; line-height:1.4;">Debug events will appear here.</pre>
               </div>
             </div>
           </section>
@@ -28493,30 +28480,6 @@ __GREENLIGHT_ADMIN_CARD__
             </div>
           </section>
 
-          <section class="tool-panel" data-panel="batchldap">
-            <h3>Batch LDAP Phone Update</h3>
-            <form id="greenlight-batch-ldap-form" style="margin-bottom:12px;">
-              <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
-              <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
-              <input type="hidden" name="cucm_pass" value="" />
-              <div class="search-filter-row">
-                <label for="batch-ldap-emails" style="display:block; font-weight:600; margin-bottom:6px;">Email Addresses (one or more)</label>
-                <textarea id="batch-ldap-emails" name="emails_text" placeholder="Paste emails: one per line or comma-separated&#10;Example:&#10;john.smith@company.com&#10;jane.doe@company.com" style="min-height:120px; width:min(760px, 100%); font-family:monospace; font-size:13px;"></textarea>
-              </div>
-              <div class="search-filter-row">
-                <label for="batch-ldap-phone" style="display:block; font-weight:600; margin-bottom:6px;">Phone Number (same for all)</label>
-                <input id="batch-ldap-phone" name="phone_number" placeholder="Example: 2025551234 or +1-202-555-1234" style="font-family:monospace;" />
-              </div>
-              <div class="search-filter-row">
-                <button type="submit">Start Batch Update</button>
-              </div>
-            </form>
-            <div class="result-card">
-              <p id="greenlight-batch-ldap-status" class="status-line">Paste emails and phone number, then click Start Batch Update.</p>
-              <p id="greenlight-batch-ldap-progress" class="status-line" style="display:none; color:#1d5490;">Processing...</p>
-              <div id="greenlight-batch-ldap-results" style="overflow-x:auto;"></div>
-              <p><a id="greenlight-batch-ldap-download" href="#" style="display:none; font-weight:700; margin-top:12px;">Download Results CSV</a></p>
-            </div>
           </section>
         </section>
       </div>
