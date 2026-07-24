@@ -29291,6 +29291,7 @@ def sinch_admin_page(request: Request):
         <div class="sinch-menu-grid">
           <button type="button" id="sinch-menu-tn" class="sinch-menu-btn active">Extract TN</button>
           <button type="button" id="sinch-menu-tf" class="sinch-menu-btn">Toll-Free Extract</button>
+          <button type="button" id="sinch-menu-back-admin" class="sinch-menu-btn" onclick="window.location.href='/page2'">Back to Administrative Items</button>
         </div>
       </div>
       <div id="sinch-tn-section">
