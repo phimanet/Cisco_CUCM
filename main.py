@@ -11829,6 +11829,329 @@ def _require_admin_session(request: Request) -> tuple[dict, str]:
   return session, username
 
 
+def _greenlight_parse_email_inputs(raw_value: str) -> list[str]:
+  text = str(raw_value or "").strip()
+  if not text:
+    return []
+
+  seen = set()
+  emails: list[str] = []
+  for part in re.split(r"[\s,;]+", text):
+    email = (part or "").strip().lower()
+    if not email or "@" not in email:
+      continue
+    if email in seen:
+      continue
+    seen.add(email)
+    emails.append(email)
+  return emails
+
+
+def _greenlight_axl_post(session: requests.Session, cucm_host: str, soap_xml: str, operation: str) -> ET.Element:
+  response = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=soap_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    verify=False,
+    timeout=60,
+  )
+  if response.status_code != 200:
+    raise RuntimeError(f"{operation} failed: {response.status_code}")
+  return _parse_xml_or_runtime_error(response.text or "", operation)
+
+
+def _greenlight_list_users_by_email(cucm_host: str, cucm_user: str, cucm_pass: str, email: str) -> list[dict]:
+  clean_email = (email or "").strip().lower()
+  if not clean_email:
+    return []
+
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:listUser sequence=\"1\">
+      <searchCriteria>
+        <mailid>%{xml_escape(clean_email)}%</mailid>
+      </searchCriteria>
+      <returnedTags>
+        <userid/>
+        <firstName/>
+        <lastName/>
+        <mailid/>
+      </returnedTags>
+    </axl:listUser>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  root = _greenlight_axl_post(session, cucm_host, soap, "listUser by mailid")
+  matches = []
+  seen_userids = set()
+  for elem in root.iter():
+    if _xml_local_name(elem.tag) != "user":
+      continue
+    row = {"userid": "", "first_name": "", "last_name": "", "mailid": ""}
+    for child in list(elem):
+      child_name = _xml_local_name(child.tag)
+      value = str(child.text or "").strip()
+      if child_name == "userid":
+        row["userid"] = value
+      elif child_name == "firstName":
+        row["first_name"] = value
+      elif child_name == "lastName":
+        row["last_name"] = value
+      elif child_name == "mailid":
+        row["mailid"] = value
+
+    userid_key = (row.get("userid") or "").strip().lower()
+    if not userid_key or userid_key in seen_userids:
+      continue
+    if (row.get("mailid") or "").strip().lower() != clean_email:
+      continue
+    seen_userids.add(userid_key)
+    matches.append(row)
+
+  return matches
+
+
+def _greenlight_get_csf_lines(cucm_host: str, cucm_user: str, cucm_pass: str, phone_name: str) -> list[dict]:
+  clean_phone = (phone_name or "").strip()
+  if not clean_phone:
+    return []
+
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getPhone sequence=\"1\">
+      <name>{xml_escape(clean_phone)}</name>
+    </axl:getPhone>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  root = _greenlight_axl_post(session, cucm_host, soap, "getPhone")
+
+  phone_node = None
+  for elem in root.iter():
+    if _xml_local_name(elem.tag) == "phone":
+      phone_node = elem
+      break
+  if phone_node is None:
+    return []
+
+  details = []
+  for child in list(phone_node):
+    if _xml_local_name(child.tag) != "lines":
+      continue
+    for line in list(child):
+      if _xml_local_name(line.tag) != "line":
+        continue
+      pattern = ""
+      partition = ""
+      line_mask = ""
+
+      for line_child in list(line):
+        tag_name = _xml_local_name(line_child.tag)
+        if tag_name == "dirn":
+          for dirn_child in list(line_child):
+            dirn_tag = _xml_local_name(dirn_child.tag)
+            if dirn_tag == "pattern":
+              pattern = str(dirn_child.text or "").strip()
+            elif dirn_tag == "routePartitionName":
+              partition = str(dirn_child.text or "").strip()
+        elif tag_name in {"e164Mask", "externalPhoneNumberMask"}:
+          line_mask = str(line_child.text or "").strip()
+
+      if pattern:
+        details.append(
+          {
+            "pattern": pattern,
+            "partition": partition,
+            "line_mask": line_mask,
+          }
+        )
+
+  return details
+
+
+def _greenlight_find_translation_patterns(cucm_host: str, cucm_user: str, cucm_pass: str, person: dict, extension: str) -> list[dict]:
+  clean_ext = (extension or "").strip()
+  if not clean_ext:
+    return []
+
+  display_name = (person.get("display_name") or "").strip().lower()
+  full_name = f"{(person.get('first_name') or '').strip()} {(person.get('last_name') or '').strip()}".strip().lower()
+  translated_number = (person.get("translated_number") or "").strip()
+
+  try:
+    candidates = lookup_translation_patterns(cucm_host, cucm_user, cucm_pass, clean_ext)
+  except Exception:
+    return []
+
+  associated = []
+  seen = set()
+  for item in candidates:
+    pattern = str(item.get("pattern") or "").strip()
+    partition = str(item.get("route_partition") or "").strip()
+    description = str(item.get("description") or "").strip()
+    mask = str(item.get("called_party_transform_mask") or "").strip()
+
+    desc_l = description.lower()
+    is_associated = False
+    if mask and mask == clean_ext:
+      is_associated = True
+    elif translated_number and pattern == translated_number:
+      is_associated = True
+    elif full_name and full_name in desc_l:
+      is_associated = True
+    elif display_name and display_name in desc_l:
+      is_associated = True
+
+    if not is_associated:
+      continue
+
+    key = (pattern, partition)
+    if key in seen:
+      continue
+    seen.add(key)
+    associated.append(
+      {
+        "pattern": pattern,
+        "route_partition": partition,
+        "description": description,
+        "called_party_transform_mask": mask,
+      }
+    )
+
+  associated.sort(key=lambda x: (x.get("pattern") or "", x.get("route_partition") or ""))
+  return associated
+
+
+def _greenlight_collect_people(cucm_host: str, cucm_user: str, cucm_pass: str, last_name: str, first_name: str, emails: list[str]) -> list[dict]:
+  people: dict[str, dict] = {}
+
+  clean_last = (last_name or "").strip()
+  clean_first = (first_name or "").strip()
+  if clean_last:
+    for person in search_persons_by_name(cucm_host, cucm_user, cucm_pass, clean_last, clean_first):
+      uid_key = str(person.get("userid") or "").strip().lower()
+      if uid_key:
+        people[uid_key] = person
+
+  for email in emails:
+    matches = _greenlight_list_users_by_email(cucm_host, cucm_user, cucm_pass, email)
+    for match in matches:
+      uid = (match.get("userid") or "").strip()
+      first = (match.get("first_name") or "").strip()
+      last = (match.get("last_name") or "").strip()
+      uid_key = uid.lower()
+      if not uid_key:
+        continue
+      if uid_key in people:
+        continue
+      if last:
+        people_for_name = search_persons_by_name(cucm_host, cucm_user, cucm_pass, last, first)
+        chosen = None
+        for row in people_for_name:
+          row_uid = str(row.get("userid") or "").strip().lower()
+          row_email = str(row.get("email") or "").strip().lower()
+          if row_uid == uid_key:
+            chosen = row
+            break
+          if row_email and row_email == email:
+            chosen = row
+        if chosen:
+          people[uid_key] = chosen
+
+  rows = list(people.values())
+  rows.sort(key=lambda item: ((item.get("display_name") or "").lower(), (item.get("userid") or "").lower()))
+  return rows
+
+
+def _greenlight_build_person_lookup_rows(cucm_host: str, cucm_user: str, cucm_pass: str, last_name: str, first_name: str, emails: list[str]) -> list[dict]:
+  people = _greenlight_collect_people(cucm_host, cucm_user, cucm_pass, last_name, first_name, emails)
+  output_rows = []
+
+  for person in people:
+    devices = person.get("devices") or []
+    csf_devices = [d for d in devices if str(d.get("name") or "").strip().upper().startswith("CSF")]
+    if not csf_devices:
+      output_rows.append(
+        {
+          "userid": str(person.get("userid") or "").strip(),
+          "display_name": str(person.get("display_name") or "").strip(),
+          "email": str(person.get("email") or "").strip(),
+          "jabber_csf_device": "",
+          "extension": str(person.get("primary_extension") or "").strip(),
+          "line_mask": "",
+          "translated_number": str(person.get("translated_number") or "").strip(),
+          "associated_translation_patterns": "",
+          "translation_details": "",
+        }
+      )
+      continue
+
+    for csf in csf_devices:
+      csf_name = str(csf.get("name") or "").strip()
+      csf_lines = _greenlight_get_csf_lines(cucm_host, cucm_user, cucm_pass, csf_name)
+      if not csf_lines:
+        ext = ""
+        ext_list = csf.get("extensions") or []
+        if ext_list:
+          ext = str(ext_list[0] or "").strip()
+        ext = ext or str(person.get("primary_extension") or "").strip()
+        tps = _greenlight_find_translation_patterns(cucm_host, cucm_user, cucm_pass, person, ext)
+        output_rows.append(
+          {
+            "userid": str(person.get("userid") or "").strip(),
+            "display_name": str(person.get("display_name") or "").strip(),
+            "email": str(person.get("email") or "").strip(),
+            "jabber_csf_device": csf_name,
+            "extension": ext,
+            "line_mask": "",
+            "translated_number": str(person.get("translated_number") or "").strip(),
+            "associated_translation_patterns": "; ".join([f"{r.get('pattern', '')}/{r.get('route_partition', '')}" for r in tps]),
+            "translation_details": "; ".join([
+              f"{r.get('pattern', '')}/{r.get('route_partition', '')}: mask={r.get('called_party_transform_mask', '')} desc={r.get('description', '')}"
+              for r in tps
+            ]),
+          }
+        )
+        continue
+
+      for line in csf_lines:
+        ext = str(line.get("pattern") or "").strip()
+        tps = _greenlight_find_translation_patterns(cucm_host, cucm_user, cucm_pass, person, ext)
+        output_rows.append(
+          {
+            "userid": str(person.get("userid") or "").strip(),
+            "display_name": str(person.get("display_name") or "").strip(),
+            "email": str(person.get("email") or "").strip(),
+            "jabber_csf_device": csf_name,
+            "extension": ext,
+            "line_mask": str(line.get("line_mask") or "").strip(),
+            "translated_number": str(person.get("translated_number") or "").strip(),
+            "associated_translation_patterns": "; ".join([f"{r.get('pattern', '')}/{r.get('route_partition', '')}" for r in tps]),
+            "translation_details": "; ".join([
+              f"{r.get('pattern', '')}/{r.get('route_partition', '')}: mask={r.get('called_party_transform_mask', '')} desc={r.get('description', '')}"
+              for r in tps
+            ]),
+          }
+        )
+
+  output_rows.sort(key=lambda item: ((item.get("display_name") or "").lower(), (item.get("jabber_csf_device") or "").lower(), (item.get("extension") or "").lower()))
+  return output_rows
+
+
 def _parse_verasmart_queue_rows(csv_text: str) -> list[dict]:
   if not (csv_text or "").strip():
     return []
@@ -21643,6 +21966,12 @@ def menu_page(request: Request):
           <span>LAB-only listener and search page for Cisco CUBE debug ccsip messages.</span>
         </a>
 """
+  greenlight_card_html = """
+        <a class=\"hero-link-card\" href=\"/project-greenlight\"> 
+          <strong>Project Greenlight</strong>
+          <span>Isolated workflow page that reuses existing portal endpoints.</span>
+        </a>
+"""
   dn_mapping = _get_dn_mapping()
   recruiter_prefix = str((dn_mapping.get("recruiter") or ("", ""))[0] or "").strip()
   general_prefix = str((dn_mapping.get("general") or ("", ""))[0] or "").strip()
@@ -22481,6 +22810,7 @@ def menu_page(request: Request):
           <strong>Voice Dashboard</strong>
           <span>Live CUCM, Jabber registration, and Unity port telemetry.</span>
         </a>
+      __GREENLIGHT_CARD__
 __SIP_CALL_SEARCH_CARD__
 __ADMIN_CARD__
         <a class="hero-link-card" href="/audit-trail">
@@ -26045,7 +26375,749 @@ __ADMIN_CARD__
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__SIP_CALL_SEARCH_CARD__", sip_card_html).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DN_TYPE_RECRUITER_LABEL__", dn_type_recruiter_label).replace("__DN_TYPE_GENERAL_LABEL__", dn_type_general_label).replace("__DN_TYPE_STRIKE_LABEL__", dn_type_strike_label)
+""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__GREENLIGHT_CARD__", greenlight_card_html).replace("__SIP_CALL_SEARCH_CARD__", sip_card_html).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DN_TYPE_RECRUITER_LABEL__", dn_type_recruiter_label).replace("__DN_TYPE_GENERAL_LABEL__", dn_type_general_label).replace("__DN_TYPE_STRIKE_LABEL__", dn_type_strike_label)
+
+  return HTMLResponse(
+    content=html,
+    headers={
+      "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+      "Pragma": "no-cache",
+      "Expires": "0",
+    },
+  )
+
+
+@app.get("/project-greenlight", response_class=HTMLResponse)
+def project_greenlight_page(request: Request):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", ""))
+  auth_user = escape(session_username)
+  auth_cucm_host = str(session.get("cucm_host", ""))
+  env_text, env_css_class = _get_environment_label(auth_cucm_host)
+  admin_card_html = "" if not _is_admin_user(session_username) else """
+        <a class=\"hero-link-card\" href=\"/page2\">
+          <strong>Administrative Items</strong>
+          <span>Open bulk tools, strike workflows, exports, and translation lookups.</span>
+        </a>
+"""
+
+  html = """
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Project Greenlight - Voice Operations Portal</title>
+    <style>
+      :root {
+        --amn-blue: #005eb8;
+        --amn-navy: #002f6c;
+        --amn-sky: #eaf4ff;
+        --amn-text-soft: #4e6a84;
+        --amn-text: #12304a;
+        --amn-border: #c8dbee;
+        --amn-panel-border: rgba(0, 47, 108, 0.12);
+        --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
+      }
+
+      body {
+        font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+        margin: 0;
+        background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+        color: var(--amn-text);
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 10px 16px;
+        background:
+          linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94)),
+          linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
+        color: #fff;
+        box-shadow: 0 12px 28px rgba(0, 47, 108, 0.22);
+        border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+      }
+
+      .topbar-brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+
+      .brand-fallback {
+        font-weight: 700;
+        letter-spacing: 0.6px;
+        text-transform: uppercase;
+        font-size: 12px;
+        opacity: 0.86;
+      }
+
+      .topbar-status {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+
+      .topbar-status > * {
+        display: inline-flex;
+        align-items: center;
+        min-height: 32px;
+        padding: 6px 10px;
+        border-radius: 10px;
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        box-sizing: border-box;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.1;
+      }
+
+      .topbar-auth-pill {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+      }
+
+      .topbar-status .env-banner {
+        background: rgba(255, 255, 255, 0.12);
+        color: #fff;
+        box-shadow: none;
+      }
+
+      .topbar-actions {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .topbar-btn {
+        display: inline-block;
+        padding: 7px 12px;
+        border-radius: 10px;
+        font-size: 12px;
+        font-weight: 700;
+        text-decoration: none;
+        border: 1px solid rgba(255, 255, 255, 0.65);
+        color: #fff;
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      .topbar-btn-logout {
+        background: linear-gradient(180deg, #cb3b2f, #9f2018);
+        border-color: #f0a79c;
+      }
+
+      .content {
+        max-width: 1400px;
+        margin: 8px auto 14px auto;
+        padding: 0 12px 12px 12px;
+      }
+
+      .page-hero {
+        padding: 12px 14px;
+        margin-bottom: 10px;
+        border-radius: 12px;
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95)),
+          linear-gradient(180deg, #ffffff, #eef6ff);
+        border: 1px solid rgba(0, 47, 108, 0.1);
+        box-shadow: var(--amn-shadow);
+      }
+
+      .page-title-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+        margin-top: 6px;
+      }
+
+      .page-title {
+        margin: 0;
+        color: var(--amn-navy);
+        font-size: 22px;
+        line-height: 1.1;
+      }
+
+      .page-subtitle {
+        margin: 4px 0 0 0;
+        color: var(--amn-text-soft);
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .page-meta-card {
+        min-width: 200px;
+        padding: 8px 10px;
+        border-radius: 10px;
+        background: linear-gradient(180deg, rgba(0, 47, 108, 0.96), rgba(0, 94, 184, 0.92));
+        color: #fff;
+        box-shadow: 0 14px 28px rgba(0, 47, 108, 0.22);
+      }
+
+      .page-meta-label {
+        display: block;
+        font-size: 10px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+        opacity: 0.76;
+        text-transform: uppercase;
+      }
+
+      .page-meta-value {
+        display: block;
+        margin-top: 2px;
+        font-size: 14px;
+        font-weight: 700;
+      }
+
+      .page-meta-note {
+        margin: 4px 0 0 0;
+        font-size: 11px;
+        line-height: 1.3;
+        color: rgba(255, 255, 255, 0.86);
+      }
+
+      .hero-link-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      .hero-link-card {
+        display: block;
+        padding: 7px 10px;
+        border-radius: 10px;
+        background: rgba(255, 255, 255, 0.9);
+        border: 1px solid rgba(0, 47, 108, 0.1);
+        color: inherit;
+        text-decoration: none;
+      }
+
+      .hero-link-card strong {
+        display: block;
+        color: var(--amn-navy);
+        margin-bottom: 0;
+        font-size: 12px;
+      }
+
+      .hero-link-card span {
+        display: none;
+      }
+
+      .portal-shell {
+        display: grid;
+        grid-template-columns: 244px minmax(0, 1fr);
+        gap: 10px;
+        align-items: start;
+        margin-top: 8px;
+      }
+
+      .portal-sidebar {
+        position: sticky;
+        top: 54px;
+        background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 12px;
+        padding: 8px;
+        box-shadow: 0 18px 36px rgba(0, 47, 108, 0.18);
+      }
+
+      .portal-sidebar h4 {
+        margin: 4px 6px 8px 6px;
+        color: #fff;
+        font-size: 13px;
+        letter-spacing: 0.3px;
+      }
+
+      .portal-nav {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      .portal-nav-btn,
+      .portal-nav-link {
+        display: block;
+        width: 100%;
+        text-align: left;
+        background: rgba(255, 255, 255, 0.09);
+        color: rgba(255, 255, 255, 0.94);
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 8px;
+        padding: 7px 8px;
+        font-size: 12px;
+        line-height: 1.25;
+        font-weight: 600;
+        cursor: pointer;
+        text-decoration: none;
+      }
+
+      .portal-nav-btn.active {
+        background: linear-gradient(90deg, #ffffff, #ecf6ff);
+        color: var(--amn-navy);
+        border-color: rgba(255, 255, 255, 0.92);
+      }
+
+      .portal-main {
+        min-width: 0;
+      }
+
+      .tool-panel {
+        display: none;
+      }
+
+      .tool-panel.active {
+        display: block;
+      }
+
+      form,
+      .result-card {
+        background: rgba(255, 255, 255, 0.93);
+        border: 1px solid var(--amn-panel-border);
+        border-radius: 14px;
+        padding: 10px;
+        box-shadow: var(--amn-shadow);
+      }
+
+      .layout-row {
+        display: flex;
+        gap: 12px;
+        align-items: flex-start;
+        flex-wrap: wrap;
+      }
+
+      .layout-row form {
+        flex: 1 1 420px;
+        min-width: 320px;
+      }
+
+      .result-card {
+        flex: 1 1 540px;
+        min-width: 320px;
+      }
+
+      input,
+      button {
+        border-radius: 10px;
+        border: 1px solid var(--amn-border);
+      }
+
+      input {
+        min-height: 32px;
+        padding: 5px 9px;
+        width: min(520px, 100%);
+        background: rgba(255, 255, 255, 0.96);
+      }
+
+      button {
+        background: linear-gradient(180deg, #0c77d8, #005eb8);
+        color: #fff;
+        border: none;
+        padding: 7px 11px;
+        font-weight: 700;
+      }
+
+      .search-filter-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .status-line {
+        color: #2c5c8a;
+        min-height: 18px;
+      }
+
+      pre {
+        width: 100%;
+        min-height: 260px;
+        margin: 0;
+        padding: 10px;
+        background: linear-gradient(180deg, #f4faff, #eaf4ff);
+        border: 1px solid var(--amn-border);
+        border-radius: 12px;
+        color: #0f2940;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+        white-space: pre-wrap;
+        overflow: auto;
+      }
+
+      .env-banner {
+        display: inline-block;
+        padding: 6px 10px;
+        border-radius: 10px;
+        font-weight: 700;
+        letter-spacing: 0.1px;
+      }
+
+      .env-banner-prod {
+        color: #083252;
+        background: #d8ecff;
+        border: 1px solid #8bb9e2;
+      }
+
+      .env-banner-lab {
+        color: #5c2700;
+        background: #ffe6cc;
+        border: 1px solid #f7b267;
+      }
+
+      @media (max-width: 980px) {
+        .portal-shell {
+          grid-template-columns: 1fr;
+        }
+
+        .portal-sidebar {
+          position: static;
+        }
+
+        .portal-nav {
+          display: grid;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-brand">
+        <span class="brand-fallback">AMN Healthcare</span>
+        <strong>Voice Operations Portal</strong>
+      </div>
+      <div class="topbar-status">
+        <span class="topbar-auth-pill">Authenticated Operator: __AUTH_USER__</span>
+        <div class="env-banner __ENV_CLASS__">__ENV_TEXT__</div>
+      </div>
+      <div class="topbar-actions">
+        <a class="topbar-btn" href="/menu">Main Operations</a>
+        <a class="topbar-btn" href="/logout">Log Out</a>
+      </div>
+    </header>
+
+    <main class="content">
+      <section class="page-hero">
+        <div class="page-title-row">
+          <div>
+            <h2 class="page-title">Project Greenlight</h2>
+            <p class="page-subtitle">Standalone workspace with its own menu that reuses existing portal logic without modifying other pages.</p>
+          </div>
+          <div class="page-meta-card">
+            <span class="page-meta-label">Mode</span>
+            <span class="page-meta-value">Isolated Page</span>
+            <p class="page-meta-note">Greenlight actions call existing endpoints and keep current page flows unchanged.</p>
+          </div>
+        </div>
+        <div class="hero-link-grid">
+          <a class="hero-link-card" href="/menu">
+            <strong>Main Operations</strong>
+            <span>Return to Page 1.</span>
+          </a>
+          <a class="hero-link-card" href="/audit-trail">
+            <strong>Action History</strong>
+            <span>Review recent portal actions.</span>
+          </a>
+__GREENLIGHT_ADMIN_CARD__
+        </div>
+      </section>
+
+      <div class="portal-shell">
+        <aside class="portal-sidebar">
+          <h4>Project Greenlight Menu</h4>
+          <div class="portal-nav">
+            <button type="button" class="portal-nav-btn active" data-panel="personlookup">Person Lookup</button>
+            <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Lookup</button>
+            <button type="button" class="portal-nav-btn" data-panel="jabberstatus">Jabber Status Check</button>
+            <button type="button" class="portal-nav-btn" data-panel="translationlookup">Translation Pattern Lookup</button>
+            <a class="portal-nav-link" href="/menu?panel=build">Open Build User (Page 1)</a>
+            <a class="portal-nav-link" href="/menu?panel=offboard">Open Separate Employee (Page 1)</a>
+          </div>
+        </aside>
+
+        <section class="portal-main">
+          <section class="tool-panel active" data-panel="personlookup">
+            <h3>Person Lookup (Project Greenlight)</h3>
+            <div class="layout-row">
+              <form id="greenlight-person-form">
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
+                <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
+                <input type="hidden" name="cucm_pass" value="" />
+                <div class="search-filter-row">
+                  <input name="last_name" placeholder="Last Name" />
+                  <input name="first_name" placeholder="First Name (optional)" />
+                  <button type="submit">Search</button>
+                </div>
+                <div class="search-filter-row">
+                  <textarea name="emails_text" placeholder="Paste 1 or more emails (comma/newline separated)" style="min-height:90px; width:min(760px, 100%);"></textarea>
+                </div>
+              </form>
+              <div class="result-card">
+                <p id="greenlight-person-status" class="status-line">Enter Last Name and/or one or more emails, then Search.</p>
+                <p><a id="greenlight-person-download" href="#" style="display:none; font-weight:700;">Download Full CSV</a></p>
+                <div id="greenlight-person-results" style="overflow-x:auto;"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="tool-panel" data-panel="extensionlookup">
+            <h3>Extension Lookup</h3>
+            <div class="layout-row">
+              <form id="greenlight-extension-form">
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
+                <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
+                <input type="hidden" name="cucm_pass" value="" />
+                <div class="search-filter-row">
+                  <input name="pattern" placeholder="Extension pattern *" required />
+                  <button type="submit">Lookup</button>
+                </div>
+              </form>
+              <div class="result-card">
+                <p id="greenlight-extension-status" class="status-line">Enter extension and click Lookup.</p>
+                <pre id="greenlight-extension-output"></pre>
+              </div>
+            </div>
+          </section>
+
+          <section class="tool-panel" data-panel="jabberstatus">
+            <h3>Jabber Status Check</h3>
+            <div class="layout-row">
+              <form id="greenlight-jabber-form">
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
+                <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
+                <input type="hidden" name="cucm_pass" value="" />
+                <div class="search-filter-row">
+                  <input name="target_user" placeholder="User ID *" required />
+                  <button type="submit">Check</button>
+                </div>
+              </form>
+              <div class="result-card">
+                <p id="greenlight-jabber-status" class="status-line">Enter user ID and click Check.</p>
+                <pre id="greenlight-jabber-output"></pre>
+              </div>
+            </div>
+          </section>
+
+          <section class="tool-panel" data-panel="translationlookup">
+            <h3>Translation Pattern Lookup</h3>
+            <div class="layout-row">
+              <form id="greenlight-translation-form">
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
+                <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
+                <input type="hidden" name="cucm_pass" value="" />
+                <div class="search-filter-row">
+                  <input name="pattern_query" placeholder="Pattern query *" required />
+                  <button type="submit">Lookup</button>
+                </div>
+              </form>
+              <div class="result-card">
+                <p id="greenlight-translation-status" class="status-line">Enter a query and click Lookup.</p>
+                <pre id="greenlight-translation-output"></pre>
+              </div>
+            </div>
+          </section>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      (function () {
+        function escapeHtml(value) {
+          return String(value || "")
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn[data-panel]"));
+        const panels = Array.from(document.querySelectorAll(".tool-panel"));
+
+        function showPanel(panelKey) {
+          panels.forEach((panel) => {
+            panel.classList.toggle("active", panel.dataset.panel === panelKey);
+          });
+          navButtons.forEach((btn) => {
+            btn.classList.toggle("active", btn.dataset.panel === panelKey);
+          });
+        }
+
+        navButtons.forEach((btn) => {
+          btn.addEventListener("click", function () {
+            showPanel((btn.dataset.panel || "").trim());
+          });
+        });
+
+        async function runLookup(opts) {
+          const { formId, endpoint, statusId, outputId, pendingText, doneText, extraHeaders } = opts;
+          const form = document.getElementById(formId);
+          const statusEl = document.getElementById(statusId);
+          const outputEl = document.getElementById(outputId);
+          if (!form || !statusEl || !outputEl) {
+            return;
+          }
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = pendingText;
+            outputEl.textContent = "";
+
+            try {
+              const response = await fetch(endpoint, {
+                method: "POST",
+                body: new FormData(form),
+                credentials: "same-origin",
+                headers: extraHeaders || {},
+              });
+              const rawText = await response.text();
+              let payload = {};
+              try {
+                payload = rawText ? JSON.parse(rawText) : {};
+              } catch (_parseErr) {
+                payload = { ok: false, error: rawText || "Unexpected server response." };
+              }
+
+              if (!response.ok || payload.ok === false) {
+                const detail = payload.error || payload.detail || payload.message || ("Request failed (HTTP " + response.status + ")");
+                throw new Error(String(detail));
+              }
+
+              statusEl.textContent = doneText;
+              outputEl.innerHTML = escapeHtml(JSON.stringify(payload, null, 2));
+            } catch (err) {
+              statusEl.textContent = "Request failed.";
+              outputEl.innerHTML = escapeHtml(String(err && err.message ? err.message : err));
+            }
+          });
+        }
+
+        (function bindGreenlightPersonLookup() {
+          const form = document.getElementById("greenlight-person-form");
+          const statusEl = document.getElementById("greenlight-person-status");
+          const resultsEl = document.getElementById("greenlight-person-results");
+          const downloadEl = document.getElementById("greenlight-person-download");
+          if (!form || !statusEl || !resultsEl || !downloadEl) {
+            return;
+          }
+
+          function toCell(value) {
+            return escapeHtml(String(value || ""));
+          }
+
+          function renderPreview(rows) {
+            if (!Array.isArray(rows) || !rows.length) {
+              resultsEl.innerHTML = "<p style='margin:0;color:#355978;'>No matching CSF records found.</p>";
+              return;
+            }
+
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8;color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">CSF Device</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Line Mask</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Translation Patterns</th>';
+            html += '</tr></thead><tbody>';
+
+            rows.forEach(function (row, idx) {
+              const bg = idx % 2 === 0 ? "#f7fbff" : "#ffffff";
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + toCell(row.userid) + '</td>';
+              html += '<td style="padding:7px 10px;">' + toCell(row.display_name) + '</td>';
+              html += '<td style="padding:7px 10px;">' + toCell(row.email) + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + toCell(row.jabber_csf_device) + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + toCell(row.extension) + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + toCell(row.line_mask) + '</td>';
+              html += '<td style="padding:7px 10px;">' + toCell(row.associated_translation_patterns) + '</td>';
+              html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            resultsEl.innerHTML = html;
+          }
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            statusEl.textContent = "Searching...";
+            resultsEl.innerHTML = "";
+            downloadEl.style.display = "none";
+            downloadEl.href = "#";
+
+            try {
+              const response = await fetch("/project-greenlight/person-lookup", {
+                method: "POST",
+                body: new FormData(form),
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+              });
+              const rawText = await response.text();
+              let payload = {};
+              try {
+                payload = rawText ? JSON.parse(rawText) : {};
+              } catch (_parseErr) {
+                payload = { ok: false, error: { message: rawText || "Unexpected server response." } };
+              }
+
+              if (!response.ok || payload.ok === false) {
+                const detail = (payload.error && payload.error.message) || payload.detail || payload.message || ("Request failed (HTTP " + response.status + ")");
+                throw new Error(String(detail));
+              }
+
+              const total = Number(payload.count || 0);
+              const previewCount = Number(payload.preview_count || 0);
+              statusEl.textContent = "Found " + total + " row(s). Showing first " + previewCount + " on page.";
+              renderPreview(payload.preview_results || []);
+              if (payload.download_url) {
+                downloadEl.href = payload.download_url;
+                downloadEl.style.display = "inline";
+              }
+            } catch (err) {
+              statusEl.textContent = "Lookup failed.";
+              resultsEl.innerHTML = "<p style='margin:0;color:#a42323; font-weight:700;'>" + escapeHtml(String(err && err.message ? err.message : err)) + "</p>";
+            }
+          });
+        })();
+
+        runLookup({
+          formId: "greenlight-extension-form",
+          endpoint: "/lookup/extension",
+          statusId: "greenlight-extension-status",
+          outputId: "greenlight-extension-output",
+          pendingText: "Looking up extension...",
+          doneText: "Lookup completed.",
+        });
+
+        runLookup({
+          formId: "greenlight-jabber-form",
+          endpoint: "/check/jabber-status",
+          statusId: "greenlight-jabber-status",
+          outputId: "greenlight-jabber-output",
+          pendingText: "Checking Jabber status...",
+          doneText: "Check completed.",
+          extraHeaders: { "X-Requested-With": "XMLHttpRequest" },
+        });
+
+        runLookup({
+          formId: "greenlight-translation-form",
+          endpoint: "/lookup/translation-pattern",
+          statusId: "greenlight-translation-status",
+          outputId: "greenlight-translation-output",
+          pendingText: "Looking up translation patterns...",
+          doneText: "Lookup completed.",
+        });
+      })();
+    </script>
+  </body>
+</html>
+""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__GREENLIGHT_ADMIN_CARD__", admin_card_html)
 
   return HTMLResponse(
     content=html,
@@ -27756,6 +28828,10 @@ def menu_admin_page(request: Request):
           <a class="hero-link-card" href="/opentext-admin">
             <strong>OpenText Admin</strong>
             <span>OpenTxt Numbers List and number lookup tools.</span>
+          </a>
+          <a class="hero-link-card" href="/project-greenlight">
+            <strong>Project Greenlight</strong>
+            <span>Isolated lookup workspace and targeted operations.</span>
           </a>
           <a class="hero-link-card" href="/page4">
             <strong>Server Certificate Manager</strong>
@@ -36538,6 +37614,97 @@ def lookup_person_route(
       raise
     except Exception as exc:
       raise RuntimeError(f"Person lookup failed: {exc}") from exc
+
+
+@app.post("/project-greenlight/person-lookup")
+def project_greenlight_person_lookup_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    last_name: str = Form(""),
+    first_name: str = Form(""),
+    emails_text: str = Form(""),
+):
+  try:
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+    clean_last = (last_name or "").strip()
+    clean_first = (first_name or "").strip()
+    emails = _greenlight_parse_email_inputs(emails_text)
+    if not clean_last and not emails:
+      return JSONResponse(
+        {
+          "ok": False,
+          "error": {"message": "Enter Last Name or one/more email addresses."},
+        },
+        status_code=400,
+      )
+
+    rows = _greenlight_build_person_lookup_rows(
+      cucm_host=cucm_host,
+      cucm_user=cucm_user,
+      cucm_pass=cucm_pass,
+      last_name=clean_last,
+      first_name=clean_first,
+      emails=emails,
+    )
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+      "userid",
+      "display_name",
+      "email",
+      "jabber_csf_device",
+      "extension",
+      "line_mask",
+      "translated_number",
+      "associated_translation_patterns",
+      "translation_details",
+    ])
+    for row in rows:
+      writer.writerow([
+        row.get("userid", ""),
+        row.get("display_name", ""),
+        row.get("email", ""),
+        row.get("jabber_csf_device", ""),
+        row.get("extension", ""),
+        row.get("line_mask", ""),
+        row.get("translated_number", ""),
+        row.get("associated_translation_patterns", ""),
+        row.get("translation_details", ""),
+      ])
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"project_greenlight_person_lookup_{timestamp}.csv"
+    job_output = _prepare_job_output(output.getvalue().encode("utf-8"), filename)
+
+    _append_audit_event(
+      action="project_greenlight_person_lookup",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=f"last={clean_last or '-'};emails={len(emails)}",
+      output_filename=filename,
+      inline_mode=True,
+    )
+
+    preview_rows = rows[:10]
+    return JSONResponse(
+      {
+        "ok": True,
+        "count": len(rows),
+        "preview_count": len(preview_rows),
+        "preview_results": preview_rows,
+        "filename": job_output["filename"],
+        "download_url": f"/download/job-output/{job_output['job_id']}",
+      }
+    )
+  except RuntimeError:
+    raise
+  except Exception as exc:
+    raise RuntimeError(f"Project Greenlight person lookup failed: {exc}") from exc
 
 
 @app.post("/lookup/twilio-by-number")
