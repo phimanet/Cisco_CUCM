@@ -27289,6 +27289,132 @@ __GREENLIGHT_ADMIN_CARD__
             </div>
           </section>
 
+          <script>
+            // Fallback binder: if the main Greenlight script fails to parse/bind,
+            // this keeps Person Lookup functional and logs debug output.
+            (function greenlightPersonLookupFallback() {
+              window.setTimeout(function () {
+                const form = document.getElementById("greenlight-person-form");
+                const statusEl = document.getElementById("greenlight-person-status");
+                const resultsEl = document.getElementById("greenlight-person-results");
+                const downloadEl = document.getElementById("greenlight-person-download");
+                const debugEl = document.getElementById("greenlight-person-debug");
+                if (!form || !statusEl || !resultsEl || !downloadEl) {
+                  return;
+                }
+                if (String(form.dataset.greenlightBound || "") === "1") {
+                  return;
+                }
+
+                function esc(v) {
+                  return String(v || "")
+                    .replace(/&/g, "&amp;")
+                    .replace(/</g, "&lt;")
+                    .replace(/>/g, "&gt;")
+                    .replace(/\"/g, "&quot;")
+                    .replace(/'/g, "&#39;");
+                }
+
+                function log(eventName, detail) {
+                  if (!debugEl) {
+                    return;
+                  }
+                  let line = "[fallback] " + String(eventName || "event");
+                  if (detail !== undefined && detail !== null) {
+                    try {
+                      line += " :: " + (typeof detail === "string" ? detail : JSON.stringify(detail));
+                    } catch (_err) {
+                      line += " :: " + String(detail);
+                    }
+                  }
+                  const prior = String(debugEl.textContent || "").trim();
+                  debugEl.textContent = prior ? (prior + "\\n" + line) : line;
+                  debugEl.scrollTop = debugEl.scrollHeight;
+                }
+
+                function showPreview(rows) {
+                  const list = Array.isArray(rows) ? rows : [];
+                  if (!list.length) {
+                    resultsEl.innerHTML = "<p style='margin:0;color:#355978;'>No matching CSF records found.</p>";
+                    return;
+                  }
+                  let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+                  html += '<thead><tr style="background:#005eb8;color:#fff;">';
+                  html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
+                  html += '<th style="padding:8px 10px; text-align:left;">First Name</th>';
+                  html += '<th style="padding:8px 10px; text-align:left;">Last Name</th>';
+                  html += '<th style="padding:8px 10px; text-align:left;">Email</th>';
+                  html += '<th style="padding:8px 10px; text-align:left;">Extension</th>';
+                  html += '<th style="padding:8px 10px; text-align:left;">SMS Provider</th>';
+                  html += '</tr></thead><tbody>';
+                  list.forEach(function (row, idx) {
+                    const bg = idx % 2 === 0 ? "#f7fbff" : "#ffffff";
+                    html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                    html += '<td style="padding:7px 10px;">' + esc(row && row.userid) + '</td>';
+                    html += '<td style="padding:7px 10px;">' + esc(row && row.first_name) + '</td>';
+                    html += '<td style="padding:7px 10px;">' + esc(row && row.last_name) + '</td>';
+                    html += '<td style="padding:7px 10px;">' + esc(row && row.email) + '</td>';
+                    html += '<td style="padding:7px 10px;">' + esc(row && row.extension) + '</td>';
+                    html += '<td style="padding:7px 10px;">' + esc(row && row.sms_provider) + '</td>';
+                    html += '</tr>';
+                  });
+                  html += '</tbody></table>';
+                  resultsEl.innerHTML = html;
+                }
+
+                form.dataset.greenlightBound = "1";
+                log("fallback-bound", "Main binder was not detected; fallback is active.");
+
+                form.addEventListener("submit", async function (event) {
+                  event.preventDefault();
+                  statusEl.textContent = "Searching...";
+                  resultsEl.innerHTML = "";
+                  downloadEl.style.display = "none";
+                  downloadEl.href = "#";
+
+                  try {
+                    const response = await fetch("/project-greenlight/person-lookup", {
+                      method: "POST",
+                      body: new FormData(form),
+                      credentials: "same-origin",
+                      headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                    });
+                    const rawText = await response.text();
+                    let payload = {};
+                    try {
+                      payload = rawText ? JSON.parse(rawText) : {};
+                    } catch (_parseErr) {
+                      payload = { ok: false, error: { message: rawText || "Unexpected server response." } };
+                    }
+
+                    if (!response.ok || payload.ok === false) {
+                      const detail = (payload.error && payload.error.message) || payload.detail || payload.message || ("Request failed (HTTP " + response.status + ")");
+                      throw new Error(String(detail));
+                    }
+
+                    if (payload.queued === true) {
+                      statusEl.textContent = "Queued lookup started. Use history refresh to track and download CSV when complete.";
+                      log("fallback-queued", { status_url: payload.status_url || "", email_count: payload.email_count || 0 });
+                      return;
+                    }
+
+                    statusEl.textContent = "Found " + Number(payload.count || 0) + " row(s).";
+                    showPreview(payload.preview_results || []);
+                    if (payload.download_url) {
+                      downloadEl.href = payload.download_url;
+                      downloadEl.style.display = "inline";
+                    }
+                    log("fallback-completed", { rows: payload.count || 0 });
+                  } catch (err) {
+                    statusEl.textContent = "Lookup failed.";
+                    resultsEl.innerHTML = "<p style='margin:0;color:#a42323; font-weight:700;'>" + esc(String(err && err.message ? err.message : err)) + "</p>";
+                    log("fallback-error", String(err && err.message ? err.message : err));
+                  }
+                });
+              }, 700);
+            })();
+          </script>
+
           <section class="tool-panel" data-panel="jabberstatus">
             <h3>Jabber Status Check</h3>
             <div class="layout-row">
@@ -27416,6 +27542,7 @@ __GREENLIGHT_ADMIN_CARD__
           if (!form || !statusEl || !resultsEl || !downloadEl) {
             return;
           }
+          form.dataset.greenlightBound = "1";
 
           const storageKeyStatusUrl = "greenlight_person_lookup_last_status_url";
 
