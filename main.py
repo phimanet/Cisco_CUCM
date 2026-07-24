@@ -29158,6 +29158,13 @@ def sinch_admin_page(request: Request):
     )
 
   auth_user = escape(session_username)
+  initial_panel = str(request.query_params.get("panel", "tn") or "tn").strip().lower()
+  if initial_panel not in {"tn", "tf"}:
+    initial_panel = "tn"
+  tn_active_class = "active" if initial_panel == "tn" else ""
+  tf_active_class = "active" if initial_panel == "tf" else ""
+  tn_display_style = "block" if initial_panel == "tn" else "none"
+  tf_display_style = "block" if initial_panel == "tf" else "none"
   html = f"""
 <html>
   <head>
@@ -29322,14 +29329,14 @@ def sinch_admin_page(request: Request):
       <aside class="portal-sidebar">
         <h4>Sinch Menu</h4>
         <div class="portal-nav">
-          <button type="button" id="sinch-menu-tn" class="portal-nav-btn active">Extract TN</button>
-          <button type="button" id="sinch-menu-tf" class="portal-nav-btn">Toll-Free Extract</button>
+          <button type="button" id="sinch-menu-tn" class="portal-nav-btn {tn_active_class}" onclick="window.location.href='/sinch-work?panel=tn'">Extract TN</button>
+          <button type="button" id="sinch-menu-tf" class="portal-nav-btn {tf_active_class}" onclick="window.location.href='/sinch-work?panel=tf'">Toll-Free Extract</button>
           <button type="button" id="sinch-menu-back-main" class="portal-nav-btn" onclick="window.location.href='/menu'">Back to Main Operations</button>
           <button type="button" id="sinch-menu-back-admin" class="portal-nav-btn" onclick="window.location.href='/page2'">Back to Administrative Items</button>
         </div>
       </aside>
       <section class="portal-main">
-      <div id="sinch-tn-section">
+      <div id="sinch-tn-section" style="display:{tn_display_style};">
       <div class="panel">
         <form id="inteliquent-inventory-form">
           <input type="hidden" id="extract_all" name="extract_all" value="0" />
@@ -29364,7 +29371,7 @@ def sinch_admin_page(request: Request):
         <pre id="inventory-debug" style="background:#f5f5f5;border:1px solid #ccc;padding:8px;border-radius:6px;max-height:320px;overflow-y:auto;font-size:10px;margin:0;color:#333;word-break:break-all;">Ready.</pre>
       </div>
       </div>
-      <div id="sinch-tf-section" style="display:none;">
+      <div id="sinch-tf-section" style="display:{tf_display_style};">
       <div class="panel">
         <h3>Toll-Free Number Lookup</h3>
         <form id="inteliquent-tf-form">
@@ -29433,12 +29440,18 @@ def sinch_admin_page(request: Request):
         }}
 
         if (menuTnBtn) {{
-          menuTnBtn.addEventListener("click", function () {{ setSinchMenu("tn"); }});
+          menuTnBtn.addEventListener("click", function (event) {{
+            event.preventDefault();
+            setSinchMenu("tn");
+          }});
         }}
         if (menuTfBtn) {{
-          menuTfBtn.addEventListener("click", function () {{ setSinchMenu("tf"); }});
+          menuTfBtn.addEventListener("click", function (event) {{
+            event.preventDefault();
+            setSinchMenu("tf");
+          }});
         }}
-        setSinchMenu("tn");
+        setSinchMenu("{initial_panel}");
 
         function escapeHtml(value) {{
           return String(value || "")
