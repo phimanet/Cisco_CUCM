@@ -27659,10 +27659,18 @@ __GREENLIGHT_ADMIN_CARD__
 
         function showPanel(panelKey) {
           panels.forEach((panel) => {
-            panel.classList.toggle("active", panel.dataset.panel === panelKey);
+            if (panel.dataset.panel === panelKey) {
+              panel.classList.add("active");
+            } else {
+              panel.classList.remove("active");
+            }
           });
           navButtons.forEach((btn) => {
-            btn.classList.toggle("active", btn.dataset.panel === panelKey);
+            if (btn.dataset.panel === panelKey) {
+              btn.classList.add("active");
+            } else {
+              btn.classList.remove("active");
+            }
           });
         }
 
