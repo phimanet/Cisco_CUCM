@@ -26845,18 +26845,19 @@ __ADMIN_CARD__
           downloadEl.style.display = "none";
 
           try {
+            const body = new URLSearchParams();
+            body.append("emails_text", emails.join("\n"));
+            body.append("phone_number", phoneNumber);
+
             const response = await fetch("/project-greenlight/batch-ldap-phone-update", {
               method: "POST",
               headers: {
-                "Content-Type": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
                 "Accept": "application/json",
                 "X-Requested-With": "XMLHttpRequest",
               },
               credentials: "same-origin",
-              body: JSON.stringify({
-                emails: emails,
-                phone_number: phoneNumber,
-              }),
+              body: body.toString(),
             });
 
             const rawText = await response.text();
@@ -26864,33 +26865,34 @@ __ADMIN_CARD__
             try {
               payload = rawText ? JSON.parse(rawText) : {};
             } catch (_parseErr) {
-              payload = { ok: false, error: { message: rawText || "Unexpected server response." } };
+              payload = { ok: false, error: rawText || "Unexpected server response." };
             }
 
             if (!response.ok || payload.ok === false) {
-              const detail = (payload.error && payload.error.message) || payload.detail || payload.message || ("Request failed (HTTP " + response.status + ")");
+              const detail = (payload.error && payload.error.message) || payload.error || payload.detail || payload.message || ("Request failed (HTTP " + response.status + ")");
               throw new Error(String(detail));
             }
 
-            statusEl.textContent = "Updated " + Number(payload.count || 0) + " user(s).";
+            statusEl.textContent = payload.summary || ("Processed " + Number(payload.email_count || 0) + " user(s).");
 
             if (payload.results && payload.results.length > 0) {
               let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
               html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left;">Email</th>';
               html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
-              html += '<th style="padding:8px 10px; text-align:left;">Phone Number</th>';
               html += '<th style="padding:8px 10px; text-align:left;">Status</th>';
-              html += '<th style="padding:8px 10px; text-align:left;">Message</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Details</th>';
               html += '</tr></thead><tbody>';
 
               payload.results.forEach((row) => {
-                const bgColor = row.status === "success" ? "#f0f8ff" : "#fff5f5";
-                const statusColor = row.status === "success" ? "#2d7d2d" : "#c41e3a";
+                const isSuccess = String(row.status || "").toLowerCase() === "success";
+                const bgColor = isSuccess ? "#f0f8ff" : "#fff5f5";
+                const statusColor = isSuccess ? "#2d7d2d" : "#c41e3a";
                 html += '<tr style="background:' + bgColor + '; border-bottom:1px solid #ddd;">';
-                html += '<td style="padding:8px 10px;">' + (row.user_id || "") + "</td>";
-                html += '<td style="padding:8px 10px;">' + (row.phone_number || "") + "</td>";
+                html += '<td style="padding:8px 10px;">' + (row.email || "") + "</td>";
+                html += '<td style="padding:8px 10px;">' + (row.userid || "") + "</td>";
                 html += '<td style="padding:8px 10px; color:' + statusColor + '; font-weight:600;">' + (row.status || "") + "</td>";
-                html += '<td style="padding:8px 10px;">' + (row.message || "") + "</td>";
+                html += '<td style="padding:8px 10px;">' + (row.details || "") + "</td>";
                 html += "</tr>";
               });
 
