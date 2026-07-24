@@ -29309,9 +29309,6 @@ def sinch_admin_page(request: Request):
           let html = '<table><thead><tr>'
             + '<th>Telephone Number</th>'
             + '<th>Status</th>'
-            + '<th>Rate Center</th>'
-            + '<th>City</th>'
-            + '<th>State</th>'
             + '<th>Routing Option</th>'
             + '<th>Trunk Group</th>'
             + '</tr></thead><tbody>';
@@ -29320,9 +29317,6 @@ def sinch_admin_page(request: Request):
             html += '<tr>'
               + '<td>' + escapeHtml(row.number) + '</td>'
               + '<td>' + escapeHtml(row.status) + '</td>'
-              + '<td>' + escapeHtml(row.rate_center) + '</td>'
-              + '<td>' + escapeHtml(row.city) + '</td>'
-              + '<td>' + escapeHtml(row.state) + '</td>'
               + '<td>' + escapeHtml(row.routing_option) + '</td>'
               + '<td>' + escapeHtml(row.trunk_group) + '</td>'
               + '</tr>';
