@@ -29360,19 +29360,81 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
   clean_wildcard = str(tn_wildcard or "").strip()
   safe_quantity = max(1, min(int(quantity or 20), 100))
 
-  payload = {
-    "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
-    "quantity": safe_quantity,
-  }
-  if clean_mask:
-    payload["tnMask"] = clean_mask
-  if clean_wildcard:
-    payload["tnWildcard"] = clean_wildcard
-  if not clean_mask and not clean_wildcard:
-    payload["tnWildcard"] = "xxxxxxxxxx"
+  default_wildcard = "xxxxxxxxxx"
+  requested_private_key = INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY
 
-  call_result = _inteliquent_post_json("/tnInventory", payload)
-  if not call_result.get("ok"):
+  def _build_payload(mask_value: str = "", wildcard_value: str = "") -> dict:
+    p = {
+      "privateKey": requested_private_key,
+      "quantity": safe_quantity,
+    }
+    if mask_value:
+      p["tnMask"] = str(mask_value).strip()
+    if wildcard_value:
+      p["tnWildcard"] = str(wildcard_value).strip()
+    return p
+
+  payload_candidates = []
+  seen_candidates = set()
+
+  def _add_candidate(mask_value: str = "", wildcard_value: str = ""):
+    candidate = _build_payload(mask_value=mask_value, wildcard_value=wildcard_value)
+    dedupe_key = json.dumps(candidate, sort_keys=True, default=str)
+    if dedupe_key in seen_candidates:
+      return
+    seen_candidates.add(dedupe_key)
+    payload_candidates.append(candidate)
+
+  # Primary request: if tnMask is provided, avoid injecting the default wildcard.
+  if clean_mask:
+    if clean_wildcard and clean_wildcard != default_wildcard:
+      _add_candidate(mask_value=clean_mask, wildcard_value=clean_wildcard)
+    else:
+      _add_candidate(mask_value=clean_mask)
+  elif clean_wildcard:
+    _add_candidate(wildcard_value=clean_wildcard)
+  else:
+    _add_candidate(wildcard_value=default_wildcard)
+
+  # Retry patterns for exact digit searches to improve hit rate (10D and 11D variants).
+  raw_number = clean_mask or clean_wildcard
+  digits_only = re.sub(r"\D", "", raw_number or "")
+  exact_10 = ""
+  if len(digits_only) == 10:
+    exact_10 = digits_only
+  elif len(digits_only) == 11 and digits_only.startswith("1"):
+    exact_10 = digits_only[1:]
+  if exact_10:
+    exact_11 = f"1{exact_10}"
+    _add_candidate(mask_value=exact_10)
+    _add_candidate(mask_value=exact_11)
+    _add_candidate(wildcard_value=exact_10)
+    _add_candidate(wildcard_value=exact_11)
+
+  call_result = None
+  raw_payload = {}
+  tn_rows = []
+  attempt_summaries = []
+
+  for candidate in payload_candidates:
+    call_result = _inteliquent_post_json("/tnInventory", candidate)
+    attempt_summaries.append(
+      {
+        "tnMask": str(candidate.get("tnMask", "") or ""),
+        "tnWildcard": str(candidate.get("tnWildcard", "") or ""),
+        "quantity": int(candidate.get("quantity") or safe_quantity),
+        "ok": bool(call_result.get("ok")),
+        "status_code": int(call_result.get("status_code") or 0),
+      }
+    )
+    if not call_result.get("ok"):
+      break
+    raw_payload = call_result.get("raw", {}) or {}
+    tn_rows = _inteliquent_extract_tn_rows(raw_payload)
+    if tn_rows:
+      break
+
+  if not call_result or not call_result.get("ok"):
     status_code = int(call_result.get("status_code") or 400)
     if status_code < 400:
       status_code = 400
@@ -29381,12 +29443,11 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
         "ok": False,
         "error": str(call_result.get("error") or "Inteliquent lookup failed."),
         "raw": call_result.get("raw", {}),
+        "attempts": attempt_summaries,
       },
       status_code=status_code,
     )
 
-  raw_payload = call_result.get("raw", {}) or {}
-  tn_rows = _inteliquent_extract_tn_rows(raw_payload)
   rows = []
   for item in tn_rows:
     if not isinstance(item, dict):
@@ -29426,6 +29487,7 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
       "page": raw_payload.get("page"),
       "totalPages": raw_payload.get("totalPages"),
       "totalItems": raw_payload.get("totalItems"),
+      "attempts": attempt_summaries,
       "raw": raw_payload,
     }
   )
