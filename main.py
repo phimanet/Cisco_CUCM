@@ -29106,7 +29106,7 @@ def sinch_admin_page(request: Request):
   html = f"""
 <html>
   <head>
-    <title>Telephone Number Extract - Inteliquent (Sinch)</title>
+    <title>Sinch Admin Page</title>
     <style>
       body {{
         font-family: "Segoe UI", Tahoma, Arial, sans-serif;
@@ -29199,7 +29199,7 @@ def sinch_admin_page(request: Request):
   </head>
   <body>
     <header class="topbar">
-      <strong>Telephone Number Extract</strong>
+      <strong>Sinch Admin Page</strong>
       <div>
         <span style="margin-right:10px;font-size:12px;opacity:0.9;">Operator: {auth_user}</span>
         <a href="/page2">Administrative Items</a>
@@ -29207,7 +29207,7 @@ def sinch_admin_page(request: Request):
     </header>
     <main class="content">
       <div class="panel">
-        <h3>Inteliquent (Sinch) Telephone Number Inventory</h3>
+        <h3>Sinch Admin Page</h3>
         <p>Read-only lookup against Inteliquent tnInventory. No create, update, reserve, or disconnect actions are included here.</p>
       </div>
       <div class="panel">
@@ -30151,7 +30151,7 @@ def menu_admin_page(request: Request):
             <span>Manage Twilio number verification and lookup operations.</span>
           </a>
           <a class="hero-link-card" href="/sinch-work">
-            <strong>Sinch - Telephone Number Extract</strong>
+            <strong>Sinch Admin Page</strong>
             <span>Read-only Inteliquent (Sinch) telephone number inventory lookup.</span>
           </a>
           <a class="hero-link-card" href="/opentext-admin">
@@ -30195,7 +30195,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/opentext-admin'">OpenText Admin</button>
-            <button type="button" class="portal-nav-btn" onclick="window.location.href='/sinch-work'">Sinch - Telephone Number Extract</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/sinch-work'">Sinch Admin Page</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">SMS Item Menu (Page 3)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
