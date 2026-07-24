@@ -23446,6 +23446,226 @@ __ADMIN_CARD__
       })();
     </script>
 
+    <script>
+      // Standalone ES5 Batch LDAP handler (works on any browser; independent of other page scripts).
+      (function () {
+        function byId(id) { return document.getElementById(id); }
+
+        function dbg(msg) {
+          try {
+            var box = byId("page1-batch-ldap-debug");
+            var stamp = "";
+            try { stamp = new Date().toISOString().split("T")[1].replace("Z", ""); } catch (e0) { stamp = ""; }
+            var line = "[" + stamp + "] " + msg;
+            if (box) { box.value += (box.value ? "\n" : "") + line; box.scrollTop = box.scrollHeight; }
+            if (window.console && window.console.log) { window.console.log("[BatchLDAP] " + msg); }
+          } catch (e) { /* ignore */ }
+        }
+
+        function trim(s) { return String(s == null ? "" : s).replace(/^\s+|\s+$/g, ""); }
+
+        function parseCsvStatus(outputText) {
+          var text = String(outputText == null ? "" : outputText).replace(/\r/g, "");
+          var lines = text.split("\n");
+          if (lines.length < 2) { return { status: "Unknown", details: "No response rows." }; }
+          var line = lines[1];
+          var parts = [], cur = "", inQ = false, ch;
+          for (var c = 0; c < line.length; c++) {
+            ch = line.charAt(c);
+            if (ch === '"') { inQ = !inQ; }
+            else if (ch === "," && !inQ) { parts.push(cur); cur = ""; }
+            else { cur += ch; }
+          }
+          parts.push(cur);
+          for (var p = 0; p < parts.length; p++) { parts[p] = trim(parts[p]); }
+          return { status: (parts[1] || "Unknown"), details: (parts[2] || "") };
+        }
+
+        function encodeForm(obj) {
+          var pairs = [];
+          for (var k in obj) {
+            if (obj.hasOwnProperty(k)) { pairs.push(encodeURIComponent(k) + "=" + encodeURIComponent(obj[k])); }
+          }
+          return pairs.join("&");
+        }
+
+        function rowId(i) { return "p1bl-row-" + i; }
+
+        function setRow(i, statusText, statusColor, bgColor, details) {
+          var tr = byId(rowId(i));
+          if (!tr) { return; }
+          tr.style.background = bgColor;
+          var stList = tr.getElementsByClassName("p1bl-status");
+          var dtList = tr.getElementsByClassName("p1bl-details");
+          if (stList && stList[0]) { stList[0].textContent = statusText; stList[0].style.color = statusColor; }
+          if (dtList && dtList[0]) { dtList[0].textContent = details || ""; }
+        }
+
+        window.runPage1BatchLdap = function () {
+          dbg("runPage1BatchLdap() called (button click received).");
+          var emailsEl = byId("page1-batch-ldap-emails");
+          var phoneEl = byId("page1-batch-ldap-phone");
+          var submitBtn = byId("page1-batch-ldap-submit");
+          var statusEl = byId("page1-batch-ldap-status");
+          var progressEl = byId("page1-batch-ldap-progress");
+          var resultsEl = byId("page1-batch-ldap-results");
+          var downloadEl = byId("page1-batch-ldap-download");
+
+          dbg("Elements: emails=" + (!!emailsEl) + " phone=" + (!!phoneEl) + " submit=" + (!!submitBtn) +
+              " status=" + (!!statusEl) + " progress=" + (!!progressEl) + " results=" + (!!resultsEl) + " download=" + (!!downloadEl));
+
+          if (!emailsEl || !phoneEl || !statusEl || !resultsEl) { dbg("ABORT: required elements missing."); return; }
+
+          var emailsText = trim(emailsEl.value);
+          var phoneNumber = trim(phoneEl.value);
+          dbg("emails length=" + emailsText.length + " phone='" + phoneNumber + "'");
+          if (!emailsText) { statusEl.textContent = "Email addresses are required."; dbg("FAIL: no emails."); return; }
+          if (!phoneNumber) { statusEl.textContent = "Phone number is required."; dbg("FAIL: no phone."); return; }
+
+          var rawLines = emailsText.split("\n");
+          var emails = [];
+          for (var r = 0; r < rawLines.length; r++) {
+            var v = trim(rawLines[r]);
+            if (v.length > 0) { emails.push(v); }
+          }
+          dbg("parsed " + emails.length + " email(s).");
+          if (emails.length === 0) { statusEl.textContent = "Please enter at least one email address."; dbg("FAIL: zero emails."); return; }
+
+          var tasks = [];
+          for (var ti = 0; ti < emails.length; ti++) {
+            var email = emails[ti];
+            var at = email.indexOf("@");
+            var userid = at > 0 ? email.substring(0, at) : email;
+            tasks.push({ idx: ti, email: email, userid: userid });
+          }
+
+          statusEl.textContent = "";
+          if (progressEl) { progressEl.style.display = "block"; }
+          if (downloadEl) { downloadEl.style.display = "none"; }
+          if (submitBtn) { submitBtn.disabled = true; }
+
+          var html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+          html += '<thead><tr style="background:#005eb8; color:#fff;">';
+          html += '<th style="padding:8px 10px; text-align:left;">#</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Email</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Status</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Details</th>';
+          html += '</tr></thead><tbody>';
+          for (var qi = 0; qi < tasks.length; qi++) {
+            html += '<tr id="' + rowId(tasks[qi].idx) + '" style="background:#fffef0; border-bottom:1px solid #ddd;">';
+            html += '<td style="padding:8px 10px;">' + (tasks[qi].idx + 1) + '</td>';
+            html += '<td style="padding:8px 10px;">' + tasks[qi].email + '</td>';
+            html += '<td style="padding:8px 10px;">' + tasks[qi].userid + '</td>';
+            html += '<td style="padding:8px 10px; color:#9a7d00; font-weight:600;" class="p1bl-status">Queued</td>';
+            html += '<td style="padding:8px 10px;" class="p1bl-details"></td>';
+            html += '</tr>';
+          }
+          html += '</tbody></table>';
+          resultsEl.innerHTML = html;
+
+          var completed = 0, successCount = 0, failedCount = 0, nextIndex = 0;
+          var total = tasks.length;
+          var WORKER_COUNT = 3;
+          var activeWorkers = 0;
+
+          function updateStatusLine() {
+            statusEl.textContent = "Processing " + completed + " / " + total + "  (Success: " + successCount + ", Failed: " + failedCount + ")";
+          }
+          updateStatusLine();
+
+          function finishAll() {
+            statusEl.textContent = "Completed " + total + " user(s). Success: " + successCount + ", Failed: " + failedCount + ".";
+            dbg("ALL DONE. Success=" + successCount + " Failed=" + failedCount);
+            if (progressEl) { progressEl.style.display = "none"; }
+            if (submitBtn) { submitBtn.disabled = false; }
+            dbg("runPage1BatchLdap() finished.");
+          }
+
+          function processTask(task, done) {
+            dbg("START userid='" + task.userid + "' (email=" + task.email + ")");
+            setRow(task.idx, "Updating...", "#1d5490", "#eef6ff", "");
+            var xhr = new XMLHttpRequest();
+            xhr.open("POST", "/update/ad-phone-fields?inline=true", true);
+            xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
+            xhr.setRequestHeader("Accept", "application/json");
+            xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
+            xhr.onreadystatechange = function () {
+              if (xhr.readyState !== 4) { return; }
+              var rawText = xhr.responseText || "";
+              dbg("DONE userid='" + task.userid + "' HTTP=" + xhr.status + " body(300)=" + rawText.substring(0, 300));
+              try {
+                if (xhr.status < 200 || xhr.status >= 300) { throw new Error("HTTP " + xhr.status + ": " + rawText.substring(0, 200)); }
+                var payload = {};
+                try { payload = rawText ? JSON.parse(rawText) : {}; } catch (pe) { throw new Error("Bad JSON: " + rawText.substring(0, 200)); }
+                var parsed = parseCsvStatus(payload.output_text);
+                var isSuccess = String(parsed.status).toLowerCase() === "success";
+                if (isSuccess) { successCount++; setRow(task.idx, "Success", "#2d7d2d", "#f0f8ff", parsed.details); }
+                else { failedCount++; setRow(task.idx, parsed.status || "Failed", "#c41e3a", "#fff5f5", parsed.details); }
+              } catch (err) {
+                failedCount++;
+                var emsg = String(err && err.message ? err.message : err);
+                dbg("ERROR userid='" + task.userid + "': " + emsg);
+                setRow(task.idx, "Failed", "#c41e3a", "#fff5f5", emsg);
+              }
+              completed++;
+              updateStatusLine();
+              done();
+            };
+            try {
+              xhr.send(encodeForm({ target_user: task.userid, phone_number: phoneNumber }));
+            } catch (sendErr) {
+              failedCount++;
+              dbg("SEND ERROR userid='" + task.userid + "': " + String(sendErr));
+              setRow(task.idx, "Failed", "#c41e3a", "#fff5f5", String(sendErr));
+              completed++;
+              updateStatusLine();
+              done();
+            }
+          }
+
+          function workerNext() {
+            if (nextIndex >= tasks.length) {
+              activeWorkers--;
+              if (activeWorkers <= 0) { finishAll(); }
+              return;
+            }
+            var i = nextIndex;
+            nextIndex++;
+            processTask(tasks[i], function () { workerNext(); });
+          }
+
+          var startCount = Math.min(WORKER_COUNT, tasks.length);
+          for (var wkr = 0; wkr < startCount; wkr++) {
+            activeWorkers++;
+            dbg("Worker " + (wkr + 1) + " started.");
+            workerNext();
+          }
+        };
+
+        function wireCopyButton() {
+          var copyBtn = byId("page1-batch-ldap-copy-debug");
+          if (copyBtn && copyBtn.getAttribute("data-bound") !== "1") {
+            copyBtn.setAttribute("data-bound", "1");
+            copyBtn.onclick = function () {
+              var box = byId("page1-batch-ldap-debug");
+              if (box) {
+                box.select();
+                try { document.execCommand("copy"); copyBtn.textContent = "Copied!"; setTimeout(function () { copyBtn.textContent = "Copy Debug Output"; }, 1500); } catch (e) { /* ignore */ }
+              }
+            };
+          }
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", function () { wireCopyButton(); dbg("Standalone Batch LDAP handler ready (DOMContentLoaded)."); });
+        } else {
+          wireCopyButton();
+          dbg("Standalone Batch LDAP handler ready.");
+        }
+      })();
+    </script>
+
     <section class="tool-panel active" data-panel="personlookup">
 
     <h3>Person Lookup - Search by Name</h3>
@@ -25499,225 +25719,6 @@ __ADMIN_CARD__
       </div>
     </section>
 
-    <script>
-      // Standalone ES5 Batch LDAP handler (works on any browser; independent of other page scripts).
-      (function () {
-        function byId(id) { return document.getElementById(id); }
-
-        function dbg(msg) {
-          try {
-            var box = byId("page1-batch-ldap-debug");
-            var stamp = "";
-            try { stamp = new Date().toISOString().split("T")[1].replace("Z", ""); } catch (e0) { stamp = ""; }
-            var line = "[" + stamp + "] " + msg;
-            if (box) { box.value += (box.value ? "\n" : "") + line; box.scrollTop = box.scrollHeight; }
-            if (window.console && window.console.log) { window.console.log("[BatchLDAP] " + msg); }
-          } catch (e) { /* ignore */ }
-        }
-
-        function trim(s) { return String(s == null ? "" : s).replace(/^\s+|\s+$/g, ""); }
-
-        function parseCsvStatus(outputText) {
-          var text = String(outputText == null ? "" : outputText).replace(/\r/g, "");
-          var lines = text.split("\n");
-          if (lines.length < 2) { return { status: "Unknown", details: "No response rows." }; }
-          var line = lines[1];
-          var parts = [], cur = "", inQ = false, ch;
-          for (var c = 0; c < line.length; c++) {
-            ch = line.charAt(c);
-            if (ch === '"') { inQ = !inQ; }
-            else if (ch === "," && !inQ) { parts.push(cur); cur = ""; }
-            else { cur += ch; }
-          }
-          parts.push(cur);
-          for (var p = 0; p < parts.length; p++) { parts[p] = trim(parts[p]); }
-          return { status: (parts[1] || "Unknown"), details: (parts[2] || "") };
-        }
-
-        function encodeForm(obj) {
-          var pairs = [];
-          for (var k in obj) {
-            if (obj.hasOwnProperty(k)) { pairs.push(encodeURIComponent(k) + "=" + encodeURIComponent(obj[k])); }
-          }
-          return pairs.join("&");
-        }
-
-        function rowId(i) { return "p1bl-row-" + i; }
-
-        function setRow(i, statusText, statusColor, bgColor, details) {
-          var tr = byId(rowId(i));
-          if (!tr) { return; }
-          tr.style.background = bgColor;
-          var stList = tr.getElementsByClassName("p1bl-status");
-          var dtList = tr.getElementsByClassName("p1bl-details");
-          if (stList && stList[0]) { stList[0].textContent = statusText; stList[0].style.color = statusColor; }
-          if (dtList && dtList[0]) { dtList[0].textContent = details || ""; }
-        }
-
-        window.runPage1BatchLdap = function () {
-          dbg("runPage1BatchLdap() called (button click received).");
-          var emailsEl = byId("page1-batch-ldap-emails");
-          var phoneEl = byId("page1-batch-ldap-phone");
-          var submitBtn = byId("page1-batch-ldap-submit");
-          var statusEl = byId("page1-batch-ldap-status");
-          var progressEl = byId("page1-batch-ldap-progress");
-          var resultsEl = byId("page1-batch-ldap-results");
-          var downloadEl = byId("page1-batch-ldap-download");
-
-          dbg("Elements: emails=" + (!!emailsEl) + " phone=" + (!!phoneEl) + " submit=" + (!!submitBtn) +
-              " status=" + (!!statusEl) + " progress=" + (!!progressEl) + " results=" + (!!resultsEl) + " download=" + (!!downloadEl));
-
-          if (!emailsEl || !phoneEl || !statusEl || !resultsEl) { dbg("ABORT: required elements missing."); return; }
-
-          var emailsText = trim(emailsEl.value);
-          var phoneNumber = trim(phoneEl.value);
-          dbg("emails length=" + emailsText.length + " phone='" + phoneNumber + "'");
-          if (!emailsText) { statusEl.textContent = "Email addresses are required."; dbg("FAIL: no emails."); return; }
-          if (!phoneNumber) { statusEl.textContent = "Phone number is required."; dbg("FAIL: no phone."); return; }
-
-          var rawLines = emailsText.split("\n");
-          var emails = [];
-          for (var r = 0; r < rawLines.length; r++) {
-            var v = trim(rawLines[r]);
-            if (v.length > 0) { emails.push(v); }
-          }
-          dbg("parsed " + emails.length + " email(s).");
-          if (emails.length === 0) { statusEl.textContent = "Please enter at least one email address."; dbg("FAIL: zero emails."); return; }
-
-          var tasks = [];
-          for (var ti = 0; ti < emails.length; ti++) {
-            var email = emails[ti];
-            var at = email.indexOf("@");
-            var userid = at > 0 ? email.substring(0, at) : email;
-            tasks.push({ idx: ti, email: email, userid: userid });
-          }
-
-          statusEl.textContent = "";
-          if (progressEl) { progressEl.style.display = "block"; }
-          if (downloadEl) { downloadEl.style.display = "none"; }
-          if (submitBtn) { submitBtn.disabled = true; }
-
-          var html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
-          html += '<thead><tr style="background:#005eb8; color:#fff;">';
-          html += '<th style="padding:8px 10px; text-align:left;">#</th>';
-          html += '<th style="padding:8px 10px; text-align:left;">Email</th>';
-          html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
-          html += '<th style="padding:8px 10px; text-align:left;">Status</th>';
-          html += '<th style="padding:8px 10px; text-align:left;">Details</th>';
-          html += '</tr></thead><tbody>';
-          for (var qi = 0; qi < tasks.length; qi++) {
-            html += '<tr id="' + rowId(tasks[qi].idx) + '" style="background:#fffef0; border-bottom:1px solid #ddd;">';
-            html += '<td style="padding:8px 10px;">' + (tasks[qi].idx + 1) + '</td>';
-            html += '<td style="padding:8px 10px;">' + tasks[qi].email + '</td>';
-            html += '<td style="padding:8px 10px;">' + tasks[qi].userid + '</td>';
-            html += '<td style="padding:8px 10px; color:#9a7d00; font-weight:600;" class="p1bl-status">Queued</td>';
-            html += '<td style="padding:8px 10px;" class="p1bl-details"></td>';
-            html += '</tr>';
-          }
-          html += '</tbody></table>';
-          resultsEl.innerHTML = html;
-
-          var completed = 0, successCount = 0, failedCount = 0, nextIndex = 0;
-          var total = tasks.length;
-          var WORKER_COUNT = 3;
-          var activeWorkers = 0;
-
-          function updateStatusLine() {
-            statusEl.textContent = "Processing " + completed + " / " + total + "  (Success: " + successCount + ", Failed: " + failedCount + ")";
-          }
-          updateStatusLine();
-
-          function finishAll() {
-            statusEl.textContent = "Completed " + total + " user(s). Success: " + successCount + ", Failed: " + failedCount + ".";
-            dbg("ALL DONE. Success=" + successCount + " Failed=" + failedCount);
-            if (progressEl) { progressEl.style.display = "none"; }
-            if (submitBtn) { submitBtn.disabled = false; }
-            dbg("runPage1BatchLdap() finished.");
-          }
-
-          function processTask(task, done) {
-            dbg("START userid='" + task.userid + "' (email=" + task.email + ")");
-            setRow(task.idx, "Updating...", "#1d5490", "#eef6ff", "");
-            var xhr = new XMLHttpRequest();
-            xhr.open("POST", "/update/ad-phone-fields?inline=true", true);
-            xhr.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
-            xhr.setRequestHeader("Accept", "application/json");
-            xhr.setRequestHeader("X-Requested-With", "XMLHttpRequest");
-            xhr.onreadystatechange = function () {
-              if (xhr.readyState !== 4) { return; }
-              var rawText = xhr.responseText || "";
-              dbg("DONE userid='" + task.userid + "' HTTP=" + xhr.status + " body(300)=" + rawText.substring(0, 300));
-              try {
-                if (xhr.status < 200 || xhr.status >= 300) { throw new Error("HTTP " + xhr.status + ": " + rawText.substring(0, 200)); }
-                var payload = {};
-                try { payload = rawText ? JSON.parse(rawText) : {}; } catch (pe) { throw new Error("Bad JSON: " + rawText.substring(0, 200)); }
-                var parsed = parseCsvStatus(payload.output_text);
-                var isSuccess = String(parsed.status).toLowerCase() === "success";
-                if (isSuccess) { successCount++; setRow(task.idx, "Success", "#2d7d2d", "#f0f8ff", parsed.details); }
-                else { failedCount++; setRow(task.idx, parsed.status || "Failed", "#c41e3a", "#fff5f5", parsed.details); }
-              } catch (err) {
-                failedCount++;
-                var emsg = String(err && err.message ? err.message : err);
-                dbg("ERROR userid='" + task.userid + "': " + emsg);
-                setRow(task.idx, "Failed", "#c41e3a", "#fff5f5", emsg);
-              }
-              completed++;
-              updateStatusLine();
-              done();
-            };
-            try {
-              xhr.send(encodeForm({ target_user: task.userid, phone_number: phoneNumber }));
-            } catch (sendErr) {
-              failedCount++;
-              dbg("SEND ERROR userid='" + task.userid + "': " + String(sendErr));
-              setRow(task.idx, "Failed", "#c41e3a", "#fff5f5", String(sendErr));
-              completed++;
-              updateStatusLine();
-              done();
-            }
-          }
-
-          function workerNext() {
-            if (nextIndex >= tasks.length) {
-              activeWorkers--;
-              if (activeWorkers <= 0) { finishAll(); }
-              return;
-            }
-            var i = nextIndex;
-            nextIndex++;
-            processTask(tasks[i], function () { workerNext(); });
-          }
-
-          var startCount = Math.min(WORKER_COUNT, tasks.length);
-          for (var wkr = 0; wkr < startCount; wkr++) {
-            activeWorkers++;
-            dbg("Worker " + (wkr + 1) + " started.");
-            workerNext();
-          }
-        };
-
-        function wireCopyButton() {
-          var copyBtn = byId("page1-batch-ldap-copy-debug");
-          if (copyBtn && copyBtn.getAttribute("data-bound") !== "1") {
-            copyBtn.setAttribute("data-bound", "1");
-            copyBtn.onclick = function () {
-              var box = byId("page1-batch-ldap-debug");
-              if (box) {
-                box.select();
-                try { document.execCommand("copy"); copyBtn.textContent = "Copied!"; setTimeout(function () { copyBtn.textContent = "Copy Debug Output"; }, 1500); } catch (e) { /* ignore */ }
-              }
-            };
-          }
-        }
-
-        if (document.readyState === "loading") {
-          document.addEventListener("DOMContentLoaded", function () { wireCopyButton(); dbg("Standalone Batch LDAP handler ready (DOMContentLoaded)."); });
-        } else {
-          wireCopyButton();
-          dbg("Standalone Batch LDAP handler ready.");
-        }
-      })();
-    </script>
 
     <script>
       const hasCachedCucmPassword = __HAS_CACHED_CUCM_PASS__;
