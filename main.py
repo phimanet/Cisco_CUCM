@@ -29436,6 +29436,10 @@ def sinch_admin_page(request: Request):
             <label for="order_tn_list" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN List</label>
             <textarea id="order_tn_list" name="order_tn_list" placeholder="Paste TNs here, for example:\n8585551000\n8585551001"></textarea>
           </div>
+          <div style="margin-bottom:10px;max-width:240px;">
+            <label for="order_pin_code" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Authorization PIN</label>
+            <input type="password" id="order_pin_code" name="order_pin_code" inputmode="numeric" maxlength="4" placeholder="Enter 4-digit PIN" style="width:100%;" />
+          </div>
           <button type="submit" id="order-tn-submit-btn">Submit TN Order</button>
         </form>
         <p id="tn-order-status" class="status-msg"></p>
@@ -29502,6 +29506,8 @@ def sinch_admin_page(request: Request):
         const tfDebugEl = document.getElementById("tf-debug");
         const tfExportBtn = document.getElementById("tf-export-csv-btn");
         const orderForm = document.getElementById("inteliquent-tn-order-form");
+        const orderPinEl = document.getElementById("order_pin_code");
+        const orderSubmitBtn = document.getElementById("order-tn-submit-btn");
         const orderStatusEl = document.getElementById("tn-order-status");
         const orderResultsEl = document.getElementById("tn-order-results");
         const terminateForm = document.getElementById("inteliquent-tn-terminate-form");
@@ -29830,8 +29836,28 @@ def sinch_admin_page(request: Request):
         }}
 
         if (orderForm) {{
+          function syncOrderSubmitState() {{
+            if (!orderSubmitBtn || !orderPinEl) {{
+              return;
+            }}
+            const pinOk = String(orderPinEl.value || "").trim() === "1776";
+            orderSubmitBtn.disabled = !pinOk;
+          }}
+
+          if (orderPinEl) {{
+            orderPinEl.addEventListener("input", function () {{
+              syncOrderSubmitState();
+            }});
+          }}
+          syncOrderSubmitState();
+
           orderForm.addEventListener("submit", async function (event) {{
             event.preventDefault();
+            if (!orderPinEl || String(orderPinEl.value || "").trim() !== "1776") {{
+              orderStatusEl.textContent = "Authorization PIN is required and must be correct before submit.";
+              syncOrderSubmitState();
+              return;
+            }}
             const formData = new FormData(orderForm);
             orderStatusEl.textContent = "Submitting TN order...";
             if (orderResultsEl) {{
@@ -30200,7 +30226,7 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
 
 
 @app.post("/inteliquent/tn-order")
-def inteliquent_tn_order_route(request: Request, order_tn_list: str = Form("")):
+def inteliquent_tn_order_route(request: Request, order_tn_list: str = Form(""), order_pin_code: str = Form("")):
   session = _get_auth_session(request) or {}
   session_username = str(session.get("username", "") or "").strip()
   if not session_username:
@@ -30213,6 +30239,12 @@ def inteliquent_tn_order_route(request: Request, order_tn_list: str = Form("")):
     return JSONResponse(
       {"ok": False, "error": "At least one valid 10-digit TN is required in the paste list."},
       status_code=400,
+    )
+
+  if str(order_pin_code or "").strip() != "1776":
+    return JSONResponse(
+      {"ok": False, "error": "Authorization PIN is invalid."},
+      status_code=403,
     )
 
   payload = {
