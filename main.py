@@ -44,7 +44,7 @@ from toolkit.add_directory_number import add_directory_numbers_from_csv
 from toolkit.build_user_csf_phone import build_user_csf_phone_from_template, lookup_user_jabber_status
 from toolkit.decommission_user_csf_voicemail import decommission_user_csf_voicemail
 from toolkit.reset_unity_voicemail_pin import reset_unity_voicemail_pin
-from toolkit.update_ad_phone_only import update_ad_phone_fields_only
+from toolkit.update_ad_phone_only import update_ad_phone_fields_only, update_ad_phone_fields_by_email
 from toolkit.add_secondary_devices import (
   add_secondary_tct_device,
   add_secondary_bot_device,
@@ -23391,6 +23391,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="mobilejabbernotify">Re-send Jabber Mobile Email Instructions</button>
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
           <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
+          <button type="button" class="portal-nav-btn" data-panel="single-ldap-email-page1">LDAP Phone Update by Email</button>
           <button type="button" class="portal-nav-btn" data-panel="batch-ldap-page1">Batch LDAP Phone Update</button>
         </div>
       </aside>
@@ -25693,6 +25694,32 @@ __ADMIN_CARD__
         });
       })();
     </script>
+    </section>
+
+    <section class="tool-panel" data-panel="single-ldap-email-page1">
+
+    <h3>Update Active Directory Telephone and ipPhone field by Email</h3>
+    <p>Enter one email address and the 10-digit number to assign. The email is resolved to the AD account (by mail / userPrincipalName), then the telephoneNumber and ipPhone fields are updated. Leave the number blank to clear both fields.</p>
+    <p>Authentication note: Uses cached login credentials from your current session for Active Directory authentication.</p>
+
+    <div class="ad-update-layout">
+      <form class="target-user-form ad-update-form" action="/update/ad-phone-by-email" method="post">
+        <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
+
+        Email address of person to update:<br>
+        <input name="email" type="email" placeholder="john.doe@amnhealthcare.com" required><br><br>
+
+        10-Digit Phone Number (or leave blank to clear):<br>
+        <input name="phone_number" placeholder="2145551234" pattern="[0-9]{0,10}"><br><br>
+
+        <div class="action-row">
+          <button type="submit">Update AD Phone Fields by Email</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
+      </form>
+    </div>
     </section>
 
     <section class="tool-panel" data-panel="batch-ldap-page1">
@@ -42087,6 +42114,45 @@ def update_ad_phone_fields_route(
       })
 
     return _render_job_result("Update Active Directory Telephone and ipPhone field only (Option 11)", data, filename)
+
+
+@app.post("/update/ad-phone-by-email")
+def update_ad_phone_by_email_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    email: str = Form(...),
+    phone_number: str = Form(""),
+    inline: bool = Query(False),
+):
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+    data, filename = update_ad_phone_fields_by_email(
+      email=email,
+      phone_number=phone_number,
+      ad_username=cucm_user,
+      ad_password=cucm_pass,
+    )
+    _append_audit_event(
+      action="update_ad_phone_by_email",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=email,
+      output_filename=filename,
+      inline_mode=inline,
+    )
+
+    if inline:
+      job_output = _prepare_job_output(data, filename)
+      return JSONResponse({
+        "job_id": job_output["job_id"],
+        "filename": job_output["filename"],
+        "output_text": job_output["output_text"],
+        "download_url": f"/download/job-output/{job_output['job_id']}",
+      })
+
+    return _render_job_result("Update Active Directory Telephone and ipPhone field by Email", data, filename)
 
 
 @app.post("/admin/ldap-sync")

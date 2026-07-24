@@ -1693,3 +1693,207 @@ def _lookup_ad_group_ldapsearch(group_name, auth_context):
         "groupCategory": _group_category_from_group_type(group_type) if group_type is not None else "",
         "groupScope": _group_scope_from_group_type(group_type) if group_type is not None else "",
     }, ""
+
+
+def _normalize_email_value(email):
+    value = (email or "").strip()
+    if not value:
+        return ""
+    if "@" not in value:
+        return ""
+    if not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", value):
+        return ""
+    return value
+
+
+def _email_local_part(email):
+    value = (email or "").strip()
+    if "@" not in value:
+        return ""
+    return value.split("@", 1)[0].strip()
+
+
+def _resolve_samaccountname_by_email_powershell(email, auth_context):
+    payload = {
+        "username": (auth_context or {}).get("username", ""),
+        "password": (auth_context or {}).get("password", ""),
+        "email": email,
+    }
+    script = r"""
+$payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
+Import-Module ActiveDirectory -ErrorAction Stop
+
+$email = [string]$payload.email
+$ldapFilter = "(|(mail=$email)(userPrincipalName=$email)(proxyAddresses=smtp:$email))"
+
+$user = $null
+if ($payload.username -and $payload.password) {
+    $secure = ConvertTo-SecureString $payload.password -AsPlainText -Force
+    $cred = [System.Management.Automation.PSCredential]::new($payload.username, $secure)
+    $user = Get-ADUser -Credential $cred -LDAPFilter $ldapFilter -Properties sAMAccountName -ErrorAction Stop | Select-Object -First 1
+} else {
+    $user = Get-ADUser -LDAPFilter $ldapFilter -Properties sAMAccountName -ErrorAction Stop | Select-Object -First 1
+}
+
+if ($null -eq $user) {
+    @{ found = $false } | ConvertTo-Json -Compress
+    exit 0
+}
+
+@{
+    found = $true
+    samAccountName = [string]$user.SamAccountName
+} | ConvertTo-Json -Compress
+"""
+    data, error = _run_powershell_json(script, payload)
+    if error:
+        return None, error
+    if not isinstance(data, dict):
+        return None, "AD email lookup returned an invalid response"
+    return data, ""
+
+
+def _resolve_samaccountname_by_email_ldap(email, auth_context):
+    if not LDAP3_AVAILABLE:
+        return None, "ldap3 package is not installed on this server"
+
+    config, config_error = _resolve_ldap_config()
+    if config_error:
+        return None, config_error
+
+    bind_user, bind_auth, bind_error = _resolve_ldap_bind_credentials(auth_context, config)
+    if bind_error:
+        return None, bind_error
+
+    bind_password = str(os.getenv("AD_LDAP_BIND_PASSWORD") or str((auth_context or {}).get("password") or ""))
+
+    try:
+        server = Server(
+            config["server"],
+            port=config["port"],
+            use_ssl=config["use_ssl"],
+            get_info=ALL,
+            connect_timeout=20,
+        )
+        conn = Connection(
+            server,
+            user=bind_user,
+            password=bind_password,
+            authentication=bind_auth,
+            auto_bind=True,
+            receive_timeout=20,
+        )
+    except Exception as exc:
+        return None, f"LDAP bind failed: {exc}"
+
+    escaped = _escape_ldap_filter_value(email)
+    search_filter = (
+        f"(&(objectClass=user)(|"
+        f"(mail={escaped})"
+        f"(userPrincipalName={escaped})"
+        f"(proxyAddresses=smtp:{escaped})"
+        "))"
+    )
+    try:
+        ok = conn.search(
+            search_base=config["base_dn"],
+            search_filter=search_filter,
+            search_scope=SUBTREE,
+            attributes=["sAMAccountName"],
+        )
+    except Exception as exc:
+        try:
+            conn.unbind()
+        except Exception:
+            pass
+        return None, f"LDAP search failed: {exc}"
+
+    if not ok or not conn.entries:
+        try:
+            conn.unbind()
+        except Exception:
+            pass
+        return {"found": False, "samAccountName": ""}, ""
+
+    entry = conn.entries[0]
+    sam = str(getattr(getattr(entry, "sAMAccountName", None), "value", "") or "").strip()
+    try:
+        conn.unbind()
+    except Exception:
+        pass
+    return {"found": bool(sam), "samAccountName": sam}, ""
+
+
+def _resolve_samaccountname_by_email_ldapsearch(email, auth_context):
+    config, config_error = _resolve_ldap_config()
+    if config_error:
+        return None, config_error
+
+    password = str((auth_context or {}).get("password") or "")
+    if not password:
+        return None, "LDAP bind requires username and password"
+
+    bind_user = _resolve_ldapsearch_bind_user(auth_context, config)
+    if not bind_user:
+        return None, "LDAP bind requires username"
+
+    escaped = _escape_ldap_filter_value(email)
+    search_filter = (
+        f"(&(objectClass=user)(|"
+        f"(mail={escaped})"
+        f"(userPrincipalName={escaped})"
+        f"(proxyAddresses=smtp:{escaped})"
+        "))"
+    )
+    attrs, lookup_error = _run_ldapsearch_query(
+        config,
+        bind_user,
+        password,
+        search_filter,
+        ["sAMAccountName"],
+    )
+    if lookup_error:
+        return None, lookup_error
+
+    sam = _first_attr_value(attrs or {}, ["sAMAccountName", "samAccountName"])
+    return {"found": bool(sam), "samAccountName": sam}, ""
+
+
+def resolve_samaccountname_by_email(email, auth_context=None):
+    """
+    Resolve an email address to its AD sAMAccountName.
+
+    Tries AD lookup by mail/userPrincipalName/proxyAddresses via PowerShell,
+    then ldap3, then ldapsearch. If no AD match is found, falls back to the
+    email local-part (AMN convention: local-part == sAMAccountName).
+    Returns (samaccountname, message). samaccountname is "" only on hard failure.
+    """
+    clean_email = _normalize_email_value(email)
+    if not clean_email:
+        return "", "A valid email address is required"
+
+    local_part = _email_local_part(clean_email)
+
+    ps_data, ps_error = _resolve_samaccountname_by_email_powershell(clean_email, auth_context)
+    if not ps_error and isinstance(ps_data, dict) and ps_data.get("found"):
+        sam = _normalize_samaccountname(str(ps_data.get("samAccountName") or ""))
+        if sam:
+            return sam, f"Resolved {clean_email} to {sam} via AD"
+
+    ldap_data, ldap_error = _resolve_samaccountname_by_email_ldap(clean_email, auth_context)
+    if not ldap_error and isinstance(ldap_data, dict) and ldap_data.get("found"):
+        sam = _normalize_samaccountname(str(ldap_data.get("samAccountName") or ""))
+        if sam:
+            return sam, f"Resolved {clean_email} to {sam} via AD"
+
+    ldapsearch_data, ldapsearch_error = _resolve_samaccountname_by_email_ldapsearch(clean_email, auth_context)
+    if not ldapsearch_error and isinstance(ldapsearch_data, dict) and ldapsearch_data.get("found"):
+        sam = _normalize_samaccountname(str(ldapsearch_data.get("samAccountName") or ""))
+        if sam:
+            return sam, f"Resolved {clean_email} to {sam} via AD"
+
+    fallback = _normalize_samaccountname(local_part)
+    if fallback:
+        return fallback, f"Used email local-part '{fallback}' (no AD email match found)"
+
+    return "", f"Could not resolve a valid AD account from {clean_email}"
