@@ -27384,6 +27384,7 @@ __GREENLIGHT_ADMIN_CARD__
             <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="jabberstatus">Jabber Status Check</button>
             <button type="button" class="portal-nav-btn" data-panel="translationlookup">Translation Pattern Lookup</button>
+            <button type="button" class="portal-nav-btn" data-panel="batchldap">Batch LDAP Phone Update</button>
             <a class="portal-nav-link" href="/menu?panel=build">Open Build User (Page 1)</a>
             <a class="portal-nav-link" href="/menu?panel=offboard">Open Separate Employee (Page 1)</a>
           </div>
@@ -27610,6 +27611,32 @@ __GREENLIGHT_ADMIN_CARD__
                 <p id="greenlight-translation-status" class="status-line">Enter a query and click Lookup.</p>
                 <pre id="greenlight-translation-output"></pre>
               </div>
+            </div>
+          </section>
+
+          <section class="tool-panel" data-panel="batchldap">
+            <h3>Batch LDAP Phone Update</h3>
+            <form id="greenlight-batch-ldap-form" style="margin-bottom:12px;">
+              <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
+              <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
+              <input type="hidden" name="cucm_pass" value="" />
+              <div class="search-filter-row">
+                <label for="batch-ldap-emails" style="display:block; font-weight:600; margin-bottom:6px;">Email Addresses (one or more)</label>
+                <textarea id="batch-ldap-emails" name="emails_text" placeholder="Paste emails: one per line or comma-separated&#10;Example:&#10;john.smith@company.com&#10;jane.doe@company.com" style="min-height:120px; width:min(760px, 100%); font-family:monospace; font-size:13px;"></textarea>
+              </div>
+              <div class="search-filter-row">
+                <label for="batch-ldap-phone" style="display:block; font-weight:600; margin-bottom:6px;">Phone Number (same for all)</label>
+                <input id="batch-ldap-phone" name="phone_number" placeholder="Example: 2025551234 or +1-202-555-1234" style="font-family:monospace;" />
+              </div>
+              <div class="search-filter-row">
+                <button type="submit">Start Batch Update</button>
+              </div>
+            </form>
+            <div class="result-card">
+              <p id="greenlight-batch-ldap-status" class="status-line">Paste emails and phone number, then click Start Batch Update.</p>
+              <p id="greenlight-batch-ldap-progress" class="status-line" style="display:none; color:#1d5490;">Processing...</p>
+              <div id="greenlight-batch-ldap-results" style="overflow-x:auto;"></div>
+              <p><a id="greenlight-batch-ldap-download" href="#" style="display:none; font-weight:700; margin-top:12px;">Download Results CSV</a></p>
             </div>
           </section>
         </section>
@@ -28171,6 +28198,123 @@ __GREENLIGHT_ADMIN_CARD__
           pendingText: "Looking up translation patterns...",
           doneText: "Lookup completed.",
         });
+
+        // Batch LDAP Phone Update
+        const batchLdapForm = document.getElementById("greenlight-batch-ldap-form");
+        if (batchLdapForm) {
+          batchLdapForm.addEventListener("submit", async function (evt) {
+            evt.preventDefault();
+            const statusEl = document.getElementById("greenlight-batch-ldap-status");
+            const progressEl = document.getElementById("greenlight-batch-ldap-progress");
+            const resultsEl = document.getElementById("greenlight-batch-ldap-results");
+            const downloadEl = document.getElementById("greenlight-batch-ldap-download");
+
+            const cucmHost = batchLdapForm.querySelector("input[name='cucm_host']").value;
+            const cucmUser = batchLdapForm.querySelector("input[name='cucm_user']").value;
+            const cucmPass = batchLdapForm.querySelector("input[name='cucm_pass']").value;
+            const emailsText = batchLdapForm.querySelector("textarea[name='emails_text']").value;
+            const phoneNumber = batchLdapForm.querySelector("input[name='phone_number']").value;
+
+            if (!emailsText.trim()) {
+              statusEl.textContent = "Error: Please paste at least one email address.";
+              statusEl.style.color = "#a42323";
+              return;
+            }
+            if (!phoneNumber.trim()) {
+              statusEl.textContent = "Error: Please enter a phone number.";
+              statusEl.style.color = "#a42323";
+              return;
+            }
+
+            const formData = new FormData();
+            formData.append("cucm_host", cucmHost);
+            formData.append("cucm_user", cucmUser);
+            formData.append("cucm_pass", cucmPass);
+            formData.append("emails_text", emailsText);
+            formData.append("phone_number", phoneNumber);
+
+            statusEl.textContent = "";
+            statusEl.style.color = "#1d5490";
+            if (progressEl) {
+              progressEl.style.display = "block";
+              progressEl.textContent = "Processing batch update...";
+            }
+            resultsEl.innerHTML = "";
+            if (downloadEl) {
+              downloadEl.style.display = "none";
+            }
+
+            try {
+              const response = await fetch("/project-greenlight/batch-ldap-phone-update", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "X-Requested-With": "XMLHttpRequest" },
+                body: formData,
+              });
+
+              const payload = await response.json();
+
+              if (!response.ok || payload.ok === false) {
+                const detail = payload.error || payload.message || ("Request failed (HTTP " + response.status + ")");
+                throw new Error(String(detail));
+              }
+
+              const jobId = String(payload.job_id || "").trim();
+              const filename = String(payload.filename || "").trim();
+
+              if (progressEl) {
+                progressEl.style.display = "none";
+              }
+
+              if (jobId && filename) {
+                statusEl.textContent = "Batch update completed! " + payload.summary || "";
+                statusEl.style.color = "#0d5d3d";
+
+                let html = '<table style="width:100%; border-collapse:collapse; font-size:12px; margin-top:12px;">';
+                html += '<thead><tr style="background:#005eb8;color:#fff;">';
+                html += '<th style="padding:6px 8px; text-align:left;">Email</th>';
+                html += '<th style="padding:6px 8px; text-align:left;">Status</th>';
+                html += '<th style="padding:6px 8px; text-align:left;">Details</th>';
+                html += '</tr></thead><tbody>';
+
+                if (payload.results && Array.isArray(payload.results)) {
+                  payload.results.forEach(function (row, idx) {
+                    const bg = idx % 2 === 0 ? "#f7fbff" : "#ffffff";
+                    const email = String(row.email || "").substring(0, 50);
+                    const status = String(row.status || "unknown");
+                    const details = String(row.details || "").substring(0, 80);
+                    const statusColor = status === "Success" ? "#0d5d3d" : "#a42323";
+
+                    html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                    html += '<td style="padding:6px 8px; font-family:Consolas,monospace;">' + escapeHtml(email) + '</td>';
+                    html += '<td style="padding:6px 8px; color:' + statusColor + '; font-weight:700;">' + escapeHtml(status) + '</td>';
+                    html += '<td style="padding:6px 8px;">' + escapeHtml(details) + '</td>';
+                    html += '</tr>';
+                  });
+                }
+
+                html += '</tbody></table>';
+                resultsEl.innerHTML = html;
+
+                if (downloadEl && filename) {
+                  downloadEl.href = "/download/job-output/" + encodeURIComponent(jobId);
+                  downloadEl.textContent = "Download Results CSV";
+                  downloadEl.style.display = "inline-block";
+                }
+              } else {
+                statusEl.textContent = "Batch update response missing job ID or filename.";
+                statusEl.style.color = "#a42323";
+              }
+            } catch (err) {
+              if (progressEl) {
+                progressEl.style.display = "none";
+              }
+              statusEl.textContent = "Error: " + String(err && err.message ? err.message : err);
+              statusEl.style.color = "#a42323";
+              resultsEl.innerHTML = "<p style='margin:0;color:#a42323;'>" + escapeHtml(String(err && err.message ? err.message : err)) + "</p>";
+            }
+          });
+        }
       })();
     </script>
   </body>
@@ -40262,6 +40406,158 @@ def project_greenlight_person_lookup_status_route(job_id: str):
 @app.get("/project-greenlight/person-lookup/history")
 def project_greenlight_person_lookup_history_route(limit: int = Query(20, ge=1, le=100)):
   return JSONResponse({"ok": True, "runs": _greenlight_queue_list(limit=limit)})
+
+
+@app.post("/project-greenlight/batch-ldap-phone-update")
+def project_greenlight_batch_ldap_phone_update_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    emails_text: str = Form(""),
+    phone_number: str = Form(""),
+):
+  """Batch update LDAP phone fields for multiple users with the same phone number."""
+  try:
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+    emails = _greenlight_parse_email_inputs(emails_text)
+    if not emails:
+      return JSONResponse(
+        {
+          "ok": False,
+          "error": "No emails parsed from input.",
+        },
+        status_code=400,
+      )
+
+    clean_phone = (phone_number or "").strip()
+    if not clean_phone:
+      return JSONResponse(
+        {
+          "ok": False,
+          "error": "Phone number is required.",
+        },
+        status_code=400,
+      )
+
+    # Build results with per-user update attempts
+    results = []
+    success_count = 0
+    failed_count = 0
+
+    for email in emails:
+      email_lower = (email or "").strip().lower()
+      if not email_lower:
+        continue
+
+      # Extract user ID from email (before @)
+      at_idx = email_lower.find("@")
+      target_userid = email_lower[:at_idx] if at_idx > 0 else email_lower
+
+      try:
+        # Call the existing AD phone update function
+        csv_data, _filename = update_ad_phone_fields_only(
+          target_user=target_userid,
+          phone_number=clean_phone,
+          ad_username=cucm_user,
+          ad_password=cucm_pass,
+        )
+
+        # Parse CSV to extract status
+        csv_text = csv_data.decode("utf-8") if isinstance(csv_data, bytes) else str(csv_data)
+        lines = csv_text.strip().split("\n")
+        status_row = None
+        if len(lines) > 1:
+          status_row = lines[1]  # Skip header, get status row
+
+        if status_row:
+          parts = status_row.split(",")
+          step = parts[0].strip() if len(parts) > 0 else "Unknown"
+          status = parts[1].strip() if len(parts) > 1 else "Unknown"
+          details = parts[2].strip() if len(parts) > 2 else ""
+
+          if status.lower() == "success":
+            success_count += 1
+            results.append({
+              "email": email,
+              "userid": target_userid,
+              "status": "Success",
+              "details": f"Phone number {clean_phone} applied successfully.",
+            })
+          else:
+            failed_count += 1
+            results.append({
+              "email": email,
+              "userid": target_userid,
+              "status": "Failed",
+              "details": details[:100] if details else "LDAP update failed.",
+            })
+        else:
+          failed_count += 1
+          results.append({
+            "email": email,
+            "userid": target_userid,
+            "status": "Failed",
+            "details": "Unable to parse response.",
+          })
+      except Exception as user_exc:
+        failed_count += 1
+        results.append({
+          "email": email,
+          "userid": target_userid,
+          "status": "Failed",
+          "details": str(user_exc)[:100],
+        })
+
+    # Prepare job output CSV
+    ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"batch_ldap_phone_update_{ts}.csv"
+    out = io.StringIO()
+    log_writer = csv.writer(out)
+    log_writer.writerow(["Email", "UserID", "Status", "Details"])
+    for result in results:
+      log_writer.writerow([
+        result.get("email", ""),
+        result.get("userid", ""),
+        result.get("status", ""),
+        result.get("details", ""),
+      ])
+
+    job_output = _prepare_job_output(out.getvalue().encode("utf-8"), filename)
+
+    _append_audit_event(
+      action="project_greenlight_batch_ldap_phone_update",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=f"emails={len(emails)};phone={clean_phone}",
+      output_filename=filename,
+      inline_mode=True,
+    )
+
+    return JSONResponse({
+      "ok": True,
+      "job_id": job_output["job_id"],
+      "filename": job_output["filename"],
+      "email_count": len(emails),
+      "success_count": success_count,
+      "failed_count": failed_count,
+      "summary": f"{success_count} succeeded, {failed_count} failed out of {len(emails)} emails.",
+      "results": results,
+      "download_url": f"/download/job-output/{job_output['job_id']}",
+    })
+
+  except RuntimeError:
+    raise
+  except Exception as exc:
+    return JSONResponse(
+      {
+        "ok": False,
+        "error": str(exc),
+      },
+      status_code=500,
+    )
 
 
 @app.post("/lookup/twilio-by-number")
