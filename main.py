@@ -23397,8 +23397,11 @@ __ADMIN_CARD__
 
       <section class="portal-main">
 
+    <script>window.__earlyProbeRan = true;</script>
+
     <script>
       (function () {
+        window.__navFallbackRan = true;
         function bindPortalNavFallback() {
           const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn[data-panel]"));
           const panels = Array.from(document.querySelectorAll(".tool-panel"));
@@ -25704,7 +25707,7 @@ __ADMIN_CARD__
           <label style="display:block; margin-bottom:6px; font-weight:600;">Phone Number to Assign:</label>
           <input id="page1-batch-ldap-phone" name="phone_number" type="tel" placeholder="2025551234" />
         </div>
-        <button type="button" id="page1-batch-ldap-submit" onclick="if(window.runPage1BatchLdap){window.runPage1BatchLdap();}else{var b=document.getElementById('page1-batch-ldap-debug'); if(b){b.value+=(b.value?String.fromCharCode(10):'')+'[inline] handler not loaded yet';}}" style="background:linear-gradient(180deg,#1d5490,#0d3b73); color:#fff; padding:8px 16px; border:1px solid #0d3b73; border-radius:6px; cursor:pointer; font-weight:600;">Start Batch Update</button>
+        <button type="button" id="page1-batch-ldap-submit" onclick="var b=document.getElementById('page1-batch-ldap-debug');function L(m){if(b){b.value+=(b.value?String.fromCharCode(10):'')+m;b.scrollTop=b.scrollHeight;}}L('--- DIAG '+new Date().toISOString()+' ---');L('runPage1BatchLdap='+(typeof window.runPage1BatchLdap));L('showPanel='+(typeof window.showPanel));L('mainPortalRan='+(window.__mainPortalRan?'yes':'no'));L('navFallbackRan='+(window.__navFallbackRan?'yes':'no'));L('earlyProbeRan='+(window.__earlyProbeRan?'yes':'no'));if(window.runPage1BatchLdap){L('calling handler...');window.runPage1BatchLdap();}else{L('[inline] handler not loaded yet');}" style="background:linear-gradient(180deg,#1d5490,#0d3b73); color:#fff; padding:8px 16px; border:1px solid #0d3b73; border-radius:6px; cursor:pointer; font-weight:600;">Start Batch Update</button>
       </form>
       <div class="result-card" style="margin-top:12px;">
         <p id="page1-batch-ldap-status" class="status-line">Paste emails and phone number, then click Start Batch Update.</p>
@@ -25721,6 +25724,7 @@ __ADMIN_CARD__
 
 
     <script>
+      window.__mainPortalRan = true;
       const hasCachedCucmPassword = __HAS_CACHED_CUCM_PASS__;
       const hasCachedUnityPassword = __HAS_CACHED_UNITY_PASS__;
       const credentialExpiresAtMs = __CREDENTIAL_EXPIRES_AT_MS__;
