@@ -29366,10 +29366,6 @@ def sinch_admin_page(request: Request):
         </div>
         <div id="inventory-results" style="overflow-x:auto;"></div>
       </div>
-      <div class="panel">
-        <h3 style="margin-bottom:10px;">Debug Output</h3>
-        <pre id="inventory-debug" style="background:#f5f5f5;border:1px solid #ccc;padding:8px;border-radius:6px;max-height:320px;overflow-y:auto;font-size:10px;margin:0;color:#333;word-break:break-all;">Ready.</pre>
-      </div>
       </div>
       <div id="sinch-tf-section" style="display:{tf_display_style};">
       <div class="panel">
@@ -29397,10 +29393,6 @@ def sinch_admin_page(request: Request):
           <button type="button" id="tf-export-csv-btn" disabled>Export TFN CSV</button>
         </div>
         <div id="tf-results" style="overflow-x:auto;"></div>
-      </div>
-      <div class="panel">
-        <h3 style="margin-bottom:10px;">Toll-Free Debug Output</h3>
-        <pre id="tf-debug" style="background:#f5f5f5;border:1px solid #ccc;padding:8px;border-radius:6px;max-height:320px;overflow-y:auto;font-size:10px;margin:0;color:#333;word-break:break-all;">Ready.</pre>
       </div>
       </div>
       </section>
@@ -29556,7 +29548,9 @@ def sinch_admin_page(request: Request):
                 body: body.toString(),
               }});
               const payload = await response.json();
-              debugEl.textContent = JSON.stringify(payload, null, 2);
+              if (debugEl) {{
+                debugEl.textContent = JSON.stringify(payload, null, 2);
+              }}
 
               if (!response.ok || !payload.ok) {{
                 statusEl.textContent = "Lookup failed: " + (payload.error || "Unknown error");
@@ -29577,7 +29571,9 @@ def sinch_admin_page(request: Request):
                 extractAllInput.value = "0";
               }}
             }} catch (err) {{
-              debugEl.textContent = String(err && err.message ? err.message : err);
+              if (debugEl) {{
+                debugEl.textContent = String(err && err.message ? err.message : err);
+              }}
               statusEl.textContent = "Lookup failed: " + String(err && err.message ? err.message : err);
               if (extractAllInput) {{
                 extractAllInput.value = "0";
@@ -29642,7 +29638,9 @@ def sinch_admin_page(request: Request):
                 body: body.toString(),
               }});
               const payload = await response.json();
-              tfDebugEl.textContent = JSON.stringify(payload, null, 2);
+              if (tfDebugEl) {{
+                tfDebugEl.textContent = JSON.stringify(payload, null, 2);
+              }}
 
               if (!response.ok || !payload.ok) {{
                 tfStatusEl.textContent = "Lookup failed: " + (payload.error || "Unknown error");
@@ -29663,7 +29661,9 @@ def sinch_admin_page(request: Request):
                 tfExtractAllInput.value = "0";
               }}
             }} catch (err) {{
-              tfDebugEl.textContent = String(err && err.message ? err.message : err);
+              if (tfDebugEl) {{
+                tfDebugEl.textContent = String(err && err.message ? err.message : err);
+              }}
               tfStatusEl.textContent = "Lookup failed: " + String(err && err.message ? err.message : err);
               if (tfExtractAllInput) {{
                 tfExtractAllInput.value = "0";
