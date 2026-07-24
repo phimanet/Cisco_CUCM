@@ -27683,6 +27683,7 @@ __GREENLIGHT_ADMIN_CARD__
               const updated = String((run && (run.updated_at || run.completed_at || run.started_at || run.created_at)) || "");
               const jobId = String((run && run.job_id) || "").trim();
               const statusUrl = jobId ? ("/project-greenlight/person-lookup/status/" + encodeURIComponent(jobId)) : "";
+              const downloadUrl = String((run && run.download_url) || "").trim();
               const progressText = emailTotal > 0 ? (emailDone + "/" + emailTotal) : "0";
 
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
@@ -27690,8 +27691,15 @@ __GREENLIGHT_ADMIN_CARD__
               html += '<td style="padding:6px 8px; font-family:Consolas,monospace;">' + escapeHtml(progressText) + '</td>';
               html += '<td style="padding:6px 8px; font-family:Consolas,monospace;">' + escapeHtml(String(rowCount)) + '</td>';
               html += '<td style="padding:6px 8px;">' + escapeHtml(updated) + '</td>';
-              if (statusUrl) {
-                html += '<td style="padding:6px 8px;"><button type="button" class="greenlight-history-resume" data-status-url="' + escapeHtml(statusUrl) + '" style="font-size:11px; padding:3px 7px;">Track</button></td>';
+              if (statusUrl || downloadUrl) {
+                html += '<td style="padding:6px 8px; white-space:nowrap;">';
+                if (statusUrl) {
+                  html += '<button type="button" class="greenlight-history-resume" data-status-url="' + escapeHtml(statusUrl) + '" style="font-size:11px; padding:3px 7px; margin-right:6px;">Track</button>';
+                }
+                if (downloadUrl) {
+                  html += '<a class="greenlight-history-download" href="' + escapeHtml(downloadUrl) + '" style="font-size:11px; font-weight:700;">Download CSV</a>';
+                }
+                html += '</td>';
               } else {
                 html += '<td style="padding:6px 8px; color:#6b7785;">N/A</td>';
               }
