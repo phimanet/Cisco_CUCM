@@ -23391,6 +23391,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="mobilejabbernotify">Re-send Jabber Mobile Email Instructions</button>
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
           <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
+          <button type="button" class="portal-nav-btn" data-panel="batch-ldap-page1">Batch LDAP Phone Update</button>
         </div>
       </aside>
 
@@ -25471,6 +25472,28 @@ __ADMIN_CARD__
     </script>
     </section>
 
+    <section class="tool-panel" data-panel="batch-ldap-page1">
+      <h3>Batch LDAP Phone Update</h3>
+      <p>Update AD phone fields for multiple users at once. Paste email addresses (one per line) and enter the phone number to assign to all of them.</p>
+      <form id="page1-batch-ldap-form">
+        <div class="search-filter-row">
+          <label style="display:block; margin-bottom:6px; font-weight:600;">Email Addresses (one per line):</label>
+          <textarea id="page1-batch-ldap-emails" name="emails" style="width:100%; height:100px; font-family:monospace; padding:8px; border:1px solid #ccc; border-radius:4px; box-sizing:border-box;" placeholder="user1@amnhealthcare.com&#10;user2@amnhealthcare.com"></textarea>
+        </div>
+        <div class="search-filter-row">
+          <label style="display:block; margin-bottom:6px; font-weight:600;">Phone Number to Assign:</label>
+          <input id="page1-batch-ldap-phone" name="phone_number" type="tel" placeholder="2025551234" />
+        </div>
+        <button type="button" id="page1-batch-ldap-submit" style="background:linear-gradient(180deg,#1d5490,#0d3b73); color:#fff; padding:8px 16px; border:1px solid #0d3b73; border-radius:6px; cursor:pointer; font-weight:600;">Start Batch Update</button>
+      </form>
+      <div class="result-card" style="margin-top:12px;">
+        <p id="page1-batch-ldap-status" class="status-line">Paste emails and phone number, then click Start Batch Update.</p>
+        <p id="page1-batch-ldap-progress" class="status-line" style="display:none; color:#1d5490;">Processing...</p>
+        <div id="page1-batch-ldap-results" style="overflow-x:auto;"></div>
+        <p><a id="page1-batch-ldap-download" href="#" style="display:none; font-weight:700; margin-top:12px; color:#1d5490;">Download Results CSV</a></p>
+      </div>
+    </section>
+
     <script>
       const hasCachedCucmPassword = __HAS_CACHED_CUCM_PASS__;
       const hasCachedUnityPassword = __HAS_CACHED_UNITY_PASS__;
@@ -26775,6 +26798,119 @@ __ADMIN_CARD__
             await runAction(action);
           });
         });
+      })();
+
+      // Batch LDAP Phone Update Handler for Page 1
+      (function () {
+        const form = document.getElementById("page1-batch-ldap-form");
+        const emailsEl = document.getElementById("page1-batch-ldap-emails");
+        const phoneEl = document.getElementById("page1-batch-ldap-phone");
+        const submitBtn = document.getElementById("page1-batch-ldap-submit");
+        const statusEl = document.getElementById("page1-batch-ldap-status");
+        const progressEl = document.getElementById("page1-batch-ldap-progress");
+        const resultsEl = document.getElementById("page1-batch-ldap-results");
+        const downloadEl = document.getElementById("page1-batch-ldap-download");
+
+        if (!form || !submitBtn || !statusEl || !resultsEl) {
+          return;
+        }
+
+        async function runBatchUpdate() {
+          const emailsText = (emailsEl?.value || "").trim();
+          const phoneNumber = (phoneEl?.value || "").trim();
+
+          if (!emailsText) {
+            statusEl.textContent = "Email addresses are required.";
+            return;
+          }
+
+          if (!phoneNumber) {
+            statusEl.textContent = "Phone number is required.";
+            return;
+          }
+
+          const emails = emailsText
+            .split("\n")
+            .map((e) => e.trim())
+            .filter((e) => e.length > 0);
+
+          if (emails.length === 0) {
+            statusEl.textContent = "Please enter at least one email address.";
+            return;
+          }
+
+          statusEl.textContent = "";
+          progressEl.style.display = "block";
+          resultsEl.innerHTML = "";
+          downloadEl.style.display = "none";
+
+          try {
+            const response = await fetch("/project-greenlight/batch-ldap-phone-update", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "X-Requested-With": "XMLHttpRequest",
+              },
+              credentials: "same-origin",
+              body: JSON.stringify({
+                emails: emails,
+                phone_number: phoneNumber,
+              }),
+            });
+
+            const rawText = await response.text();
+            let payload = {};
+            try {
+              payload = rawText ? JSON.parse(rawText) : {};
+            } catch (_parseErr) {
+              payload = { ok: false, error: { message: rawText || "Unexpected server response." } };
+            }
+
+            if (!response.ok || payload.ok === false) {
+              const detail = (payload.error && payload.error.message) || payload.detail || payload.message || ("Request failed (HTTP " + response.status + ")");
+              throw new Error(String(detail));
+            }
+
+            statusEl.textContent = "Updated " + Number(payload.count || 0) + " user(s).";
+
+            if (payload.results && payload.results.length > 0) {
+              let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+              html += '<thead><tr style="background:#005eb8; color:#fff;">';
+              html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Phone Number</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Status</th>';
+              html += '<th style="padding:8px 10px; text-align:left;">Message</th>';
+              html += '</tr></thead><tbody>';
+
+              payload.results.forEach((row) => {
+                const bgColor = row.status === "success" ? "#f0f8ff" : "#fff5f5";
+                const statusColor = row.status === "success" ? "#2d7d2d" : "#c41e3a";
+                html += '<tr style="background:' + bgColor + '; border-bottom:1px solid #ddd;">';
+                html += '<td style="padding:8px 10px;">' + (row.user_id || "") + "</td>";
+                html += '<td style="padding:8px 10px;">' + (row.phone_number || "") + "</td>";
+                html += '<td style="padding:8px 10px; color:' + statusColor + '; font-weight:600;">' + (row.status || "") + "</td>";
+                html += '<td style="padding:8px 10px;">' + (row.message || "") + "</td>";
+                html += "</tr>";
+              });
+
+              html += "</tbody></table>";
+              resultsEl.innerHTML = html;
+            }
+
+            if (payload.download_url) {
+              downloadEl.href = payload.download_url;
+              downloadEl.style.display = "inline";
+            }
+          } catch (err) {
+            statusEl.textContent = "Batch update failed.";
+            resultsEl.innerHTML = "<p style='margin:0;color:#a42323; font-weight:700;'>" + String(err && err.message ? err.message : err) + "</p>";
+          } finally {
+            progressEl.style.display = "none";
+          }
+        }
+
+        submitBtn.addEventListener("click", runBatchUpdate);
       })();
 
       const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn"));
