@@ -29311,6 +29311,7 @@ def sinch_admin_page(request: Request):
             + '<th>Status</th>'
             + '<th>Routing Option</th>'
             + '<th>Trunk Group</th>'
+            + '<th>Call Forwarding to</th>'
             + '<th>Note</th>'
             + '</tr></thead><tbody>';
 
@@ -29320,6 +29321,7 @@ def sinch_admin_page(request: Request):
               + '<td>' + escapeHtml(row.status) + '</td>'
               + '<td>' + escapeHtml(row.routing_option) + '</td>'
               + '<td>' + escapeHtml(row.trunk_group) + '</td>'
+              + '<td>' + escapeHtml(row.call_forwarding_to) + '</td>'
               + '<td>' + escapeHtml(row.note) + '</td>'
               + '</tr>';
           }}
@@ -29525,6 +29527,16 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
           or ""
         ).strip(),
         "trunk_group": str(item.get("trunkGroup", "") or item.get("trunkGroupName", "") or "").strip(),
+        "call_forwarding_to": str(
+          item.get("callForwardingTo", "")
+          or item.get("callForwardTo", "")
+          or item.get("forwardTo", "")
+          or item.get("forwardingNumber", "")
+          or item.get("forwardingDestination", "")
+          or ((item.get("tnFeature", {}) or {}).get("callForwarding", {}) or {}).get("forwardTo", "")
+          or ((item.get("tnFeature", {}) or {}).get("callForwarding", {}) or {}).get("number", "")
+          or ""
+        ).strip(),
         "note": str(item.get("tnNote", "") or item.get("note", "") or "").strip(),
         "raw": item,
       }
