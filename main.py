@@ -29159,12 +29159,16 @@ def sinch_admin_page(request: Request):
 
   auth_user = escape(session_username)
   initial_panel = str(request.query_params.get("panel", "tn") or "tn").strip().lower()
-  if initial_panel not in {"tn", "tf"}:
+  if initial_panel not in {"tn", "tf", "order", "terminate"}:
     initial_panel = "tn"
   tn_active_class = "active" if initial_panel == "tn" else ""
   tf_active_class = "active" if initial_panel == "tf" else ""
+  order_active_class = "active" if initial_panel == "order" else ""
+  terminate_active_class = "active" if initial_panel == "terminate" else ""
   tn_display_style = "block" if initial_panel == "tn" else "none"
   tf_display_style = "block" if initial_panel == "tf" else "none"
+  order_display_style = "block" if initial_panel == "order" else "none"
+  terminate_display_style = "block" if initial_panel == "terminate" else "none"
   html = f"""
 <html>
   <head>
@@ -29309,6 +29313,28 @@ def sinch_admin_page(request: Request):
       .portal-main {{
         min-width: 0;
       }}
+      textarea {{
+        border: 1px solid #c8dbee;
+        border-radius: 10px;
+        padding: 8px 10px;
+        width: 100%;
+        min-height: 120px;
+        resize: vertical;
+        font-family: Consolas, "Courier New", monospace;
+        font-size: 12px;
+      }}
+      .danger-btn {{
+        background: linear-gradient(180deg, #b82f2f, #8f2020);
+      }}
+      .danger-btn:hover {{
+        background: linear-gradient(180deg, #a42a2a, #7b1a1a);
+      }}
+      .result-card {{
+        border: 1px solid #c8dbee;
+        border-radius: 10px;
+        padding: 10px;
+        background: #f7fbff;
+      }}
     </style>
   </head>
   <body>
@@ -29323,14 +29349,16 @@ def sinch_admin_page(request: Request):
     <main class="content">
       <div class="panel">
         <h3>Sinch Admin Page</h3>
-        <p>Read-only lookup against Inteliquent tnInventory. No create, update, reserve, or disconnect actions are included here.</p>
+        <p>Inteliquent admin tools for TN extract, toll-free extract, TN ordering, and TN termination.</p>
       </div>
       <div class="portal-shell">
       <aside class="portal-sidebar">
         <h4>Sinch Menu</h4>
         <div class="portal-nav">
-          <button type="button" id="sinch-menu-tn" class="portal-nav-btn {tn_active_class}" onclick="window.location.href='/sinch-work?panel=tn'">Extract TN</button>
+          <button type="button" id="sinch-menu-tn" class="portal-nav-btn {tn_active_class}" onclick="window.location.href='/sinch-work?panel=tn'">TN Extract</button>
           <button type="button" id="sinch-menu-tf" class="portal-nav-btn {tf_active_class}" onclick="window.location.href='/sinch-work?panel=tf'">Toll-Free Extract</button>
+          <button type="button" id="sinch-menu-order" class="portal-nav-btn {order_active_class}" onclick="window.location.href='/sinch-work?panel=order'">Order New TN</button>
+          <button type="button" id="sinch-menu-terminate" class="portal-nav-btn {terminate_active_class}" onclick="window.location.href='/sinch-work?panel=terminate'">Delete TN (Terminate)</button>
           <button type="button" id="sinch-menu-back-main" class="portal-nav-btn" onclick="window.location.href='/menu'">Back to Main Operations</button>
           <button type="button" id="sinch-menu-back-admin" class="portal-nav-btn" onclick="window.location.href='/page2'">Back to Administrative Items</button>
         </div>
@@ -29399,6 +29427,50 @@ def sinch_admin_page(request: Request):
         <div id="tf-results" style="overflow-x:auto;"></div>
       </div>
       </div>
+      <div id="sinch-order-section" style="display:{order_display_style};">
+      <div class="panel">
+        <h3>Order New TN</h3>
+        <p style="margin:0 0 10px 0;">Copy and paste one or more telephone numbers. Supported separators: new line, comma, or space.</p>
+        <form id="inteliquent-tn-order-form">
+          <div style="margin-bottom:10px;">
+            <label for="order_tn_list" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN List</label>
+            <textarea id="order_tn_list" name="order_tn_list" placeholder="Paste TNs here, for example:\n8585551000\n8585551001"></textarea>
+          </div>
+          <button type="submit" id="order-tn-submit-btn">Submit TN Order</button>
+        </form>
+        <p id="tn-order-status" class="status-msg"></p>
+      </div>
+      <div class="panel">
+        <h3 style="margin:0 0 8px 0;">Order Results</h3>
+        <div id="tn-order-results"></div>
+      </div>
+      </div>
+      <div id="sinch-terminate-section" style="display:{terminate_display_style};">
+      <div class="panel">
+        <h3>Delete TN (Terminate)</h3>
+        <p style="margin:0 0 10px 0;">Copy and paste one or more telephone numbers to terminate.</p>
+        <form id="inteliquent-tn-terminate-form">
+          <div style="margin-bottom:10px;">
+            <label for="terminate_tn_list" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN List</label>
+            <textarea id="terminate_tn_list" name="terminate_tn_list" placeholder="Paste TNs here, for example:\n8585551000\n8585551001"></textarea>
+          </div>
+          <div style="margin-bottom:10px;max-width:240px;">
+            <label for="terminate_pin_code" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Authorization PIN</label>
+            <input type="password" id="terminate_pin_code" name="terminate_pin_code" inputmode="numeric" maxlength="4" placeholder="Enter 4-digit PIN" style="width:100%;" />
+          </div>
+          <label style="display:flex;align-items:center;gap:8px;margin:0 0 10px 0;color:#12304a;font-size:12px;font-weight:700;">
+            <input type="checkbox" id="terminate_confirm_required" name="terminate_confirm_required" value="1" style="margin:0;" />
+            <span>&#10003; I explicitly confirm these TNs must be terminated.</span>
+          </label>
+          <button type="submit" id="terminate-tn-submit-btn" class="danger-btn" disabled>Submit TN Termination</button>
+        </form>
+        <p id="tn-terminate-status" class="status-msg"></p>
+      </div>
+      <div class="panel">
+        <h3 style="margin:0 0 8px 0;">Termination Results</h3>
+        <div id="tn-terminate-results"></div>
+      </div>
+      </div>
       </section>
       </div>
     </main>
@@ -29406,8 +29478,12 @@ def sinch_admin_page(request: Request):
       (function () {{
         const menuTnBtn = document.getElementById("sinch-menu-tn");
         const menuTfBtn = document.getElementById("sinch-menu-tf");
+        const menuOrderBtn = document.getElementById("sinch-menu-order");
+        const menuTerminateBtn = document.getElementById("sinch-menu-terminate");
         const tnSection = document.getElementById("sinch-tn-section");
         const tfSection = document.getElementById("sinch-tf-section");
+        const orderSection = document.getElementById("sinch-order-section");
+        const terminateSection = document.getElementById("sinch-terminate-section");
         const form = document.getElementById("inteliquent-inventory-form");
         const statusEl = document.getElementById("inventory-status");
         const resultsEl = document.getElementById("inventory-results");
@@ -29425,14 +29501,30 @@ def sinch_admin_page(request: Request):
         const tfResultsEl = document.getElementById("tf-results");
         const tfDebugEl = document.getElementById("tf-debug");
         const tfExportBtn = document.getElementById("tf-export-csv-btn");
+        const orderForm = document.getElementById("inteliquent-tn-order-form");
+        const orderStatusEl = document.getElementById("tn-order-status");
+        const orderResultsEl = document.getElementById("tn-order-results");
+        const terminateForm = document.getElementById("inteliquent-tn-terminate-form");
+        const terminateStatusEl = document.getElementById("tn-terminate-status");
+        const terminateResultsEl = document.getElementById("tn-terminate-results");
+        const terminateConfirmEl = document.getElementById("terminate_confirm_required");
+        const terminatePinEl = document.getElementById("terminate_pin_code");
+        const terminateSubmitBtn = document.getElementById("terminate-tn-submit-btn");
         let lastTfRows = [];
 
         function setSinchMenu(section) {{
           const showTn = section === "tn";
+          const showTf = section === "tf";
+          const showOrder = section === "order";
+          const showTerminate = section === "terminate";
           if (tnSection) tnSection.style.display = showTn ? "block" : "none";
-          if (tfSection) tfSection.style.display = showTn ? "none" : "block";
+          if (tfSection) tfSection.style.display = showTf ? "block" : "none";
+          if (orderSection) orderSection.style.display = showOrder ? "block" : "none";
+          if (terminateSection) terminateSection.style.display = showTerminate ? "block" : "none";
           if (menuTnBtn) menuTnBtn.classList.toggle("active", showTn);
-          if (menuTfBtn) menuTfBtn.classList.toggle("active", !showTn);
+          if (menuTfBtn) menuTfBtn.classList.toggle("active", showTf);
+          if (menuOrderBtn) menuOrderBtn.classList.toggle("active", showOrder);
+          if (menuTerminateBtn) menuTerminateBtn.classList.toggle("active", showTerminate);
         }}
 
         if (menuTnBtn) {{
@@ -29445,6 +29537,18 @@ def sinch_admin_page(request: Request):
           menuTfBtn.addEventListener("click", function (event) {{
             event.preventDefault();
             setSinchMenu("tf");
+          }});
+        }}
+        if (menuOrderBtn) {{
+          menuOrderBtn.addEventListener("click", function (event) {{
+            event.preventDefault();
+            setSinchMenu("order");
+          }});
+        }}
+        if (menuTerminateBtn) {{
+          menuTerminateBtn.addEventListener("click", function (event) {{
+            event.preventDefault();
+            setSinchMenu("terminate");
           }});
         }}
         setSinchMenu("{initial_panel}");
@@ -29518,6 +29622,29 @@ def sinch_admin_page(request: Request):
           }}
           html += '</tbody></table>';
           targetEl.innerHTML = html;
+        }}
+
+        function renderActionResult(targetEl, payload, actionLabel) {{
+          if (!targetEl) {{
+            return;
+          }}
+          const numbers = Array.isArray(payload && payload.submitted_numbers) ? payload.submitted_numbers : [];
+          const numbersHtml = numbers.length
+            ? '<div style="margin-top:6px;"><strong>Submitted TNs:</strong> ' + escapeHtml(numbers.join(", ")) + '</div>'
+            : "";
+          const statusCode = escapeHtml(String((payload && payload.statusCode) || ""));
+          const statusText = escapeHtml(String((payload && payload.status) || ""));
+          const message = escapeHtml(String((payload && payload.message) || ""));
+
+          targetEl.innerHTML = ''
+            + '<div class="result-card">'
+            + '<div><strong>' + escapeHtml(actionLabel) + ' response</strong></div>'
+            + '<div style="margin-top:6px;">Count: ' + escapeHtml(String((payload && payload.submitted_count) || 0)) + '</div>'
+            + (statusCode ? '<div>Status Code: ' + statusCode + '</div>' : '')
+            + (statusText ? '<div>Status: ' + statusText + '</div>' : '')
+            + (message ? '<div>Message: ' + message + '</div>' : '')
+            + numbersHtml
+            + '</div>';
         }}
 
         if (form) {{
@@ -29701,12 +29828,116 @@ def sinch_admin_page(request: Request):
             downloadCsv("sinch-tfn-results-" + stamp + ".csv", lastTfRows);
           }});
         }}
+
+        if (orderForm) {{
+          orderForm.addEventListener("submit", async function (event) {{
+            event.preventDefault();
+            const formData = new FormData(orderForm);
+            orderStatusEl.textContent = "Submitting TN order...";
+            if (orderResultsEl) {{
+              orderResultsEl.innerHTML = "";
+            }}
+            try {{
+              const response = await fetch("/inteliquent/tn-order", {{
+                method: "POST",
+                body: formData,
+              }});
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {{
+                orderStatusEl.textContent = "Order failed: " + (payload.error || "Unknown error");
+                return;
+              }}
+              orderStatusEl.textContent = "TN order submitted successfully.";
+              renderActionResult(orderResultsEl, payload, "TN Order");
+            }} catch (err) {{
+              orderStatusEl.textContent = "Order failed: " + String(err && err.message ? err.message : err);
+            }}
+          }});
+        }}
+
+        function syncTerminateSubmitState() {{
+          if (!terminateSubmitBtn || !terminateConfirmEl || !terminatePinEl) {{
+            return;
+          }}
+          const pinOk = String(terminatePinEl.value || "").trim() === "1776";
+          terminateSubmitBtn.disabled = !terminateConfirmEl.checked || !pinOk;
+        }}
+
+        if (terminateConfirmEl) {{
+          terminateConfirmEl.addEventListener("change", function () {{
+            syncTerminateSubmitState();
+          }});
+        }}
+        if (terminatePinEl) {{
+          terminatePinEl.addEventListener("input", function () {{
+            syncTerminateSubmitState();
+          }});
+        }}
+        syncTerminateSubmitState();
+
+        if (terminateForm) {{
+          terminateForm.addEventListener("submit", async function (event) {{
+            event.preventDefault();
+            if (!terminateConfirmEl || !terminateConfirmEl.checked) {{
+              terminateStatusEl.textContent = "You must check the explicit terminate confirmation box before submit.";
+              return;
+            }}
+            if (!terminatePinEl || String(terminatePinEl.value || "").trim() !== "1776") {{
+              terminateStatusEl.textContent = "Authorization PIN is required and must be correct before submit.";
+              syncTerminateSubmitState();
+              return;
+            }}
+
+            const formData = new FormData(terminateForm);
+            terminateStatusEl.textContent = "Submitting TN termination...";
+            if (terminateResultsEl) {{
+              terminateResultsEl.innerHTML = "";
+            }}
+
+            try {{
+              const response = await fetch("/inteliquent/tn-disconnect", {{
+                method: "POST",
+                body: formData,
+              }});
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {{
+                terminateStatusEl.textContent = "Termination failed: " + (payload.error || "Unknown error");
+                return;
+              }}
+              terminateStatusEl.textContent = "TN termination submitted successfully.";
+              renderActionResult(terminateResultsEl, payload, "TN Termination");
+            }} catch (err) {{
+              terminateStatusEl.textContent = "Termination failed: " + String(err && err.message ? err.message : err);
+            }}
+          }});
+        }}
       }})();
     </script>
   </body>
 </html>
 """
   return HTMLResponse(content=html)
+
+
+def _inteliquent_parse_tn_list(raw_text: str) -> list[str]:
+  text = str(raw_text or "")
+  if not text.strip():
+    return []
+
+  tokens = re.split(r"[\s,;|]+", text.strip())
+  numbers = []
+  seen = set()
+  for token in tokens:
+    digits = re.sub(r"\D", "", str(token or ""))
+    if len(digits) == 11 and digits.startswith("1"):
+      digits = digits[1:]
+    if len(digits) != 10:
+      continue
+    if digits in seen:
+      continue
+    seen.add(digits)
+    numbers.append(digits)
+  return numbers
 
 
 @app.post("/inteliquent/tn-inventory")
@@ -29963,6 +30194,128 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
       "totalPages": raw_payload.get("totalPages"),
       "totalItems": raw_payload.get("totalItems"),
       "attempts": attempt_summaries,
+      "raw": raw_payload,
+    }
+  )
+
+
+@app.post("/inteliquent/tn-order")
+def inteliquent_tn_order_route(request: Request, order_tn_list: str = Form("")):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", "") or "").strip()
+  if not session_username:
+    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
+  if not _is_admin_user(session_username):
+    return JSONResponse({"ok": False, "error": "Not authorized for Inteliquent Admin."}, status_code=403)
+
+  numbers = _inteliquent_parse_tn_list(order_tn_list)
+  if not numbers:
+    return JSONResponse(
+      {"ok": False, "error": "At least one valid 10-digit TN is required in the paste list."},
+      status_code=400,
+    )
+
+  payload = {
+    "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
+    "tnOrder": {
+      "tnList": {
+        "tnItem": [{"tn": tn} for tn in numbers],
+      }
+    },
+  }
+
+  call_result = _inteliquent_post_json("/tnOrder", payload)
+  if not call_result.get("ok"):
+    status_code = int(call_result.get("status_code") or 400)
+    if status_code < 400:
+      status_code = 400
+    return JSONResponse(
+      {
+        "ok": False,
+        "error": str(call_result.get("error") or "Inteliquent TN order failed."),
+        "raw": call_result.get("raw", {}),
+      },
+      status_code=status_code,
+    )
+
+  raw_payload = call_result.get("raw", {}) or {}
+  return JSONResponse(
+    {
+      "ok": True,
+      "submitted_count": len(numbers),
+      "submitted_numbers": numbers,
+      "status": str(raw_payload.get("status", "") or "").strip(),
+      "statusCode": str(raw_payload.get("statusCode", "") or "").strip(),
+      "message": str(raw_payload.get("message", "") or "").strip(),
+      "raw": raw_payload,
+    }
+  )
+
+
+@app.post("/inteliquent/tn-disconnect")
+def inteliquent_tn_disconnect_route(
+  request: Request,
+  terminate_tn_list: str = Form(""),
+  terminate_confirm_required: str = Form(""),
+  terminate_pin_code: str = Form(""),
+):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", "") or "").strip()
+  if not session_username:
+    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
+  if not _is_admin_user(session_username):
+    return JSONResponse({"ok": False, "error": "Not authorized for Inteliquent Admin."}, status_code=403)
+
+  confirm_checked = str(terminate_confirm_required or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+  if not confirm_checked:
+    return JSONResponse(
+      {"ok": False, "error": "Explicit terminate confirmation checkbox is required."},
+      status_code=400,
+    )
+
+  if str(terminate_pin_code or "").strip() != "1776":
+    return JSONResponse(
+      {"ok": False, "error": "Authorization PIN is invalid."},
+      status_code=403,
+    )
+
+  numbers = _inteliquent_parse_tn_list(terminate_tn_list)
+  if not numbers:
+    return JSONResponse(
+      {"ok": False, "error": "At least one valid 10-digit TN is required in the paste list."},
+      status_code=400,
+    )
+
+  payload = {
+    "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
+    "tnList": {
+      "tnItem": [{"tn": tn} for tn in numbers],
+    },
+  }
+
+  call_result = _inteliquent_post_json("/tnDisconnect", payload)
+  if not call_result.get("ok"):
+    status_code = int(call_result.get("status_code") or 400)
+    if status_code < 400:
+      status_code = 400
+    return JSONResponse(
+      {
+        "ok": False,
+        "error": str(call_result.get("error") or "Inteliquent TN disconnect failed."),
+        "raw": call_result.get("raw", {}),
+      },
+      status_code=status_code,
+    )
+
+  raw_payload = call_result.get("raw", {}) or {}
+  return JSONResponse(
+    {
+      "ok": True,
+      "submitted_count": len(numbers),
+      "submitted_numbers": numbers,
+      "status": str(raw_payload.get("status", "") or "").strip(),
+      "statusCode": str(raw_payload.get("statusCode", "") or "").strip(),
+      "message": str(raw_payload.get("message", "") or "").strip(),
       "raw": raw_payload,
     }
   )
