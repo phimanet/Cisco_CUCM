@@ -29515,7 +29515,13 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
         "rate_center": str(item.get("rateCenter", "") or item.get("rateCenterAbbr", "") or "").strip(),
         "city": str(item.get("city", "") or item.get("locName", "") or "").strip(),
         "state": str(item.get("province", "") or item.get("state", "") or "").strip(),
-        "routing_option": str(item.get("routingOption", "") or item.get("customerRoutingOption", "") or "").strip(),
+        "routing_option": str(
+          item.get("customerRoutingOption", "")
+          or item.get("customerRoutingOptionName", "")
+          or item.get("routingOptionName", "")
+          or item.get("routingOption", "")
+          or ""
+        ).strip(),
         "trunk_group": str(item.get("trunkGroup", "") or item.get("trunkGroupName", "") or "").strip(),
         "raw": item,
       }
