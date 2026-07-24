@@ -29311,6 +29311,7 @@ def sinch_admin_page(request: Request):
             + '<th>Status</th>'
             + '<th>Routing Option</th>'
             + '<th>Trunk Group</th>'
+            + '<th>Note</th>'
             + '</tr></thead><tbody>';
 
           for (const row of rows) {{
@@ -29319,6 +29320,7 @@ def sinch_admin_page(request: Request):
               + '<td>' + escapeHtml(row.status) + '</td>'
               + '<td>' + escapeHtml(row.routing_option) + '</td>'
               + '<td>' + escapeHtml(row.trunk_group) + '</td>'
+              + '<td>' + escapeHtml(row.note) + '</td>'
               + '</tr>';
           }}
           html += '</tbody></table>';
@@ -29523,6 +29525,7 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
           or ""
         ).strip(),
         "trunk_group": str(item.get("trunkGroup", "") or item.get("trunkGroupName", "") or "").strip(),
+        "note": str(item.get("tnNote", "") or item.get("note", "") or "").strip(),
         "raw": item,
       }
     )
