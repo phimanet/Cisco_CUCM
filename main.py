@@ -26843,25 +26843,23 @@ __GREENLIGHT_ADMIN_CARD__
         <section class="portal-main">
           <section class="tool-panel active" data-panel="personlookup">
             <h3>Person Lookup (Project Greenlight)</h3>
-            <div class="layout-row">
-              <form id="greenlight-person-form">
-                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
-                <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
-                <input type="hidden" name="cucm_pass" value="" />
-                <div class="search-filter-row">
-                  <input name="last_name" placeholder="Last Name" />
-                  <input name="first_name" placeholder="First Name (optional)" />
-                  <button type="submit">Search</button>
-                </div>
-                <div class="search-filter-row">
-                  <textarea name="emails_text" placeholder="Paste 1 or more emails (comma/newline separated)" style="min-height:90px; width:min(760px, 100%);"></textarea>
-                </div>
-              </form>
-              <div class="result-card">
-                <p id="greenlight-person-status" class="status-line">Enter Last Name and/or one or more emails, then Search.</p>
-                <p><a id="greenlight-person-download" href="#" style="display:none; font-weight:700;">Download Full CSV</a></p>
-                <div id="greenlight-person-results" style="overflow-x:auto;"></div>
+            <form id="greenlight-person-form" style="margin-bottom:12px;">
+              <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
+              <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
+              <input type="hidden" name="cucm_pass" value="" />
+              <div class="search-filter-row">
+                <input name="last_name" placeholder="Last Name" />
+                <input name="first_name" placeholder="First Name (optional)" />
+                <button type="submit">Search</button>
               </div>
+              <div class="search-filter-row">
+                <textarea name="emails_text" placeholder="Paste 1 or more emails (comma/newline separated)" style="min-height:90px; width:min(760px, 100%);"></textarea>
+              </div>
+            </form>
+            <div class="result-card" style="width:100%; max-width:none;">
+              <p id="greenlight-person-status" class="status-line">Enter Last Name and/or one or more emails, then Search.</p>
+              <p><a id="greenlight-person-download" href="#" style="display:none; font-weight:700;">Download Full CSV</a></p>
+              <div id="greenlight-person-results" style="overflow-x:auto;"></div>
             </div>
           </section>
 
