@@ -13142,7 +13142,7 @@ def _greenlight_collect_people(
         people[uid_key] = person
 
   clean_emails = [str(e or "").strip().lower() for e in emails if str(e or "").strip()]
-  if len(clean_emails) > 1:
+  if len(clean_emails) >= 1:
     completed = 0
     total = len(clean_emails)
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
