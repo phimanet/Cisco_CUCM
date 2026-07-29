@@ -24274,6 +24274,33 @@ def menu_page(request: Request):
       </div>
     </header>
 
+    <script>
+      // Self-contained session timer, isolated from the main portal script block
+      // so a syntax error elsewhere on the page cannot stop the auto-logout countdown.
+      (function () {
+        const hasCachedCucmPassword = __HAS_CACHED_CUCM_PASS__;
+        const credentialExpiresAtMs = __CREDENTIAL_EXPIRES_AT_MS__;
+        const banner = document.getElementById("session-timer-banner");
+        const remaining = document.getElementById("session-timer-remaining");
+        if (!hasCachedCucmPassword || !banner || !remaining || !credentialExpiresAtMs) { return; }
+        function fmt(totalSeconds) {
+          const safe = Math.max(0, Math.floor(totalSeconds));
+          const h = Math.floor(safe / 3600);
+          const m = Math.floor((safe % 3600) / 60);
+          const s = safe % 60;
+          return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+        }
+        banner.style.display = "flex";
+        const tick = () => {
+          const ms = credentialExpiresAtMs - Date.now();
+          if (ms <= 0) { remaining.textContent = "Expired"; window.location.href = "/logout"; return; }
+          remaining.textContent = fmt(ms / 1000);
+        };
+        tick();
+        window.setInterval(tick, 1000);
+      })();
+    </script>
+
     <main class="content">
     <section class="page-hero">
       <div class="page-title-row">
