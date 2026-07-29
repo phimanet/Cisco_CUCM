@@ -92,7 +92,7 @@ VERASMART_QUEUE_LOCK = threading.Lock()
 VERASMART_QUEUE_MAX_RUNS = 50
 GREENLIGHT_LOOKUP_RUNS = {}
 GREENLIGHT_LOOKUP_RUNS_LOCK = threading.Lock()
-GREENLIGHT_LOOKUP_MAX_RUNS = 200
+GREENLIGHT_LOOKUP_MAX_RUNS = 20
 GREENLIGHT_LOOKUP_MAX_EMAILS = int((os.getenv("GREENLIGHT_LOOKUP_MAX_EMAILS", "2000") or "2000").strip())
 STRIKE_MASK_OPERATIONS = {}
 STRIKE_MASK_LOCK = threading.Lock()
@@ -13225,10 +13225,10 @@ def _greenlight_build_person_lookup_rows(
     devices = person.get("devices") or []
     csf_devices = [d for d in devices if str(d.get("name") or "").strip().upper().startswith("CSF")]
     if not csf_devices:
+      # No Jabber device/lines: SMS is resolved only from the translated
+      # number, never from the End User telephone or ipPhone extension.
       sms_lookup = _greenlight_resolve_sms_provider(
-        str(person.get("telephone") or "").strip(),
         str(person.get("translated_number") or "").strip(),
-        str(person.get("primary_extension") or "").strip(),
       )
       ident = _identity(person)
       output_rows.append(
@@ -13262,11 +13262,8 @@ def _greenlight_build_person_lookup_rows(
         ext = ext or str(person.get("primary_extension") or "").strip()
         ext = _ext_or_ad(person, ext)
         tps = _greenlight_find_translation_patterns(cucm_host, cucm_user, cucm_pass, person, ext)
-        sms_lookup = _greenlight_resolve_sms_provider(
-          str(person.get("telephone") or "").strip(),
-          str(person.get("translated_number") or "").strip(),
-          ext,
-        )
+        # SMS is resolved from the device line directory number only.
+        sms_lookup = _greenlight_resolve_sms_provider(ext)
         ident = _identity(person)
         output_rows.append(
           {
@@ -13292,14 +13289,14 @@ def _greenlight_build_person_lookup_rows(
         continue
 
       for line in csf_lines:
-        ext = str(line.get("pattern") or "").strip()
-        ext = _ext_or_ad(person, ext)
-        tps = _greenlight_find_translation_patterns(cucm_host, cucm_user, cucm_pass, person, ext)
+        # Use this line's own directory number for both translation and SMS
+        # lookups so each of a person's lines resolves independently.
+        line_dn = str(line.get("pattern") or "").strip()
+        ext = line_dn
+        tps = _greenlight_find_translation_patterns(cucm_host, cucm_user, cucm_pass, person, line_dn)
         sms_lookup = _greenlight_resolve_sms_provider(
-          str(person.get("telephone") or "").strip(),
+          line_dn,
           str(line.get("line_mask") or "").strip(),
-          str(person.get("translated_number") or "").strip(),
-          ext,
         )
         ident = _identity(person)
         output_rows.append(
@@ -29651,8 +29648,8 @@ __GREENLIGHT_ADMIN_CARD__
                       return;
                     }
 
-                    statusEl.textContent = "Found " + Number(payload.count || 0) + " row(s).";
-                    showPreview(payload.preview_results || []);
+                    statusEl.textContent = "Found " + Number(payload.count || 0) + " row(s). Download the CSV below.";
+                    resultsEl.innerHTML = "";
                     if (payload.download_url) {
                       downloadEl.href = payload.download_url;
                       downloadEl.style.display = "inline";
@@ -30219,9 +30216,8 @@ __GREENLIGHT_ADMIN_CARD__
               }
 
               const total = Number(payload.count || 0);
-              const previewCount = Number(payload.preview_count || 0);
-              statusEl.textContent = "Found " + total + " row(s). Showing first " + previewCount + " on page.";
-              renderPreview(payload.preview_results || []);
+              statusEl.textContent = "Found " + total + " row(s). Download the CSV below.";
+              resultsEl.innerHTML = "";
               saveLastStatusUrl("");
               debugLog("submit-completed", {
                 token: queuePollToken,
