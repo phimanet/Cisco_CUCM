@@ -35,7 +35,7 @@ from fastapi import FastAPI, Form, UploadFile, File, Query, Request
 from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse
 from html import escape, unescape
 from requests.auth import HTTPBasicAuth
-from urllib.parse import urljoin
+from urllib.parse import urljoin, quote
 from uuid import uuid4
 
 from toolkit.enduser import export_endusers_all_fields
@@ -228,6 +228,12 @@ GENESYS_IMPORTANT_QUEUE_NAMES = [
   ).split(",")
   if (item or "").strip()
 ]
+GENESYS_BLOCKED_CALLER_DATATABLE_NAME = (
+  os.getenv("GENESYS_BLOCKED_CALLER_DATATABLE_NAME", "Blocked Caller Management")
+  or "Blocked Caller Management"
+).strip()
+GENESYS_DATATABLE_LIST_MAX_PAGES = int((os.getenv("GENESYS_DATATABLE_LIST_MAX_PAGES", "25") or "25").strip())
+GENESYS_DATATABLE_ROW_MAX_PAGES = int((os.getenv("GENESYS_DATATABLE_ROW_MAX_PAGES", "50") or "50").strip())
 OPENTEXT_TOKEN_URL = (
   os.getenv("OPENTEXT_TOKEN_URL", "https://api.us.cloudmessaging.opentext.com/mra/v1/oauth2/token")
   or "https://api.us.cloudmessaging.opentext.com/mra/v1/oauth2/token"
@@ -1749,6 +1755,125 @@ def _genesys_get_queue_by_id(api_base: str, access_token: str, queue_id: str) ->
       return queue_row, ""
 
   return {}, (" | ".join(errors) if errors else "Queue lookup failed.")
+
+
+def _genesys_find_datatable_by_name(api_base: str, access_token: str, name: str) -> tuple[dict, str]:
+  clean_name = str(name or "").strip()
+  if not clean_name:
+    return {}, "Data table name is required."
+
+  seen_names = []
+  page_number = 1
+  while page_number <= max(1, GENESYS_DATATABLE_LIST_MAX_PAGES):
+    params = {"pageSize": 100, "pageNumber": page_number, "expand": "schema"}
+    ok, payload, err = _genesys_get_json(api_base, access_token, "/api/v2/flows/datatables", params=params)
+    if not ok:
+      return {}, f"Data table lookup failed: {err}"
+    entities = payload.get("entities") if isinstance(payload.get("entities"), list) else []
+    for entity in entities:
+      if not isinstance(entity, dict):
+        continue
+      entity_name = str(entity.get("name", "") or "").strip()
+      if entity_name:
+        seen_names.append(entity_name)
+      if entity_name.lower() == clean_name.lower():
+        return entity, ""
+    page_count = int(payload.get("pageCount", 0) or 0)
+    if not entities or page_number >= page_count:
+      break
+    page_number += 1
+
+  visible = ", ".join(seen_names[:60]) or "(none returned)"
+  return {}, f"Data table '{clean_name}' was not found. Tables visible to this Genesys client: {visible}"
+
+
+def _genesys_datatable_columns(datatable: dict) -> list[dict]:
+  schema = datatable.get("schema") if isinstance(datatable, dict) and isinstance(datatable.get("schema"), dict) else {}
+  props = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+  columns = []
+  for col_name, col_def in props.items():
+    definition = col_def if isinstance(col_def, dict) else {}
+    columns.append({
+      "name": str(col_name or "").strip(),
+      "title": str(definition.get("title", "") or col_name or "").strip(),
+      "type": str(definition.get("type", "string") or "string").strip(),
+    })
+  return [c for c in columns if c["name"]]
+
+
+def _genesys_datatable_key_column(datatable: dict) -> str:
+  columns = _genesys_datatable_columns(datatable)
+  return columns[0]["name"] if columns else "key"
+
+
+def _genesys_datatable_list_rows(api_base: str, access_token: str, datatable_id: str) -> tuple[list[dict], str]:
+  clean_id = str(datatable_id or "").strip()
+  if not clean_id:
+    return [], "Data table id is required."
+
+  rows = []
+  page_number = 1
+  while page_number <= max(1, GENESYS_DATATABLE_ROW_MAX_PAGES):
+    params = {"pageSize": 100, "pageNumber": page_number, "showbrief": "false"}
+    ok, payload, err = _genesys_get_json(
+      api_base, access_token, f"/api/v2/flows/datatables/{clean_id}/rows", params=params
+    )
+    if not ok:
+      return rows, f"Data table row lookup failed: {err}"
+    entities = payload.get("entities") if isinstance(payload.get("entities"), list) else []
+    for entity in entities:
+      if isinstance(entity, dict):
+        rows.append(entity)
+    page_count = int(payload.get("pageCount", 0) or 0)
+    if not entities or page_number >= page_count:
+      break
+    page_number += 1
+  return rows, ""
+
+
+def _genesys_datatable_add_row(api_base: str, access_token: str, datatable_id: str, row: dict) -> tuple[bool, dict, str, int]:
+  clean_id = str(datatable_id or "").strip()
+  if not clean_id:
+    return False, {}, "Data table id is required.", 0
+  return _genesys_send_json(
+    "POST", api_base, access_token, f"/api/v2/flows/datatables/{clean_id}/rows", payload=row
+  )
+
+
+def _genesys_datatable_delete_row(api_base: str, access_token: str, datatable_id: str, row_key: str) -> tuple[bool, dict, str, int]:
+  clean_id = str(datatable_id or "").strip()
+  clean_key = str(row_key or "").strip()
+  if not clean_id or not clean_key:
+    return False, {}, "Data table id and row key are required.", 0
+  encoded_key = quote(clean_key, safe="")
+  return _genesys_send_json(
+    "DELETE", api_base, access_token, f"/api/v2/flows/datatables/{clean_id}/rows/{encoded_key}"
+  )
+
+
+def _genesys_resolve_blocked_caller_datatable() -> tuple[dict, str]:
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return {}, token_result.get("error", "Genesys token request failed.")
+
+  region = token_result.get("region", clean_region)
+  _, _, api_base = _genesys_region_to_urls(region)
+  access_token = token_result.get("access_token", "")
+  datatable, err = _genesys_find_datatable_by_name(api_base, access_token, GENESYS_BLOCKED_CALLER_DATATABLE_NAME)
+  if err:
+    return {}, err
+
+  return {
+    "region": region,
+    "api_base": api_base,
+    "access_token": access_token,
+    "datatable": datatable,
+    "datatable_id": str(datatable.get("id", "") or "").strip(),
+    "datatable_name": str(datatable.get("name", "") or GENESYS_BLOCKED_CALLER_DATATABLE_NAME).strip(),
+    "columns": _genesys_datatable_columns(datatable),
+    "key_column": _genesys_datatable_key_column(datatable),
+  }, ""
 
 
 def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id: str, user_name: str, user_email: str = "") -> dict:
@@ -15371,6 +15496,7 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-bulk-email-panel" onclick="(function(){var id='genesys-bulk-email-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Bulk WebRTC build</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-queue-remove-panel" onclick="(function(){var id='genesys-user-queue-remove-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Lookup + Remove (User)</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel" onclick="(function(){var id='genesys-queue-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Info</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-blocked-caller-panel" onclick="(function(){var id='genesys-blocked-caller-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Block Incoming Calls</button>
         </aside>
 
         <section class="portal-main">
@@ -17366,6 +17492,193 @@ def genesys_admin_placeholder(request: Request):
                   lookupMembers(q);
                 });
               }
+            })();
+          </script>
+
+          <div id="genesys-blocked-caller-panel" class="panel genesys-panel" style="display:none; margin-top:12px;">
+            <h3 style="margin-top:0;">Genesys Block Incoming Calls</h3>
+            <p style="margin-top:0; color:#4e6a84;">Manage the Genesys <strong>Blocked Caller Management</strong> data table used to block incoming calls by caller ID number. Step 1: Load the current list. Step 2: Add a number. Step 3: Delete a number.</p>
+            <div class="search-filter-row">
+              <button type="button" id="genesys-blocked-load-btn" style="background:#455a64;">Load / Refresh Blocked List</button>
+              <input id="genesys-blocked-filter" placeholder="Filter loaded numbers (optional)" style="width:280px;">
+            </div>
+            <div class="search-filter-row" style="align-items:flex-start;">
+              <input id="genesys-blocked-add-number" placeholder="Telephone number to block" style="width:280px;">
+              <button type="button" id="genesys-blocked-add-btn" style="background:#2d7a43;">Add Number to Block List</button>
+            </div>
+            <p id="genesys-blocked-status" style="color:#2c5c8a; min-height:18px;">Ready.</p>
+            <p id="genesys-blocked-meta" style="color:#4e6a84; font-size:12px; min-height:16px; margin-top:0;"></p>
+            <div id="genesys-blocked-results" style="overflow-x:auto;"></div>
+          </div>
+          <script>
+            (function () {
+              const panel = document.getElementById("genesys-blocked-caller-panel");
+              if (!panel || String(panel.dataset.blockedBound || "") === "1") {
+                return;
+              }
+              panel.dataset.blockedBound = "1";
+
+              const loadBtn = document.getElementById("genesys-blocked-load-btn");
+              const filterEl = document.getElementById("genesys-blocked-filter");
+              const addNumberEl = document.getElementById("genesys-blocked-add-number");
+              const addBtn = document.getElementById("genesys-blocked-add-btn");
+              const statusEl = document.getElementById("genesys-blocked-status");
+              const metaEl = document.getElementById("genesys-blocked-meta");
+              const resultsEl = document.getElementById("genesys-blocked-results");
+
+              let currentColumns = [];
+              let currentKeyColumn = "";
+              let currentRows = [];
+
+              function escapeHtml(value) {
+                return String(value == null ? "" : value)
+                  .replace(/&/g, "&amp;")
+                  .replace(/</g, "&lt;")
+                  .replace(/>/g, "&gt;")
+                  .replace(/"/g, "&quot;")
+                  .replace(/'/g, "&#39;");
+              }
+
+              function renderRows() {
+                const filterText = String((filterEl && filterEl.value) || "").trim().toLowerCase();
+                const columns = Array.isArray(currentColumns) && currentColumns.length
+                  ? currentColumns
+                  : (currentKeyColumn ? [{ name: currentKeyColumn, title: currentKeyColumn }] : []);
+
+                let rows = Array.isArray(currentRows) ? currentRows.slice() : [];
+                if (filterText) {
+                  rows = rows.filter(function (row) {
+                    return columns.some(function (col) {
+                      return String(row[col.name] == null ? "" : row[col.name]).toLowerCase().indexOf(filterText) >= 0;
+                    });
+                  });
+                }
+
+                if (!rows.length) {
+                  resultsEl.innerHTML = "<p style='color:#4e6a84;'>No blocked numbers to display. Load the list, then add a number.</p>";
+                  return;
+                }
+
+                let html = "<table><thead><tr>";
+                columns.forEach(function (col) {
+                  html += "<th>" + escapeHtml(col.title || col.name) + "</th>";
+                });
+                html += "<th>Action</th></tr></thead><tbody>";
+                rows.forEach(function (row, i) {
+                  const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+                  const keyValue = String(row[currentKeyColumn] == null ? "" : row[currentKeyColumn]);
+                  html += "<tr style='background:" + bg + ";'>";
+                  columns.forEach(function (col) {
+                    const cellVal = row[col.name] == null ? "" : row[col.name];
+                    html += "<td style='font-family:Consolas,monospace;'>" + escapeHtml(cellVal) + "</td>";
+                  });
+                  html += "<td><button type='button' class='genesys-blocked-remove-btn' data-row-key='" + escapeHtml(keyValue) + "' style='background:#8a2d2d; color:#fff; border:none; border-radius:6px; padding:6px 10px; cursor:pointer;'>Delete</button></td>";
+                  html += "</tr>";
+                });
+                html += "</tbody></table>";
+                resultsEl.innerHTML = html;
+
+                Array.from(resultsEl.querySelectorAll(".genesys-blocked-remove-btn")).forEach(function (btn) {
+                  btn.addEventListener("click", function () {
+                    removeNumber(String(btn.getAttribute("data-row-key") || ""));
+                  });
+                });
+              }
+
+              function applyPayload(payload) {
+                currentColumns = Array.isArray(payload.columns) ? payload.columns : currentColumns;
+                currentKeyColumn = String(payload.key_column || currentKeyColumn || "").trim();
+                currentRows = Array.isArray(payload.rows) ? payload.rows : [];
+                const name = String(payload.datatable_name || "Blocked Caller Management");
+                metaEl.textContent = "Table: " + name + " | Region: " + String(payload.region || "") + " | Key column: " + currentKeyColumn + " | Total numbers: " + String(payload.count == null ? currentRows.length : payload.count);
+                renderRows();
+              }
+
+              async function loadList() {
+                const original = loadBtn ? loadBtn.textContent : "";
+                if (loadBtn) { loadBtn.disabled = true; loadBtn.textContent = "Loading..."; }
+                statusEl.textContent = "Loading blocked caller list...";
+                try {
+                  const response = await fetch("/genesys/blocked-caller/list", { method: "POST" });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || "Load failed.");
+                  }
+                  applyPayload(payload);
+                  statusEl.textContent = "Loaded " + String(payload.count == null ? (payload.rows || []).length : payload.count) + " blocked number(s).";
+                } catch (err) {
+                  statusEl.textContent = "Load failed: " + ((err && err.message) || "Unknown error.");
+                } finally {
+                  if (loadBtn) { loadBtn.disabled = false; loadBtn.textContent = original || "Load / Refresh Blocked List"; }
+                }
+                return false;
+              }
+
+              async function addNumber() {
+                const value = String((addNumberEl && addNumberEl.value) || "").trim();
+                if (!value) {
+                  statusEl.textContent = "Enter a telephone number to block.";
+                  return false;
+                }
+                const original = addBtn ? addBtn.textContent : "";
+                if (addBtn) { addBtn.disabled = true; addBtn.textContent = "Adding..."; }
+                statusEl.textContent = "Adding " + value + " to the block list...";
+                try {
+                  const formData = new FormData();
+                  formData.append("phone_number", value);
+                  const response = await fetch("/genesys/blocked-caller/add", { method: "POST", body: formData });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || "Add failed.");
+                  }
+                  applyPayload(payload);
+                  if (addNumberEl) { addNumberEl.value = ""; }
+                  statusEl.textContent = "Added " + String(payload.added || value) + " to the block list.";
+                } catch (err) {
+                  statusEl.textContent = "Add failed: " + ((err && err.message) || "Unknown error.");
+                } finally {
+                  if (addBtn) { addBtn.disabled = false; addBtn.textContent = original || "Add Number to Block List"; }
+                }
+                return false;
+              }
+
+              async function removeNumber(rowKey) {
+                const value = String(rowKey || "").trim();
+                if (!value) {
+                  statusEl.textContent = "No number selected to delete.";
+                  return false;
+                }
+                if (!window.confirm("Delete blocked number " + value + " from the Genesys block list?")) {
+                  return false;
+                }
+                statusEl.textContent = "Deleting " + value + "...";
+                try {
+                  const formData = new FormData();
+                  formData.append("row_key", value);
+                  const response = await fetch("/genesys/blocked-caller/remove", { method: "POST", body: formData });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) {
+                    throw new Error((payload && payload.error) || "Delete failed.");
+                  }
+                  applyPayload(payload);
+                  statusEl.textContent = "Deleted " + String(payload.removed || value) + " from the block list.";
+                } catch (err) {
+                  statusEl.textContent = "Delete failed: " + ((err && err.message) || "Unknown error.");
+                }
+                return false;
+              }
+
+              if (loadBtn) { loadBtn.addEventListener("click", function () { loadList(); }); }
+              if (addBtn) { addBtn.addEventListener("click", function () { addNumber(); }); }
+              if (addNumberEl) {
+                addNumberEl.addEventListener("keydown", function (event) {
+                  if (event && event.key === "Enter") {
+                    event.preventDefault();
+                    addNumber();
+                  }
+                });
+              }
+              if (filterEl) { filterEl.addEventListener("input", function () { renderRows(); }); }
             })();
           </script>
         </section>
@@ -20788,6 +21101,112 @@ def _genesys_resolve_queue_action_user(region: str, access_token: str, user_id: 
     "user_name": str(lookup_result.get("display_name", "") or lookup_result.get("user_name", "") or "").strip(),
     "region": region,
   }
+
+
+@app.post("/genesys/blocked-caller/list")
+def genesys_blocked_caller_list_route():
+  resolved, err = _genesys_resolve_blocked_caller_datatable()
+  if err:
+    return JSONResponse({"ok": False, "error": err}, status_code=400)
+
+  rows, rows_err = _genesys_datatable_list_rows(
+    resolved.get("api_base", ""),
+    resolved.get("access_token", ""),
+    resolved.get("datatable_id", ""),
+  )
+  if rows_err:
+    return JSONResponse({"ok": False, "error": rows_err}, status_code=400)
+
+  return JSONResponse({
+    "ok": True,
+    "region": resolved.get("region", ""),
+    "datatable_id": resolved.get("datatable_id", ""),
+    "datatable_name": resolved.get("datatable_name", ""),
+    "key_column": resolved.get("key_column", ""),
+    "columns": resolved.get("columns", []),
+    "rows": rows,
+    "count": len(rows),
+  })
+
+
+@app.post("/genesys/blocked-caller/add")
+def genesys_blocked_caller_add_route(request: Request, phone_number: str = Form("")):
+  clean_number = str(phone_number or "").strip()
+  if not clean_number:
+    return JSONResponse({"ok": False, "error": "A telephone number is required."}, status_code=400)
+
+  resolved, err = _genesys_resolve_blocked_caller_datatable()
+  if err:
+    return JSONResponse({"ok": False, "error": err}, status_code=400)
+
+  api_base = resolved.get("api_base", "")
+  access_token = resolved.get("access_token", "")
+  datatable_id = resolved.get("datatable_id", "")
+  key_column = resolved.get("key_column", "") or "key"
+
+  existing_rows, rows_err = _genesys_datatable_list_rows(api_base, access_token, datatable_id)
+  if not rows_err:
+    for row in existing_rows:
+      if str(row.get(key_column, "") or "").strip() == clean_number:
+        return JSONResponse({
+          "ok": False,
+          "error": f"{clean_number} is already in {resolved.get('datatable_name', 'the data table')}.",
+        }, status_code=400)
+
+  new_row = {key_column: clean_number}
+  ok_add, body, add_err, status = _genesys_datatable_add_row(api_base, access_token, datatable_id, new_row)
+  if not ok_add:
+    return JSONResponse({
+      "ok": False,
+      "error": f"Add failed (HTTP {status}): {add_err}",
+    }, status_code=400)
+
+  rows, _rows_err2 = _genesys_datatable_list_rows(api_base, access_token, datatable_id)
+  return JSONResponse({
+    "ok": True,
+    "region": resolved.get("region", ""),
+    "datatable_name": resolved.get("datatable_name", ""),
+    "key_column": key_column,
+    "columns": resolved.get("columns", []),
+    "added": clean_number,
+    "row": body,
+    "rows": rows,
+    "count": len(rows),
+  })
+
+
+@app.post("/genesys/blocked-caller/remove")
+def genesys_blocked_caller_remove_route(request: Request, row_key: str = Form("")):
+  clean_key = str(row_key or "").strip()
+  if not clean_key:
+    return JSONResponse({"ok": False, "error": "A row key (telephone number) is required."}, status_code=400)
+
+  resolved, err = _genesys_resolve_blocked_caller_datatable()
+  if err:
+    return JSONResponse({"ok": False, "error": err}, status_code=400)
+
+  api_base = resolved.get("api_base", "")
+  access_token = resolved.get("access_token", "")
+  datatable_id = resolved.get("datatable_id", "")
+
+  ok_del, body, del_err, status = _genesys_datatable_delete_row(api_base, access_token, datatable_id, clean_key)
+  if not ok_del:
+    return JSONResponse({
+      "ok": False,
+      "error": f"Delete failed (HTTP {status}): {del_err}",
+    }, status_code=400)
+
+  rows, _rows_err = _genesys_datatable_list_rows(api_base, access_token, datatable_id)
+  return JSONResponse({
+    "ok": True,
+    "region": resolved.get("region", ""),
+    "datatable_name": resolved.get("datatable_name", ""),
+    "key_column": resolved.get("key_column", ""),
+    "columns": resolved.get("columns", []),
+    "removed": clean_key,
+    "rows": rows,
+    "count": len(rows),
+  })
 
 
 @app.post("/genesys/queues/member-add")
