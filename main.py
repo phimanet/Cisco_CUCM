@@ -66,7 +66,11 @@ from toolkit.remove_teams_telephony_user import (
   lookup_teams_telephony_removal_candidate,
   remove_teams_telephony_user,
 )
-from toolkit.ad_phone_fields import inspect_ad_group_identifiers, manage_ad_group_membership
+from toolkit.ad_phone_fields import (
+  inspect_ad_group_identifiers,
+  manage_ad_group_membership,
+  lookup_ad_identity_by_email,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -13030,7 +13034,33 @@ def _greenlight_collect_people_from_email(cucm_host: str, cucm_user: str, cucm_p
   if not email_lower:
     return matches
 
+  # LDAP-first: resolve the authoritative AD identity (userID + name + ipPhone
+  # extension) so we do not have to guess the CUCM userID from the email.
+  ad_identity: dict = {}
+  try:
+    ad_identity = lookup_ad_identity_by_email(
+      email_lower, {"username": cucm_user, "password": cucm_pass}
+    ) or {}
+  except Exception:
+    ad_identity = {}
+  ad_found = bool(ad_identity.get("found"))
+  ad_userid = str(ad_identity.get("samAccountName") or "").strip() if ad_found else ""
+
+  def _annotate_ad(row: dict) -> dict:
+    if ad_found and isinstance(row, dict):
+      row["ad_userid"] = ad_userid
+      row["ad_first"] = str(ad_identity.get("firstName") or "").strip()
+      row["ad_last"] = str(ad_identity.get("lastName") or "").strip()
+      row["ad_display"] = str(ad_identity.get("displayName") or "").strip()
+      row["ad_extension"] = str(ad_identity.get("extension") or "").strip()
+    return row
+
   userid_candidates = _greenlight_userid_candidates(email_lower)
+  if ad_userid:
+    # Prefer the real AD sAMAccountName over guessed local-part variants.
+    userid_candidates = [ad_userid] + [
+      uid for uid in userid_candidates if uid.strip().lower() != ad_userid.lower()
+    ]
   for userid in userid_candidates:
     try:
       userid_rows = _greenlight_list_users_by_userid(cucm_host, cucm_user, cucm_pass, userid)
@@ -13053,7 +13083,7 @@ def _greenlight_collect_people_from_email(cucm_host: str, cucm_user: str, cucm_p
         person_email = str(row.get("email") or "").strip().lower()
         if person_uid == row_uid or (person_email and person_email == email_lower):
           if person_uid:
-            matches[person_uid] = row
+            matches[person_uid] = _annotate_ad(row)
 
   candidates = _greenlight_email_name_candidates(email_lower)
   for cand_last, cand_first in candidates:
@@ -13068,7 +13098,26 @@ def _greenlight_collect_people_from_email(cucm_host: str, cucm_user: str, cucm_p
         continue
       uid_key = str(row.get("userid") or "").strip().lower()
       if uid_key:
-        matches[uid_key] = row
+        matches[uid_key] = _annotate_ad(row)
+
+  # If AD found the person but CUCM has no matching End User, emit an AD-only
+  # synthetic row so the extract still reflects the ipPhone extension.
+  if ad_found and ad_userid and not matches:
+    synthetic_key = f"ad:{ad_userid.lower()}"
+    matches[synthetic_key] = {
+      "userid": ad_userid,
+      "first_name": str(ad_identity.get("firstName") or "").strip(),
+      "last_name": str(ad_identity.get("lastName") or "").strip(),
+      "display_name": str(ad_identity.get("displayName") or "").strip(),
+      "email": email_lower,
+      "primary_extension": str(ad_identity.get("extension") or "").strip(),
+      "devices": [],
+      "ad_userid": ad_userid,
+      "ad_first": str(ad_identity.get("firstName") or "").strip(),
+      "ad_last": str(ad_identity.get("lastName") or "").strip(),
+      "ad_display": str(ad_identity.get("displayName") or "").strip(),
+      "ad_extension": str(ad_identity.get("extension") or "").strip(),
+    }
 
   return matches
 
@@ -13155,6 +13204,23 @@ def _greenlight_build_person_lookup_rows(
   )
   output_rows = []
 
+  def _identity(person: dict) -> dict:
+    """Prefer authoritative AD identity fields over CUCM-derived values."""
+    return {
+      "userid": (str(person.get("ad_userid") or "").strip() or str(person.get("userid") or "").strip()),
+      "first_name": (str(person.get("ad_first") or "").strip() or str(person.get("first_name") or "").strip()),
+      "last_name": (str(person.get("ad_last") or "").strip() or str(person.get("last_name") or "").strip()),
+      "display_name": (str(person.get("ad_display") or "").strip() or str(person.get("display_name") or "").strip()),
+      "email": str(person.get("email") or "").strip(),
+    }
+
+  def _ext_or_ad(person: dict, ext: str) -> str:
+    """The AD ipPhone value is the CUCM extension; use it when CUCM has none."""
+    ext = str(ext or "").strip()
+    if ext:
+      return ext
+    return str(person.get("ad_extension") or "").strip()
+
   for person in people:
     devices = person.get("devices") or []
     csf_devices = [d for d in devices if str(d.get("name") or "").strip().upper().startswith("CSF")]
@@ -13164,15 +13230,16 @@ def _greenlight_build_person_lookup_rows(
         str(person.get("translated_number") or "").strip(),
         str(person.get("primary_extension") or "").strip(),
       )
+      ident = _identity(person)
       output_rows.append(
         {
-          "userid": str(person.get("userid") or "").strip(),
-          "first_name": str(person.get("first_name") or "").strip(),
-          "last_name": str(person.get("last_name") or "").strip(),
-          "display_name": str(person.get("display_name") or "").strip(),
-          "email": str(person.get("email") or "").strip(),
+          "userid": ident["userid"],
+          "first_name": ident["first_name"],
+          "last_name": ident["last_name"],
+          "display_name": ident["display_name"],
+          "email": ident["email"],
           "jabber_csf_device": "",
-          "extension": str(person.get("primary_extension") or "").strip(),
+          "extension": _ext_or_ad(person, str(person.get("primary_extension") or "").strip()),
           "line_mask": "",
           "translated_number": str(person.get("translated_number") or "").strip(),
           "associated_translation_patterns": "",
@@ -13193,19 +13260,21 @@ def _greenlight_build_person_lookup_rows(
         if ext_list:
           ext = str(ext_list[0] or "").strip()
         ext = ext or str(person.get("primary_extension") or "").strip()
+        ext = _ext_or_ad(person, ext)
         tps = _greenlight_find_translation_patterns(cucm_host, cucm_user, cucm_pass, person, ext)
         sms_lookup = _greenlight_resolve_sms_provider(
           str(person.get("telephone") or "").strip(),
           str(person.get("translated_number") or "").strip(),
           ext,
         )
+        ident = _identity(person)
         output_rows.append(
           {
-            "userid": str(person.get("userid") or "").strip(),
-            "first_name": str(person.get("first_name") or "").strip(),
-            "last_name": str(person.get("last_name") or "").strip(),
-            "display_name": str(person.get("display_name") or "").strip(),
-            "email": str(person.get("email") or "").strip(),
+            "userid": ident["userid"],
+            "first_name": ident["first_name"],
+            "last_name": ident["last_name"],
+            "display_name": ident["display_name"],
+            "email": ident["email"],
             "jabber_csf_device": csf_name,
             "extension": ext,
             "line_mask": "",
@@ -13224,6 +13293,7 @@ def _greenlight_build_person_lookup_rows(
 
       for line in csf_lines:
         ext = str(line.get("pattern") or "").strip()
+        ext = _ext_or_ad(person, ext)
         tps = _greenlight_find_translation_patterns(cucm_host, cucm_user, cucm_pass, person, ext)
         sms_lookup = _greenlight_resolve_sms_provider(
           str(person.get("telephone") or "").strip(),
@@ -13231,13 +13301,14 @@ def _greenlight_build_person_lookup_rows(
           str(person.get("translated_number") or "").strip(),
           ext,
         )
+        ident = _identity(person)
         output_rows.append(
           {
-            "userid": str(person.get("userid") or "").strip(),
-            "first_name": str(person.get("first_name") or "").strip(),
-            "last_name": str(person.get("last_name") or "").strip(),
-            "display_name": str(person.get("display_name") or "").strip(),
-            "email": str(person.get("email") or "").strip(),
+            "userid": ident["userid"],
+            "first_name": ident["first_name"],
+            "last_name": ident["last_name"],
+            "display_name": ident["display_name"],
+            "email": ident["email"],
             "jabber_csf_device": csf_name,
             "extension": ext,
             "line_mask": str(line.get("line_mask") or "").strip(),

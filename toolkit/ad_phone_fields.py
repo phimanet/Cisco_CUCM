@@ -1897,3 +1897,270 @@ def resolve_samaccountname_by_email(email, auth_context=None):
         return fallback, f"Used email local-part '{fallback}' (no AD email match found)"
 
     return "", f"Could not resolve a valid AD account from {clean_email}"
+
+
+# --- Full AD identity lookup by email (userID + name + ipPhone extension) ---
+
+def _blank_ad_identity():
+    return {
+        "found": False,
+        "samAccountName": "",
+        "firstName": "",
+        "lastName": "",
+        "displayName": "",
+        "mail": "",
+        "extension": "",
+        "telephoneNumber": "",
+        "distinguishedName": "",
+        "source": "",
+    }
+
+
+def _lookup_ad_identity_by_email_powershell(email, auth_context):
+    payload = {
+        "username": (auth_context or {}).get("username", ""),
+        "password": (auth_context or {}).get("password", ""),
+        "email": email,
+    }
+    script = r"""
+$payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
+Import-Module ActiveDirectory -ErrorAction Stop
+
+$email = [string]$payload.email
+$ldapFilter = "(|(mail=$email)(userPrincipalName=$email)(proxyAddresses=smtp:$email))"
+$props = @('sAMAccountName','givenName','sn','displayName','mail','ipPhone','telephoneNumber','distinguishedName')
+
+$user = $null
+if ($payload.username -and $payload.password) {
+    $secure = ConvertTo-SecureString $payload.password -AsPlainText -Force
+    $cred = [System.Management.Automation.PSCredential]::new($payload.username, $secure)
+    $user = Get-ADUser -Credential $cred -LDAPFilter $ldapFilter -Properties $props -ErrorAction Stop | Select-Object -First 1
+} else {
+    $user = Get-ADUser -LDAPFilter $ldapFilter -Properties $props -ErrorAction Stop | Select-Object -First 1
+}
+
+if ($null -eq $user) {
+    @{ found = $false } | ConvertTo-Json -Compress
+    exit 0
+}
+
+@{
+    found = $true
+    samAccountName = [string]$user.SamAccountName
+    firstName = [string]$user.givenName
+    lastName = [string]$user.sn
+    displayName = [string]$user.displayName
+    mail = [string]$user.mail
+    extension = [string]$user.ipPhone
+    telephoneNumber = [string]$user.telephoneNumber
+    distinguishedName = [string]$user.distinguishedName
+} | ConvertTo-Json -Compress
+"""
+    data, error = _run_powershell_json(script, payload)
+    if error:
+        return None, error
+    if not isinstance(data, dict):
+        return None, "AD email identity lookup returned an invalid response"
+    return data, ""
+
+
+def _lookup_ad_identity_by_email_ldap(email, auth_context):
+    if not LDAP3_AVAILABLE:
+        return None, "ldap3 package is not installed on this server"
+
+    config, config_error = _resolve_ldap_config()
+    if config_error:
+        return None, config_error
+
+    bind_user, bind_auth, bind_error = _resolve_ldap_bind_credentials(auth_context, config)
+    if bind_error:
+        return None, bind_error
+
+    bind_password = str(os.getenv("AD_LDAP_BIND_PASSWORD") or str((auth_context or {}).get("password") or ""))
+
+    try:
+        server = Server(
+            config["server"],
+            port=config["port"],
+            use_ssl=config["use_ssl"],
+            get_info=ALL,
+            connect_timeout=20,
+        )
+        conn = Connection(
+            server,
+            user=bind_user,
+            password=bind_password,
+            authentication=bind_auth,
+            auto_bind=True,
+            receive_timeout=20,
+        )
+    except Exception as exc:
+        return None, f"LDAP bind failed: {exc}"
+
+    escaped = _escape_ldap_filter_value(email)
+    search_filter = (
+        f"(&(objectClass=user)(|"
+        f"(mail={escaped})"
+        f"(userPrincipalName={escaped})"
+        f"(proxyAddresses=smtp:{escaped})"
+        "))"
+    )
+    attrs = [
+        "sAMAccountName",
+        "givenName",
+        "sn",
+        "displayName",
+        "mail",
+        "ipPhone",
+        "telephoneNumber",
+        "distinguishedName",
+    ]
+    try:
+        ok = conn.search(
+            search_base=config["base_dn"],
+            search_filter=search_filter,
+            search_scope=SUBTREE,
+            attributes=attrs,
+        )
+    except Exception as exc:
+        try:
+            conn.unbind()
+        except Exception:
+            pass
+        return None, f"LDAP search failed: {exc}"
+
+    if not ok or not conn.entries:
+        try:
+            conn.unbind()
+        except Exception:
+            pass
+        return {"found": False}, ""
+
+    entry = conn.entries[0]
+
+    def _val(name):
+        return str(getattr(getattr(entry, name, None), "value", "") or "").strip()
+
+    result = {
+        "found": True,
+        "samAccountName": _val("sAMAccountName"),
+        "firstName": _val("givenName"),
+        "lastName": _val("sn"),
+        "displayName": _val("displayName"),
+        "mail": _val("mail"),
+        "extension": _val("ipPhone"),
+        "telephoneNumber": _val("telephoneNumber"),
+        "distinguishedName": _val("distinguishedName"),
+    }
+    try:
+        conn.unbind()
+    except Exception:
+        pass
+    result["found"] = bool(result.get("samAccountName"))
+    return result, ""
+
+
+def _lookup_ad_identity_by_email_ldapsearch(email, auth_context):
+    config, config_error = _resolve_ldap_config()
+    if config_error:
+        return None, config_error
+
+    password = str((auth_context or {}).get("password") or "")
+    if not password:
+        return None, "LDAP bind requires username and password"
+
+    bind_user = _resolve_ldapsearch_bind_user(auth_context, config)
+    if not bind_user:
+        return None, "LDAP bind requires username"
+
+    escaped = _escape_ldap_filter_value(email)
+    search_filter = (
+        f"(&(objectClass=user)(|"
+        f"(mail={escaped})"
+        f"(userPrincipalName={escaped})"
+        f"(proxyAddresses=smtp:{escaped})"
+        "))"
+    )
+    attrs, lookup_error = _run_ldapsearch_query(
+        config,
+        bind_user,
+        password,
+        search_filter,
+        [
+            "sAMAccountName",
+            "givenName",
+            "sn",
+            "displayName",
+            "mail",
+            "ipPhone",
+            "telephoneNumber",
+            "distinguishedName",
+        ],
+    )
+    if lookup_error:
+        return None, lookup_error
+
+    attrs = attrs or {}
+    sam = _first_attr_value(attrs, ["sAMAccountName", "samAccountName"])
+    result = {
+        "found": bool(sam),
+        "samAccountName": sam,
+        "firstName": _first_attr_value(attrs, ["givenName"]),
+        "lastName": _first_attr_value(attrs, ["sn"]),
+        "displayName": _first_attr_value(attrs, ["displayName"]),
+        "mail": _first_attr_value(attrs, ["mail"]),
+        "extension": _first_attr_value(attrs, ["ipPhone"]),
+        "telephoneNumber": _first_attr_value(attrs, ["telephoneNumber"]),
+        "distinguishedName": _first_attr_value(attrs, ["distinguishedName"]),
+    }
+    return result, ""
+
+
+def lookup_ad_identity_by_email(email, auth_context=None):
+    """
+    Resolve an email address to the full AD identity.
+
+    Returns a dict with found, samAccountName (userID), firstName, lastName,
+    displayName, mail, extension (from the ipPhone attribute), telephoneNumber,
+    distinguishedName, and source. Tries PowerShell, then ldap3, then ldapsearch.
+    The ipPhone attribute holds the CUCM extension, so it is returned as
+    "extension".
+    """
+    result = _blank_ad_identity()
+
+    clean_email = _normalize_email_value(email)
+    if not clean_email:
+        result["error"] = "A valid email address is required"
+        return result
+
+    result["mail"] = clean_email
+
+    for source, fn in (
+        ("powershell", _lookup_ad_identity_by_email_powershell),
+        ("ldap", _lookup_ad_identity_by_email_ldap),
+        ("ldapsearch", _lookup_ad_identity_by_email_ldapsearch),
+    ):
+        data, error = fn(clean_email, auth_context)
+        if error or not isinstance(data, dict):
+            continue
+        sam = _normalize_samaccountname(str(data.get("samAccountName") or ""))
+        if not sam:
+            continue
+        merged = _blank_ad_identity()
+        merged.update(
+            {
+                "found": True,
+                "samAccountName": sam,
+                "firstName": str(data.get("firstName") or "").strip(),
+                "lastName": str(data.get("lastName") or "").strip(),
+                "displayName": str(data.get("displayName") or "").strip(),
+                "mail": str(data.get("mail") or "").strip() or clean_email,
+                "extension": str(data.get("extension") or "").strip(),
+                "telephoneNumber": str(data.get("telephoneNumber") or "").strip(),
+                "distinguishedName": str(data.get("distinguishedName") or "").strip(),
+                "source": source,
+            }
+        )
+        return merged
+
+    return result
