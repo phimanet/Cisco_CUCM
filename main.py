@@ -1876,6 +1876,183 @@ def _genesys_resolve_blocked_caller_datatable() -> tuple[dict, str]:
   }, ""
 
 
+def _genesys_blocked_caller_enabled() -> bool:
+  return bool((GENESYS_CLIENT_ID or "").strip()) and bool((GENESYS_CLIENT_SECRET or "").strip())
+
+
+def _genesys_normalize_ani_10(value: str) -> str:
+  digits = re.sub(r"\D", "", str(value or ""))
+  if len(digits) == 11 and digits.startswith("1"):
+    digits = digits[1:]
+  return digits
+
+
+def _genesys_blocked_match_columns(columns: list[dict]) -> tuple[str, str]:
+  def _norm(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+  date_col = ""
+  notes_col = ""
+  for col in columns or []:
+    name = str(col.get("name", "") or "")
+    norm = _norm(name)
+    if not date_col and norm in {"dateadded", "date"}:
+      date_col = name
+    if not notes_col and norm in {"notes", "note", "comment", "comments"}:
+      notes_col = name
+  return date_col, notes_col
+
+
+def _genesys_blocked_list_core() -> dict:
+  resolved, err = _genesys_resolve_blocked_caller_datatable()
+  if err:
+    return {"ok": False, "error": err}
+  rows, rows_err = _genesys_datatable_list_rows(
+    resolved.get("api_base", ""),
+    resolved.get("access_token", ""),
+    resolved.get("datatable_id", ""),
+  )
+  if rows_err:
+    return {"ok": False, "error": rows_err}
+  return {
+    "ok": True,
+    "region": resolved.get("region", ""),
+    "datatable_id": resolved.get("datatable_id", ""),
+    "datatable_name": resolved.get("datatable_name", ""),
+    "key_column": resolved.get("key_column", ""),
+    "columns": resolved.get("columns", []),
+    "rows": rows,
+    "count": len(rows),
+  }
+
+
+def _genesys_blocked_add_core(phone_number: str, date_added: str = "", notes: str = "") -> dict:
+  clean_number = _genesys_normalize_ani_10(phone_number) or str(phone_number or "").strip()
+  if not clean_number:
+    return {"ok": False, "error": "A telephone number is required."}
+
+  resolved, err = _genesys_resolve_blocked_caller_datatable()
+  if err:
+    return {"ok": False, "error": err}
+
+  api_base = resolved.get("api_base", "")
+  access_token = resolved.get("access_token", "")
+  datatable_id = resolved.get("datatable_id", "")
+  key_column = resolved.get("key_column", "") or "key"
+  columns = resolved.get("columns", []) or []
+  date_column, notes_column = _genesys_blocked_match_columns(columns)
+
+  clean_date = str(date_added or "").strip() or datetime.datetime.now().strftime("%Y-%m-%d")
+  clean_notes = str(notes or "").strip()
+
+  existing_rows, rows_err = _genesys_datatable_list_rows(api_base, access_token, datatable_id)
+  if not rows_err:
+    for row in existing_rows:
+      if _genesys_normalize_ani_10(row.get(key_column, "")) == clean_number:
+        return {
+          "ok": False,
+          "already": True,
+          "error": f"{clean_number} is already in {resolved.get('datatable_name', 'the data table')}.",
+        }
+
+  warnings = []
+  new_row = {key_column: clean_number}
+  if date_column:
+    new_row[date_column] = clean_date
+  else:
+    warnings.append("No 'Date Added' column found; date not stored.")
+  if notes_column:
+    new_row[notes_column] = clean_notes
+  elif clean_notes:
+    warnings.append("No 'Notes' column found; notes not stored.")
+
+  ok_add, body, add_err, status = _genesys_datatable_add_row(api_base, access_token, datatable_id, new_row)
+  if not ok_add:
+    return {"ok": False, "error": f"Add failed (HTTP {status}): {add_err}"}
+
+  rows, _rows_err2 = _genesys_datatable_list_rows(api_base, access_token, datatable_id)
+  return {
+    "ok": True,
+    "region": resolved.get("region", ""),
+    "datatable_name": resolved.get("datatable_name", ""),
+    "key_column": key_column,
+    "columns": columns,
+    "added": clean_number,
+    "row": body,
+    "rows": rows,
+    "count": len(rows),
+    "warnings": warnings,
+  }
+
+
+def _genesys_blocked_remove_core(row_key: str) -> dict:
+  clean_key = _genesys_normalize_ani_10(row_key) or str(row_key or "").strip()
+  if not clean_key:
+    return {"ok": False, "error": "A row key (telephone number) is required."}
+
+  resolved, err = _genesys_resolve_blocked_caller_datatable()
+  if err:
+    return {"ok": False, "error": err}
+
+  api_base = resolved.get("api_base", "")
+  access_token = resolved.get("access_token", "")
+  datatable_id = resolved.get("datatable_id", "")
+  key_column = resolved.get("key_column", "") or "key"
+
+  actual_key = clean_key
+  found = False
+  existing_rows, rows_err = _genesys_datatable_list_rows(api_base, access_token, datatable_id)
+  if not rows_err:
+    for row in existing_rows:
+      stored = str(row.get(key_column, "") or "").strip()
+      if _genesys_normalize_ani_10(stored) == clean_key:
+        actual_key = stored
+        found = True
+        break
+
+  ok_del, body, del_err, status = _genesys_datatable_delete_row(api_base, access_token, datatable_id, actual_key)
+  if not ok_del:
+    return {"ok": False, "error": f"Delete failed (HTTP {status}): {del_err}", "found": found}
+
+  rows, _rows_err = _genesys_datatable_list_rows(api_base, access_token, datatable_id)
+  return {
+    "ok": True,
+    "region": resolved.get("region", ""),
+    "datatable_name": resolved.get("datatable_name", ""),
+    "key_column": key_column,
+    "columns": resolved.get("columns", []),
+    "removed": actual_key,
+    "found": found,
+    "rows": rows,
+    "count": len(rows),
+  }
+
+
+def _genesys_blocked_contains(ani_value: str) -> dict:
+  target = _genesys_normalize_ani_10(ani_value)
+  listing = _genesys_blocked_list_core()
+  if not listing.get("ok"):
+    return {"ok": False, "error": listing.get("error", "")}
+  key_column = str(listing.get("key_column", "") or "key")
+  found = any(
+    _genesys_normalize_ani_10(row.get(key_column, "")) == target
+    for row in listing.get("rows", [])
+    if isinstance(row, dict)
+  )
+  return {"ok": True, "found": found, "listing": listing}
+
+
+def _genesys_blocked_key_set(listing: dict) -> set:
+  key_column = str(listing.get("key_column", "") or "key")
+  keys = set()
+  for row in listing.get("rows", []) or []:
+    if isinstance(row, dict):
+      normalized = _genesys_normalize_ani_10(row.get(key_column, ""))
+      if normalized:
+        keys.add(normalized)
+  return keys
+
+
 def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id: str, user_name: str, user_email: str = "") -> dict:
   clean_region, _, api_base = _genesys_region_to_urls(region)
   fallback_template = _load_genesys_webrtc_template()
@@ -21127,28 +21304,10 @@ def _genesys_resolve_queue_action_user(region: str, access_token: str, user_id: 
 
 @app.post("/genesys/blocked-caller/list")
 def genesys_blocked_caller_list_route():
-  resolved, err = _genesys_resolve_blocked_caller_datatable()
-  if err:
-    return JSONResponse({"ok": False, "error": err}, status_code=400)
-
-  rows, rows_err = _genesys_datatable_list_rows(
-    resolved.get("api_base", ""),
-    resolved.get("access_token", ""),
-    resolved.get("datatable_id", ""),
-  )
-  if rows_err:
-    return JSONResponse({"ok": False, "error": rows_err}, status_code=400)
-
-  return JSONResponse({
-    "ok": True,
-    "region": resolved.get("region", ""),
-    "datatable_id": resolved.get("datatable_id", ""),
-    "datatable_name": resolved.get("datatable_name", ""),
-    "key_column": resolved.get("key_column", ""),
-    "columns": resolved.get("columns", []),
-    "rows": rows,
-    "count": len(rows),
-  })
+  result = _genesys_blocked_list_core()
+  if not result.get("ok"):
+    return JSONResponse({"ok": False, "error": result.get("error", "Load failed.")}, status_code=400)
+  return JSONResponse(result)
 
 
 @app.post("/genesys/blocked-caller/add")
@@ -21162,70 +21321,10 @@ def genesys_blocked_caller_add_route(
   if not clean_number:
     return JSONResponse({"ok": False, "error": "A telephone number is required."}, status_code=400)
 
-  resolved, err = _genesys_resolve_blocked_caller_datatable()
-  if err:
-    return JSONResponse({"ok": False, "error": err}, status_code=400)
-
-  api_base = resolved.get("api_base", "")
-  access_token = resolved.get("access_token", "")
-  datatable_id = resolved.get("datatable_id", "")
-  key_column = resolved.get("key_column", "") or "key"
-  columns = resolved.get("columns", []) or []
-
-  def _match_column(*candidates: str) -> str:
-    wanted = {re.sub(r"[^a-z0-9]", "", str(c or "").lower()) for c in candidates}
-    for col in columns:
-      col_name = str(col.get("name", "") or "")
-      if re.sub(r"[^a-z0-9]", "", col_name.lower()) in wanted:
-        return col_name
-    return ""
-
-  date_column = _match_column("date added", "dateadded", "date")
-  notes_column = _match_column("notes", "note", "comment", "comments")
-
-  clean_date = str(date_added or "").strip() or datetime.datetime.now().strftime("%Y-%m-%d")
-  clean_notes = str(notes or "").strip()
-
-  existing_rows, rows_err = _genesys_datatable_list_rows(api_base, access_token, datatable_id)
-  if not rows_err:
-    for row in existing_rows:
-      if str(row.get(key_column, "") or "").strip() == clean_number:
-        return JSONResponse({
-          "ok": False,
-          "error": f"{clean_number} is already in {resolved.get('datatable_name', 'the data table')}.",
-        }, status_code=400)
-
-  warnings = []
-  new_row = {key_column: clean_number}
-  if date_column:
-    new_row[date_column] = clean_date
-  else:
-    warnings.append("No 'Date Added' column found in the data table; date was not stored.")
-  if notes_column:
-    new_row[notes_column] = clean_notes
-  elif clean_notes:
-    warnings.append("No 'Notes' column found in the data table; notes were not stored.")
-
-  ok_add, body, add_err, status = _genesys_datatable_add_row(api_base, access_token, datatable_id, new_row)
-  if not ok_add:
-    return JSONResponse({
-      "ok": False,
-      "error": f"Add failed (HTTP {status}): {add_err}",
-    }, status_code=400)
-
-  rows, _rows_err2 = _genesys_datatable_list_rows(api_base, access_token, datatable_id)
-  return JSONResponse({
-    "ok": True,
-    "region": resolved.get("region", ""),
-    "datatable_name": resolved.get("datatable_name", ""),
-    "key_column": key_column,
-    "columns": resolved.get("columns", []),
-    "added": clean_number,
-    "row": body,
-    "rows": rows,
-    "count": len(rows),
-    "warnings": warnings,
-  })
+  result = _genesys_blocked_add_core(clean_number, date_added=date_added, notes=notes)
+  if not result.get("ok"):
+    return JSONResponse({"ok": False, "error": result.get("error", "Add failed.")}, status_code=400)
+  return JSONResponse(result)
 
 
 @app.post("/genesys/blocked-caller/remove")
@@ -21234,32 +21333,10 @@ def genesys_blocked_caller_remove_route(request: Request, row_key: str = Form(""
   if not clean_key:
     return JSONResponse({"ok": False, "error": "A row key (telephone number) is required."}, status_code=400)
 
-  resolved, err = _genesys_resolve_blocked_caller_datatable()
-  if err:
-    return JSONResponse({"ok": False, "error": err}, status_code=400)
-
-  api_base = resolved.get("api_base", "")
-  access_token = resolved.get("access_token", "")
-  datatable_id = resolved.get("datatable_id", "")
-
-  ok_del, body, del_err, status = _genesys_datatable_delete_row(api_base, access_token, datatable_id, clean_key)
-  if not ok_del:
-    return JSONResponse({
-      "ok": False,
-      "error": f"Delete failed (HTTP {status}): {del_err}",
-    }, status_code=400)
-
-  rows, _rows_err = _genesys_datatable_list_rows(api_base, access_token, datatable_id)
-  return JSONResponse({
-    "ok": True,
-    "region": resolved.get("region", ""),
-    "datatable_name": resolved.get("datatable_name", ""),
-    "key_column": resolved.get("key_column", ""),
-    "columns": resolved.get("columns", []),
-    "removed": clean_key,
-    "rows": rows,
-    "count": len(rows),
-  })
+  result = _genesys_blocked_remove_core(clean_key)
+  if not result.get("ok"):
+    return JSONResponse({"ok": False, "error": result.get("error", "Delete failed.")}, status_code=400)
+  return JSONResponse(result)
 
 
 @app.post("/genesys/queues/member-add")
@@ -26049,6 +26126,7 @@ __ADMIN_CARD__
           html += '<th style="padding:8px 10px; text-align:left;">Normalized (10)</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Description</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Partition</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Genesys</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Action</th>';
           html += '</tr></thead><tbody>';
 
@@ -26058,11 +26136,18 @@ __ADMIN_CARD__
             const normalized = row.normalized_number || "";
             const description = row.description || "";
             const partition = row.route_partition || "";
+            let genesysCell = '<span style="color:#7a7a7a;">-</span>';
+            if (row.genesys_found === true) {
+              genesysCell = '<span style="color:#1d7a3a; font-weight:600;">Found</span>';
+            } else if (row.genesys_found === false) {
+              genesysCell = '<span style="color:#a63b00; font-weight:600;">Not Found</span>';
+            }
             html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
             html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + pattern + '</td>';
             html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + normalized + '</td>';
             html += '<td style="padding:7px 10px;">' + description + '</td>';
             html += '<td style="padding:7px 10px;">' + partition + '</td>';
+            html += '<td style="padding:7px 10px;">' + genesysCell + '</td>';
             html += '<td style="padding:7px 10px;"><button type="button" data-delete-pattern="' + pattern + '" style="background:linear-gradient(180deg,#a63b00,#7d2b00);">Delete</button></td>';
             html += '</tr>';
           });
@@ -26142,7 +26227,7 @@ __ADMIN_CARD__
                 statusEl.textContent = `${stateLabel}: ${payload.pattern || ""}`;
               }
 
-              summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Partition: ${payload.route_partition || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}`;
+              summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Partition: ${payload.route_partition || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}` + (payload.genesys && payload.genesys.enabled ? ` | Genesys: ${payload.genesys.message || (payload.genesys_found ? "Found" : "Not Found")}` : "");
 
               const showDeleteResult = (
                 (payload.action === "status" && payload.blocked)
@@ -27734,6 +27819,7 @@ __ADMIN_CARD__
           html += '<th style="padding:8px 10px; text-align:left;">Normalized (10)</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Description</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Partition</th>';
+          html += '<th style="padding:8px 10px; text-align:left;">Genesys</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Action</th>';
           html += '</tr></thead><tbody>';
 
@@ -27743,11 +27829,18 @@ __ADMIN_CARD__
             const normalized = row.normalized_number || "";
             const description = row.description || "";
             const partition = row.route_partition || "";
+            let genesysCell = '<span style="color:#7a7a7a;">-</span>';
+            if (row.genesys_found === true) {
+              genesysCell = '<span style="color:#1d7a3a; font-weight:600;">Found</span>';
+            } else if (row.genesys_found === false) {
+              genesysCell = '<span style="color:#a63b00; font-weight:600;">Not Found</span>';
+            }
             html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
             html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + pattern + '</td>';
             html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + normalized + '</td>';
             html += '<td style="padding:7px 10px;">' + description + '</td>';
             html += '<td style="padding:7px 10px;">' + partition + '</td>';
+            html += '<td style="padding:7px 10px;">' + genesysCell + '</td>';
             html += '<td style="padding:7px 10px;"><button type="button" data-delete-pattern="' + pattern + '" style="background:linear-gradient(180deg,#a63b00,#7d2b00);">Delete</button></td>';
             html += '</tr>';
           });
@@ -27825,7 +27918,7 @@ __ADMIN_CARD__
               const stateLabel = payload.blocked ? "Blocked" : "Not Blocked";
               statusEl.textContent = `${stateLabel}: ${payload.pattern || ""}`;
             }
-            summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Partition: ${payload.route_partition || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}`;
+            summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Partition: ${payload.route_partition || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}` + (payload.genesys && payload.genesys.enabled ? ` | Genesys: ${payload.genesys.message || (payload.genesys_found ? "Found" : "Not Found")}` : "");
 
             const showDeleteResult = (
               (payload.action === "status" && payload.blocked)
@@ -27839,6 +27932,7 @@ __ADMIN_CARD__
                   normalized_number: payload.normalized_number || "",
                   description: payload.description || "",
                   route_partition: payload.route_partition || "",
+                  genesys_found: payload.genesys_found,
                 },
               ]);
             } else {
@@ -35174,6 +35268,7 @@ def menu_admin_page(request: Request):
             html += '<th style="padding:8px 10px; text-align:left;">Normalized (10)</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Description</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Partition</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Genesys</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Action</th>';
             html += '</tr></thead><tbody>';
 
@@ -35183,11 +35278,18 @@ def menu_admin_page(request: Request):
               const normalized = row.normalized_number || "";
               const description = row.description || "";
               const partition = row.route_partition || "";
+              let genesysCell = '<span style="color:#7a7a7a;">-</span>';
+              if (row.genesys_found === true) {
+                genesysCell = '<span style="color:#1d7a3a; font-weight:600;">Found</span>';
+              } else if (row.genesys_found === false) {
+                genesysCell = '<span style="color:#a63b00; font-weight:600;">Not Found</span>';
+              }
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + pattern + '</td>';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + normalized + '</td>';
               html += '<td style="padding:7px 10px;">' + description + '</td>';
               html += '<td style="padding:7px 10px;">' + partition + '</td>';
+              html += '<td style="padding:7px 10px;">' + genesysCell + '</td>';
               html += '<td style="padding:7px 10px;"><button type="button" data-delete-pattern="' + pattern + '" style="background:linear-gradient(180deg,#a63b00,#7d2b00);">Delete</button></td>';
               html += '</tr>';
             });
@@ -35265,7 +35367,7 @@ def menu_admin_page(request: Request):
                 const stateLabel = payload.blocked ? "Blocked" : "Not Blocked";
                 statusEl.textContent = `${stateLabel}: ${payload.pattern || ""}`;
               }
-              summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Partition: ${payload.route_partition || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}`;
+              summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Partition: ${payload.route_partition || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}` + (payload.genesys && payload.genesys.enabled ? ` | Genesys: ${payload.genesys.message || (payload.genesys_found ? "Found" : "Not Found")}` : "");
 
               const showDeleteResult = (
                 (payload.action === "status" && payload.blocked)
@@ -35279,6 +35381,7 @@ def menu_admin_page(request: Request):
                     normalized_number: payload.normalized_number || "",
                     description: payload.description || "",
                     route_partition: payload.route_partition || "",
+                    genesys_found: payload.genesys_found,
                   },
                 ]);
               } else {
@@ -41105,6 +41208,18 @@ def block_inbound_callerid_route(
 
     if clean_action == "list":
       rows = _list_blocked_inbound_patterns(cucm_host, cucm_user, cucm_pass)
+      genesys_summary = {"enabled": _genesys_blocked_caller_enabled()}
+      if genesys_summary["enabled"]:
+        listing = _genesys_blocked_list_core()
+        if listing.get("ok"):
+          genesys_keys = _genesys_blocked_key_set(listing)
+          for row in rows:
+            row["genesys_found"] = _genesys_normalize_ani_10(row.get("normalized_number", "")) in genesys_keys
+          genesys_summary["ok"] = True
+          genesys_summary["count"] = listing.get("count", len(genesys_keys))
+        else:
+          genesys_summary["ok"] = False
+          genesys_summary["error"] = listing.get("error", "")
       _append_audit_event(
         action="block_inbound_calls_by_caller_id",
         cucm_host=cucm_host,
@@ -41118,11 +41233,13 @@ def block_inbound_callerid_route(
         "action": "list",
         "count": len(rows),
         "results": rows,
+        "genesys": genesys_summary,
       })
 
     pattern_value = _resolve_blocked_pattern_input(clean_input)
     normalized_number = _normalize_blocked_pattern_for_display(pattern_value)
 
+    genesys = {"enabled": _genesys_blocked_caller_enabled()}
     if clean_action == "block":
       description_text = _build_blocked_description(request_ticket)
       result = _add_blocked_inbound_pattern(
@@ -41132,11 +41249,38 @@ def block_inbound_callerid_route(
         pattern_value,
         description_text,
       )
+      if genesys["enabled"]:
+        # String CUCM add together with Genesys add: ANI = 10-digit caller ID, Notes = TASK/INC.
+        g = _genesys_blocked_add_core(normalized_number, notes=request_ticket)
+        if g.get("ok"):
+          genesys.update({"ok": True, "changed": True, "found": True, "message": f"Added {normalized_number} to Genesys."})
+        elif g.get("already"):
+          genesys.update({"ok": True, "changed": False, "found": True, "message": f"{normalized_number} already in Genesys."})
+        else:
+          genesys.update({"ok": False, "changed": False, "found": False, "error": g.get("error", "")})
     elif clean_action in {"remove", "delete"}:
       result = _remove_blocked_inbound_pattern(cucm_host, cucm_user, cucm_pass, pattern_value)
       clean_action = "remove"
+      if genesys["enabled"]:
+        # String CUCM delete together with Genesys delete of the same 10-digit ANI.
+        g = _genesys_blocked_remove_core(normalized_number)
+        if g.get("ok"):
+          genesys.update({
+            "ok": True,
+            "changed": bool(g.get("found", False)),
+            "found": bool(g.get("found", False)),
+            "message": (f"Removed {normalized_number} from Genesys." if g.get("found") else f"{normalized_number} was not in Genesys."),
+          })
+        else:
+          genesys.update({"ok": False, "changed": False, "error": g.get("error", "")})
     else:
       result = _get_blocked_inbound_pattern_status(cucm_host, cucm_user, cucm_pass, pattern_value)
+      if genesys["enabled"]:
+        g = _genesys_blocked_contains(normalized_number)
+        if g.get("ok"):
+          genesys.update({"ok": True, "found": bool(g.get("found", False))})
+        else:
+          genesys.update({"ok": False, "error": g.get("error", "")})
 
     _append_audit_event(
       action="block_inbound_calls_by_caller_id",
@@ -41147,7 +41291,9 @@ def block_inbound_callerid_route(
         f"pattern={pattern_value};"
         f"action={clean_action};"
         f"blocked={result.get('blocked', False)};"
-        f"changed={result.get('changed', False)}"
+        f"changed={result.get('changed', False)};"
+        f"genesys_found={genesys.get('found', '')};"
+        f"genesys_changed={genesys.get('changed', '')}"
       ),
       output_filename="inline_json_ok",
       inline_mode=True,
@@ -41159,6 +41305,8 @@ def block_inbound_callerid_route(
       "caller_id_number": normalized_number,
       "pattern": result.get("pattern", pattern_value),
       "normalized_number": result.get("normalized_number", normalized_number),
+      "genesys_found": genesys.get("found"),
+      "genesys": genesys,
       **result,
     })
 
