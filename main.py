@@ -5392,6 +5392,44 @@ def _get_dn_report_settings() -> dict:
   }
 
 
+def _get_blocked_cleanup_settings() -> dict:
+  """Return live Blocked Number auto Cleanup settings from settings.json.
+
+  CUCM credentials are shared with the DN Availability Report so the monthly
+  unattended run has valid credentials without a second copy to maintain.
+  """
+  s = _load_settings()
+  dn = _get_dn_report_settings()
+
+  def _str(key, fallback=""):
+    v = (s.get(key) or "").strip()
+    return v if v else fallback
+
+  def _int(key, fallback):
+    v = (s.get(key) or "").strip()
+    try:
+      return int(v) if v else fallback
+    except ValueError:
+      return fallback
+
+  enabled_raw = (s.get("blocked_cleanup_enabled") or "").strip().lower()
+  enabled = True if not enabled_raw else enabled_raw in {"1", "true", "yes", "on"}
+
+  return {
+    "enabled": enabled,
+    "recipient": _str("blocked_cleanup_recipient", "Phimane.Tiaokhiao@amnhealthcare.com"),
+    "recipient_2": _str("blocked_cleanup_recipient_2"),
+    "from_address": _str("blocked_cleanup_from", "noreply@amnhealthcare.com"),
+    "day_of_month": _int("blocked_cleanup_day", 1),
+    "hour": _int("blocked_cleanup_hour", 6),
+    "minute": _int("blocked_cleanup_minute", 0),
+    "max_age_years": _int("blocked_cleanup_max_age_years", 2),
+    "cucm_host": dn["cucm_host"],
+    "cucm_user": dn["cucm_user"],
+    "cucm_pass": dn["cucm_pass"],
+  }
+
+
 def _get_sip_call_search_settings() -> dict:
   """Return live SIP call-search settings from settings.json with env fallbacks."""
   s = _load_settings()
@@ -8759,6 +8797,11 @@ def _wants_json_response(request: Request) -> bool:
     "/admin/dn-avail-report/save-config",
     "/admin/dn-avail-report/run",
     "/admin/dn-avail-report/history",
+    "/admin/blocked-cleanup/config",
+    "/admin/blocked-cleanup/save-config",
+    "/admin/blocked-cleanup/run",
+    "/admin/blocked-cleanup/preview",
+    "/admin/blocked-cleanup/history",
   }:
     return True
   return False
@@ -9818,6 +9861,312 @@ def _dn_report_scheduler_loop():
 
 _dn_report_thread = threading.Thread(target=_dn_report_scheduler_loop, name="dn-avail-report-scheduler", daemon=True)
 _dn_report_thread.start()
+
+
+# ---------------------------------------------------------------------------
+# Blocked Number auto Cleanup - monthly purge of aged blocked caller ID entries
+# ---------------------------------------------------------------------------
+_BLOCKED_CLEANUP_SCHEDULER_LAST_FIRED: dict[str, str] = {}
+_BLOCKED_CLEANUP_SCHEDULER_LOCK = threading.Lock()
+
+
+def _parse_blocked_description_date(description: str) -> datetime.date | None:
+  """Extract the MM-DD-YYYY date embedded in a blocked-caller description.
+
+  Descriptions are created as "Blocked CallerID Num - MM-DD-YYYY TASK1234".
+  Returns None when no parseable date is present so the caller can skip it.
+  """
+  text = (description or "").strip()
+  if not text:
+    return None
+  match = re.search(r"(\d{1,2})[-/](\d{1,2})[-/](\d{4})", text)
+  if not match:
+    return None
+  month, day, year = int(match.group(1)), int(match.group(2)), int(match.group(3))
+  try:
+    return datetime.date(year, month, day)
+  except ValueError:
+    return None
+
+
+def _blocked_cleanup_build_html(
+  deleted: list[dict],
+  skipped_no_date: list[dict],
+  kept: list[dict],
+  errors: list[str],
+  run_at: str,
+  cucm_host: str,
+  max_age_years: int,
+  dry_run: bool,
+) -> str:
+  """Build the HTML email body summarizing the cleanup run."""
+
+  def _rows(items: list[dict], show_age: bool = True) -> str:
+    if not items:
+      return '<tr><td colspan="4" style="padding:12px;text-align:center;color:#888">None</td></tr>'
+    parts = []
+    for it in items:
+      genesys_txt = it.get("genesys", "")
+      parts.append(
+        '<tr>'
+        f'<td style="padding:8px 12px;border-bottom:1px solid #eee;font-family:monospace">{escape(it.get("normalized_number", ""))}</td>'
+        f'<td style="padding:8px 12px;border-bottom:1px solid #eee">{escape(it.get("description", ""))}</td>'
+        f'<td style="padding:8px 12px;border-bottom:1px solid #eee">{escape(str(it.get("date", "")) if show_age else "-")}</td>'
+        f'<td style="padding:8px 12px;border-bottom:1px solid #eee">{escape(genesys_txt)}</td>'
+        '</tr>'
+      )
+    return "\n".join(parts)
+
+  mode_banner = (
+    '<div style="background:#e65100;color:#fff;padding:12px 20px;border-radius:6px;margin-bottom:16px;font-weight:600">'
+    'PREVIEW (dry run) - no entries were deleted.</div>'
+    if dry_run else ""
+  )
+  error_banner = ""
+  if errors:
+    err_items = "".join(f"<li>{escape(e)}</li>" for e in errors)
+    error_banner = (
+      '<div style="background:#ffebee;border:1px solid #ef9a9a;border-radius:6px;padding:12px 18px;margin-bottom:16px;color:#b71c1c">'
+      f'<strong>{len(errors)} error(s) during cleanup:</strong><ul style="margin:8px 0 0 18px">{err_items}</ul></div>'
+    )
+
+  action_word = "Would delete" if dry_run else "Deleted"
+
+  return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family:Arial,sans-serif;color:#333;margin:0;padding:0">
+<div style="max-width:900px;margin:24px auto;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden">
+  <div style="background:#1a237e;color:#fff;padding:20px 28px">
+    <h2 style="margin:0 0 4px 0">Blocked Number Auto Cleanup Report</h2>
+    <p style="margin:0;font-size:14px;opacity:.85">CUCM Host: {escape(cucm_host)} &nbsp;|&nbsp; Run at: {escape(run_at)} &nbsp;|&nbsp; Max age: {max_age_years} years</p>
+  </div>
+  <div style="padding:20px 28px">
+    {mode_banner}
+    {error_banner}
+    <div style="display:flex;gap:14px;margin-bottom:20px">
+      <div style="background:#ffebee;border-radius:6px;padding:12px 20px;flex:1;text-align:center">
+        <div style="font-size:26px;font-weight:bold;color:#b71c1c">{len(deleted)}</div>
+        <div style="font-size:12px;color:#555">{action_word}</div>
+      </div>
+      <div style="background:#fff8e1;border-radius:6px;padding:12px 20px;flex:1;text-align:center">
+        <div style="font-size:26px;font-weight:bold;color:#e65100">{len(skipped_no_date)}</div>
+        <div style="font-size:12px;color:#555">Skipped (no date)</div>
+      </div>
+      <div style="background:#e8f5e9;border-radius:6px;padding:12px 20px;flex:1;text-align:center">
+        <div style="font-size:26px;font-weight:bold;color:#2e7d32">{len(kept)}</div>
+        <div style="font-size:12px;color:#555">Kept (within age)</div>
+      </div>
+    </div>
+
+    <h3 style="color:#b71c1c;margin:0 0 8px 0">{action_word} - older than {max_age_years} years</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:22px">
+      <thead><tr style="background:#f5f5f5">
+        <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #ddd">Number</th>
+        <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #ddd">Description</th>
+        <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #ddd">Blocked Date</th>
+        <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #ddd">Genesys</th>
+      </tr></thead>
+      <tbody>{_rows(deleted)}</tbody>
+    </table>
+
+    <h3 style="color:#e65100;margin:0 0 8px 0">Skipped - no date in description</h3>
+    <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:22px">
+      <thead><tr style="background:#f5f5f5">
+        <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #ddd">Number</th>
+        <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #ddd">Description</th>
+        <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #ddd">Blocked Date</th>
+        <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #ddd">Genesys</th>
+      </tr></thead>
+      <tbody>{_rows(skipped_no_date, show_age=False)}</tbody>
+    </table>
+
+    <p style="margin:18px 0 0 0;font-size:12px;color:#aaa">
+      Entries with a blocked date older than {max_age_years} years are removed from CUCM and Genesys.
+      Entries with no date in the description are skipped and left in place.
+      This is an automated report from the CUCM Voice Automation Portal.
+    </p>
+  </div>
+</div>
+</body>
+</html>"""
+
+
+def _run_blocked_number_cleanup(triggered_by: str = "scheduler", dry_run: bool = False) -> dict:
+  """List blocked numbers, delete entries older than max_age_years, email results."""
+  try:
+    cfg = _get_blocked_cleanup_settings()
+    cucm_host = cfg["cucm_host"]
+    cucm_user = cfg["cucm_user"]
+    cucm_pass = cfg["cucm_pass"]
+    if not cucm_host or not cucm_user or not cucm_pass:
+      raise RuntimeError("CUCM credentials for cleanup not configured. Set them in the DN Availability Report panel on Page 2.")
+
+    max_age_years = max(1, int(cfg["max_age_years"]))
+    run_at = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+    today = _audit_now().date()
+    try:
+      cutoff = today.replace(year=today.year - max_age_years)
+    except ValueError:
+      # Handles Feb 29 edge case.
+      cutoff = today.replace(month=2, day=28, year=today.year - max_age_years)
+
+    rows = _list_blocked_inbound_patterns(cucm_host, cucm_user, cucm_pass)
+    genesys_enabled = _genesys_blocked_caller_enabled()
+
+    deleted: list[dict] = []
+    skipped_no_date: list[dict] = []
+    kept: list[dict] = []
+    errors: list[str] = []
+
+    for row in rows:
+      pattern = (row.get("pattern") or "").strip()
+      normalized = (row.get("normalized_number") or "").strip()
+      description = (row.get("description") or "").strip()
+      blocked_date = _parse_blocked_description_date(description)
+
+      if blocked_date is None:
+        skipped_no_date.append({
+          "normalized_number": normalized,
+          "description": description,
+          "date": "",
+          "genesys": "",
+        })
+        continue
+
+      if blocked_date > cutoff:
+        kept.append({
+          "normalized_number": normalized,
+          "description": description,
+          "date": blocked_date.isoformat(),
+        })
+        continue
+
+      # Older than the max age -> remove from CUCM and Genesys.
+      genesys_note = ""
+      if dry_run:
+        genesys_note = "would remove" if genesys_enabled else "n/a"
+      else:
+        try:
+          _remove_blocked_inbound_pattern(cucm_host, cucm_user, cucm_pass, pattern)
+        except Exception as exc:
+          errors.append(f"CUCM delete failed for {normalized}: {exc}")
+          continue
+        if genesys_enabled:
+          try:
+            g = _genesys_blocked_remove_core(normalized)
+            if g.get("ok"):
+              genesys_note = "removed" if g.get("found") else "not in Genesys"
+            else:
+              genesys_note = "error"
+              errors.append(f"Genesys delete failed for {normalized}: {g.get('error', '')}")
+          except Exception as exc:
+            genesys_note = "error"
+            errors.append(f"Genesys delete failed for {normalized}: {exc}")
+        else:
+          genesys_note = "n/a"
+
+      deleted.append({
+        "normalized_number": normalized,
+        "description": description,
+        "date": blocked_date.isoformat(),
+        "genesys": genesys_note,
+      })
+
+    recipients = [r for r in [cfg["recipient"], cfg["recipient_2"]] if r]
+    if not recipients:
+      raise RuntimeError("No recipients configured for blocked number cleanup.")
+    sender = cfg["from_address"] or "noreply@amnhealthcare.com"
+
+    mode_tag = "PREVIEW " if dry_run else ""
+    subject = f"[CUCM] {mode_tag}Blocked Number Auto Cleanup - {run_at[:10]} ({len(deleted)} {'to delete' if dry_run else 'deleted'})"
+    html_body = _blocked_cleanup_build_html(
+      deleted, skipped_no_date, kept, errors, run_at, cucm_host, max_age_years, dry_run
+    )
+    plain_lines = [
+      f"Blocked Number Auto Cleanup{' (PREVIEW / dry run)' if dry_run else ''} - {run_at}",
+      f"CUCM: {cucm_host} | Max age: {max_age_years} years | Cutoff: {cutoff.isoformat()}",
+      "",
+      f"{'Would delete' if dry_run else 'Deleted'}: {len(deleted)}",
+      f"Skipped (no date): {len(skipped_no_date)}",
+      f"Kept (within age): {len(kept)}",
+      "",
+    ]
+    for it in deleted:
+      plain_lines.append(f"  DELETE {it['normalized_number']} | {it['date']} | Genesys: {it['genesys']} | {it['description']}")
+    if skipped_no_date:
+      plain_lines.append("")
+      plain_lines.append("Skipped (no date):")
+      for it in skipped_no_date:
+        plain_lines.append(f"  SKIP   {it['normalized_number']} | {it['description']}")
+    if errors:
+      plain_lines += ["", "Errors:"] + [f"  {e}" for e in errors]
+    plain_body = "\n".join(plain_lines)
+
+    _send_smtp_email(sender=sender, recipients=recipients, subject=subject, body=plain_body, html_body=html_body)
+
+    _append_audit_event(
+      action="blocked_number_cleanup",
+      cucm_host=cucm_host,
+      operator=triggered_by,
+      target=(
+        f"run_at={run_at};dry_run={dry_run};deleted={len(deleted)};"
+        f"skipped_no_date={len(skipped_no_date)};kept={len(kept)};errors={len(errors)}"
+      ),
+      account="|".join(recipients),
+      output_filename=f"blocked_cleanup_{run_at[:10].replace('-','')}.html",
+      inline_mode=False,
+    )
+
+    return {
+      "success": True,
+      "dry_run": dry_run,
+      "run_at": run_at,
+      "cutoff": cutoff.isoformat(),
+      "max_age_years": max_age_years,
+      "recipients": recipients,
+      "deleted": deleted,
+      "skipped_no_date": skipped_no_date,
+      "kept_count": len(kept),
+      "errors": errors,
+    }
+  except Exception as exc:
+    logger.error("blocked_number_cleanup failed: %s", exc, exc_info=True)
+    return {"success": False, "error": str(exc)}
+
+
+def _blocked_cleanup_scheduler_loop():
+  """Daemon thread: fires _run_blocked_number_cleanup monthly at the configured PST time."""
+  tz = ZoneInfo("America/Los_Angeles")
+  while True:
+    try:
+      time.sleep(60)
+      cfg = _get_blocked_cleanup_settings()
+      if not cfg["enabled"]:
+        continue
+      now = datetime.datetime.now(tz=tz)
+      if now.day != cfg["day_of_month"] or now.hour != cfg["hour"] or now.minute != cfg["minute"]:
+        continue
+      fire_key = now.strftime("%Y-%m")
+      with _BLOCKED_CLEANUP_SCHEDULER_LOCK:
+        if _BLOCKED_CLEANUP_SCHEDULER_LAST_FIRED.get("last") == fire_key:
+          continue
+        _BLOCKED_CLEANUP_SCHEDULER_LAST_FIRED["last"] = fire_key
+      logger.info("blocked_number_cleanup: firing for key=%s", fire_key)
+      result = _run_blocked_number_cleanup(triggered_by="scheduler")
+      logger.info("blocked_number_cleanup: result success=%s", result.get("success"))
+    except Exception as exc:
+      logger.error("blocked_cleanup_scheduler_loop error: %s", exc, exc_info=True)
+
+
+# Auto-delete blocked numbers only on PROD runtime; manual/preview runs work anywhere.
+if _is_prod_runtime_host_strict():
+  _blocked_cleanup_thread = threading.Thread(
+    target=_blocked_cleanup_scheduler_loop, name="blocked-number-cleanup-scheduler", daemon=True
+  )
+  _blocked_cleanup_thread.start()
+else:
+  logger.info("blocked_number_cleanup scheduler disabled on non-PROD runtime host")
 
 
 def _ensure_twilio_sms_hosting_audit_log():
@@ -32974,6 +33323,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="ad-group-identifiers">Security Group Identifier (Read-Only)</button>
             <button type="button" class="portal-nav-btn" data-panel="sep-sms-report">SMS Separation Email Process</button>
             <button type="button" class="portal-nav-btn" data-panel="dn-avail-report">DN Number Pool Availability Report</button>
+            <button type="button" class="portal-nav-btn" data-panel="blocked-cleanup">Blocked Number auto Cleanup</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page4'">Server Certificate Manager (Page 4)</button>
           </div>
         </aside>
@@ -34021,6 +34371,75 @@ def menu_admin_page(request: Request):
         <button type="button" id="dn-report-history-btn" style="font-size:12px;padding:5px 14px;margin-bottom:10px;">Refresh History</button>
         <div id="dn-report-history-loading" style="color:#888;font-size:13px;display:none;">Loading...</div>
         <div id="dn-report-history-results" style="overflow-x:auto;"></div>
+      </section>
+
+      <section class="panel tool-panel" data-panel="blocked-cleanup">
+        <h3>Blocked Number auto Cleanup</h3>
+        <p>Automated monthly cleanup of aged inbound Caller ID blocks. It reads every currently blocked number (the same list as "List All Currently Blocked Inbound Caller ID Number"), looks at the date in each description, and removes any block older than the configured age from <strong>both CUCM and Genesys</strong>. Entries with no date in the description are skipped and left in place. A results email is sent after every run.</p>
+
+        <div style="background:#f0f4fa;border:1px solid #c5d4e8;border-radius:6px;padding:18px;margin-bottom:20px;">
+          <h4 style="margin:0 0 14px 0;color:#002f6c;">Scheduler Settings</h4>
+          <div id="bc-config-loading" style="color:#888;font-size:13px;">Loading settings...</div>
+          <div id="bc-config-form-wrap" style="display:none">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;margin-bottom:14px;">
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Primary Recipient *</label>
+                <input id="bc-cfg-recipient" type="email" placeholder="Phimane.Tiaokhiao@amnhealthcare.com" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Second Recipient <span style="font-weight:400;color:#888">(optional)</span></label>
+                <input id="bc-cfg-recipient-2" type="email" placeholder="Leave blank to disable" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">From Address</label>
+                <input id="bc-cfg-from" type="email" placeholder="noreply@amnhealthcare.com" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Enabled</label>
+                <select id="bc-cfg-enabled" style="width:100%;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <option value="true">Yes - monthly cleanup active</option>
+                  <option value="false">No - paused</option>
+                </select>
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Run Day of Month <span style="font-weight:400;color:#888">(1-28)</span></label>
+                <input id="bc-cfg-day" type="number" min="1" max="28" placeholder="1" style="width:100px;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Run Time (PST/PDT)</label>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <input id="bc-cfg-hour" type="number" min="0" max="23" placeholder="6" style="width:70px;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <span style="color:#555">:</span>
+                  <input id="bc-cfg-minute" type="number" min="0" max="59" placeholder="0" style="width:70px;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <span style="font-size:12px;color:#888">24-hr PST/PDT</span>
+                </div>
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Delete If Older Than <span style="font-weight:400;color:#888">(years)</span></label>
+                <input id="bc-cfg-age" type="number" min="1" max="20" placeholder="2" style="width:100px;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">CUCM Host <span style="font-weight:400;color:#888">(shared with DN report)</span></label>
+                <input id="bc-cfg-cucm-host" type="text" readonly style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #dde;border-radius:4px;font-size:13px;background:#f4f6f9;color:#666">
+              </div>
+            </div>
+            <button type="button" id="bc-save-btn" style="background:#1565c0;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">Save Settings</button>
+            <span id="bc-save-status" style="margin-left:12px;font-size:13px;"></span>
+          </div>
+        </div>
+
+        <div style="margin-bottom:20px;">
+          <button type="button" id="bc-preview-btn" style="background:#e65100;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;">Preview (dry run)</button>
+          <button type="button" id="bc-run-btn" style="background:#b71c1c;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;margin-left:10px;">Run Cleanup Now</button>
+          <span style="font-size:12px;color:#888;margin-left:12px;">Preview lists what would be deleted without changing anything. Run Cleanup deletes and emails results.</span>
+        </div>
+        <div id="bc-run-status" style="min-height:18px;margin-bottom:16px;"></div>
+        <div id="bc-run-preview" style="overflow-x:auto;margin-bottom:16px;"></div>
+
+        <h4 style="color:#002f6c;margin-bottom:8px;">Recent Cleanup History</h4>
+        <button type="button" id="bc-history-btn" style="font-size:12px;padding:5px 14px;margin-bottom:10px;">Refresh History</button>
+        <div id="bc-history-loading" style="color:#888;font-size:13px;display:none;">Loading...</div>
+        <div id="bc-history-results" style="overflow-x:auto;"></div>
       </section>
 
       <script>
@@ -36270,6 +36689,213 @@ def menu_admin_page(request: Request):
                 });
               });
               obs.observe(dnPanelEl, { attributes: true });
+            }
+          })();
+
+          // ---- Blocked Number auto Cleanup panel -----------------------------
+          (function () {
+            const cfgLoading = document.getElementById("bc-config-loading");
+            const cfgWrap = document.getElementById("bc-config-form-wrap");
+            const saveBtn = document.getElementById("bc-save-btn");
+            const saveStatus = document.getElementById("bc-save-status");
+            const previewBtn = document.getElementById("bc-preview-btn");
+            const runBtn = document.getElementById("bc-run-btn");
+            const runStatus = document.getElementById("bc-run-status");
+            const runPreview = document.getElementById("bc-run-preview");
+            const histBtn = document.getElementById("bc-history-btn");
+            const histLoading = document.getElementById("bc-history-loading");
+            const histResults = document.getElementById("bc-history-results");
+
+            function esc(v) {
+              return String(v == null ? "" : v)
+                .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+            }
+
+            function loadConfig() {
+              if (!cfgLoading) return;
+              cfgLoading.style.display = "";
+              if (cfgWrap) cfgWrap.style.display = "none";
+              fetch("/admin/blocked-cleanup/config", { credentials: "same-origin" })
+                .then(r => r.json())
+                .then(data => {
+                  cfgLoading.style.display = "none";
+                  if (!cfgWrap) return;
+                  const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? ""; };
+                  set("bc-cfg-recipient", data.recipient || "");
+                  set("bc-cfg-recipient-2", data.recipient_2 || "");
+                  set("bc-cfg-from", data.from_address || "");
+                  set("bc-cfg-enabled", data.enabled ? "true" : "false");
+                  set("bc-cfg-day", data.day_of_month ?? 1);
+                  set("bc-cfg-hour", data.hour ?? 6);
+                  set("bc-cfg-minute", String(data.minute ?? 0).padStart(2, "0"));
+                  set("bc-cfg-age", data.max_age_years ?? 2);
+                  set("bc-cfg-cucm-host", data.cucm_host || "");
+                  cfgWrap.style.display = "";
+                })
+                .catch(() => { if (cfgLoading) cfgLoading.textContent = "Failed to load settings."; });
+            }
+
+            if (saveBtn) {
+              saveBtn.addEventListener("click", function () {
+                const recipient = (document.getElementById("bc-cfg-recipient")?.value || "").trim();
+                if (!recipient) {
+                  if (saveStatus) saveStatus.innerHTML = '<span style="color:#b71c1c">Primary recipient is required.</span>';
+                  return;
+                }
+                saveBtn.disabled = true;
+                if (saveStatus) saveStatus.textContent = "Saving...";
+                const payload = {
+                  recipient,
+                  recipient_2: (document.getElementById("bc-cfg-recipient-2")?.value || "").trim(),
+                  from_address: (document.getElementById("bc-cfg-from")?.value || "").trim(),
+                  enabled: document.getElementById("bc-cfg-enabled")?.value === "true",
+                  day_of_month: parseInt(document.getElementById("bc-cfg-day")?.value || "1", 10),
+                  hour: parseInt(document.getElementById("bc-cfg-hour")?.value || "6", 10),
+                  minute: parseInt(document.getElementById("bc-cfg-minute")?.value || "0", 10),
+                  max_age_years: parseInt(document.getElementById("bc-cfg-age")?.value || "2", 10),
+                };
+                fetch("/admin/blocked-cleanup/save-config", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  credentials: "same-origin",
+                  body: JSON.stringify(payload),
+                })
+                  .then(r => r.json())
+                  .then(data => {
+                    saveBtn.disabled = false;
+                    if (data.ok) {
+                      saveStatus.innerHTML = '<span style="color:#1b5e20;background:#e8f5e9;padding:4px 10px;border-radius:4px">Saved</span>';
+                    } else {
+                      saveStatus.innerHTML = `<span style="color:#b71c1c">${esc(data.error || "Save failed")}</span>`;
+                    }
+                  })
+                  .catch(err => {
+                    saveBtn.disabled = false;
+                    saveStatus.innerHTML = `<span style="color:#b71c1c">Network error: ${esc(err.message)}</span>`;
+                  });
+              });
+            }
+
+            function renderResult(data, dryRun) {
+              const deleted = data.deleted || [];
+              const skipped = data.skipped_no_date || [];
+              const errors = data.errors || [];
+              const actionWord = dryRun ? "Would delete" : "Deleted";
+              let html = '<div style="margin-top:6px;font-size:13px;">'
+                + `<strong>${actionWord}:</strong> ${deleted.length} &nbsp;|&nbsp; `
+                + `<strong>Skipped (no date):</strong> ${skipped.length} &nbsp;|&nbsp; `
+                + `<strong>Kept:</strong> ${data.kept_count ?? 0} &nbsp;|&nbsp; `
+                + `<strong>Cutoff:</strong> ${esc(data.cutoff || "")} (older than ${data.max_age_years} yrs)`
+                + '</div>';
+              if (errors.length) {
+                html += `<div style="margin-top:8px;color:#b71c1c;font-size:12px;">Errors: ${errors.map(esc).join("<br>")}</div>`;
+              }
+              if (deleted.length) {
+                html += '<table style="margin-top:12px;font-size:13px;border-collapse:collapse;width:100%">'
+                  + '<tr style="background:#f5f5f5">'
+                  + '<th style="padding:6px 12px;text-align:left;border-bottom:2px solid #ddd">Number</th>'
+                  + '<th style="padding:6px 12px;text-align:left;border-bottom:2px solid #ddd">Blocked Date</th>'
+                  + '<th style="padding:6px 12px;text-align:left;border-bottom:2px solid #ddd">Genesys</th>'
+                  + '<th style="padding:6px 12px;text-align:left;border-bottom:2px solid #ddd">Description</th></tr>';
+                deleted.forEach(it => {
+                  html += `<tr><td style="padding:6px 12px;border-bottom:1px solid #eee;font-family:monospace">${esc(it.normalized_number)}</td>`
+                    + `<td style="padding:6px 12px;border-bottom:1px solid #eee">${esc(it.date)}</td>`
+                    + `<td style="padding:6px 12px;border-bottom:1px solid #eee">${esc(it.genesys)}</td>`
+                    + `<td style="padding:6px 12px;border-bottom:1px solid #eee;font-size:12px">${esc(it.description)}</td></tr>`;
+                });
+                html += "</table>";
+              } else {
+                html += '<p style="margin-top:12px;color:#2e7d32;font-size:13px;">No aged blocks to remove.</p>';
+              }
+              if (runPreview) runPreview.innerHTML = html;
+            }
+
+            function runJob(dryRun) {
+              const btn = dryRun ? previewBtn : runBtn;
+              const origText = btn ? btn.textContent : "";
+              if (previewBtn) previewBtn.disabled = true;
+              if (runBtn) runBtn.disabled = true;
+              if (btn) btn.textContent = dryRun ? "Previewing..." : "Running...";
+              if (runStatus) runStatus.innerHTML = '<span style="color:#555;font-size:13px;">' + (dryRun ? "Scanning blocked numbers..." : "Deleting aged blocks and sending email...") + '</span>';
+              if (runPreview) runPreview.innerHTML = "";
+              const url = dryRun ? "/admin/blocked-cleanup/preview" : "/admin/blocked-cleanup/run";
+              fetch(url, { method: "POST", credentials: "same-origin" })
+                .then(r => r.json())
+                .then(data => {
+                  if (previewBtn) previewBtn.disabled = false;
+                  if (runBtn) runBtn.disabled = false;
+                  if (btn) btn.textContent = origText;
+                  if (data.ok) {
+                    const modeMsg = dryRun ? "Preview complete" : "Cleanup complete";
+                    if (runStatus) runStatus.innerHTML = `<span style="color:#1b5e20;background:#e8f5e9;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">${modeMsg} - emailed <strong>${esc((data.recipients || []).join(", "))}</strong></span>`;
+                    renderResult(data, dryRun);
+                    loadHistory();
+                  } else {
+                    if (runStatus) runStatus.innerHTML = `<span style="color:#b71c1c;background:#ffebee;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">${esc(data.error || "Unknown error")}</span>`;
+                  }
+                })
+                .catch(err => {
+                  if (previewBtn) previewBtn.disabled = false;
+                  if (runBtn) runBtn.disabled = false;
+                  if (btn) btn.textContent = origText;
+                  if (runStatus) runStatus.innerHTML = `<span style="color:#b71c1c;font-size:13px;">Network error: ${esc(err.message)}</span>`;
+                });
+            }
+
+            if (previewBtn) previewBtn.addEventListener("click", () => runJob(true));
+            if (runBtn) runBtn.addEventListener("click", function () {
+              if (!window.confirm("Run cleanup now? This will permanently delete blocked numbers older than the configured age from CUCM and Genesys.")) return;
+              runJob(false);
+            });
+
+            function loadHistory() {
+              if (!histLoading || !histResults) return;
+              histLoading.style.display = "";
+              histResults.innerHTML = "";
+              fetch("/admin/blocked-cleanup/history", { credentials: "same-origin" })
+                .then(r => r.json())
+                .then(data => {
+                  histLoading.style.display = "none";
+                  const rows = data.rows || [];
+                  if (!rows.length) { histResults.innerHTML = '<p style="color:#888;font-size:13px;">No cleanup runs logged yet.</p>'; return; }
+                  let html = '<table style="width:100%;font-size:13px;border-collapse:collapse">'
+                    + '<thead><tr style="background:#f5f5f5">'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Run At</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Summary</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Recipients</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Triggered By</th>'
+                    + '</tr></thead><tbody>';
+                  rows.forEach((r, i) => {
+                    const bg = i % 2 === 0 ? "#fff" : "#f9f9f9";
+                    html += `<tr style="background:${bg}">`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap">${esc(r.timestamp)}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;font-size:12px">${esc(r.summary)}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;font-size:12px">${esc(r.account).replace(/\|/g, "<br>")}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;color:#888;font-size:12px">${esc(r.operator)}</td>`
+                      + `</tr>`;
+                  });
+                  html += "</tbody></table>";
+                  histResults.innerHTML = html;
+                })
+                .catch(() => {
+                  if (histLoading) histLoading.style.display = "none";
+                  if (histResults) histResults.innerHTML = '<p style="color:#c00;font-size:13px;">Failed to load history.</p>';
+                });
+            }
+
+            if (histBtn) histBtn.addEventListener("click", loadHistory);
+
+            const bcPanelEl = document.querySelector('[data-panel="blocked-cleanup"]');
+            if (bcPanelEl) {
+              const obs = new MutationObserver(mutations => {
+                mutations.forEach(m => {
+                  if (m.attributeName === "class" && bcPanelEl.classList.contains("active")) {
+                    loadConfig();
+                    loadHistory();
+                  }
+                });
+              });
+              obs.observe(bcPanelEl, { attributes: true });
             }
           })();
 
@@ -43273,6 +43899,119 @@ def dn_avail_report_history_route(request: Request):
     history.append({
       "timestamp": row.get("timestamp", ""),
       "summary": summary,
+      "account": row.get("account", ""),
+      "operator": row.get("operator", ""),
+    })
+    if len(history) >= 20:
+      break
+  return JSONResponse({"ok": True, "rows": history})
+
+
+@app.get("/admin/blocked-cleanup/config")
+def blocked_cleanup_config_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  cfg = _get_blocked_cleanup_settings()
+  return JSONResponse({
+    "ok": True,
+    "enabled": cfg["enabled"],
+    "recipient": cfg["recipient"],
+    "recipient_2": cfg["recipient_2"],
+    "from_address": cfg["from_address"],
+    "day_of_month": cfg["day_of_month"],
+    "hour": cfg["hour"],
+    "minute": cfg["minute"],
+    "max_age_years": cfg["max_age_years"],
+    "cucm_host": cfg["cucm_host"],
+  })
+
+
+@app.post("/admin/blocked-cleanup/save-config")
+async def blocked_cleanup_save_config_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  try:
+    body = await request.json()
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Invalid JSON body"}, status_code=400)
+
+  recipient = (body.get("recipient") or "").strip()
+  if not recipient:
+    return JSONResponse({"ok": False, "error": "Primary recipient email is required"}, status_code=400)
+  try:
+    day_of_month = int(body.get("day_of_month", 1))
+    hour = int(body.get("hour", 6))
+    minute = int(body.get("minute", 0))
+    max_age_years = int(body.get("max_age_years", 2))
+  except (TypeError, ValueError):
+    return JSONResponse({"ok": False, "error": "Day, hour, minute, and age must be integers"}, status_code=400)
+  if not (1 <= day_of_month <= 28) or not (0 <= hour <= 23) or not (0 <= minute <= 59) or max_age_years < 1:
+    return JSONResponse({"ok": False, "error": "Invalid day (1-28), hour, minute, or age value"}, status_code=400)
+
+  enabled = str(body.get("enabled", "true")).strip().lower() in {"1", "true", "yes", "on"}
+
+  settings = _load_settings()
+  settings["blocked_cleanup_enabled"] = "true" if enabled else "false"
+  settings["blocked_cleanup_recipient"] = recipient
+  settings["blocked_cleanup_recipient_2"] = (body.get("recipient_2") or "").strip()
+  settings["blocked_cleanup_from"] = (body.get("from_address") or "").strip()
+  settings["blocked_cleanup_day"] = str(day_of_month)
+  settings["blocked_cleanup_hour"] = str(hour)
+  settings["blocked_cleanup_minute"] = str(minute)
+  settings["blocked_cleanup_max_age_years"] = str(max_age_years)
+
+  if not _save_settings(settings):
+    return JSONResponse({"ok": False, "error": "Failed to save settings file"}, status_code=500)
+  return JSONResponse({"ok": True, "message": "Settings saved successfully."})
+
+
+@app.post("/admin/blocked-cleanup/run")
+def blocked_cleanup_run_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  operator = str(session.get("username", "manual")).strip() or "manual"
+  result = _run_blocked_number_cleanup(triggered_by=f"manual:{operator}", dry_run=False)
+  if result.get("success"):
+    return JSONResponse({"ok": True, **result})
+  return JSONResponse({"ok": False, "error": result.get("error", "Unknown error")}, status_code=500)
+
+
+@app.post("/admin/blocked-cleanup/preview")
+def blocked_cleanup_preview_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  operator = str(session.get("username", "manual")).strip() or "manual"
+  result = _run_blocked_number_cleanup(triggered_by=f"preview:{operator}", dry_run=True)
+  if result.get("success"):
+    return JSONResponse({"ok": True, **result})
+  return JSONResponse({"ok": False, "error": result.get("error", "Unknown error")}, status_code=500)
+
+
+@app.get("/admin/blocked-cleanup/history")
+def blocked_cleanup_history_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  if not os.path.exists(AUDIT_LOG_PATH):
+    return JSONResponse({"ok": True, "rows": []})
+  try:
+    with AUDIT_LOG_LOCK:
+      with open(AUDIT_LOG_PATH, "r", newline="", encoding="utf-8") as fh:
+        all_rows = list(csv.DictReader(fh))
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+  history = []
+  for row in reversed(all_rows):
+    if (row.get("action") or "").strip() != "blocked_number_cleanup":
+      continue
+    history.append({
+      "timestamp": row.get("timestamp", ""),
+      "summary": row.get("target", ""),
       "account": row.get("account", ""),
       "operator": row.get("operator", ""),
     })
