@@ -13142,7 +13142,7 @@ def _greenlight_collect_people(
         people[uid_key] = person
 
   clean_emails = [str(e or "").strip().lower() for e in emails if str(e or "").strip()]
-  if len(clean_emails) > 5:
+  if len(clean_emails) > 1:
     completed = 0
     total = len(clean_emails)
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
@@ -42544,7 +42544,9 @@ def project_greenlight_person_lookup_route(
         status_code=400,
       )
 
-    if len(emails) > 5:
+    # Any email-based lookup runs as an async batch job (AD/LDAP + CUCM per
+    # email is too slow for the synchronous request/Nginx timeout window).
+    if emails:
       queue_job_id = str(uuid4())
       created_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
       queue_entry = {
