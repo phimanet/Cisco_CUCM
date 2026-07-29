@@ -17503,7 +17503,9 @@ def genesys_admin_placeholder(request: Request):
               <input id="genesys-blocked-filter" placeholder="Filter loaded numbers (optional)" style="width:280px;">
             </div>
             <div class="search-filter-row" style="align-items:flex-start;">
-              <input id="genesys-blocked-add-number" placeholder="Telephone number to block" style="width:280px;">
+              <input id="genesys-blocked-add-number" placeholder="Telephone number to block (required)" style="width:280px;">
+              <input id="genesys-blocked-add-date" type="date" title="Date Added (optional, defaults to today)" style="width:170px;">
+              <input id="genesys-blocked-add-notes" placeholder="Notes (optional)" style="width:320px;">
               <button type="button" id="genesys-blocked-add-btn" style="background:#2d7a43;">Add Number to Block List</button>
             </div>
             <p id="genesys-blocked-status" style="color:#2c5c8a; min-height:18px;">Ready.</p>
@@ -17521,6 +17523,8 @@ def genesys_admin_placeholder(request: Request):
               const loadBtn = document.getElementById("genesys-blocked-load-btn");
               const filterEl = document.getElementById("genesys-blocked-filter");
               const addNumberEl = document.getElementById("genesys-blocked-add-number");
+              const addDateEl = document.getElementById("genesys-blocked-add-date");
+              const addNotesEl = document.getElementById("genesys-blocked-add-notes");
               const addBtn = document.getElementById("genesys-blocked-add-btn");
               const statusEl = document.getElementById("genesys-blocked-status");
               const metaEl = document.getElementById("genesys-blocked-meta");
@@ -17529,6 +17533,17 @@ def genesys_admin_placeholder(request: Request):
               let currentColumns = [];
               let currentKeyColumn = "";
               let currentRows = [];
+
+              function todayIso() {
+                const d = new Date();
+                const mm = String(d.getMonth() + 1).padStart(2, "0");
+                const dd = String(d.getDate()).padStart(2, "0");
+                return d.getFullYear() + "-" + mm + "-" + dd;
+              }
+
+              if (addDateEl && !addDateEl.value) {
+                addDateEl.value = todayIso();
+              }
 
               function escapeHtml(value) {
                 return String(value == null ? "" : value)
@@ -17626,6 +17641,8 @@ def genesys_admin_placeholder(request: Request):
                 try {
                   const formData = new FormData();
                   formData.append("phone_number", value);
+                  formData.append("date_added", String((addDateEl && addDateEl.value) || todayIso()).trim());
+                  formData.append("notes", String((addNotesEl && addNotesEl.value) || "").trim());
                   const response = await fetch("/genesys/blocked-caller/add", { method: "POST", body: formData });
                   const payload = await response.json();
                   if (!response.ok || !payload.ok) {
@@ -17633,7 +17650,12 @@ def genesys_admin_placeholder(request: Request):
                   }
                   applyPayload(payload);
                   if (addNumberEl) { addNumberEl.value = ""; }
-                  statusEl.textContent = "Added " + String(payload.added || value) + " to the block list.";
+                  if (addNotesEl) { addNotesEl.value = ""; }
+                  if (addDateEl) { addDateEl.value = todayIso(); }
+                  const warnText = Array.isArray(payload.warnings) && payload.warnings.length
+                    ? " (" + payload.warnings.join(" ") + ")"
+                    : "";
+                  statusEl.textContent = "Added " + String(payload.added || value) + " to the block list." + warnText;
                 } catch (err) {
                   statusEl.textContent = "Add failed: " + ((err && err.message) || "Unknown error.");
                 } finally {
@@ -21130,7 +21152,12 @@ def genesys_blocked_caller_list_route():
 
 
 @app.post("/genesys/blocked-caller/add")
-def genesys_blocked_caller_add_route(request: Request, phone_number: str = Form("")):
+def genesys_blocked_caller_add_route(
+  request: Request,
+  phone_number: str = Form(""),
+  date_added: str = Form(""),
+  notes: str = Form(""),
+):
   clean_number = str(phone_number or "").strip()
   if not clean_number:
     return JSONResponse({"ok": False, "error": "A telephone number is required."}, status_code=400)
@@ -21143,6 +21170,21 @@ def genesys_blocked_caller_add_route(request: Request, phone_number: str = Form(
   access_token = resolved.get("access_token", "")
   datatable_id = resolved.get("datatable_id", "")
   key_column = resolved.get("key_column", "") or "key"
+  columns = resolved.get("columns", []) or []
+
+  def _match_column(*candidates: str) -> str:
+    wanted = {re.sub(r"[^a-z0-9]", "", str(c or "").lower()) for c in candidates}
+    for col in columns:
+      col_name = str(col.get("name", "") or "")
+      if re.sub(r"[^a-z0-9]", "", col_name.lower()) in wanted:
+        return col_name
+    return ""
+
+  date_column = _match_column("date added", "dateadded", "date")
+  notes_column = _match_column("notes", "note", "comment", "comments")
+
+  clean_date = str(date_added or "").strip() or datetime.datetime.now().strftime("%Y-%m-%d")
+  clean_notes = str(notes or "").strip()
 
   existing_rows, rows_err = _genesys_datatable_list_rows(api_base, access_token, datatable_id)
   if not rows_err:
@@ -21153,7 +21195,17 @@ def genesys_blocked_caller_add_route(request: Request, phone_number: str = Form(
           "error": f"{clean_number} is already in {resolved.get('datatable_name', 'the data table')}.",
         }, status_code=400)
 
+  warnings = []
   new_row = {key_column: clean_number}
+  if date_column:
+    new_row[date_column] = clean_date
+  else:
+    warnings.append("No 'Date Added' column found in the data table; date was not stored.")
+  if notes_column:
+    new_row[notes_column] = clean_notes
+  elif clean_notes:
+    warnings.append("No 'Notes' column found in the data table; notes were not stored.")
+
   ok_add, body, add_err, status = _genesys_datatable_add_row(api_base, access_token, datatable_id, new_row)
   if not ok_add:
     return JSONResponse({
@@ -21172,6 +21224,7 @@ def genesys_blocked_caller_add_route(request: Request, phone_number: str = Form(
     "row": body,
     "rows": rows,
     "count": len(rows),
+    "warnings": warnings,
   })
 
 
