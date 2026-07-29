@@ -26166,6 +26166,216 @@ __ADMIN_CARD__
         });
       })();
     </script>
+
+    <hr style="margin:22px 0; border:none; border-top:1px solid #c8dbee;">
+    <h3 style="margin-bottom:4px;">Genesys Block List (Blocked Caller Management Data Table)</h3>
+    <p style="color:#355978; margin-top:6px;">Manage the Genesys <strong>Blocked Caller Management</strong> data table used to block incoming calls by caller ID. Step 1: Load the list. Step 2: Add a number (ANI required; Date Added and Notes optional). Step 3: Delete a number.</p>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:8px;">
+      <button type="button" id="p1-genesys-blocked-load-btn" style="background:linear-gradient(180deg,#385977,#29425a);">Load / Refresh Blocked List</button>
+      <input id="p1-genesys-blocked-filter" placeholder="Filter loaded numbers (optional)" style="min-width:260px;">
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-start; margin-bottom:8px;">
+      <input id="p1-genesys-blocked-add-number" placeholder="Telephone number to block (required)" style="min-width:240px;">
+      <input id="p1-genesys-blocked-add-date" type="date" title="Date Added (optional, defaults to today)" style="min-width:150px;">
+      <input id="p1-genesys-blocked-add-notes" placeholder="Notes (optional)" style="min-width:280px;">
+      <button type="button" id="p1-genesys-blocked-add-btn" style="background:linear-gradient(180deg,#1d7a3a,#155f2c);">Add Number to Block List</button>
+    </div>
+    <p id="p1-genesys-blocked-status" style="color:#2c5c8a; min-height:18px;">Ready.</p>
+    <p id="p1-genesys-blocked-meta" style="color:#4e6a84; font-size:12px; min-height:16px; margin-top:0;"></p>
+    <div id="p1-genesys-blocked-results" style="overflow-x:auto;"></div>
+
+    <script>
+      (function () {
+        const scope = document.getElementById("p1-genesys-blocked-results");
+        if (!scope || String(scope.dataset.blockedBound || "") === "1") {
+          return;
+        }
+        scope.dataset.blockedBound = "1";
+
+        const loadBtn = document.getElementById("p1-genesys-blocked-load-btn");
+        const filterEl = document.getElementById("p1-genesys-blocked-filter");
+        const addNumberEl = document.getElementById("p1-genesys-blocked-add-number");
+        const addDateEl = document.getElementById("p1-genesys-blocked-add-date");
+        const addNotesEl = document.getElementById("p1-genesys-blocked-add-notes");
+        const addBtn = document.getElementById("p1-genesys-blocked-add-btn");
+        const statusEl = document.getElementById("p1-genesys-blocked-status");
+        const metaEl = document.getElementById("p1-genesys-blocked-meta");
+        const resultsEl = scope;
+
+        let currentColumns = [];
+        let currentKeyColumn = "";
+        let currentRows = [];
+
+        function todayIso() {
+          const d = new Date();
+          const mm = String(d.getMonth() + 1).padStart(2, "0");
+          const dd = String(d.getDate()).padStart(2, "0");
+          return d.getFullYear() + "-" + mm + "-" + dd;
+        }
+
+        if (addDateEl && !addDateEl.value) {
+          addDateEl.value = todayIso();
+        }
+
+        function escapeHtml(value) {
+          return String(value == null ? "" : value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        function renderRows() {
+          const filterText = String((filterEl && filterEl.value) || "").trim().toLowerCase();
+          const columns = Array.isArray(currentColumns) && currentColumns.length
+            ? currentColumns
+            : (currentKeyColumn ? [{ name: currentKeyColumn, title: currentKeyColumn }] : []);
+
+          let rows = Array.isArray(currentRows) ? currentRows.slice() : [];
+          if (filterText) {
+            rows = rows.filter(function (row) {
+              return columns.some(function (col) {
+                return String(row[col.name] == null ? "" : row[col.name]).toLowerCase().indexOf(filterText) >= 0;
+              });
+            });
+          }
+
+          if (!rows.length) {
+            resultsEl.innerHTML = "<p style='color:#4e6a84;'>No blocked numbers to display. Load the list, then add a number.</p>";
+            return;
+          }
+
+          let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+          html += '<thead><tr style="background:#005eb8; color:#fff;">';
+          columns.forEach(function (col) {
+            html += '<th style="padding:8px 10px; text-align:left;">' + escapeHtml(col.title || col.name) + '</th>';
+          });
+          html += '<th style="padding:8px 10px; text-align:left;">Action</th></tr></thead><tbody>';
+          rows.forEach(function (row, i) {
+            const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+            const keyValue = String(row[currentKeyColumn] == null ? "" : row[currentKeyColumn]);
+            html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+            columns.forEach(function (col) {
+              const cellVal = row[col.name] == null ? "" : row[col.name];
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + escapeHtml(cellVal) + '</td>';
+            });
+            html += '<td style="padding:7px 10px;"><button type="button" class="p1-genesys-blocked-remove-btn" data-row-key="' + escapeHtml(keyValue) + '" style="background:linear-gradient(180deg,#a63b00,#7d2b00);">Delete</button></td>';
+            html += '</tr>';
+          });
+          html += '</tbody></table>';
+          resultsEl.innerHTML = html;
+
+          Array.from(resultsEl.querySelectorAll(".p1-genesys-blocked-remove-btn")).forEach(function (btn) {
+            btn.addEventListener("click", function () {
+              removeNumber(String(btn.getAttribute("data-row-key") || ""));
+            });
+          });
+        }
+
+        function applyPayload(payload) {
+          currentColumns = Array.isArray(payload.columns) ? payload.columns : currentColumns;
+          currentKeyColumn = String(payload.key_column || currentKeyColumn || "").trim();
+          currentRows = Array.isArray(payload.rows) ? payload.rows : [];
+          const name = String(payload.datatable_name || "Blocked Caller Management");
+          metaEl.textContent = "Table: " + name + " | Region: " + String(payload.region || "") + " | Key column: " + currentKeyColumn + " | Total numbers: " + String(payload.count == null ? currentRows.length : payload.count);
+          renderRows();
+        }
+
+        async function loadList() {
+          const original = loadBtn ? loadBtn.textContent : "";
+          if (loadBtn) { loadBtn.disabled = true; loadBtn.textContent = "Loading..."; }
+          statusEl.textContent = "Loading blocked caller list...";
+          try {
+            const response = await fetch("/genesys/blocked-caller/list", { method: "POST", credentials: "same-origin" });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Load failed.");
+            }
+            applyPayload(payload);
+            statusEl.textContent = "Loaded " + String(payload.count == null ? (payload.rows || []).length : payload.count) + " blocked number(s).";
+          } catch (err) {
+            statusEl.textContent = "Load failed: " + ((err && err.message) || "Unknown error.");
+          } finally {
+            if (loadBtn) { loadBtn.disabled = false; loadBtn.textContent = original || "Load / Refresh Blocked List"; }
+          }
+          return false;
+        }
+
+        async function addNumber() {
+          const value = String((addNumberEl && addNumberEl.value) || "").trim();
+          if (!value) {
+            statusEl.textContent = "Enter a telephone number to block.";
+            return false;
+          }
+          const original = addBtn ? addBtn.textContent : "";
+          if (addBtn) { addBtn.disabled = true; addBtn.textContent = "Adding..."; }
+          statusEl.textContent = "Adding " + value + " to the block list...";
+          try {
+            const formData = new FormData();
+            formData.append("phone_number", value);
+            formData.append("date_added", String((addDateEl && addDateEl.value) || todayIso()).trim());
+            formData.append("notes", String((addNotesEl && addNotesEl.value) || "").trim());
+            const response = await fetch("/genesys/blocked-caller/add", { method: "POST", body: formData, credentials: "same-origin" });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Add failed.");
+            }
+            applyPayload(payload);
+            if (addNumberEl) { addNumberEl.value = ""; }
+            if (addNotesEl) { addNotesEl.value = ""; }
+            if (addDateEl) { addDateEl.value = todayIso(); }
+            const warnText = Array.isArray(payload.warnings) && payload.warnings.length
+              ? " (" + payload.warnings.join(" ") + ")"
+              : "";
+            statusEl.textContent = "Added " + String(payload.added || value) + " to the block list." + warnText;
+          } catch (err) {
+            statusEl.textContent = "Add failed: " + ((err && err.message) || "Unknown error.");
+          } finally {
+            if (addBtn) { addBtn.disabled = false; addBtn.textContent = original || "Add Number to Block List"; }
+          }
+          return false;
+        }
+
+        async function removeNumber(rowKey) {
+          const value = String(rowKey || "").trim();
+          if (!value) {
+            statusEl.textContent = "No number selected to delete.";
+            return false;
+          }
+          if (!window.confirm("Delete blocked number " + value + " from the Genesys block list?")) {
+            return false;
+          }
+          statusEl.textContent = "Deleting " + value + "...";
+          try {
+            const formData = new FormData();
+            formData.append("row_key", value);
+            const response = await fetch("/genesys/blocked-caller/remove", { method: "POST", body: formData, credentials: "same-origin" });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Delete failed.");
+            }
+            applyPayload(payload);
+            statusEl.textContent = "Deleted " + String(payload.removed || value) + " from the block list.";
+          } catch (err) {
+            statusEl.textContent = "Delete failed: " + ((err && err.message) || "Unknown error.");
+          }
+          return false;
+        }
+
+        if (loadBtn) { loadBtn.addEventListener("click", function () { loadList(); }); }
+        if (addBtn) { addBtn.addEventListener("click", function () { addNumber(); }); }
+        if (addNumberEl) {
+          addNumberEl.addEventListener("keydown", function (event) {
+            if (event && event.key === "Enter") {
+              event.preventDefault();
+              addNumber();
+            }
+          });
+        }
+        if (filterEl) { filterEl.addEventListener("input", function () { renderRows(); }); }
+      })();
+    </script>
     </section>
 
     <section class="tool-panel" data-panel="single-ldap-email-page1">
