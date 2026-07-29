@@ -29438,6 +29438,180 @@ __GREENLIGHT_ADMIN_CARD__
                 form.dataset.greenlightBound = "1";
                 log("fallback-bound", "Main binder was not detected; fallback is active.");
 
+                const historyRefreshBtn = document.getElementById("greenlight-history-refresh");
+                const historyResumeLastBtn = document.getElementById("greenlight-history-resume-last");
+                const historyStatusEl = document.getElementById("greenlight-history-status");
+                const historyResultsEl = document.getElementById("greenlight-history-results");
+                const storageKeyStatusUrl = "greenlight_person_lookup_last_status_url";
+                let pollToken = 0;
+                let pollTimerId = null;
+
+                function saveLastStatusUrl(statusUrl) {
+                  try {
+                    if (!statusUrl) {
+                      window.localStorage.removeItem(storageKeyStatusUrl);
+                    } else {
+                      window.localStorage.setItem(storageKeyStatusUrl, String(statusUrl));
+                    }
+                  } catch (_e) {}
+                }
+
+                function getLastStatusUrl() {
+                  try {
+                    return String(window.localStorage.getItem(storageKeyStatusUrl) || "").trim();
+                  } catch (_e) {
+                    return "";
+                  }
+                }
+
+                function formatState(state) {
+                  const clean = String(state || "").toLowerCase();
+                  if (!clean) { return "Unknown"; }
+                  return clean.charAt(0).toUpperCase() + clean.slice(1);
+                }
+
+                function renderHistory(runs) {
+                  if (!historyResultsEl) { return; }
+                  const rows = Array.isArray(runs) ? runs : [];
+                  if (!rows.length) {
+                    historyResultsEl.innerHTML = "<p style='margin:0;color:#355978;'>No queued jobs yet.</p>";
+                    return;
+                  }
+                  let html = '<table style="width:100%; border-collapse:collapse; font-size:12px;">';
+                  html += '<thead><tr style="background:#005eb8;color:#fff;">';
+                  html += '<th style="padding:6px 8px; text-align:left;">Status</th>';
+                  html += '<th style="padding:6px 8px; text-align:left;">Emails</th>';
+                  html += '<th style="padding:6px 8px; text-align:left;">Rows</th>';
+                  html += '<th style="padding:6px 8px; text-align:left;">Updated</th>';
+                  html += '<th style="padding:6px 8px; text-align:left;">Action</th>';
+                  html += '</tr></thead><tbody>';
+                  rows.forEach(function (run, idx) {
+                    const bg = idx % 2 === 0 ? "#f7fbff" : "#ffffff";
+                    const emailTotal = Number((run && run.email_count) || 0);
+                    const emailDone = Number((run && run.emails_completed) || 0);
+                    const rowCount = Number((run && run.count) || 0);
+                    const updated = String((run && (run.updated_at || run.completed_at || run.started_at || run.created_at)) || "");
+                    const jobId = String((run && run.job_id) || "").trim();
+                    const statusUrl = jobId ? ("/project-greenlight/person-lookup/status/" + encodeURIComponent(jobId)) : "";
+                    const downloadUrl = String((run && run.download_url) || "").trim();
+                    const progressText = emailTotal > 0 ? (emailDone + "/" + emailTotal) : "0";
+                    html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+                    html += '<td style="padding:6px 8px;">' + esc(formatState(run && run.status)) + '</td>';
+                    html += '<td style="padding:6px 8px; font-family:Consolas,monospace;">' + esc(progressText) + '</td>';
+                    html += '<td style="padding:6px 8px; font-family:Consolas,monospace;">' + esc(String(rowCount)) + '</td>';
+                    html += '<td style="padding:6px 8px;">' + esc(updated) + '</td>';
+                    if (statusUrl || downloadUrl) {
+                      html += '<td style="padding:6px 8px; white-space:nowrap;">';
+                      if (statusUrl) {
+                        html += '<button type="button" class="greenlight-history-resume" data-status-url="' + esc(statusUrl) + '" style="font-size:11px; padding:3px 7px; margin-right:6px;">Track</button>';
+                      }
+                      if (downloadUrl) {
+                        html += '<a href="' + esc(downloadUrl) + '" style="font-size:11px; font-weight:700;">Download CSV</a>';
+                      }
+                      html += '</td>';
+                    } else {
+                      html += '<td style="padding:6px 8px; color:#6b7785;">N/A</td>';
+                    }
+                    html += '</tr>';
+                  });
+                  html += '</tbody></table>';
+                  historyResultsEl.innerHTML = html;
+                  Array.prototype.forEach.call(historyResultsEl.querySelectorAll(".greenlight-history-resume"), function (btn) {
+                    btn.addEventListener("click", function () {
+                      const statusUrl = String(btn.getAttribute("data-status-url") || "").trim();
+                      if (!statusUrl) { return; }
+                      saveLastStatusUrl(statusUrl);
+                      startPolling(statusUrl);
+                    });
+                  });
+                }
+
+                async function refreshHistory() {
+                  if (historyStatusEl) { historyStatusEl.textContent = "Refreshing history..."; }
+                  try {
+                    const response = await fetch("/project-greenlight/person-lookup/history?limit=20", {
+                      method: "GET",
+                      credentials: "same-origin",
+                      headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                    });
+                    const rawText = await response.text();
+                    let payload = {};
+                    try { payload = rawText ? JSON.parse(rawText) : {}; }
+                    catch (_e) { payload = { ok: false, error: { message: rawText || "Unexpected history response." } }; }
+                    if (!response.ok || payload.ok === false) {
+                      const detail = (payload.error && payload.error.message) || payload.detail || payload.message || ("History failed (HTTP " + response.status + ")");
+                      throw new Error(String(detail));
+                    }
+                    const runs = Array.isArray(payload.runs) ? payload.runs : [];
+                    renderHistory(runs);
+                    if (historyStatusEl) { historyStatusEl.textContent = "History loaded: " + runs.length + " job(s)."; }
+                  } catch (err) {
+                    if (historyStatusEl) { historyStatusEl.textContent = "History refresh failed."; }
+                    if (historyResultsEl) {
+                      historyResultsEl.innerHTML = "<p style='margin:0;color:#a42323; font-weight:700;'>" + esc(String(err && err.message ? err.message : err)) + "</p>";
+                    }
+                  }
+                }
+
+                function startPolling(statusUrl) {
+                  if (!statusUrl) { return; }
+                  pollToken += 1;
+                  const myToken = pollToken;
+                  if (pollTimerId) { window.clearTimeout(pollTimerId); pollTimerId = null; }
+                  statusEl.textContent = "Tracking queued job...";
+                  (function tick() {
+                    if (myToken !== pollToken) { return; }
+                    fetch(statusUrl, {
+                      method: "GET",
+                      credentials: "same-origin",
+                      headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                    }).then(function (resp) {
+                      return resp.text();
+                    }).then(function (rawText) {
+                      let payload = {};
+                      try { payload = rawText ? JSON.parse(rawText) : {}; } catch (_e) { payload = {}; }
+                      const run = (payload && payload.run) || {};
+                      const state = String(run.status || "").toLowerCase();
+                      const emailTotal = Number(run.email_count || 0);
+                      const emailDone = Number(run.emails_completed || 0);
+                      const progress = emailTotal > 0 ? (" (" + emailDone + "/" + emailTotal + " emails)") : "";
+                      refreshHistory();
+                      if (state === "complete" || state === "completed" || state === "done") {
+                        statusEl.textContent = "Job complete: " + Number(run.count || 0) + " row(s).";
+                        const downloadUrl = String(run.download_url || "").trim();
+                        if (downloadUrl) {
+                          downloadEl.href = downloadUrl;
+                          downloadEl.style.display = "inline";
+                        }
+                        return;
+                      }
+                      if (state === "error" || state === "failed") {
+                        statusEl.textContent = "Job failed: " + String(run.error || "Unknown error.");
+                        return;
+                      }
+                      statusEl.textContent = "Job " + (state || "running") + progress + "...";
+                      pollTimerId = window.setTimeout(tick, 4000);
+                    }).catch(function () {
+                      if (myToken !== pollToken) { return; }
+                      pollTimerId = window.setTimeout(tick, 5000);
+                    });
+                  })();
+                }
+
+                if (historyRefreshBtn) {
+                  historyRefreshBtn.addEventListener("click", function () { refreshHistory(); });
+                }
+                if (historyResumeLastBtn) {
+                  historyResumeLastBtn.addEventListener("click", function () {
+                    const statusUrl = getLastStatusUrl();
+                    if (!statusUrl) {
+                      if (historyStatusEl) { historyStatusEl.textContent = "No previously tracked queued job found in this browser."; }
+                      return;
+                    }
+                    startPolling(statusUrl);
+                  });
+                }
+
                 form.addEventListener("submit", async function (event) {
                   event.preventDefault();
                   statusEl.textContent = "Searching...";
@@ -29468,6 +29642,12 @@ __GREENLIGHT_ADMIN_CARD__
                     if (payload.queued === true) {
                       statusEl.textContent = "Queued lookup started. Use history refresh to track and download CSV when complete.";
                       log("fallback-queued", { status_url: payload.status_url || "", email_count: payload.email_count || 0 });
+                      const statusUrl = String(payload.status_url || "").trim();
+                      if (statusUrl) {
+                        saveLastStatusUrl(statusUrl);
+                        startPolling(statusUrl);
+                      }
+                      refreshHistory();
                       return;
                     }
 
