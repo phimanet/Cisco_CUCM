@@ -15379,6 +15379,7 @@ def _send_csf_jabber_ready_email_if_created(
     body = (
       "Welcome to AMN Healthcare\n\n"
       f"Cisco Jabber has been created, and ready for your use. The Telephone number assigned to you is {phone_text}.\n\n"
+      "Your initial voicemail PIN is 56219#.\n\n"
       "What is Cisco Jabber?  Jabber is what you will be using to make voice calls, providing secure and reliable communication.\n\n"
       "Please click on the link below for video training on how to use of Cisco Jabber.\n"
       f"Watch and Learn Cisco Jabber Softphone \n{CSF_JABBER_TRAINING_URL}"
@@ -15386,6 +15387,7 @@ def _send_csf_jabber_ready_email_if_created(
     html_body = (
       "<p>Welcome to AMN Healthcare</p>"
       f"<p>Cisco Jabber has been created, and ready for your use. The Telephone number assigned to you is {escape(phone_text)}.</p>"
+      "<p>Your initial voicemail PIN is 56219#.</p>"
       "<p>What is Cisco Jabber? Jabber is what you will be using to make voice calls, providing secure and reliable communication.</p>"
       "<p>Please click on the link below for video training on how to use of Cisco Jabber.<br>"
       f"<a href=\"{escape(CSF_JABBER_TRAINING_URL)}\">Watch and Learn Cisco Jabber Softphone 12.9.mp4</a></p>"
