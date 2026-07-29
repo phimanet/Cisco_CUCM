@@ -13279,7 +13279,7 @@ def _greenlight_build_person_lookup_rows(
             "extension": ext,
             "line_mask": "",
             "translated_number": str(person.get("translated_number") or "").strip(),
-            "associated_translation_patterns": "; ".join([f"{r.get('pattern', '')}/{r.get('route_partition', '')}" for r in tps]),
+            "associated_translation_patterns": "; ".join([str(r.get('pattern', '')).strip() for r in tps if str(r.get('pattern', '')).strip()]),
             "translation_details": "; ".join([
               f"{r.get('pattern', '')}/{r.get('route_partition', '')}: mask={r.get('called_party_transform_mask', '')} desc={r.get('description', '')}"
               for r in tps
@@ -13313,7 +13313,7 @@ def _greenlight_build_person_lookup_rows(
             "extension": ext,
             "line_mask": str(line.get("line_mask") or "").strip(),
             "translated_number": str(person.get("translated_number") or "").strip(),
-            "associated_translation_patterns": "; ".join([f"{r.get('pattern', '')}/{r.get('route_partition', '')}" for r in tps]),
+            "associated_translation_patterns": "; ".join([str(r.get('pattern', '')).strip() for r in tps if str(r.get('pattern', '')).strip()]),
             "translation_details": "; ".join([
               f"{r.get('pattern', '')}/{r.get('route_partition', '')}: mask={r.get('called_party_transform_mask', '')} desc={r.get('description', '')}"
               for r in tps
