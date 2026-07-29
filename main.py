@@ -26094,7 +26094,7 @@ __ADMIN_CARD__
     </section>
 
     <section class="tool-panel" data-panel="block-inbound-callerid">
-    <h3>Block Inbound Calls by Caller ID Number</h3>
+    <h3>Block Inbound Calls By Caller ID Number - Cisco and Genesys</h3>
     <p>Creates/removes inbound call-block translation patterns using the local template (not a live copy pattern).</p>
     <p style="color:#355978; margin-top:6px;">For new blocks: enter 10-digit caller ID and TASK/INC number. The date is auto-set to today when the block is created. Pattern is auto-built as <strong>71 + caller ID</strong>.</p>
     <form id="admin-block-inbound-callerid-form" class="jabber-check-form" style="max-width:720px;" action="javascript:void(0)" method="post" onsubmit="if (window.runMenuBlockedCallerAction) { return window.runMenuBlockedCallerAction('block'); } var s=document.getElementById('admin-block-inbound-callerid-status'); if (s) { s.textContent='Block handler missing (JS did not load).'; } return false;">
@@ -33263,7 +33263,7 @@ def menu_admin_page(request: Request):
       </section>
 
       <section class="panel tool-panel" data-panel="block-inbound-callerid">
-        <h3>Block Inbound Calls by Caller ID Number</h3>
+        <h3>Block Inbound Calls By Caller ID Number - Cisco and Genesys</h3>
         <p>Creates/removes inbound call-block translation patterns using the local template (not a live copy pattern) in route partition <strong>__BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION__</strong>.</p>
         <p style="color:#355978; margin-top:6px;">For new blocks: enter 10-digit caller ID and TASK/INC number. The date is auto-set to today when the block is created. Pattern is auto-built as <strong>71 + caller ID</strong>.</p>
         <form id="admin-block-inbound-callerid-form">
