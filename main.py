@@ -26156,7 +26156,6 @@ __ADMIN_CARD__
           html += '<th style="padding:8px 10px; text-align:left;">Pattern (71)</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Normalized (10)</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Description</th>';
-          html += '<th style="padding:8px 10px; text-align:left;">Partition</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Genesys</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Action</th>';
           html += '</tr></thead><tbody>';
@@ -26166,7 +26165,6 @@ __ADMIN_CARD__
             const pattern = row.pattern || "";
             const normalized = row.normalized_number || "";
             const description = row.description || "";
-            const partition = row.route_partition || "";
             let genesysCell = '<span style="color:#7a7a7a;">-</span>';
             if (row.genesys_found === true) {
               genesysCell = '<span style="color:#1d7a3a; font-weight:600;">Found</span>';
@@ -26177,7 +26175,6 @@ __ADMIN_CARD__
             html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + pattern + '</td>';
             html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + normalized + '</td>';
             html += '<td style="padding:7px 10px;">' + description + '</td>';
-            html += '<td style="padding:7px 10px;">' + partition + '</td>';
             html += '<td style="padding:7px 10px;">' + genesysCell + '</td>';
             html += '<td style="padding:7px 10px;"><button type="button" data-delete-pattern="' + pattern + '" style="background:linear-gradient(180deg,#a63b00,#7d2b00);">Delete</button></td>';
             html += '</tr>';
@@ -26258,7 +26255,7 @@ __ADMIN_CARD__
                 statusEl.textContent = `${stateLabel}: ${payload.pattern || ""}`;
               }
 
-              summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Partition: ${payload.route_partition || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}` + (payload.genesys && payload.genesys.enabled ? ` | Genesys: ${payload.genesys.message || (payload.genesys_found ? "Found" : "Not Found")}` : "");
+              summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}` + (payload.genesys && payload.genesys.enabled ? ` | Genesys: ${payload.genesys.message || (payload.genesys_found ? "Found" : "Not Found")}` : "");
 
               const showDeleteResult = (
                 (payload.action === "status" && payload.blocked)
@@ -27639,7 +27636,6 @@ __ADMIN_CARD__
           html += '<th style="padding:8px 10px; text-align:left;">Pattern (71)</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Normalized (10)</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Description</th>';
-          html += '<th style="padding:8px 10px; text-align:left;">Partition</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Genesys</th>';
           html += '<th style="padding:8px 10px; text-align:left;">Action</th>';
           html += '</tr></thead><tbody>';
@@ -27649,7 +27645,6 @@ __ADMIN_CARD__
             const pattern = row.pattern || "";
             const normalized = row.normalized_number || "";
             const description = row.description || "";
-            const partition = row.route_partition || "";
             let genesysCell = '<span style="color:#7a7a7a;">-</span>';
             if (row.genesys_found === true) {
               genesysCell = '<span style="color:#1d7a3a; font-weight:600;">Found</span>';
@@ -27660,7 +27655,6 @@ __ADMIN_CARD__
             html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + pattern + '</td>';
             html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + normalized + '</td>';
             html += '<td style="padding:7px 10px;">' + description + '</td>';
-            html += '<td style="padding:7px 10px;">' + partition + '</td>';
             html += '<td style="padding:7px 10px;">' + genesysCell + '</td>';
             html += '<td style="padding:7px 10px;"><button type="button" data-delete-pattern="' + pattern + '" style="background:linear-gradient(180deg,#a63b00,#7d2b00);">Delete</button></td>';
             html += '</tr>';
@@ -27739,7 +27733,7 @@ __ADMIN_CARD__
               const stateLabel = payload.blocked ? "Blocked" : "Not Blocked";
               statusEl.textContent = `${stateLabel}: ${payload.pattern || ""}`;
             }
-            summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Partition: ${payload.route_partition || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}` + (payload.genesys && payload.genesys.enabled ? ` | Genesys: ${payload.genesys.message || (payload.genesys_found ? "Found" : "Not Found")}` : "");
+            summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}` + (payload.genesys && payload.genesys.enabled ? ` | Genesys: ${payload.genesys.message || (payload.genesys_found ? "Found" : "Not Found")}` : "");
 
             const showDeleteResult = (
               (payload.action === "status" && payload.blocked)
@@ -35088,7 +35082,6 @@ def menu_admin_page(request: Request):
             html += '<th style="padding:8px 10px; text-align:left;">Pattern (71)</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Normalized (10)</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Description</th>';
-            html += '<th style="padding:8px 10px; text-align:left;">Partition</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Genesys</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Action</th>';
             html += '</tr></thead><tbody>';
@@ -35098,7 +35091,6 @@ def menu_admin_page(request: Request):
               const pattern = row.pattern || "";
               const normalized = row.normalized_number || "";
               const description = row.description || "";
-              const partition = row.route_partition || "";
               let genesysCell = '<span style="color:#7a7a7a;">-</span>';
               if (row.genesys_found === true) {
                 genesysCell = '<span style="color:#1d7a3a; font-weight:600;">Found</span>';
@@ -35109,7 +35101,6 @@ def menu_admin_page(request: Request):
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + pattern + '</td>';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + normalized + '</td>';
               html += '<td style="padding:7px 10px;">' + description + '</td>';
-              html += '<td style="padding:7px 10px;">' + partition + '</td>';
               html += '<td style="padding:7px 10px;">' + genesysCell + '</td>';
               html += '<td style="padding:7px 10px;"><button type="button" data-delete-pattern="' + pattern + '" style="background:linear-gradient(180deg,#a63b00,#7d2b00);">Delete</button></td>';
               html += '</tr>';
@@ -35188,7 +35179,7 @@ def menu_admin_page(request: Request):
                 const stateLabel = payload.blocked ? "Blocked" : "Not Blocked";
                 statusEl.textContent = `${stateLabel}: ${payload.pattern || ""}`;
               }
-              summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Partition: ${payload.route_partition || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}` + (payload.genesys && payload.genesys.enabled ? ` | Genesys: ${payload.genesys.message || (payload.genesys_found ? "Found" : "Not Found")}` : "");
+              summaryEl.textContent = `Normalized: ${payload.normalized_number || ""} | Description: ${payload.description || "(none)"} | Action: ${payload.action || ""} | Changed: ${payload.changed ? "Yes" : "No"}` + (payload.genesys && payload.genesys.enabled ? ` | Genesys: ${payload.genesys.message || (payload.genesys_found ? "Found" : "Not Found")}` : "");
 
               const showDeleteResult = (
                 (payload.action === "status" && payload.blocked)
