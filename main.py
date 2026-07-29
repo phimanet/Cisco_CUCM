@@ -23422,9 +23422,17 @@ def menu_page(request: Request):
   session = _get_auth_session(request) or {}
   now_epoch = time.time()
   session_id = request.cookies.get(SESSION_COOKIE_NAME, "")
-  session_username = str(session.get("username", ""))
+  # Strip line-break/JS line-terminator chars so these values are safe to inject
+  # into JS string literals below (e.g. const cucmHost/cucmUser). A stray newline
+  # in the cached username/cucm_host would otherwise break the entire main <script>
+  # block (unescaped line break in string literal), disabling the session timer
+  # and all page JS. HTML-only pages (Page 2) are unaffected, which is why the
+  # timer still shows there.
+  def _js_str_safe(_v):
+    return str(_v).replace("\r", "").replace("\n", "").replace("\u2028", "").replace("\u2029", "")
+  session_username = _js_str_safe(session.get("username", ""))
   auth_user = escape(session_username)
-  auth_cucm_host = str(session.get("cucm_host", ""))
+  auth_cucm_host = _js_str_safe(session.get("cucm_host", ""))
   has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
   if not has_cached_cucm_pass and session_id:
     has_cached_cucm_pass = bool((AUTH_SESSION_SECRETS.get(session_id, {}).get("cucm_pass", "") or "").strip())
