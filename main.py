@@ -32667,6 +32667,13 @@ def menu_admin_page(request: Request):
   credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
   env_text, env_css_class = _get_environment_label(auth_cucm_host)
 
+  # Blocked Number auto Cleanup is a PROD-web-server-only feature; hide its nav on LAB.
+  blocked_cleanup_is_prod = _is_prod_runtime_host_strict()
+  blocked_cleanup_nav_html = (
+    '<button type="button" class="portal-nav-btn" data-panel="blocked-cleanup">Blocked Number auto Cleanup</button>'
+    if blocked_cleanup_is_prod else ""
+  )
+
   html = """
 <html>
   <head>
@@ -33323,7 +33330,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="ad-group-identifiers">Security Group Identifier (Read-Only)</button>
             <button type="button" class="portal-nav-btn" data-panel="sep-sms-report">SMS Separation Email Process</button>
             <button type="button" class="portal-nav-btn" data-panel="dn-avail-report">DN Number Pool Availability Report</button>
-            <button type="button" class="portal-nav-btn" data-panel="blocked-cleanup">Blocked Number auto Cleanup</button>
+            __BLOCKED_CLEANUP_NAV__
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page4'">Server Certificate Manager (Page 4)</button>
           </div>
         </aside>
@@ -34429,9 +34436,9 @@ def menu_admin_page(request: Request):
         </div>
 
         <div style="margin-bottom:20px;">
-          <button type="button" id="bc-preview-btn" style="background:#e65100;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;">Preview (dry run)</button>
+          <button type="button" id="bc-preview-btn" style="background:#e65100;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;">Run/Check Now</button>
           <button type="button" id="bc-run-btn" style="background:#b71c1c;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;margin-left:10px;">Run Cleanup Now</button>
-          <span style="font-size:12px;color:#888;margin-left:12px;">Preview lists what would be deleted without changing anything. Run Cleanup deletes and emails results.</span>
+          <span style="font-size:12px;color:#888;margin-left:12px;">Run/Check Now lists what would be deleted (no changes made). Run Cleanup Now deletes aged blocks and emails results.</span>
         </div>
         <div id="bc-run-status" style="min-height:18px;margin-bottom:16px;"></div>
         <div id="bc-run-preview" style="overflow-x:auto;margin-bottom:16px;"></div>
@@ -36815,7 +36822,7 @@ def menu_admin_page(request: Request):
               const origText = btn ? btn.textContent : "";
               if (previewBtn) previewBtn.disabled = true;
               if (runBtn) runBtn.disabled = true;
-              if (btn) btn.textContent = dryRun ? "Previewing..." : "Running...";
+              if (btn) btn.textContent = dryRun ? "Checking..." : "Running...";
               if (runStatus) runStatus.innerHTML = '<span style="color:#555;font-size:13px;">' + (dryRun ? "Scanning blocked numbers..." : "Deleting aged blocks and sending email...") + '</span>';
               if (runPreview) runPreview.innerHTML = "";
               const url = dryRun ? "/admin/blocked-cleanup/preview" : "/admin/blocked-cleanup/run";
@@ -36826,7 +36833,7 @@ def menu_admin_page(request: Request):
                   if (runBtn) runBtn.disabled = false;
                   if (btn) btn.textContent = origText;
                   if (data.ok) {
-                    const modeMsg = dryRun ? "Preview complete" : "Cleanup complete";
+                    const modeMsg = dryRun ? "Check complete" : "Cleanup complete";
                     if (runStatus) runStatus.innerHTML = `<span style="color:#1b5e20;background:#e8f5e9;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">${modeMsg} - emailed <strong>${esc((data.recipients || []).join(", "))}</strong></span>`;
                     renderResult(data, dryRun);
                     loadHistory();
@@ -36906,7 +36913,7 @@ def menu_admin_page(request: Request):
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION__", escape(BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION_DEFAULT))
+""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION__", escape(BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION_DEFAULT)).replace("__BLOCKED_CLEANUP_NAV__", blocked_cleanup_nav_html)
 
   return HTMLResponse(
     content=html,
@@ -43932,6 +43939,8 @@ async def blocked_cleanup_save_config_route(request: Request):
   session = _get_auth_session(request)
   if not session or not _is_admin_user(str(session.get("username", ""))):
     return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  if not _is_prod_runtime_host_strict():
+    return JSONResponse({"ok": False, "error": "Blocked Number auto Cleanup runs on the PROD web server only."}, status_code=403)
   try:
     body = await request.json()
   except Exception:
@@ -43972,6 +43981,8 @@ def blocked_cleanup_run_route(request: Request):
   session = _get_auth_session(request)
   if not session or not _is_admin_user(str(session.get("username", ""))):
     return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  if not _is_prod_runtime_host_strict():
+    return JSONResponse({"ok": False, "error": "Blocked Number auto Cleanup runs on the PROD web server only."}, status_code=403)
   operator = str(session.get("username", "manual")).strip() or "manual"
   result = _run_blocked_number_cleanup(triggered_by=f"manual:{operator}", dry_run=False)
   if result.get("success"):
@@ -43984,6 +43995,8 @@ def blocked_cleanup_preview_route(request: Request):
   session = _get_auth_session(request)
   if not session or not _is_admin_user(str(session.get("username", ""))):
     return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  if not _is_prod_runtime_host_strict():
+    return JSONResponse({"ok": False, "error": "Blocked Number auto Cleanup runs on the PROD web server only."}, status_code=403)
   operator = str(session.get("username", "manual")).strip() or "manual"
   result = _run_blocked_number_cleanup(triggered_by=f"preview:{operator}", dry_run=True)
   if result.get("success"):
