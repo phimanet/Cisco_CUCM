@@ -94,6 +94,10 @@ GREENLIGHT_LOOKUP_RUNS = {}
 GREENLIGHT_LOOKUP_RUNS_LOCK = threading.Lock()
 GREENLIGHT_LOOKUP_MAX_RUNS = 20
 GREENLIGHT_LOOKUP_MAX_EMAILS = int((os.getenv("GREENLIGHT_LOOKUP_MAX_EMAILS", "2000") or "2000").strip())
+GREENLIGHT_LOOKUP_STORE_DIR = (os.getenv("GREENLIGHT_LOOKUP_STORE_DIR", "") or "").strip() or os.path.join(
+  os.path.dirname(os.path.abspath(__file__)), "data", "greenlight_jobs"
+)
+GREENLIGHT_LOOKUP_HISTORY_FILE = os.path.join(GREENLIGHT_LOOKUP_STORE_DIR, "history.json")
 STRIKE_MASK_OPERATIONS = {}
 STRIKE_MASK_LOCK = threading.Lock()
 STRIKE_MASK_MAX_OPERATIONS = 200
@@ -137,6 +141,7 @@ def _app_startup_tasks():
   _startup_background_services()
 
 def _startup_background_services():
+  _greenlight_load_state()
   if _is_lab_runtime_host() and SIP_CALL_SEARCH_ENABLED and SIP_CALL_SEARCH_LAB_ONLY:
     _start_sip_call_search_listener()
 PROD_CUCM_HOST = "lascucmpp01.ahs.int"
@@ -13406,6 +13411,128 @@ def _greenlight_queue_list(limit: int = 20) -> list[dict]:
   return runs[:safe_limit]
 
 
+def _greenlight_ensure_store_dir() -> None:
+  try:
+    os.makedirs(GREENLIGHT_LOOKUP_STORE_DIR, exist_ok=True)
+  except Exception:
+    pass
+
+
+def _greenlight_csv_path(output_job_id: str) -> str:
+  safe = "".join(ch for ch in str(output_job_id or "") if ch.isalnum() or ch in "-_")
+  return os.path.join(GREENLIGHT_LOOKUP_STORE_DIR, f"{safe}.csv")
+
+
+def _greenlight_store_csv_to_disk(output_job_id: str, csv_bytes: bytes) -> str:
+  clean_id = str(output_job_id or "").strip()
+  if not clean_id:
+    return ""
+  _greenlight_ensure_store_dir()
+  path = _greenlight_csv_path(clean_id)
+  try:
+    with open(path, "wb") as handle:
+      handle.write(csv_bytes)
+    return path
+  except Exception as exc:
+    logger.warning("Greenlight CSV persist failed: %s", exc)
+    return ""
+
+
+def _greenlight_save_state() -> None:
+  """Persist job history to disk and prune CSV files no longer referenced."""
+  with GREENLIGHT_LOOKUP_RUNS_LOCK:
+    entries = [dict(item or {}) for item in GREENLIGHT_LOOKUP_RUNS.values()]
+
+  _greenlight_ensure_store_dir()
+  try:
+    tmp_path = GREENLIGHT_LOOKUP_HISTORY_FILE + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as handle:
+      json.dump(entries, handle)
+    os.replace(tmp_path, GREENLIGHT_LOOKUP_HISTORY_FILE)
+  except Exception as exc:
+    logger.warning("Greenlight history persist failed: %s", exc)
+
+  try:
+    referenced = {
+      str(entry.get("output_job_id") or "").strip()
+      for entry in entries
+      if str(entry.get("output_job_id") or "").strip()
+    }
+    for name in os.listdir(GREENLIGHT_LOOKUP_STORE_DIR):
+      if not name.endswith(".csv"):
+        continue
+      if name[:-4] not in referenced:
+        try:
+          os.remove(os.path.join(GREENLIGHT_LOOKUP_STORE_DIR, name))
+        except Exception:
+          pass
+  except Exception:
+    pass
+
+
+def _greenlight_load_state() -> None:
+  """Reload persisted job history and CSV outputs on startup."""
+  try:
+    if not os.path.exists(GREENLIGHT_LOOKUP_HISTORY_FILE):
+      return
+    with open(GREENLIGHT_LOOKUP_HISTORY_FILE, "r", encoding="utf-8") as handle:
+      entries = json.load(handle) or []
+  except Exception as exc:
+    logger.warning("Greenlight history load failed: %s", exc)
+    return
+
+  if not isinstance(entries, list):
+    return
+
+  entries.sort(
+    key=lambda row: str(
+      (row or {}).get("updated_at")
+      or (row or {}).get("completed_at")
+      or (row or {}).get("started_at")
+      or (row or {}).get("created_at")
+      or ""
+    ),
+    reverse=True,
+  )
+  entries = entries[:GREENLIGHT_LOOKUP_MAX_RUNS]
+
+  restored: dict = {}
+  # Insert oldest-first so dict FIFO order reflects recency for the roll-off cap.
+  for entry in reversed(entries):
+    if not isinstance(entry, dict):
+      continue
+    job_id = str(entry.get("job_id") or "").strip()
+    if not job_id:
+      continue
+
+    status = str(entry.get("status") or "").strip().lower()
+    if status in {"queued", "running"}:
+      # A job mid-run when the process stopped cannot resume.
+      entry["status"] = "interrupted"
+      entry["error"] = entry.get("error") or "Interrupted by server restart."
+      entry["download_url"] = ""
+    else:
+      output_job_id = str(entry.get("output_job_id") or "").strip()
+      csv_path = _greenlight_csv_path(output_job_id) if output_job_id else ""
+      if output_job_id and csv_path and os.path.exists(csv_path):
+        try:
+          with open(csv_path, "rb") as handle:
+            data = handle.read()
+          JOB_OUTPUTS[output_job_id] = {
+            "data": data,
+            "filename": str(entry.get("filename") or f"{output_job_id}.csv"),
+            "media_type": "text/csv",
+          }
+        except Exception:
+          pass
+
+    restored[job_id] = entry
+
+  with GREENLIGHT_LOOKUP_RUNS_LOCK:
+    GREENLIGHT_LOOKUP_RUNS.clear()
+    GREENLIGHT_LOOKUP_RUNS.update(restored)
+
+
 def _greenlight_run_queued_lookup(job_id: str, cucm_host: str, cucm_user: str, cucm_pass: str, clean_last: str, clean_first: str, emails: list[str]) -> None:
   started_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
   _greenlight_queue_update(job_id, status="running", started_at=started_at, emails_completed=0, email_count=len(emails))
@@ -13428,6 +13555,7 @@ def _greenlight_run_queued_lookup(job_id: str, cucm_host: str, cucm_user: str, c
     filename = f"project_greenlight_person_lookup_{timestamp}.csv"
     csv_bytes = _greenlight_rows_to_csv_bytes(rows)
     job_output = _prepare_job_output(csv_bytes, filename)
+    _greenlight_store_csv_to_disk(job_output["job_id"], csv_bytes)
     completed_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     _greenlight_queue_update(
@@ -13437,9 +13565,11 @@ def _greenlight_run_queued_lookup(job_id: str, cucm_host: str, cucm_user: str, c
       count=len(rows),
       emails_completed=len(emails),
       filename=job_output.get("filename", filename),
+      output_job_id=job_output["job_id"],
       download_url=f"/download/job-output/{job_output['job_id']}",
       error="",
     )
+    _greenlight_save_state()
   except Exception as exc:
     failed_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     _greenlight_queue_update(
@@ -13449,6 +13579,7 @@ def _greenlight_run_queued_lookup(job_id: str, cucm_host: str, cucm_user: str, c
       emails_completed=0,
       error=str(exc),
     )
+    _greenlight_save_state()
 
 
 def _parse_verasmart_queue_rows(csv_text: str) -> list[dict]:
@@ -42738,10 +42869,12 @@ def project_greenlight_person_lookup_route(
         "worker_count": 3,
         "count": 0,
         "filename": "",
+        "output_job_id": "",
         "download_url": "",
         "error": "",
       }
       _greenlight_queue_store(queue_entry)
+      _greenlight_save_state()
 
       worker = threading.Thread(
         target=_greenlight_run_queued_lookup,
