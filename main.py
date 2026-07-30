@@ -32140,22 +32140,59 @@ def sinch_admin_page(request: Request):
             return;
           }}
           const numbers = Array.isArray(payload && payload.submitted_numbers) ? payload.submitted_numbers : [];
+          const rows = Array.isArray(payload && payload.results) ? payload.results : [];
           const numbersHtml = numbers.length
             ? '<div style="margin-top:6px;"><strong>Submitted TNs:</strong> ' + escapeHtml(numbers.join(", ")) + '</div>'
             : "";
           const statusCode = escapeHtml(String((payload && payload.statusCode) || ""));
           const statusText = escapeHtml(String((payload && payload.status) || ""));
           const message = escapeHtml(String((payload && payload.message) || ""));
+          const routingOption = escapeHtml(String((payload && payload.routing_option) || ""));
+
+          let detailsHtml = "";
+          if (rows.length) {{
+            detailsHtml += '<div style="margin-top:10px; overflow-x:auto;">';
+            detailsHtml += '<table><thead><tr>';
+            detailsHtml += '<th>TN</th><th>Status</th><th>Details</th><th>Current Routing</th><th>Attempts</th>';
+            detailsHtml += '</tr></thead><tbody>';
+            rows.forEach(function (row, idx) {{
+              const bg = idx % 2 === 0 ? '#ffffff' : '#f7fbff';
+              const attemptRows = Array.isArray(row && row.attempts) ? row.attempts : [];
+              let attemptText = "";
+              attemptRows.forEach(function (attempt, aidx) {{
+                const endpoint = String((attempt && attempt.endpoint) || "");
+                const ok = !!(attempt && attempt.ok);
+                const apiStatusCode = String((attempt && attempt.api_status_code) || "");
+                const apiMessage = String((attempt && attempt.api_message) || "");
+                const line = endpoint
+                  + (ok ? ' OK' : ' FAIL')
+                  + (apiStatusCode ? (' [code ' + apiStatusCode + ']') : '')
+                  + (apiMessage ? (': ' + apiMessage) : '');
+                attemptText += (aidx ? '\\n' : '') + line;
+              }});
+              detailsHtml += '<tr style="background:' + bg + ';">';
+              detailsHtml += '<td>' + escapeHtml(String((row && row.number) || "")) + '</td>';
+              detailsHtml += '<td>' + escapeHtml(String((row && row.status) || "")) + '</td>';
+              detailsHtml += '<td>' + escapeHtml(String((row && row.details) || "")) + '</td>';
+              detailsHtml += '<td>' + escapeHtml(String((row && row.actual_routing_option) || "")) + '</td>';
+              detailsHtml += '<td><pre style="margin:0; white-space:pre-wrap; font-size:11px;">' + escapeHtml(attemptText) + '</pre></td>';
+              detailsHtml += '</tr>';
+            }});
+            detailsHtml += '</tbody></table>';
+            detailsHtml += '</div>';
+          }}
 
           targetEl.innerHTML = ''
             + '<div class="result-card">'
             + '<div><strong>' + escapeHtml(actionLabel) + ' response</strong></div>'
             + '<div style="margin-top:6px;">Count: ' + escapeHtml(String((payload && payload.submitted_count) || 0)) + '</div>'
+            + (routingOption ? '<div>Routing Option: ' + routingOption + '</div>' : '')
             + ((payload && payload.pon) ? '<div>PON: ' + escapeHtml(String(payload.pon || "")) + '</div>' : '')
             + (statusCode ? '<div>Status Code: ' + statusCode + '</div>' : '')
             + (statusText ? '<div>Status: ' + statusText + '</div>' : '')
             + (message ? '<div>Message: ' + message + '</div>' : '')
             + numbersHtml
+            + detailsHtml
             + '</div>';
         }}
 
@@ -32917,6 +32954,12 @@ def inteliquent_tn_routing_option_update_route(
   success_count = 0
   failed_count = 0
 
+  def _normalize_tn_digits(value: str) -> str:
+    digits = re.sub(r"\D", "", str(value or ""))
+    if len(digits) == 11 and digits.startswith("1"):
+      digits = digits[1:]
+    return digits
+
   def _extract_row_routing_option(row: dict) -> str:
     if not isinstance(row, dict):
       return ""
@@ -32936,7 +32979,7 @@ def inteliquent_tn_routing_option_update_route(
 
     verify_payload = verify_call.get("raw", {}) or {}
     verify_rows = _inteliquent_extract_tn_rows(verify_payload)
-    clean_tn = str(tn or "").strip()
+    clean_tn = _normalize_tn_digits(tn)
     for row in verify_rows:
       if not isinstance(row, dict):
         continue
@@ -32947,7 +32990,8 @@ def inteliquent_tn_routing_option_update_route(
         or row.get("tnNumber", "")
         or ""
       ).strip()
-      if number != clean_tn:
+      number_digits = _normalize_tn_digits(number)
+      if not number_digits or number_digits != clean_tn:
         continue
       current_option = _extract_row_routing_option(row)
       if current_option.lower() == str(expected_option or "").strip().lower():
