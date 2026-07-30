@@ -31913,6 +31913,7 @@ def sinch_admin_page(request: Request):
               <select id="routing_option_value" name="routing_option_value" style="width:100%; min-height:34px; border:1px solid #c8dbee; border-radius:10px; padding:6px 10px;">
                 <option value="">Loading routing options...</option>
               </select>
+              <input type="hidden" id="routing_option_code" name="routing_option_code" value="" />
               <button type="button" id="routing-option-refresh-btn" style="white-space:nowrap;">Refresh</button>
             </div>
             <div id="routing-option-status" style="margin-top:6px; font-size:12px; color:#4e6a84;">Fetching available routing options from Sinch...</div>
@@ -32003,6 +32004,7 @@ def sinch_admin_page(request: Request):
         const routingPinEl = document.getElementById("routing_pin_code");
         const routingPonEl = document.getElementById("routing_pon");
         const routingOptionEl = document.getElementById("routing_option_value");
+        const routingOptionCodeEl = document.getElementById("routing_option_code");
         const routingOptionStatusEl = document.getElementById("routing-option-status");
         const routingOptionRefreshBtn = document.getElementById("routing-option-refresh-btn");
         const routingSubmitBtn = document.getElementById("routing-tn-submit-btn");
@@ -32148,6 +32150,7 @@ def sinch_admin_page(request: Request):
           const statusText = escapeHtml(String((payload && payload.status) || ""));
           const message = escapeHtml(String((payload && payload.message) || ""));
           const routingOption = escapeHtml(String((payload && payload.routing_option) || ""));
+          const routingOptionCode = escapeHtml(String((payload && payload.routing_option_code) || ""));
 
           let detailsHtml = "";
           if (rows.length) {{
@@ -32187,6 +32190,7 @@ def sinch_admin_page(request: Request):
             + '<div><strong>' + escapeHtml(actionLabel) + ' response</strong></div>'
             + '<div style="margin-top:6px;">Count: ' + escapeHtml(String((payload && payload.submitted_count) || 0)) + '</div>'
             + (routingOption ? '<div>Routing Option: ' + routingOption + '</div>' : '')
+            + (routingOptionCode ? '<div>Routing Option Code: ' + routingOptionCode + '</div>' : '')
             + ((payload && payload.pon) ? '<div>PON: ' + escapeHtml(String(payload.pon || "")) + '</div>' : '')
             + (statusCode ? '<div>Status Code: ' + statusCode + '</div>' : '')
             + (statusText ? '<div>Status: ' + statusText + '</div>' : '')
@@ -32454,14 +32458,23 @@ def sinch_admin_page(request: Request):
 
               options.forEach(function (opt) {{
                 const text = String((opt && opt.value) || "").trim();
+                const code = String((opt && opt.code) || "").trim();
                 if (!text) {{
                   return;
                 }}
                 const option = document.createElement("option");
                 option.value = text;
                 option.textContent = text;
+                if (code) {{
+                  option.setAttribute("data-code", code);
+                }}
                 routingOptionEl.appendChild(option);
               }});
+
+              if (routingOptionCodeEl) {{
+                const selected = routingOptionEl.options[routingOptionEl.selectedIndex];
+                routingOptionCodeEl.value = selected ? String(selected.getAttribute("data-code") || "").trim() : "";
+              }}
 
               if (routingOptionStatusEl) {{
                 routingOptionStatusEl.textContent = "Loaded " + options.length + " routing option(s).";
@@ -32499,9 +32512,17 @@ def sinch_admin_page(request: Request):
           }}
           if (routingOptionEl) {{
             routingOptionEl.addEventListener("input", function () {{
+              if (routingOptionCodeEl) {{
+                const selected = routingOptionEl.options[routingOptionEl.selectedIndex];
+                routingOptionCodeEl.value = selected ? String(selected.getAttribute("data-code") || "").trim() : "";
+              }}
               syncRoutingSubmitState();
             }});
             routingOptionEl.addEventListener("change", function () {{
+              if (routingOptionCodeEl) {{
+                const selected = routingOptionEl.options[routingOptionEl.selectedIndex];
+                routingOptionCodeEl.value = selected ? String(selected.getAttribute("data-code") || "").trim() : "";
+              }}
               syncRoutingSubmitState();
             }});
           }}
@@ -32727,17 +32748,21 @@ def _inteliquent_extract_routing_options(raw_payload: dict) -> list[dict]:
     return []
 
   values = []
-  seen = set()
+  seen_index = {}
 
-  def _add(value):
+  def _add(value, code=""):
     text = str(value or "").strip()
     if not text:
       return
     key = text.lower()
-    if key in seen:
+    clean_code = str(code or "").strip()
+    if key in seen_index:
+      existing_idx = seen_index[key]
+      if clean_code and not str(values[existing_idx].get("code") or "").strip():
+        values[existing_idx]["code"] = clean_code
       return
-    seen.add(key)
-    values.append({"value": text})
+    seen_index[key] = len(values)
+    values.append({"value": text, "code": clean_code})
 
   candidates = []
   for key in ("routingOptionList", "routingOptions", "tnRoutingOptions", "options"):
@@ -32756,14 +32781,20 @@ def _inteliquent_extract_routing_options(raw_payload: dict) -> list[dict]:
       candidates.extend([item for item in rows if isinstance(item, dict)])
 
   for item in candidates:
-    _add(item.get("routingOption"))
-    _add(item.get("routingOptionName"))
-    _add(item.get("customerRoutingOption"))
-    _add(item.get("customerRoutingOptionName"))
-    _add(item.get("routingLabel"))
-    _add(item.get("name"))
-    _add(item.get("code"))
-    _add(item.get("description"))
+    option_code = str(
+      item.get("routingOptionCode", "")
+      or item.get("customerRoutingOptionCode", "")
+      or item.get("code", "")
+      or item.get("id", "")
+      or ""
+    ).strip()
+    _add(item.get("routingOption"), option_code)
+    _add(item.get("routingOptionName"), option_code)
+    _add(item.get("customerRoutingOption"), option_code)
+    _add(item.get("customerRoutingOptionName"), option_code)
+    _add(item.get("routingLabel"), option_code)
+    _add(item.get("name"), option_code)
+    _add(item.get("description"), option_code)
 
   return values
 
@@ -32905,6 +32936,7 @@ def inteliquent_tn_routing_option_update_route(
   request: Request,
   routing_tn_list: str = Form(""),
   routing_option_value: str = Form(""),
+  routing_option_code: str = Form(""),
   routing_pon: str = Form(""),
   routing_pin_code: str = Form(""),
 ):
@@ -32922,6 +32954,7 @@ def inteliquent_tn_routing_option_update_route(
     )
 
   target_option = str(routing_option_value or "").strip()
+  target_option_code = str(routing_option_code or "").strip()
   if not target_option:
     return JSONResponse(
       {"ok": False, "error": "Routing Option is required."},
@@ -32947,12 +32980,22 @@ def inteliquent_tn_routing_option_update_route(
       status_code=400,
     )
 
-  endpoint_candidates = [
+  endpoint_candidates = []
+
+  if target_option_code:
+    endpoint_candidates.extend([
+      ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOptionCode": target_option_code, "pon": target_pon}]}}),
+      ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "routingOptionCode": target_option_code, "purchaseOrderNumber": target_pon}]}}),
+      ("/tnRoutingOptionUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOptionCode": target_option_code, "customerPurchaseOrderNumber": target_pon}]}}),
+      ("/tnRoutingOption", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tn": tn, "customerRoutingOptionCode": target_option_code, "pon": target_pon}),
+    ])
+
+  endpoint_candidates.extend([
     ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOption": target_option, "pon": target_pon}]}}),
     ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "routingOption": target_option, "purchaseOrderNumber": target_pon}]}}),
     ("/tnRoutingOptionUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOption": target_option, "customerPurchaseOrderNumber": target_pon}]}}),
     ("/tnRoutingOption", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tn": tn, "customerRoutingOption": target_option, "pon": target_pon}),
-  ]
+  ])
 
   per_number = []
   success_count = 0
@@ -32974,6 +33017,16 @@ def inteliquent_tn_routing_option_update_route(
       or row.get("routingOptionName", "")
       or row.get("routingOption", "")
       or row.get("routingLabel", "")
+      or ""
+    ).strip()
+
+  def _extract_row_routing_code(row: dict) -> str:
+    if not isinstance(row, dict):
+      return ""
+    return str(
+      row.get("customerRoutingOptionCode", "")
+      or row.get("routingOptionCode", "")
+      or row.get("code", "")
       or ""
     ).strip()
 
@@ -32999,7 +33052,10 @@ def inteliquent_tn_routing_option_update_route(
       if not number_digits or number_digits != clean_tn:
         continue
       current_option = _extract_row_routing_option(row)
-      if current_option.lower() == str(expected_option or "").strip().lower():
+      current_code = _extract_row_routing_code(row)
+      expected_code = str(target_option_code or "").strip().lower()
+      expected_label = str(expected_option or "").strip().lower()
+      if (expected_code and current_code.lower() == expected_code) or (current_option.lower() == expected_label):
         return True, current_option, ""
       return False, current_option, "Routing option mismatch after update."
 
@@ -33022,6 +33078,8 @@ def inteliquent_tn_routing_option_update_route(
           "api_status": str(raw_payload.get("status", "") or "").strip(),
           "api_status_code": str(raw_payload.get("statusCode", "") or "").strip(),
           "api_message": str(raw_payload.get("message", "") or "").strip(),
+          "submitted_code": target_option_code,
+          "submitted_option": target_option,
         }
       )
 
@@ -33092,6 +33150,7 @@ def inteliquent_tn_routing_option_update_route(
       "submitted_count": len(numbers),
       "submitted_numbers": numbers,
       "routing_option": target_option,
+      "routing_option_code": target_option_code,
       "pon": target_pon,
       "success_count": success_count,
       "pending_count": pending_count,
