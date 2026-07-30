@@ -32553,11 +32553,15 @@ def sinch_admin_page(request: Request):
                 return;
               }}
               const allSucceeded = !!(payload && payload.all_succeeded);
+              const allSubmitted = !!(payload && payload.all_submitted);
               const successCount = Number((payload && payload.success_count) || 0);
+              const pendingCount = Number((payload && payload.pending_count) || 0);
               const failedCount = Number((payload && payload.failed_count) || 0);
               routingStatusEl.textContent = allSucceeded
                 ? ("TN routing update verified successfully for " + successCount + " TN(s).")
-                : ("TN routing update completed with warnings. Success: " + successCount + ", Failed: " + failedCount + ".");
+                : (allSubmitted
+                  ? ("TN routing update submitted to provider. Verified: " + successCount + ", Pending: " + pendingCount + ", Failed: " + failedCount + ".")
+                  : ("TN routing update completed with warnings. Verified: " + successCount + ", Pending: " + pendingCount + ", Failed: " + failedCount + "."));
               renderActionResult(routingResultsEl, payload, "TN Routing Update");
             }} catch (err) {{
               routingStatusEl.textContent = "Routing update failed: " + String(err && err.message ? err.message : err);
@@ -32952,6 +32956,7 @@ def inteliquent_tn_routing_option_update_route(
 
   per_number = []
   success_count = 0
+  pending_count = 0
   failed_count = 0
 
   def _normalize_tn_digits(value: str) -> str:
@@ -33028,14 +33033,14 @@ def inteliquent_tn_routing_option_update_route(
     if updated:
       verified, actual_option, verify_error = _verify_tn_routing_option(tn, target_option)
       if not verified:
-        failed_count += 1
-        details = verify_error or "Update call returned success but verification did not confirm change."
+        pending_count += 1
+        details = verify_error or "Update accepted by provider but immediate verification did not confirm change yet."
         if actual_option:
           details += f" Current routing option: '{actual_option}'."
         per_number.append(
           {
             "number": tn,
-            "status": "Failed",
+            "status": "Pending",
             "details": details,
             "attempts": attempt_log,
             "verified": False,
@@ -33072,22 +33077,26 @@ def inteliquent_tn_routing_option_update_route(
     request=request,
     action_label=f"TN Routing Update ({target_option}, PON {target_pon})",
     numbers=numbers,
-    api_status="partial_success" if failed_count else "success",
+    api_status=(
+      "partial_failed" if failed_count else ("submitted_pending_verification" if pending_count else "success")
+    ),
     api_status_code="",
-    api_message=f"{success_count} succeeded, {failed_count} failed.",
+    api_message=f"{success_count} verified, {pending_count} pending, {failed_count} failed.",
   )
 
   return JSONResponse(
     {
       "ok": True,
-      "all_succeeded": failed_count == 0,
+      "all_succeeded": failed_count == 0 and pending_count == 0,
+      "all_submitted": failed_count == 0,
       "submitted_count": len(numbers),
       "submitted_numbers": numbers,
       "routing_option": target_option,
       "pon": target_pon,
       "success_count": success_count,
+      "pending_count": pending_count,
       "failed_count": failed_count,
-      "message": f"{success_count} succeeded, {failed_count} failed out of {len(numbers)} TN(s).",
+      "message": f"{success_count} verified, {pending_count} pending, {failed_count} failed out of {len(numbers)} TN(s).",
       "results": per_number,
     },
     status_code=200,
