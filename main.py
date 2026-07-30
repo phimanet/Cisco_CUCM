@@ -24549,6 +24549,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="namechange">Employee Name Change-Update Jabber/VM</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
           <button type="button" class="portal-nav-btn" data-panel="mobiledelete">Remove Jabber Mobile only</button>
+          <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM</button>
           <button type="button" class="portal-nav-btn" data-panel="ad">Update AD Telephone/ipPhone Field Only</button>
           <button type="button" class="portal-nav-btn" data-panel="tct">Add in Jabber iPhone</button>
           <button type="button" class="portal-nav-btn" data-panel="bot">Add in Jabber Android</button>
@@ -24556,8 +24557,6 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="mobilejabbernotify">Re-send Jabber Mobile Email Instructions</button>
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
           <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
-          <button type="button" class="portal-nav-btn" data-panel="single-ldap-email-page1">LDAP Phone Update by Email</button>
-          <button type="button" class="portal-nav-btn" data-panel="batch-ldap-page1">Batch LDAP Phone Update</button>
         </div>
       </aside>
 
@@ -29431,6 +29430,8 @@ __GREENLIGHT_ADMIN_CARD__
           <h4>Project Greenlight Menu</h4>
           <div class="portal-nav">
             <button type="button" class="portal-nav-btn active" data-panel="personlookup">Person Lookup</button>
+            <button type="button" class="portal-nav-btn" data-panel="singleldapupdate">LDAP Phone Update by Email</button>
+            <button type="button" class="portal-nav-btn" data-panel="batchldapupdate">Batch LDAP Phone Update</button>
             <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="jabberstatus">Jabber Status Check</button>
             <button type="button" class="portal-nav-btn" data-panel="translationlookup">Translation Pattern Lookup</button>
@@ -29489,6 +29490,51 @@ __GREENLIGHT_ADMIN_CARD__
                 <p id="greenlight-extension-status" class="status-line">Enter extension and click Lookup.</p>
                 <pre id="greenlight-extension-output"></pre>
               </div>
+            </div>
+          </section>
+
+          <section class="tool-panel" data-panel="singleldapupdate">
+            <h3>Update Active Directory Telephone and ipPhone field by Email</h3>
+            <p>Enter one email address and the 10-digit number to assign. Leave the number blank to clear both fields.</p>
+            <div class="layout-row">
+              <form id="greenlight-single-ldap-form">
+                <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
+                <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
+                <input type="hidden" name="cucm_pass" value="" />
+                <div class="search-filter-row">
+                  <input name="email" type="email" placeholder="Email address *" required />
+                  <input name="phone_number" placeholder="10-digit phone (blank clears)" />
+                  <button type="submit">Update</button>
+                </div>
+              </form>
+              <div class="result-card">
+                <p id="greenlight-single-ldap-status" class="status-line">Enter email and phone number, then click Update.</p>
+                <p><a id="greenlight-single-ldap-download" href="#" style="display:none; font-weight:700;">Download Result CSV</a></p>
+                <pre id="greenlight-single-ldap-output"></pre>
+              </div>
+            </div>
+          </section>
+
+          <section class="tool-panel" data-panel="batchldapupdate">
+            <h3>Batch LDAP Phone Update</h3>
+            <p>Update AD phone fields for multiple users at once. Paste email addresses and enter one phone number to apply.</p>
+            <form id="greenlight-batch-ldap-form" style="margin-bottom:12px;">
+              <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
+              <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
+              <input type="hidden" name="cucm_pass" value="" />
+              <div class="search-filter-row">
+                <textarea name="emails_text" placeholder="Paste 1 or more emails (comma/newline separated)" style="min-height:90px; width:min(760px, 100%);"></textarea>
+              </div>
+              <div class="search-filter-row">
+                <input name="phone_number" placeholder="Phone number to assign *" required />
+                <button type="submit">Start Batch Update</button>
+              </div>
+            </form>
+            <div class="result-card" style="width:100%; max-width:none;">
+              <p id="greenlight-batch-ldap-status" class="status-line">Paste emails and phone number, then click Start Batch Update.</p>
+              <p id="greenlight-batch-ldap-progress" class="status-line" style="display:none; color:#1d5490;">Processing...</p>
+              <div id="greenlight-batch-ldap-results" style="overflow-x:auto;"></div>
+              <p><a id="greenlight-batch-ldap-download" href="#" style="display:none; font-weight:700; margin-top:12px;">Download Results CSV</a></p>
             </div>
           </section>
 
@@ -30410,6 +30456,50 @@ __GREENLIGHT_ADMIN_CARD__
           pendingText: "Looking up translation patterns...",
           doneText: "Lookup completed.",
         });
+
+        const singleLdapForm = document.getElementById("greenlight-single-ldap-form");
+        if (singleLdapForm) {
+          singleLdapForm.addEventListener("submit", async function (evt) {
+            evt.preventDefault();
+            const statusEl = document.getElementById("greenlight-single-ldap-status");
+            const outputEl = document.getElementById("greenlight-single-ldap-output");
+            const downloadEl = document.getElementById("greenlight-single-ldap-download");
+            const formData = new FormData(singleLdapForm);
+            statusEl.textContent = "Updating AD phone fields...";
+            statusEl.style.color = "";
+            outputEl.textContent = "";
+            if (downloadEl) {
+              downloadEl.style.display = "none";
+              downloadEl.href = "#";
+            }
+
+            try {
+              const response = await fetch("/update/ad-phone-by-email?inline=true", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "X-Requested-With": "XMLHttpRequest" },
+                body: formData,
+              });
+              const payload = await response.json();
+              if (!response.ok) {
+                const detail = payload.error || payload.message || ("Request failed (HTTP " + response.status + ")");
+                throw new Error(String(detail));
+              }
+
+              statusEl.textContent = "LDAP phone update completed.";
+              statusEl.style.color = "#0d5d3d";
+              outputEl.textContent = String(payload.output_text || "");
+              if (downloadEl && payload.download_url) {
+                downloadEl.href = String(payload.download_url);
+                downloadEl.style.display = "inline";
+              }
+            } catch (err) {
+              statusEl.textContent = "LDAP phone update failed.";
+              statusEl.style.color = "#a42323";
+              outputEl.textContent = String(err && err.message ? err.message : err);
+            }
+          });
+        }
 
         // Batch LDAP Phone Update
         const batchLdapForm = document.getElementById("greenlight-batch-ldap-form");
