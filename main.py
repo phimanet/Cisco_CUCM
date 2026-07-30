@@ -31918,6 +31918,10 @@ def sinch_admin_page(request: Request):
             <div id="routing-option-status" style="margin-top:6px; font-size:12px; color:#4e6a84;">Fetching available routing options from Sinch...</div>
           </div>
           <div style="margin-bottom:10px;max-width:240px;">
+            <label for="routing_pon" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">PON (required)</label>
+            <input type="text" id="routing_pon" name="routing_pon" maxlength="64" placeholder="Enter purchase order number" required style="width:100%;" />
+          </div>
+          <div style="margin-bottom:10px;max-width:240px;">
             <label for="routing_pin_code" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Authorization PIN</label>
             <input type="password" id="routing_pin_code" name="routing_pin_code" inputmode="numeric" maxlength="4" placeholder="Enter 4-digit PIN" style="width:100%;" />
           </div>
@@ -31997,6 +32001,7 @@ def sinch_admin_page(request: Request):
         const routingStatusEl = document.getElementById("tn-routing-status");
         const routingResultsEl = document.getElementById("tn-routing-results");
         const routingPinEl = document.getElementById("routing_pin_code");
+        const routingPonEl = document.getElementById("routing_pon");
         const routingOptionEl = document.getElementById("routing_option_value");
         const routingOptionStatusEl = document.getElementById("routing-option-status");
         const routingOptionRefreshBtn = document.getElementById("routing-option-refresh-btn");
@@ -32146,6 +32151,7 @@ def sinch_admin_page(request: Request):
             + '<div class="result-card">'
             + '<div><strong>' + escapeHtml(actionLabel) + ' response</strong></div>'
             + '<div style="margin-top:6px;">Count: ' + escapeHtml(String((payload && payload.submitted_count) || 0)) + '</div>'
+            + ((payload && payload.pon) ? '<div>PON: ' + escapeHtml(String(payload.pon || "")) + '</div>' : '')
             + (statusCode ? '<div>Status Code: ' + statusCode + '</div>' : '')
             + (statusText ? '<div>Status: ' + statusText + '</div>' : '')
             + (message ? '<div>Message: ' + message + '</div>' : '')
@@ -32440,12 +32446,13 @@ def sinch_admin_page(request: Request):
           }}
 
           function syncRoutingSubmitState() {{
-            if (!routingSubmitBtn || !routingPinEl || !routingOptionEl) {{
+            if (!routingSubmitBtn || !routingPinEl || !routingOptionEl || !routingPonEl) {{
               return;
             }}
             const pinOk = String(routingPinEl.value || "").trim() === "1776";
             const optionOk = String(routingOptionEl.value || "").trim().length > 0;
-            routingSubmitBtn.disabled = !(pinOk && optionOk);
+            const ponOk = String(routingPonEl.value || "").trim().length > 0;
+            routingSubmitBtn.disabled = !(pinOk && optionOk && ponOk);
           }}
 
           if (routingPinEl) {{
@@ -32466,6 +32473,11 @@ def sinch_admin_page(request: Request):
               loadRoutingOptions();
             }});
           }}
+          if (routingPonEl) {{
+            routingPonEl.addEventListener("input", function () {{
+              syncRoutingSubmitState();
+            }});
+          }}
           syncRoutingSubmitState();
           loadRoutingOptions();
 
@@ -32478,6 +32490,11 @@ def sinch_admin_page(request: Request):
             }}
             if (!routingOptionEl || !String(routingOptionEl.value || "").trim()) {{
               routingStatusEl.textContent = "Routing Option is required.";
+              syncRoutingSubmitState();
+              return;
+            }}
+            if (!routingPonEl || !String(routingPonEl.value || "").trim()) {{
+              routingStatusEl.textContent = "PON is required.";
               syncRoutingSubmitState();
               return;
             }}
@@ -32842,6 +32859,7 @@ def inteliquent_tn_routing_option_update_route(
   request: Request,
   routing_tn_list: str = Form(""),
   routing_option_value: str = Form(""),
+  routing_pon: str = Form(""),
   routing_pin_code: str = Form(""),
 ):
   session = _get_auth_session(request) or {}
@@ -32864,6 +32882,18 @@ def inteliquent_tn_routing_option_update_route(
       status_code=400,
     )
 
+  target_pon = str(routing_pon or "").strip()
+  if not target_pon:
+    return JSONResponse(
+      {"ok": False, "error": "PON is required."},
+      status_code=400,
+    )
+  if not re.fullmatch(r"[A-Za-z0-9._\-/]{1,64}", target_pon):
+    return JSONResponse(
+      {"ok": False, "error": "PON contains invalid characters."},
+      status_code=400,
+    )
+
   numbers = _inteliquent_parse_tn_list(routing_tn_list)
   if not numbers:
     return JSONResponse(
@@ -32872,10 +32902,10 @@ def inteliquent_tn_routing_option_update_route(
     )
 
   endpoint_candidates = [
-    ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOption": target_option}]}}),
-    ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "routingOption": target_option}]}}),
-    ("/tnRoutingOptionUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOption": target_option}]}}),
-    ("/tnRoutingOption", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tn": tn, "customerRoutingOption": target_option}),
+    ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOption": target_option, "pon": target_pon}]}}),
+    ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "routingOption": target_option, "purchaseOrderNumber": target_pon}]}}),
+    ("/tnRoutingOptionUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOption": target_option, "customerPurchaseOrderNumber": target_pon}]}}),
+    ("/tnRoutingOption", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tn": tn, "customerRoutingOption": target_option, "pon": target_pon}),
   ]
 
   per_number = []
@@ -32930,7 +32960,7 @@ def inteliquent_tn_routing_option_update_route(
 
   _inteliquent_send_tn_action_email(
     request=request,
-    action_label=f"TN Routing Update ({target_option})",
+    action_label=f"TN Routing Update ({target_option}, PON {target_pon})",
     numbers=numbers,
     api_status="partial_success" if failed_count else "success",
     api_status_code="",
@@ -32944,6 +32974,7 @@ def inteliquent_tn_routing_option_update_route(
       "submitted_count": len(numbers),
       "submitted_numbers": numbers,
       "routing_option": target_option,
+      "pon": target_pon,
       "success_count": success_count,
       "failed_count": failed_count,
       "message": f"{success_count} succeeded, {failed_count} failed out of {len(numbers)} TN(s).",
