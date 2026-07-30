@@ -32515,7 +32515,12 @@ def sinch_admin_page(request: Request):
                 routingStatusEl.textContent = "Routing update failed: " + (payload.error || "Unknown error");
                 return;
               }}
-              routingStatusEl.textContent = "TN routing update submitted successfully.";
+              const allSucceeded = !!(payload && payload.all_succeeded);
+              const successCount = Number((payload && payload.success_count) || 0);
+              const failedCount = Number((payload && payload.failed_count) || 0);
+              routingStatusEl.textContent = allSucceeded
+                ? ("TN routing update verified successfully for " + successCount + " TN(s).")
+                : ("TN routing update completed with warnings. Success: " + successCount + ", Failed: " + failedCount + ".");
               renderActionResult(routingResultsEl, payload, "TN Routing Update");
             }} catch (err) {{
               routingStatusEl.textContent = "Routing update failed: " + String(err && err.message ? err.message : err);
@@ -32912,6 +32917,45 @@ def inteliquent_tn_routing_option_update_route(
   success_count = 0
   failed_count = 0
 
+  def _extract_row_routing_option(row: dict) -> str:
+    if not isinstance(row, dict):
+      return ""
+    return str(
+      row.get("customerRoutingOption", "")
+      or row.get("customerRoutingOptionName", "")
+      or row.get("routingOptionName", "")
+      or row.get("routingOption", "")
+      or row.get("routingLabel", "")
+      or ""
+    ).strip()
+
+  def _verify_tn_routing_option(tn: str, expected_option: str) -> tuple[bool, str, str]:
+    verify_call = _inteliquent_tn_detail_lookup(tn, quantity=20)
+    if not verify_call.get("ok"):
+      return False, "", str(verify_call.get("error") or "Unable to verify routing option via /tnDetail.")
+
+    verify_payload = verify_call.get("raw", {}) or {}
+    verify_rows = _inteliquent_extract_tn_rows(verify_payload)
+    clean_tn = str(tn or "").strip()
+    for row in verify_rows:
+      if not isinstance(row, dict):
+        continue
+      number = str(
+        row.get("tn", "")
+        or row.get("number", "")
+        or row.get("telephoneNumber", "")
+        or row.get("tnNumber", "")
+        or ""
+      ).strip()
+      if number != clean_tn:
+        continue
+      current_option = _extract_row_routing_option(row)
+      if current_option.lower() == str(expected_option or "").strip().lower():
+        return True, current_option, ""
+      return False, current_option, "Routing option mismatch after update."
+
+    return False, "", "TN not found in verification response."
+
   for tn in numbers:
     updated = False
     last_error = ""
@@ -32938,6 +32982,24 @@ def inteliquent_tn_routing_option_update_route(
       last_error = str(call_result.get("error") or "Update attempt failed.")
 
     if updated:
+      verified, actual_option, verify_error = _verify_tn_routing_option(tn, target_option)
+      if not verified:
+        failed_count += 1
+        details = verify_error or "Update call returned success but verification did not confirm change."
+        if actual_option:
+          details += f" Current routing option: '{actual_option}'."
+        per_number.append(
+          {
+            "number": tn,
+            "status": "Failed",
+            "details": details,
+            "attempts": attempt_log,
+            "verified": False,
+            "actual_routing_option": actual_option,
+          }
+        )
+        continue
+
       success_count += 1
       per_number.append(
         {
@@ -32945,6 +33007,8 @@ def inteliquent_tn_routing_option_update_route(
           "status": "Success",
           "details": f"Routing option set to '{target_option}'.",
           "attempts": attempt_log,
+          "verified": True,
+          "actual_routing_option": actual_option,
         }
       )
     else:
@@ -32955,6 +33019,8 @@ def inteliquent_tn_routing_option_update_route(
           "status": "Failed",
           "details": last_error or "Unable to update routing option.",
           "attempts": attempt_log,
+          "verified": False,
+          "actual_routing_option": "",
         }
       )
 
