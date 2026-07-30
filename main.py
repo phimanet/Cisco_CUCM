@@ -31605,15 +31605,17 @@ def sinch_admin_page(request: Request):
 
   auth_user = escape(session_username)
   initial_panel = str(request.query_params.get("panel", "tn") or "tn").strip().lower()
-  if initial_panel not in {"tn", "tf", "order", "terminate"}:
+  if initial_panel not in {"tn", "tf", "order", "routing", "terminate"}:
     initial_panel = "tn"
   tn_active_class = "active" if initial_panel == "tn" else ""
   tf_active_class = "active" if initial_panel == "tf" else ""
   order_active_class = "active" if initial_panel == "order" else ""
+  routing_active_class = "active" if initial_panel == "routing" else ""
   terminate_active_class = "active" if initial_panel == "terminate" else ""
   tn_display_style = "block" if initial_panel == "tn" else "none"
   tf_display_style = "block" if initial_panel == "tf" else "none"
   order_display_style = "block" if initial_panel == "order" else "none"
+  routing_display_style = "block" if initial_panel == "routing" else "none"
   terminate_display_style = "block" if initial_panel == "terminate" else "none"
   html = f"""
 <html>
@@ -31795,7 +31797,7 @@ def sinch_admin_page(request: Request):
     <main class="content">
       <div class="panel">
         <h3>Sinch Admin Page</h3>
-        <p>Inteliquent admin tools for TN extract, toll-free extract, TN ordering, and TN termination.</p>
+        <p>Inteliquent admin tools for TN extract, toll-free extract, TN ordering, TN routing update, and TN termination.</p>
       </div>
       <div class="portal-shell">
       <aside class="portal-sidebar">
@@ -31804,6 +31806,7 @@ def sinch_admin_page(request: Request):
           <button type="button" id="sinch-menu-tn" class="portal-nav-btn {tn_active_class}" onclick="window.location.href='/sinch-work?panel=tn'">TN Extract</button>
           <button type="button" id="sinch-menu-tf" class="portal-nav-btn {tf_active_class}" onclick="window.location.href='/sinch-work?panel=tf'">Toll-Free Extract</button>
           <button type="button" id="sinch-menu-order" class="portal-nav-btn {order_active_class}" onclick="window.location.href='/sinch-work?panel=order'">Order New TN</button>
+          <button type="button" id="sinch-menu-routing" class="portal-nav-btn {routing_active_class}" onclick="window.location.href='/sinch-work?panel=routing'">Update TN Routing Option</button>
           <button type="button" id="sinch-menu-terminate" class="portal-nav-btn {terminate_active_class}" onclick="window.location.href='/sinch-work?panel=terminate'">Delete TN (Terminate)</button>
           <button type="button" id="sinch-menu-back-main" class="portal-nav-btn" onclick="window.location.href='/menu'">Back to Main Operations</button>
           <button type="button" id="sinch-menu-back-admin" class="portal-nav-btn" onclick="window.location.href='/page2'">Back to Administrative Items</button>
@@ -31895,6 +31898,38 @@ def sinch_admin_page(request: Request):
         <div id="tn-order-results"></div>
       </div>
       </div>
+      <div id="sinch-routing-section" style="display:{routing_display_style};">
+      <div class="panel">
+        <h3>Update TN Routing Option</h3>
+        <p style="margin:0 0 10px 0;">Copy and paste one or more telephone numbers, then set the routing option to apply to all pasted TNs.</p>
+        <form id="inteliquent-tn-routing-form">
+          <div style="margin-bottom:10px;">
+            <label for="routing_tn_list" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN List</label>
+            <textarea id="routing_tn_list" name="routing_tn_list" placeholder="Paste TNs here, for example:\n8585551000\n8585551001"></textarea>
+          </div>
+          <div style="margin-bottom:10px;max-width:420px;">
+            <label for="routing_option_value" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Routing Option</label>
+            <div style="display:flex; gap:8px; align-items:center;">
+              <select id="routing_option_value" name="routing_option_value" style="width:100%; min-height:34px; border:1px solid #c8dbee; border-radius:10px; padding:6px 10px;">
+                <option value="">Loading routing options...</option>
+              </select>
+              <button type="button" id="routing-option-refresh-btn" style="white-space:nowrap;">Refresh</button>
+            </div>
+            <div id="routing-option-status" style="margin-top:6px; font-size:12px; color:#4e6a84;">Fetching available routing options from Sinch...</div>
+          </div>
+          <div style="margin-bottom:10px;max-width:240px;">
+            <label for="routing_pin_code" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Authorization PIN</label>
+            <input type="password" id="routing_pin_code" name="routing_pin_code" inputmode="numeric" maxlength="4" placeholder="Enter 4-digit PIN" style="width:100%;" />
+          </div>
+          <button type="submit" id="routing-tn-submit-btn">Submit Routing Update</button>
+        </form>
+        <p id="tn-routing-status" class="status-msg"></p>
+      </div>
+      <div class="panel">
+        <h3 style="margin:0 0 8px 0;">Routing Update Results</h3>
+        <div id="tn-routing-results"></div>
+      </div>
+      </div>
       <div id="sinch-terminate-section" style="display:{terminate_display_style};">
       <div class="panel">
         <h3>Delete TN (Terminate)</h3>
@@ -31929,10 +31964,12 @@ def sinch_admin_page(request: Request):
         const menuTnBtn = document.getElementById("sinch-menu-tn");
         const menuTfBtn = document.getElementById("sinch-menu-tf");
         const menuOrderBtn = document.getElementById("sinch-menu-order");
+        const menuRoutingBtn = document.getElementById("sinch-menu-routing");
         const menuTerminateBtn = document.getElementById("sinch-menu-terminate");
         const tnSection = document.getElementById("sinch-tn-section");
         const tfSection = document.getElementById("sinch-tf-section");
         const orderSection = document.getElementById("sinch-order-section");
+        const routingSection = document.getElementById("sinch-routing-section");
         const terminateSection = document.getElementById("sinch-terminate-section");
         const form = document.getElementById("inteliquent-inventory-form");
         const statusEl = document.getElementById("inventory-status");
@@ -31956,6 +31993,14 @@ def sinch_admin_page(request: Request):
         const orderSubmitBtn = document.getElementById("order-tn-submit-btn");
         const orderStatusEl = document.getElementById("tn-order-status");
         const orderResultsEl = document.getElementById("tn-order-results");
+        const routingForm = document.getElementById("inteliquent-tn-routing-form");
+        const routingStatusEl = document.getElementById("tn-routing-status");
+        const routingResultsEl = document.getElementById("tn-routing-results");
+        const routingPinEl = document.getElementById("routing_pin_code");
+        const routingOptionEl = document.getElementById("routing_option_value");
+        const routingOptionStatusEl = document.getElementById("routing-option-status");
+        const routingOptionRefreshBtn = document.getElementById("routing-option-refresh-btn");
+        const routingSubmitBtn = document.getElementById("routing-tn-submit-btn");
         const terminateForm = document.getElementById("inteliquent-tn-terminate-form");
         const terminateStatusEl = document.getElementById("tn-terminate-status");
         const terminateResultsEl = document.getElementById("tn-terminate-results");
@@ -31968,14 +32013,17 @@ def sinch_admin_page(request: Request):
           const showTn = section === "tn";
           const showTf = section === "tf";
           const showOrder = section === "order";
+          const showRouting = section === "routing";
           const showTerminate = section === "terminate";
           if (tnSection) tnSection.style.display = showTn ? "block" : "none";
           if (tfSection) tfSection.style.display = showTf ? "block" : "none";
           if (orderSection) orderSection.style.display = showOrder ? "block" : "none";
+          if (routingSection) routingSection.style.display = showRouting ? "block" : "none";
           if (terminateSection) terminateSection.style.display = showTerminate ? "block" : "none";
           if (menuTnBtn) menuTnBtn.classList.toggle("active", showTn);
           if (menuTfBtn) menuTfBtn.classList.toggle("active", showTf);
           if (menuOrderBtn) menuOrderBtn.classList.toggle("active", showOrder);
+          if (menuRoutingBtn) menuRoutingBtn.classList.toggle("active", showRouting);
           if (menuTerminateBtn) menuTerminateBtn.classList.toggle("active", showTerminate);
         }}
 
@@ -31995,6 +32043,12 @@ def sinch_admin_page(request: Request):
           menuOrderBtn.addEventListener("click", function (event) {{
             event.preventDefault();
             setSinchMenu("order");
+          }});
+        }}
+        if (menuRoutingBtn) {{
+          menuRoutingBtn.addEventListener("click", function (event) {{
+            event.preventDefault();
+            setSinchMenu("routing");
           }});
         }}
         if (menuTerminateBtn) {{
@@ -32327,6 +32381,131 @@ def sinch_admin_page(request: Request):
           }});
         }}
 
+        if (routingForm) {{
+          async function loadRoutingOptions() {{
+            if (!routingOptionEl) {{
+              return;
+            }}
+            if (routingOptionStatusEl) {{
+              routingOptionStatusEl.textContent = "Fetching available routing options from Sinch...";
+              routingOptionStatusEl.style.color = "#4e6a84";
+            }}
+
+            try {{
+              const response = await fetch("/inteliquent/routing-options", {{
+                method: "GET",
+                credentials: "same-origin",
+                headers: {{ "Accept": "application/json" }},
+              }});
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {{
+                throw new Error(String(payload.error || "Routing options lookup failed."));
+              }}
+
+              const options = Array.isArray(payload.options) ? payload.options : [];
+              routingOptionEl.innerHTML = "";
+              const placeholder = document.createElement("option");
+              placeholder.value = "";
+              placeholder.textContent = options.length ? "Select routing option" : "No options returned";
+              routingOptionEl.appendChild(placeholder);
+
+              options.forEach(function (opt) {{
+                const text = String((opt && opt.value) || "").trim();
+                if (!text) {{
+                  return;
+                }}
+                const option = document.createElement("option");
+                option.value = text;
+                option.textContent = text;
+                routingOptionEl.appendChild(option);
+              }});
+
+              if (routingOptionStatusEl) {{
+                routingOptionStatusEl.textContent = "Loaded " + options.length + " routing option(s).";
+                routingOptionStatusEl.style.color = "#0d5d3d";
+              }}
+            }} catch (err) {{
+              routingOptionEl.innerHTML = "";
+              const fallback = document.createElement("option");
+              fallback.value = "";
+              fallback.textContent = "Unable to load routing options";
+              routingOptionEl.appendChild(fallback);
+              if (routingOptionStatusEl) {{
+                routingOptionStatusEl.textContent = "Routing options lookup failed: " + String(err && err.message ? err.message : err);
+                routingOptionStatusEl.style.color = "#a42323";
+              }}
+            }}
+
+            syncRoutingSubmitState();
+          }}
+
+          function syncRoutingSubmitState() {{
+            if (!routingSubmitBtn || !routingPinEl || !routingOptionEl) {{
+              return;
+            }}
+            const pinOk = String(routingPinEl.value || "").trim() === "1776";
+            const optionOk = String(routingOptionEl.value || "").trim().length > 0;
+            routingSubmitBtn.disabled = !(pinOk && optionOk);
+          }}
+
+          if (routingPinEl) {{
+            routingPinEl.addEventListener("input", function () {{
+              syncRoutingSubmitState();
+            }});
+          }}
+          if (routingOptionEl) {{
+            routingOptionEl.addEventListener("input", function () {{
+              syncRoutingSubmitState();
+            }});
+            routingOptionEl.addEventListener("change", function () {{
+              syncRoutingSubmitState();
+            }});
+          }}
+          if (routingOptionRefreshBtn) {{
+            routingOptionRefreshBtn.addEventListener("click", function () {{
+              loadRoutingOptions();
+            }});
+          }}
+          syncRoutingSubmitState();
+          loadRoutingOptions();
+
+          routingForm.addEventListener("submit", async function (event) {{
+            event.preventDefault();
+            if (!routingPinEl || String(routingPinEl.value || "").trim() !== "1776") {{
+              routingStatusEl.textContent = "Authorization PIN is required and must be correct before submit.";
+              syncRoutingSubmitState();
+              return;
+            }}
+            if (!routingOptionEl || !String(routingOptionEl.value || "").trim()) {{
+              routingStatusEl.textContent = "Routing Option is required.";
+              syncRoutingSubmitState();
+              return;
+            }}
+
+            const formData = new FormData(routingForm);
+            routingStatusEl.textContent = "Submitting TN routing update...";
+            if (routingResultsEl) {{
+              routingResultsEl.innerHTML = "";
+            }}
+
+            try {{
+              const response = await fetch("/inteliquent/tn-routing-option-update", {{
+                method: "POST",
+                body: formData,
+              }});
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {{
+                routingStatusEl.textContent = "Routing update failed: " + (payload.error || "Unknown error");
+                return;
+              }}
+              routingStatusEl.textContent = "TN routing update submitted successfully.";
+              renderActionResult(routingResultsEl, payload, "TN Routing Update");
+            }} catch (err) {{
+              routingStatusEl.textContent = "Routing update failed: " + String(err && err.message ? err.message : err);
+            }}
+          }});
+        }}
+
         function syncTerminateSubmitState() {{
           if (!terminateSubmitBtn || !terminateConfirmEl || !terminatePinEl) {{
             return;
@@ -32478,6 +32657,300 @@ def _inteliquent_send_tn_action_email(
     )
   except Exception as exc:
     logger.warning("inteliquent tn action email failed for %s (recipient=%s): %s", action_label, recipient, exc)
+
+
+def _inteliquent_extract_routing_options(raw_payload: dict) -> list[dict]:
+  if not isinstance(raw_payload, dict):
+    return []
+
+  values = []
+  seen = set()
+
+  def _add(value):
+    text = str(value or "").strip()
+    if not text:
+      return
+    key = text.lower()
+    if key in seen:
+      return
+    seen.add(key)
+    values.append({"value": text})
+
+  candidates = []
+  for key in ("routingOptionList", "routingOptions", "tnRoutingOptions", "options"):
+    block = raw_payload.get(key)
+    if isinstance(block, dict):
+      for child_key in ("routingOptionItem", "routingOptions", "items", "data", "results"):
+        rows = block.get(child_key)
+        if isinstance(rows, list):
+          candidates.extend([item for item in rows if isinstance(item, dict)])
+    elif isinstance(block, list):
+      candidates.extend([item for item in block if isinstance(item, dict)])
+
+  for key in ("items", "data", "results"):
+    rows = raw_payload.get(key)
+    if isinstance(rows, list):
+      candidates.extend([item for item in rows if isinstance(item, dict)])
+
+  for item in candidates:
+    _add(item.get("routingOption"))
+    _add(item.get("routingOptionName"))
+    _add(item.get("customerRoutingOption"))
+    _add(item.get("customerRoutingOptionName"))
+    _add(item.get("routingLabel"))
+    _add(item.get("name"))
+    _add(item.get("code"))
+    _add(item.get("description"))
+
+  return values
+
+
+def _inteliquent_fetch_routing_options() -> dict:
+  attempts = []
+  endpoint_candidates = [
+    "/routingOptionList",
+    "/tnRoutingOptionList",
+    "/tnRoutingOptions",
+    "/routingOptions",
+    "/tnRoutingOption",
+  ]
+
+  base_payload = {
+    "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
+    "pageSort": {
+      "page": 1,
+      "size": 200,
+      "direction": "asc",
+      "property": "name",
+    },
+  }
+
+  for endpoint in endpoint_candidates:
+    call_result = _inteliquent_post_json(endpoint, base_payload)
+    raw_payload = call_result.get("raw", {}) or {}
+    options = _inteliquent_extract_routing_options(raw_payload)
+    attempts.append(
+      {
+        "endpoint": endpoint,
+        "ok": bool(call_result.get("ok")),
+        "status_code": int(call_result.get("status_code") or 0),
+        "options_count": len(options),
+      }
+    )
+    if call_result.get("ok") and options:
+      return {
+        "ok": True,
+        "options": sorted(options, key=lambda row: str(row.get("value", "")).lower()),
+        "source": endpoint,
+        "attempts": attempts,
+      }
+
+  detail_call = _inteliquent_post_json(
+    "/tnDetail",
+    {
+      "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
+      "tnSearchList": {
+        "tnSearchItem": [{"tnMask": "xxxxxxxxxx"}],
+      },
+      "pageSort": {
+        "page": 1,
+        "size": 500,
+        "direction": "asc",
+        "property": "tn",
+      },
+    },
+  )
+  detail_payload = detail_call.get("raw", {}) or {}
+  detail_rows = _inteliquent_extract_tn_rows(detail_payload)
+  seen = set()
+  fallback_options = []
+  for row in detail_rows:
+    if not isinstance(row, dict):
+      continue
+    value = str(
+      row.get("customerRoutingOption", "")
+      or row.get("customerRoutingOptionName", "")
+      or row.get("routingOptionName", "")
+      or row.get("routingOption", "")
+      or row.get("routingLabel", "")
+      or ""
+    ).strip()
+    if not value:
+      continue
+    key = value.lower()
+    if key in seen:
+      continue
+    seen.add(key)
+    fallback_options.append({"value": value})
+
+  attempts.append(
+    {
+      "endpoint": "/tnDetail(fallback)",
+      "ok": bool(detail_call.get("ok")),
+      "status_code": int(detail_call.get("status_code") or 0),
+      "options_count": len(fallback_options),
+    }
+  )
+
+  if fallback_options:
+    return {
+      "ok": True,
+      "options": sorted(fallback_options, key=lambda row: str(row.get("value", "")).lower()),
+      "source": "/tnDetail(fallback from assigned TNs)",
+      "attempts": attempts,
+    }
+
+  return {
+    "ok": False,
+    "error": "Unable to retrieve routing options from Inteliquent.",
+    "attempts": attempts,
+  }
+
+
+@app.get("/inteliquent/routing-options")
+def inteliquent_routing_options_route(request: Request):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", "") or "").strip()
+  if not session_username:
+    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
+  if not _is_admin_user(session_username):
+    return JSONResponse({"ok": False, "error": "Not authorized for Inteliquent Admin."}, status_code=403)
+
+  result = _inteliquent_fetch_routing_options()
+  if not result.get("ok"):
+    return JSONResponse(
+      {
+        "ok": False,
+        "error": str(result.get("error") or "Routing options lookup failed."),
+        "attempts": result.get("attempts", []),
+      },
+      status_code=502,
+    )
+
+  return JSONResponse(
+    {
+      "ok": True,
+      "options": result.get("options", []),
+      "source": result.get("source", ""),
+      "attempts": result.get("attempts", []),
+    }
+  )
+
+
+@app.post("/inteliquent/tn-routing-option-update")
+def inteliquent_tn_routing_option_update_route(
+  request: Request,
+  routing_tn_list: str = Form(""),
+  routing_option_value: str = Form(""),
+  routing_pin_code: str = Form(""),
+):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", "") or "").strip()
+  if not session_username:
+    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
+  if not _is_admin_user(session_username):
+    return JSONResponse({"ok": False, "error": "Not authorized for Inteliquent Admin."}, status_code=403)
+
+  if str(routing_pin_code or "").strip() != "1776":
+    return JSONResponse(
+      {"ok": False, "error": "Authorization PIN is invalid."},
+      status_code=403,
+    )
+
+  target_option = str(routing_option_value or "").strip()
+  if not target_option:
+    return JSONResponse(
+      {"ok": False, "error": "Routing Option is required."},
+      status_code=400,
+    )
+
+  numbers = _inteliquent_parse_tn_list(routing_tn_list)
+  if not numbers:
+    return JSONResponse(
+      {"ok": False, "error": "At least one valid 10-digit TN is required in the paste list."},
+      status_code=400,
+    )
+
+  endpoint_candidates = [
+    ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOption": target_option}]}}),
+    ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "routingOption": target_option}]}}),
+    ("/tnRoutingOptionUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOption": target_option}]}}),
+    ("/tnRoutingOption", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tn": tn, "customerRoutingOption": target_option}),
+  ]
+
+  per_number = []
+  success_count = 0
+  failed_count = 0
+
+  for tn in numbers:
+    updated = False
+    last_error = ""
+    attempt_log = []
+
+    for endpoint, payload_builder in endpoint_candidates:
+      payload = payload_builder(tn)
+      call_result = _inteliquent_post_json(endpoint, payload)
+      raw_payload = call_result.get("raw", {}) or {}
+      attempt_log.append(
+        {
+          "endpoint": endpoint,
+          "ok": bool(call_result.get("ok")),
+          "status_code": int(call_result.get("status_code") or 0),
+          "api_status": str(raw_payload.get("status", "") or "").strip(),
+          "api_status_code": str(raw_payload.get("statusCode", "") or "").strip(),
+          "api_message": str(raw_payload.get("message", "") or "").strip(),
+        }
+      )
+
+      if call_result.get("ok"):
+        updated = True
+        break
+      last_error = str(call_result.get("error") or "Update attempt failed.")
+
+    if updated:
+      success_count += 1
+      per_number.append(
+        {
+          "number": tn,
+          "status": "Success",
+          "details": f"Routing option set to '{target_option}'.",
+          "attempts": attempt_log,
+        }
+      )
+    else:
+      failed_count += 1
+      per_number.append(
+        {
+          "number": tn,
+          "status": "Failed",
+          "details": last_error or "Unable to update routing option.",
+          "attempts": attempt_log,
+        }
+      )
+
+  _inteliquent_send_tn_action_email(
+    request=request,
+    action_label=f"TN Routing Update ({target_option})",
+    numbers=numbers,
+    api_status="partial_success" if failed_count else "success",
+    api_status_code="",
+    api_message=f"{success_count} succeeded, {failed_count} failed.",
+  )
+
+  return JSONResponse(
+    {
+      "ok": True,
+      "all_succeeded": failed_count == 0,
+      "submitted_count": len(numbers),
+      "submitted_numbers": numbers,
+      "routing_option": target_option,
+      "success_count": success_count,
+      "failed_count": failed_count,
+      "message": f"{success_count} succeeded, {failed_count} failed out of {len(numbers)} TN(s).",
+      "results": per_number,
+    },
+    status_code=200,
+  )
 
 
 @app.post("/inteliquent/tn-inventory")
