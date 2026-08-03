@@ -482,7 +482,7 @@ SIP_CALL_SEARCH_LAB_ONLY = (os.getenv("SIP_CALL_SEARCH_LAB_ONLY", "true") or "tr
 }
 SIP_CALL_SEARCH_DEFAULT_UDP_PORT = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_UDP_PORT", "1024") or "1024").strip())
 SIP_CALL_SEARCH_DEFAULT_RETENTION_DAYS = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_RETENTION_DAYS", "14") or "14").strip())
-SIP_CALL_SEARCH_DEFAULT_TOTAL_MB = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_TOTAL_MB", "12288") or "12288").strip())
+SIP_CALL_SEARCH_DEFAULT_TOTAL_MB = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_TOTAL_MB", "4096") or "4096").strip())
 SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB = int((os.getenv("SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB", "15") or "15").strip())
 SIP_CALL_SEARCH_INDEX_SHARDS = 3
 SIP_CALL_SEARCH_SOURCE_MAP = {
@@ -620,7 +620,7 @@ DEFAULT_SETTINGS = {
   "sip_call_search_enabled": "true",
   "sip_call_search_udp_port": "1024",
   "sip_call_search_retention_days": "14",
-  "sip_call_search_total_mb": "12288",
+  "sip_call_search_total_mb": "4096",
   "sip_call_search_per_file_mb": "15",
 }
 SETTINGS_LOCK = threading.Lock()
@@ -6396,6 +6396,12 @@ def _sip_capture_listener_loop():
       if not packet_text:
         continue
       _sip_store_record(packet_text, received_at, source_ip)
+    except OSError as exc:
+      if getattr(exc, "errno", None) == 28:  # ENOSPC — back off instead of hot-looping
+        logger.error("SIP call-search listener: disk full, pausing 60 s: %s", exc)
+        time.sleep(60)
+      else:
+        logger.error("SIP call-search listener error: %s", exc, exc_info=True)
     except Exception as exc:
       logger.error("SIP call-search listener error: %s", exc, exc_info=True)
 
@@ -8983,11 +8989,14 @@ def _prune_audit_log_locked():
     if ts >= cutoff:
       kept_rows.append(row)
 
-  with open(AUDIT_LOG_PATH, "w", newline="", encoding="utf-8") as handle:
-    writer = csv.DictWriter(handle, fieldnames=AUDIT_FIELDS)
-    writer.writeheader()
-    for row in kept_rows:
-      writer.writerow({field: row.get(field, "") for field in AUDIT_FIELDS})
+  try:
+    with open(AUDIT_LOG_PATH, "w", newline="", encoding="utf-8") as handle:
+      writer = csv.DictWriter(handle, fieldnames=AUDIT_FIELDS)
+      writer.writeheader()
+      for row in kept_rows:
+        writer.writerow({field: row.get(field, "") for field in AUDIT_FIELDS})
+  except OSError as exc:
+    logger.warning("Audit log prune skipped (disk write error): %s", exc)
 
 
 def _append_audit_event(
@@ -9017,9 +9026,12 @@ def _append_audit_event(
   with AUDIT_LOG_LOCK:
     _ensure_audit_log()
     _prune_audit_log_locked()
-    with open(AUDIT_LOG_PATH, "a", newline="", encoding="utf-8") as handle:
-      writer = csv.writer(handle)
-      writer.writerow(row)
+    try:
+      with open(AUDIT_LOG_PATH, "a", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(row)
+    except OSError as exc:
+      logger.warning("Audit log append skipped (disk write error): %s", exc)
 
 
 def _ensure_genesys_bulk_history_log():
