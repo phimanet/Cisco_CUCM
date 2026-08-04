@@ -14972,7 +14972,7 @@ def _ls_did_lookup_assigned_user_in_cucm(
     return {
       "checked": True,
       "found": False,
-      "status": "Not Found in CUCM",
+      "status": "Not Found in CUCM (Review for Available)",
       "match_count": 0,
       "display_name": "",
       "userid": "",
@@ -14988,7 +14988,7 @@ def _ls_did_lookup_assigned_user_in_cucm(
   return {
     "checked": True,
     "found": True,
-    "status": "Active in CUCM",
+    "status": "Listed in CUCM (Still with AMN)",
     "match_count": len(candidates),
     "display_name": selected_display,
     "userid": selected_userid,
@@ -27623,7 +27623,7 @@ __ADMIN_CARD__
 
             const activeCount = Number(payload.active_count || 0);
             const staleCount = Number(payload.stale_count || 0);
-            statusEl.textContent = "Loaded " + rows.length + " LS Genesys DID pattern(s). Active in CUCM: " + activeCount + ", Not Found: " + staleCount + ".";
+            statusEl.textContent = "Loaded " + rows.length + " LS Genesys DID pattern(s). Listed in CUCM (Still with AMN): " + activeCount + ", Review for Available: " + staleCount + ".";
             let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
             html += '<thead><tr style="background:#005eb8; color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Pattern</th>';
@@ -27637,7 +27637,7 @@ __ADMIN_CARD__
               const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
               const assignedUser = (row.assigned_user || "").trim() || "-";
               const state = row.is_available ? "Available" : "Assigned";
-              const cucmActive = (row.cucm_user_status || "").trim() || (row.cucm_user_found ? "Active in CUCM" : "Not Found in CUCM");
+              const cucmActive = (row.cucm_user_status || "").trim() || (row.cucm_user_found ? "Listed in CUCM (Still with AMN)" : "Not Found in CUCM (Review for Available)");
               const cucmColor = row.cucm_user_found ? "#1f7a3d" : (row.is_available ? "#1f7a3d" : "#7a1020");
               const cucmUserid = (row.cucm_userid || "").trim() || "-";
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
