@@ -415,6 +415,10 @@ BLOCKED_CALLERID_TEMPLATE_PATH = os.path.join(
   "blocked_callerid_template.json",
 )
 BLOCKED_CALLERID_DESCRIPTION_MATCH_PREFIX = "Blocked CallerID Num"
+GENESYS_LS_DID_PATTERN_PREFIX = (os.getenv("GENESYS_LS_DID_PATTERN_PREFIX", "72760") or "72760").strip() or "72760"
+GENESYS_LS_DID_LIST_PATTERN_PREFIX = (os.getenv("GENESYS_LS_DID_LIST_PATTERN_PREFIX", "727") or "727").strip() or "727"
+GENESYS_LS_DID_DESCRIPTION_PREFIX = (os.getenv("GENESYS_LS_DID_DESCRIPTION_PREFIX", "LS Genesys DID") or "LS Genesys DID").strip() or "LS Genesys DID"
+GENESYS_LS_DID_AVAILABLE_SUFFIX = (os.getenv("GENESYS_LS_DID_AVAILABLE_SUFFIX", "Available") or "Available").strip() or "Available"
 CSF_JABBER_EMAIL_FROM = (os.getenv("CSF_JABBER_EMAIL_FROM", MOBILE_JABBER_EMAIL_FROM) or MOBILE_JABBER_EMAIL_FROM).strip()
 CSF_JABBER_TRAINING_URL = (
   "https://amnhealthcare.sharepoint.com/teams/AMNITTrainingContent-tm/_layouts/15/stream.aspx?id=%2Fteams%2FAMNITTrainingContent%2Dtm%2FShared%20Documents%2FGeneral%2FWatch%20and%20Learn%20Cisco%20Jabber%20Softphone%2012%2E9%2Emp4&referrer=StreamWebApp%2EWeb&referrerScenario=AddressBarCopied%2Eview%2Ef9fafd5b%2D7aeb%2D4bfb%2Dbc57%2Dda61d14ef75f"
@@ -4266,6 +4270,185 @@ def _genesys_get_user_search_profile(region: str, access_token: str, user_id: st
     "has_webrtc_inventory_match": bool(str(inventory_webrtc_phone or "").strip()),
     "skill_ids": skill_ids,
     "queue_ids": queue_ids,
+  }
+
+
+def _genesys_normalize_did_number(value: str) -> tuple[str, str, str]:
+  raw = str(value or "").strip()
+  digits = "".join(ch for ch in raw if ch.isdigit())
+  if len(digits) == 11 and digits.startswith("1"):
+    digits = digits[1:]
+  if len(digits) != 10:
+    return "", "", "DID must be a 10-digit US number (or 11 digits starting with 1)."
+  e164 = f"+1{digits}"
+  return digits, e164, ""
+
+
+def _genesys_station_association_ids(payload: dict) -> list[str]:
+  station_ids = []
+  seen = set()
+
+  def _add_station_id(station_id: str):
+    clean_station_id = str(station_id or "").strip()
+    if not clean_station_id or clean_station_id in seen:
+      return
+    seen.add(clean_station_id)
+    station_ids.append(clean_station_id)
+
+  def _walk(value):
+    if isinstance(value, dict):
+      station_obj = value.get("station") if isinstance(value.get("station"), dict) else {}
+      _add_station_id(station_obj.get("id", ""))
+      _add_station_id(value.get("stationId", ""))
+
+      if "lineAppearanceId" in value:
+        _add_station_id(value.get("lineAppearanceId", ""))
+
+      for nested in value.values():
+        _walk(nested)
+    elif isinstance(value, list):
+      for item in value:
+        _walk(item)
+
+  _walk(payload if isinstance(payload, dict) else {})
+  return station_ids
+
+
+def _genesys_payload_contains_did(payload: dict, did_10: str) -> bool:
+  if not isinstance(payload, dict):
+    return False
+
+  target = str(did_10 or "").strip()
+  if not target:
+    return False
+
+  values = []
+
+  def _walk(value):
+    if isinstance(value, dict):
+      for nested in value.values():
+        _walk(nested)
+      return
+    if isinstance(value, list):
+      for item in value:
+        _walk(item)
+      return
+    text = str(value or "").strip()
+    if text:
+      values.append(text)
+
+  _walk(payload)
+  for text in values:
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) == 11 and digits.startswith("1"):
+      digits = digits[1:]
+    if digits == target:
+      return True
+  return False
+
+
+def _genesys_assign_user_did(region: str, access_token: str, user_id: str, did_number: str, user_email: str = "") -> dict:
+  clean_user_id = str(user_id or "").strip()
+  if not clean_user_id:
+    return {"ok": False, "error": "User ID is required."}
+
+  did_10, did_e164, did_err = _genesys_normalize_did_number(did_number)
+  if did_err:
+    return {"ok": False, "error": did_err}
+
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+
+  ok_assoc, assoc_payload, assoc_err = _genesys_get_json(
+    api_base,
+    access_token,
+    f"/api/v2/users/{clean_user_id}/stationassociations",
+  )
+  if not ok_assoc:
+    return {
+      "ok": False,
+      "error": f"Unable to load station associations: {assoc_err}",
+      "did_10": did_10,
+      "did_e164": did_e164,
+    }
+
+  station_ids = _genesys_station_association_ids(assoc_payload)
+  if not station_ids:
+    return {
+      "ok": False,
+      "error": "No station association was found for this user. Build/associate WebRTC first.",
+      "did_10": did_10,
+      "did_e164": did_e164,
+    }
+
+  errors = []
+  success_path = ""
+  success_method = ""
+  success_status = 0
+
+  for station_id in station_ids:
+    attempts = [
+      ("PUT", f"/api/v2/users/{clean_user_id}/stationassociations", {"station": {"id": station_id}, "line": {"address": did_e164}}),
+      ("POST", f"/api/v2/users/{clean_user_id}/stationassociations", {"station": {"id": station_id}, "line": {"address": did_e164}}),
+      ("PUT", f"/api/v2/users/{clean_user_id}/stationassociations", {"stationId": station_id, "address": did_e164}),
+      ("POST", f"/api/v2/users/{clean_user_id}/stationassociations", {"stationId": station_id, "address": did_e164}),
+      ("PUT", f"/api/v2/users/{clean_user_id}/stationassociations/{station_id}", {"address": did_e164}),
+      ("PATCH", f"/api/v2/users/{clean_user_id}/stationassociations/{station_id}", {"address": did_e164}),
+      ("PUT", f"/api/v2/users/{clean_user_id}/station/{station_id}", {"address": did_e164}),
+    ]
+
+    for method, path, payload in attempts:
+      ok_set, _, err_set, status_set = _genesys_send_json(method, api_base, access_token, path, payload=payload)
+      if ok_set:
+        success_path = path
+        success_method = method
+        success_status = int(status_set or 0)
+        break
+      if err_set:
+        errors.append(f"{method} {path}: {err_set}")
+
+    if success_path:
+      break
+
+  if not success_path:
+    detail = " | ".join(errors[:8]) if errors else "No station update endpoint accepted the DID update request."
+    return {
+      "ok": False,
+      "error": f"DID assignment failed. {detail}",
+      "did_10": did_10,
+      "did_e164": did_e164,
+      "station_ids": station_ids,
+    }
+
+  ok_verify, verify_payload, verify_err = _genesys_get_json(
+    api_base,
+    access_token,
+    f"/api/v2/users/{clean_user_id}/stationassociations",
+  )
+  if not ok_verify:
+    return {
+      "ok": True,
+      "warning": f"DID update was accepted but verification read failed: {verify_err}",
+      "did_10": did_10,
+      "did_e164": did_e164,
+      "station_ids": station_ids,
+      "update_method": success_method,
+      "update_path": success_path,
+      "update_status": success_status,
+      "verified": False,
+    }
+
+  verified = _genesys_payload_contains_did(verify_payload, did_10)
+  return {
+    "ok": True,
+    "did_10": did_10,
+    "did_e164": did_e164,
+    "station_ids": station_ids,
+    "update_method": success_method,
+    "update_path": success_path,
+    "update_status": success_status,
+    "verified": verified,
+    "warning": "" if verified else "Update was accepted, but DID was not clearly visible in station association payload yet.",
+    "user_email": str(user_email or "").strip().lower(),
   }
 
 
@@ -14621,6 +14804,215 @@ def _list_translation_patterns_by_pattern(cucm_host: str, cucm_user: str, cucm_p
     return matches
 
 
+def _list_ls_genesys_did_available_patterns(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[dict]:
+    all_rows = _list_ls_genesys_did_patterns(
+      cucm_host=cucm_host,
+      cucm_user=cucm_user,
+      cucm_pass=cucm_pass,
+      pattern_prefix=GENESYS_LS_DID_PATTERN_PREFIX,
+      require_available_suffix=True,
+    )
+    expected_pattern_re = rf"{re.escape(GENESYS_LS_DID_PATTERN_PREFIX)}\d{{5}}"
+    rows = [item for item in all_rows if re.fullmatch(expected_pattern_re, str(item.get("pattern", "") or "").strip())]
+    rows.sort(key=lambda item: item.get("pattern", ""))
+    return rows
+
+
+def _list_ls_genesys_did_patterns(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  pattern_prefix: str,
+  require_available_suffix: bool = False,
+) -> list[dict]:
+    session = requests.Session()
+    session.verify = False
+    session.trust_env = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+    clean_prefix = (pattern_prefix or "").strip() or "727"
+    pattern_search = f"{clean_prefix}%"
+    description_search = f"{GENESYS_LS_DID_DESCRIPTION_PREFIX}%"
+    suffix_l = GENESYS_LS_DID_AVAILABLE_SUFFIX.casefold()
+
+    soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:listTransPattern sequence=\"1\">
+      <searchCriteria>
+        <pattern>{xml_escape(pattern_search)}</pattern>
+        <description>{xml_escape(description_search)}</description>
+      </searchCriteria>
+      <returnedTags>
+        <pattern/>
+        <routePartitionName/>
+        <description/>
+        <blockEnable/>
+      </returnedTags>
+    </axl:listTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = session.post(
+      f"https://{cucm_host}:8443/axl/",
+      data=soap_xml.encode("utf-8"),
+      headers={"Content-Type": "text/xml"},
+      verify=False,
+      timeout=60,
+    )
+    if response.status_code != 200:
+      raise RuntimeError(f"listTransPattern failed HTTP {response.status_code}: {response.text[:800]}")
+
+    root = ET.fromstring(response.text)
+    rows: list[dict] = []
+    for elem in root.iter():
+      if elem.tag.split("}")[-1] != "transPattern":
+        continue
+
+      row = {
+        "pattern": "",
+        "route_partition": "",
+        "description": "",
+        "block_enable": "",
+      }
+      for child in list(elem):
+        key = child.tag.split("}")[-1]
+        text = (child.text or "").strip()
+        if key == "pattern":
+          row["pattern"] = text
+        elif key == "routePartitionName":
+          row["route_partition"] = text
+        elif key == "description":
+          row["description"] = text
+        elif key == "blockEnable":
+          row["block_enable"] = text
+
+      pattern = (row.get("pattern") or "").strip()
+      description = (row.get("description") or "").strip()
+      if not pattern.startswith(clean_prefix):
+        continue
+      if not description.casefold().startswith(GENESYS_LS_DID_DESCRIPTION_PREFIX.casefold()):
+        continue
+      if require_available_suffix and not description.casefold().endswith(suffix_l):
+        continue
+      parsed_user = ""
+      upper_desc = description.upper()
+      prefix_token = "LS GENESYS DID"
+      idx = upper_desc.find(prefix_token)
+      if idx >= 0:
+        after = description[idx + len(prefix_token):].strip()
+        if after:
+          parts = after.split(None, 1)
+          if len(parts) >= 2:
+            parsed_user = parts[1].strip()
+      row["assigned_user"] = parsed_user
+      row["is_available"] = description.casefold().endswith(suffix_l)
+      rows.append(row)
+
+    rows.sort(key=lambda item: item.get("pattern", ""))
+    return rows
+
+
+def _update_translation_pattern_description(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  pattern: str,
+  route_partition: str,
+  description: str,
+):
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (route_partition or "").strip()
+  clean_description = (description or "").strip()
+  if not clean_pattern or not clean_partition:
+    raise RuntimeError("pattern and route_partition are required")
+  if not clean_description:
+    raise RuntimeError("description is required")
+
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:updateTransPattern sequence=\"1\">
+      <pattern>{xml_escape(clean_pattern)}</pattern>
+      <routePartitionName>{xml_escape(clean_partition)}</routePartitionName>
+      <description>{xml_escape(clean_description)}</description>
+    </axl:updateTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  response = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=soap_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    verify=False,
+    timeout=60,
+  )
+  if response.status_code != 200:
+    raise RuntimeError(f"updateTransPattern failed HTTP {response.status_code}: {response.text[:800]}")
+
+
+def _format_ls_genesys_did_description(pattern: str, first_name: str, last_name: str) -> str:
+  clean_pattern = (pattern or "").strip()
+  clean_first = (first_name or "").strip()
+  clean_last = (last_name or "").strip()
+  display_name = " ".join([part for part in [clean_first, clean_last] if part]).strip()
+  if not display_name:
+    display_name = "Unknown User"
+  return f"LS GENESYS DID {clean_pattern} {display_name}".strip()
+
+
+def _assign_available_ls_genesys_did(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  target_user: str,
+  first_name: str,
+  last_name: str,
+) -> dict:
+  clean_target = (target_user or "").strip()
+  if not clean_target:
+    raise RuntimeError("target_user is required")
+
+  available = _list_ls_genesys_did_available_patterns(cucm_host, cucm_user, cucm_pass)
+  if not available:
+    raise RuntimeError(
+      "No available LS DID translation pattern found. Expected pattern 72760XXXXX with description starting "
+      f"'{GENESYS_LS_DID_DESCRIPTION_PREFIX}' and ending '{GENESYS_LS_DID_AVAILABLE_SUFFIX}'."
+    )
+
+  selected = available[0]
+  pattern = str(selected.get("pattern", "") or "").strip()
+  route_partition = str(selected.get("route_partition", "") or "").strip()
+  old_description = str(selected.get("description", "") or "").strip()
+  if not pattern or not route_partition:
+    raise RuntimeError("Selected available LS DID pattern is missing pattern or route partition.")
+
+  new_description = _format_ls_genesys_did_description(pattern, first_name, last_name)
+  _update_translation_pattern_description(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    pattern=pattern,
+    route_partition=route_partition,
+    description=new_description,
+  )
+
+  return {
+    "target_user": clean_target,
+    "pattern": pattern,
+    "route_partition": route_partition,
+    "old_description": old_description,
+    "new_description": new_description,
+  }
+
+
 def _list_blocked_inbound_patterns(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[dict]:
     session = requests.Session()
     session.verify = False
@@ -23185,6 +23577,158 @@ def genesys_user_search_profile_route(user_email: str = Form("")):
   return JSONResponse(profile_result)
 
 
+@app.post("/genesys/ls-did/list")
+def genesys_ls_did_list_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=resolved_host, cucm_user=resolved_user)
+
+  rows = _list_ls_genesys_did_patterns(
+    cucm_host=resolved_host,
+    cucm_user=resolved_user,
+    cucm_pass=resolved_pass,
+    pattern_prefix=GENESYS_LS_DID_LIST_PATTERN_PREFIX,
+    require_available_suffix=False,
+  )
+
+  _append_audit_event(
+    action="genesys_ls_did_list",
+    cucm_host=resolved_host,
+    operator=resolved_user,
+    target=f"pattern_prefix={GENESYS_LS_DID_LIST_PATTERN_PREFIX};description_prefix={GENESYS_LS_DID_DESCRIPTION_PREFIX};count={len(rows)}",
+    output_filename="inline_json_ok",
+    inline_mode=True,
+  )
+
+  return JSONResponse({
+    "ok": True,
+    "count": len(rows),
+    "pattern_prefix": GENESYS_LS_DID_LIST_PATTERN_PREFIX,
+    "description_prefix": GENESYS_LS_DID_DESCRIPTION_PREFIX,
+    "results": rows,
+  })
+
+
+@app.post("/genesys/users/ls-did-assignment")
+def genesys_ls_user_did_assignment_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  target_user: str = Form(""),
+  first_name: str = Form(""),
+  last_name: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=resolved_host, cucm_user=resolved_user)
+
+  clean_target = (target_user or "").strip()
+  clean_first = (first_name or "").strip()
+  clean_last = (last_name or "").strip()
+  if not clean_target:
+    return JSONResponse({"ok": False, "error": "target_user is required."}, status_code=400)
+  if not clean_first and not clean_last:
+    return JSONResponse({"ok": False, "error": "First name and/or last name is required."}, status_code=400)
+
+  result = _assign_available_ls_genesys_did(
+    cucm_host=resolved_host,
+    cucm_user=resolved_user,
+    cucm_pass=resolved_pass,
+    target_user=clean_target,
+    first_name=clean_first,
+    last_name=clean_last,
+  )
+
+  assigned_pattern = str(result.get("pattern", "") or "").strip()
+  route_partition = str(result.get("route_partition", "") or "").strip()
+
+  template_job_id = ""
+  template_filename = ""
+  template_download_url = ""
+  template_field_count = 0
+  try:
+    _template_csv_data, template_filename, template_detail = build_translation_pattern_template(
+      cucm_host=resolved_host,
+      cucm_user=resolved_user,
+      cucm_pass=resolved_pass,
+      pattern_prefix=assigned_pattern,
+    )
+    template_job = _prepare_job_output(_template_csv_data, template_filename)
+    template_job_id = template_job["job_id"]
+    template_download_url = f"/download/job-output/{template_job_id}"
+    template_fields = template_detail.get("full_fields", {}) if isinstance(template_detail, dict) else {}
+    template_field_count = len(template_fields) if isinstance(template_fields, dict) else 0
+  except Exception as template_exc:
+    template_filename = ""
+    template_download_url = ""
+    template_field_count = 0
+    logger.warning("LS DID template extract failed for %s/%s: %s", assigned_pattern, route_partition, template_exc)
+
+  ldap_csv_data, ldap_filename = update_ad_phone_fields_only(
+    target_user=clean_target,
+    phone_number=assigned_pattern,
+    ad_username=resolved_user,
+    ad_password=resolved_pass,
+  )
+  ldap_output_text = ldap_csv_data.decode("utf-8", errors="replace") if isinstance(ldap_csv_data, (bytes, bytearray)) else str(ldap_csv_data)
+  ldap_status = "Unknown"
+  ldap_details = ""
+  try:
+    ldap_reader = csv.reader(io.StringIO(ldap_output_text))
+    ldap_rows = list(ldap_reader)
+    if len(ldap_rows) > 1 and len(ldap_rows[1]) >= 3:
+      ldap_status = str(ldap_rows[1][1] or "Unknown").strip() or "Unknown"
+      ldap_details = str(ldap_rows[1][2] or "").strip()
+  except Exception:
+    ldap_status = "Unknown"
+    ldap_details = "Unable to parse LDAP update output."
+
+  ldap_ok = ldap_status.casefold() == "success"
+
+  _append_audit_event(
+    action="genesys_ls_user_did_assignment",
+    cucm_host=resolved_host,
+    operator=resolved_user,
+    target=(
+      f"target_user={clean_target};"
+      f"pattern={assigned_pattern};"
+      f"route_partition={route_partition};"
+      f"old_desc={result.get('old_description', '')};"
+      f"new_desc={result.get('new_description', '')};"
+      f"ldap_status={ldap_status};"
+      f"template_fields={template_field_count}"
+    ),
+    account=clean_target,
+    extension_added=assigned_pattern,
+    output_filename="inline_json_ok",
+    inline_mode=True,
+  )
+
+  return JSONResponse({
+    "ok": True,
+    "target_user": clean_target,
+    "first_name": clean_first,
+    "last_name": clean_last,
+    "assigned_pattern": assigned_pattern,
+    "route_partition": route_partition,
+    "old_description": result.get("old_description", ""),
+    "new_description": result.get("new_description", ""),
+    "template_job_id": template_job_id,
+    "template_filename": template_filename,
+    "template_download_url": template_download_url,
+    "template_field_count": template_field_count,
+    "ldap_ok": ldap_ok,
+    "ldap_status": ldap_status,
+    "ldap_details": ldap_details,
+    "ldap_output_text": ldap_output_text,
+    "ldap_output_filename": ldap_filename,
+  })
+
+
 @app.post("/genesys/users/search-update-batch")
 def genesys_user_search_update_batch_route(
   request: Request,
@@ -24569,6 +25113,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="mobilejabbernotify">Re-send Jabber Mobile Email Instructions</button>
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
           <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
+          <button type="button" class="portal-nav-btn" data-panel="genesys-ls-user-did-assignment">Genesys LS User DID Assignment</button>
         </div>
       </aside>
 
@@ -26872,6 +27417,229 @@ __ADMIN_CARD__
         form.addEventListener("submit", function (event) {
           event.preventDefault();
           window.runMenuBlockedCallerAction("block");
+        });
+      })();
+    </script>
+    </section>
+
+    <section class="tool-panel" data-panel="genesys-ls-user-did-assignment">
+    <h3>Genesys LS User DID Assignment</h3>
+    <p>Lookup by last and first name, then assign the next available translation pattern matching <strong>72760XXXXX</strong> where description starts with <strong>LS Genesys DID</strong> and ends with <strong>Available</strong>.</p>
+    <p style="color:#355978; margin-top:6px;">Assigned description format is always: <strong>LS GENESYS DID 72760XXXXX Firstname Lastname</strong>.</p>
+    <form id="genesys-ls-did-lookup-form" class="jabber-check-form" style="max-width:720px;">
+      <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+      <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+      <input type="hidden" name="cucm_pass" value="">
+
+      <div class="compact-inline-row">
+        <span>Last Name:</span>
+        <input name="last_name" placeholder="Smith" required>
+      </div><br>
+
+      <div class="compact-inline-row">
+        <span>First Name (optional):</span>
+        <input name="first_name" placeholder="John">
+      </div><br>
+
+      <div class="action-row">
+        <button type="submit">Search User</button>
+        <button type="button" id="genesys-ls-did-list-btn" style="background:linear-gradient(180deg,#1d4f91,#12386a);">List LS Genesys DID Users</button>
+        <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+      </div>
+    </form>
+
+    <p id="genesys-ls-did-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter name and click Search User.</p>
+    <div id="genesys-ls-did-results" style="overflow-x:auto;"></div>
+
+    <script>
+      (function () {
+        const form = document.getElementById("genesys-ls-did-lookup-form");
+        const listBtn = document.getElementById("genesys-ls-did-list-btn");
+        const statusEl = document.getElementById("genesys-ls-did-status");
+        const resultsEl = document.getElementById("genesys-ls-did-results");
+
+        if (!form || !statusEl || !resultsEl) {
+          return;
+        }
+
+        async function loadLsDidList() {
+          statusEl.textContent = "Loading LS Genesys DID user list...";
+          resultsEl.innerHTML = "";
+          try {
+            const fd = new FormData();
+            fd.append("cucm_host", "__AUTH_CUCM_HOST__");
+            fd.append("cucm_user", "__AUTH_USER__");
+            fd.append("cucm_pass", "");
+            const resp = await fetch("/genesys/ls-did/list", {
+              method: "POST",
+              body: fd,
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+            });
+            const payload = await resp.json();
+            if (!resp.ok || !payload.ok) {
+              const msg = payload.error || payload.detail || "List lookup failed.";
+              throw new Error(msg);
+            }
+
+            const rows = payload.results || [];
+            if (!rows.length) {
+              statusEl.textContent = "No LS Genesys DID translation patterns found.";
+              return;
+            }
+
+            statusEl.textContent = "Loaded " + rows.length + " LS Genesys DID pattern(s).";
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Pattern</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Route Partition</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Assigned User</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Status</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Description</th>';
+            html += '</tr></thead><tbody>';
+            rows.forEach(function (row, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const assignedUser = (row.assigned_user || "").trim() || "-";
+              const state = row.is_available ? "Available" : "Assigned";
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.pattern || "") + '</td>';
+              html += '<td style="padding:7px 10px;">' + (row.route_partition || "") + '</td>';
+              html += '<td style="padding:7px 10px;">' + assignedUser + '</td>';
+              html += '<td style="padding:7px 10px; font-weight:700; color:' + (row.is_available ? "#1f7a3d" : "#12386a") + ';">' + state + '</td>';
+              html += '<td style="padding:7px 10px;">' + (row.description || "") + '</td>';
+              html += '</tr>';
+            });
+            html += '</tbody></table>';
+            resultsEl.innerHTML = html;
+          } catch (err) {
+            statusEl.textContent = "List lookup failed: " + ((err && err.message) || "Unknown error.");
+          }
+        }
+
+        if (listBtn) {
+          listBtn.addEventListener("click", function () {
+            loadLsDidList();
+          });
+        }
+
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          statusEl.textContent = "Searching...";
+          resultsEl.innerHTML = "";
+
+          try {
+            const formData = new FormData(form);
+            const response = await fetch("/lookup/person", {
+              method: "POST",
+              body: formData,
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+            });
+
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              const msg = (payload.error && payload.error.message) || payload.error || payload.detail || "Lookup failed.";
+              throw new Error(msg);
+            }
+
+            const results = payload.results || [];
+            if (!results.length) {
+              statusEl.textContent = "No users found matching that name.";
+              return;
+            }
+
+            statusEl.textContent = "Found " + results.length + " user(s). Select Assign Available LS DID.";
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
+            html += '</tr></thead><tbody>';
+
+            results.forEach(function (r, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const firstName = (r.first_name || "").trim();
+              const lastName = (r.last_name || "").trim();
+              const name = (r.display_name || (firstName + " " + lastName)).trim() || (r.userid || "");
+              const uid = (r.userid || "").trim();
+              const email = (r.email || "-").trim();
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px;">' + name + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+              html += '<td style="padding:7px 10px;">' + email + '</td>';
+              html += '<td style="padding:7px 10px;">';
+              html += '<button type="button" data-ls-user="' + uid + '" data-ls-first="' + firstName + '" data-ls-last="' + lastName + '" style="background:#237741; color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Assign Available LS DID</button>';
+              html += '</td>';
+              html += '</tr>';
+            });
+            html += '</tbody></table>';
+            resultsEl.innerHTML = html;
+
+            resultsEl.querySelectorAll("button[data-ls-user]").forEach(function (btn) {
+              btn.addEventListener("click", async function () {
+                const uid = (btn.getAttribute("data-ls-user") || "").trim();
+                const firstName = (btn.getAttribute("data-ls-first") || "").trim();
+                const lastName = (btn.getAttribute("data-ls-last") || "").trim();
+                if (!uid) {
+                  return;
+                }
+
+                const confirmMsg = "Assign next available LS DID to " + uid + "?";
+                if (!window.confirm(confirmMsg)) {
+                  return;
+                }
+
+                statusEl.textContent = "Assigning available LS DID for " + uid + "...";
+                try {
+                  const assignData = new FormData();
+                  assignData.append("cucm_host", "__AUTH_CUCM_HOST__");
+                  assignData.append("cucm_user", "__AUTH_USER__");
+                  assignData.append("cucm_pass", "");
+                  assignData.append("target_user", uid);
+                  assignData.append("first_name", firstName);
+                  assignData.append("last_name", lastName);
+
+                  const assignResp = await fetch("/genesys/users/ls-did-assignment", {
+                    method: "POST",
+                    body: assignData,
+                    credentials: "same-origin",
+                    headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                  });
+                  const assignPayload = await assignResp.json();
+                  if (!assignResp.ok || !assignPayload.ok) {
+                    const msg = assignPayload.error || assignPayload.detail || "Assignment failed.";
+                    throw new Error(msg);
+                  }
+
+                  statusEl.textContent = "Assigned " + (assignPayload.assigned_pattern || "") + " to " + uid + ".";
+
+                  const templateLink = (assignPayload.template_download_url || "").trim()
+                    ? ('<a href="' + assignPayload.template_download_url + '" style="color:#0b4f9c; font-weight:700;" target="_blank" rel="noopener">Download Extracted Template CSV</a>')
+                    : '<span style="color:#7a1020;">Template extract unavailable</span>';
+                  const ldapState = (assignPayload.ldap_ok ? "Success" : "Failed") + " (" + (assignPayload.ldap_status || "Unknown") + ")";
+
+                  const detailHtml = [
+                    '<div style="margin-top:10px; padding:10px; border:1px solid #c8dbee; border-radius:8px; background:#f7fbff;">',
+                    '<div><strong>Assigned Pattern:</strong> ' + (assignPayload.assigned_pattern || "") + '</div>',
+                    '<div><strong>Route Partition:</strong> ' + (assignPayload.route_partition || "") + '</div>',
+                    '<div><strong>Old Description:</strong> ' + (assignPayload.old_description || "") + '</div>',
+                    '<div><strong>New Description:</strong> ' + (assignPayload.new_description || "") + '</div>',
+                    '<div><strong>Template Fields Extracted:</strong> ' + String(assignPayload.template_field_count || 0) + '</div>',
+                    '<div><strong>Template CSV:</strong> ' + templateLink + '</div>',
+                    '<div><strong>LDAP Update (telephoneNumber + ipPhone):</strong> ' + ldapState + '</div>',
+                    '<div><strong>LDAP Details:</strong> ' + (assignPayload.ldap_details || "") + '</div>',
+                    '</div>'
+                  ].join("");
+                  resultsEl.insertAdjacentHTML("beforeend", detailHtml);
+                } catch (assignErr) {
+                  statusEl.textContent = "Assignment failed: " + ((assignErr && assignErr.message) || "Unknown error.");
+                }
+              });
+            });
+          } catch (err) {
+            statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+          }
         });
       })();
     </script>
