@@ -15050,6 +15050,13 @@ def _format_ls_genesys_did_description(pattern: str, first_name: str, last_name:
   return f"LS GENESYS DID {clean_pattern} {display_name}".strip()
 
 
+def _format_ls_genesys_available_description(pattern: str) -> str:
+  clean_pattern = (pattern or "").strip()
+  if not clean_pattern:
+    raise RuntimeError("pattern is required")
+  return f"LS GENESYS DID {clean_pattern} - Available"
+
+
 def _assign_available_ls_genesys_did(
   cucm_host: str,
   cucm_user: str,
@@ -15090,6 +15097,46 @@ def _assign_available_ls_genesys_did(
     "target_user": clean_target,
     "pattern": pattern,
     "route_partition": route_partition,
+    "old_description": old_description,
+    "new_description": new_description,
+  }
+
+
+def _release_ls_genesys_did(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  pattern: str,
+  route_partition: str,
+) -> dict:
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (route_partition or "").strip()
+  if not clean_pattern or not clean_partition:
+    raise RuntimeError("pattern and route_partition are required")
+
+  matches = _list_translation_patterns_by_pattern(cucm_host, cucm_user, cucm_pass, clean_pattern)
+  current = None
+  for item in matches:
+    if str(item.get("pattern", "") or "").strip() == clean_pattern and str(item.get("route_partition", "") or "").strip() == clean_partition:
+      current = item
+      break
+  if not current:
+    raise RuntimeError(f"Translation pattern {clean_pattern}/{clean_partition} was not found.")
+
+  old_description = str(current.get("description", "") or "").strip()
+  new_description = _format_ls_genesys_available_description(clean_pattern)
+  _update_translation_pattern_description(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    pattern=clean_pattern,
+    route_partition=clean_partition,
+    description=new_description,
+  )
+
+  return {
+    "pattern": clean_pattern,
+    "route_partition": clean_partition,
     "old_description": old_description,
     "new_description": new_description,
   }
@@ -23746,6 +23793,98 @@ def genesys_ls_did_list_route(
   })
 
 
+@app.post("/genesys/ls-did/release")
+def genesys_ls_did_release_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  pattern: str = Form(""),
+  route_partition: str = Form(""),
+  assigned_user: str = Form(""),
+  cucm_userid: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=resolved_host, cucm_user=resolved_user)
+
+  clean_pattern = str(pattern or "").strip()
+  clean_partition = str(route_partition or "").strip()
+  clean_assigned_user = str(assigned_user or "").strip()
+  clean_cucm_userid = str(cucm_userid or "").strip()
+  if not clean_pattern or not clean_partition:
+    return JSONResponse({"ok": False, "error": "pattern and route_partition are required."}, status_code=400)
+
+  tp_result = _release_ls_genesys_did(
+    cucm_host=resolved_host,
+    cucm_user=resolved_user,
+    cucm_pass=resolved_pass,
+    pattern=clean_pattern,
+    route_partition=clean_partition,
+  )
+
+  ldap_attempted = False
+  ldap_ok = False
+  ldap_status = "Skipped"
+  ldap_details = "CUCM user not found; LDAP clear not required."
+  if clean_cucm_userid:
+    ldap_attempted = True
+    ldap_csv_data, ldap_filename = update_ad_phone_fields_only(
+      target_user=clean_cucm_userid,
+      phone_number="",
+      ad_username=resolved_user,
+      ad_password=resolved_pass,
+    )
+    ldap_output_text = ldap_csv_data.decode("utf-8", errors="replace") if isinstance(ldap_csv_data, (bytes, bytearray)) else str(ldap_csv_data)
+    ldap_status = "Unknown"
+    ldap_details = ""
+    try:
+      ldap_reader = csv.reader(io.StringIO(ldap_output_text))
+      ldap_rows = list(ldap_reader)
+      if len(ldap_rows) > 1 and len(ldap_rows[1]) >= 3:
+        ldap_status = str(ldap_rows[1][1] or "Unknown").strip() or "Unknown"
+        ldap_details = str(ldap_rows[1][2] or "").strip()
+      else:
+        ldap_details = "LDAP response parsing returned no result rows."
+    except Exception as exc:
+      ldap_status = "Unknown"
+      ldap_details = f"LDAP parse failed: {exc}"
+    ldap_ok = ldap_status.casefold() == "success"
+    if not ldap_details:
+      ldap_details = "LDAP clear action completed."
+
+  _append_audit_event(
+    action="genesys_ls_did_release",
+    cucm_host=resolved_host,
+    operator=resolved_user,
+    target=(
+      f"pattern={clean_pattern};"
+      f"route_partition={clean_partition};"
+      f"assigned_user={clean_assigned_user};"
+      f"cucm_userid={clean_cucm_userid};"
+      f"ldap_attempted={ldap_attempted};"
+      f"ldap_status={ldap_status}"
+    ),
+    account=clean_cucm_userid,
+    extension_deleted=clean_pattern,
+    output_filename="inline_json_ok",
+    inline_mode=True,
+  )
+
+  return JSONResponse({
+    "ok": True,
+    "pattern": clean_pattern,
+    "route_partition": clean_partition,
+    "old_description": tp_result.get("old_description", ""),
+    "new_description": tp_result.get("new_description", ""),
+    "assigned_user": clean_assigned_user,
+    "cucm_userid": clean_cucm_userid,
+    "ldap_attempted": ldap_attempted,
+    "ldap_ok": ldap_ok,
+    "ldap_status": ldap_status,
+    "ldap_details": ldap_details,
+  })
+
+
 @app.post("/genesys/users/ls-did-assignment")
 def genesys_ls_user_did_assignment_route(
   request: Request,
@@ -27631,6 +27770,7 @@ __ADMIN_CARD__
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Status</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">CUCM Active</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">CUCM UserID</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Description</th>';
             html += '</tr></thead><tbody>';
             rows.forEach(function (row, i) {
@@ -27640,17 +27780,72 @@ __ADMIN_CARD__
               const cucmActive = (row.cucm_user_status || "").trim() || (row.cucm_user_found ? "Listed in CUCM (Still with AMN)" : "Not Found in CUCM (Review for Available)");
               const cucmColor = row.cucm_user_found ? "#1f7a3d" : (row.is_available ? "#1f7a3d" : "#7a1020");
               const cucmUserid = (row.cucm_userid || "").trim() || "-";
+              const releaseBtn = row.is_available
+                ? '<span style="color:#6b7280;">-</span>'
+                : ('<button type="button" data-ls-release-pattern="' + (row.pattern || "") + '" data-ls-release-partition="' + (row.route_partition || "") + '" data-ls-release-user="' + assignedUser + '" data-ls-release-cucm-userid="' + (row.cucm_userid || "") + '" style="background:linear-gradient(180deg,#a63b00,#7d2b00); color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Set Available</button>');
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.pattern || "") + '</td>';
               html += '<td style="padding:7px 10px;">' + assignedUser + '</td>';
               html += '<td style="padding:7px 10px; font-weight:700; color:' + (row.is_available ? "#1f7a3d" : "#12386a") + ';">' + state + '</td>';
               html += '<td style="padding:7px 10px; font-weight:700; color:' + cucmColor + ';">' + cucmActive + '</td>';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + cucmUserid + '</td>';
+              html += '<td style="padding:7px 10px;">' + releaseBtn + '</td>';
               html += '<td style="padding:7px 10px;">' + (row.description || "") + '</td>';
               html += '</tr>';
             });
             html += '</tbody></table>';
             resultsEl.innerHTML = html;
+
+            resultsEl.querySelectorAll('button[data-ls-release-pattern]').forEach(function (btn) {
+              btn.addEventListener('click', async function () {
+                const pattern = (btn.getAttribute('data-ls-release-pattern') || '').trim();
+                const routePartition = (btn.getAttribute('data-ls-release-partition') || '').trim();
+                const assignedUser = (btn.getAttribute('data-ls-release-user') || '').trim();
+                const cucmUserid = (btn.getAttribute('data-ls-release-cucm-userid') || '').trim();
+                if (!pattern || !routePartition) {
+                  return;
+                }
+
+                const confirmMsg = cucmUserid
+                  ? ('Set ' + pattern + ' back to Available and clear LDAP phone fields for ' + cucmUserid + '?')
+                  : ('Set ' + pattern + ' back to Available? LDAP clear will be skipped because user is not found in CUCM.');
+                if (!window.confirm(confirmMsg)) {
+                  return;
+                }
+
+                statusEl.textContent = 'Releasing ' + pattern + ' to Available...';
+                try {
+                  const fd = new FormData();
+                  fd.append('cucm_host', '__AUTH_CUCM_HOST__');
+                  fd.append('cucm_user', '__AUTH_USER__');
+                  fd.append('cucm_pass', '');
+                  fd.append('pattern', pattern);
+                  fd.append('route_partition', routePartition);
+                  fd.append('assigned_user', assignedUser);
+                  fd.append('cucm_userid', cucmUserid);
+
+                  const resp = await fetch('/genesys/ls-did/release', {
+                    method: 'POST',
+                    body: fd,
+                    credentials: 'same-origin',
+                    headers: { 'Accept': 'application/json', 'X-Requested-With': 'XMLHttpRequest' },
+                  });
+                  const payload = await resp.json();
+                  if (!resp.ok || !payload.ok) {
+                    const msg = payload.error || payload.detail || 'Release failed.';
+                    throw new Error(msg);
+                  }
+
+                  const ldapMsg = payload.ldap_attempted
+                    ? ('LDAP clear: ' + (payload.ldap_status || 'Unknown') + ' - ' + (payload.ldap_details || ''))
+                    : 'LDAP clear skipped (user not found in CUCM).';
+                  statusEl.textContent = 'Released ' + pattern + ' to Available. ' + ldapMsg;
+                  await loadLsDidList();
+                } catch (err) {
+                  statusEl.textContent = 'Release failed: ' + ((err && err.message) || 'Unknown error.');
+                }
+              });
+            });
           } catch (err) {
             statusEl.textContent = "List lookup failed: " + ((err && err.message) || "Unknown error.");
           }
