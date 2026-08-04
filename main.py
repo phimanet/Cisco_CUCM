@@ -621,6 +621,18 @@ DEFAULT_SETTINGS = {
   "dn_report_cucm_user": "ucmappadmin",
   "dn_report_cucm_pass": "abi3rto!",
   "dn_report_low_threshold": "10",
+  # Language Services Missing LS DID report scheduler (editable via Page 2 panel)
+  "ls_did_report_enabled": "true",
+  "ls_did_report_recipient": "",
+  "ls_did_report_recipient_2": "",
+  "ls_did_report_from": "",
+  "ls_did_report_hour": "8",
+  "ls_did_report_minute": "0",
+  "ls_did_report_weekly_day": "monday",
+  "ls_did_report_division_name": "Language Services",
+  "ls_did_report_cucm_host": "",
+  "ls_did_report_cucm_user": "ucmappadmin",
+  "ls_did_report_cucm_pass": "abi3rto!",
   "sip_call_search_enabled": "true",
   "sip_call_search_udp_port": "1024",
   "sip_call_search_retention_days": "14",
@@ -5644,6 +5656,45 @@ def _get_dn_report_settings() -> dict:
   }
 
 
+def _get_ls_did_report_settings() -> dict:
+  """Return live Language Services Missing LS DID report settings from settings.json."""
+  s = _load_settings()
+  dn = _get_dn_report_settings()
+
+  def _str(key, fallback=""):
+    v = (s.get(key) or "").strip()
+    return v if v else fallback
+
+  def _int(key, fallback):
+    v = (s.get(key) or "").strip()
+    try:
+      return int(v) if v else fallback
+    except ValueError:
+      return fallback
+
+  enabled_raw = (s.get("ls_did_report_enabled") or "").strip().lower()
+  enabled = True if not enabled_raw else enabled_raw in {"1", "true", "yes", "on"}
+
+  weekly_day = _str("ls_did_report_weekly_day", "monday").lower()
+  if weekly_day not in {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}:
+    weekly_day = "monday"
+
+  return {
+    "enabled": enabled,
+    "recipient": _str("ls_did_report_recipient"),
+    "recipient_2": _str("ls_did_report_recipient_2"),
+    "from_address": _str("ls_did_report_from", "noreply@amnhealthcare.com"),
+    "hour": _int("ls_did_report_hour", 8),
+    "minute": _int("ls_did_report_minute", 0),
+    "weekly_day": weekly_day,
+    "division_name": _str("ls_did_report_division_name", "Language Services"),
+    # Reuse DN report CUCM credentials by default for unattended scheduler reliability.
+    "cucm_host": _str("ls_did_report_cucm_host", dn["cucm_host"]),
+    "cucm_user": _str("ls_did_report_cucm_user", dn["cucm_user"]),
+    "cucm_pass": _str("ls_did_report_cucm_pass", dn["cucm_pass"]),
+  }
+
+
 def _get_blocked_cleanup_settings() -> dict:
   """Return live Blocked Number auto Cleanup settings from settings.json.
 
@@ -9055,6 +9106,10 @@ def _wants_json_response(request: Request) -> bool:
     "/admin/dn-avail-report/save-config",
     "/admin/dn-avail-report/run",
     "/admin/dn-avail-report/history",
+    "/admin/ls-did-missing-report/config",
+    "/admin/ls-did-missing-report/save-config",
+    "/admin/ls-did-missing-report/run",
+    "/admin/ls-did-missing-report/history",
     "/admin/blocked-cleanup/config",
     "/admin/blocked-cleanup/save-config",
     "/admin/blocked-cleanup/run",
@@ -10125,6 +10180,391 @@ def _dn_report_scheduler_loop():
 
 _dn_report_thread = threading.Thread(target=_dn_report_scheduler_loop, name="dn-avail-report-scheduler", daemon=True)
 _dn_report_thread.start()
+
+
+# ---------------------------------------------------------------------------
+# Language Services Missing LS DID Report - weekly scheduled email
+# ---------------------------------------------------------------------------
+_LS_DID_REPORT_SCHEDULER_LAST_FIRED: dict[str, str] = {}
+_LS_DID_REPORT_SCHEDULER_LOCK = threading.Lock()
+
+
+def _collect_language_services_missing_ls_did(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  division_name: str = "Language Services",
+  region: str = "",
+  access_token: str = "",
+) -> dict:
+  clean_region = (region or GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  clean_division_name = (division_name or "Language Services").strip() or "Language Services"
+
+  token_value = (access_token or "").strip()
+  if not token_value:
+    token_result = _genesys_get_queue_access_token(clean_region)
+    if not token_result.get("ok"):
+      return {
+        "ok": False,
+        "error": token_result.get("error", "Genesys token request failed."),
+      }
+    clean_region = str(token_result.get("region", clean_region) or clean_region).strip().lower()
+    token_value = str(token_result.get("access_token", "") or "").strip()
+
+  if not token_value:
+    return {"ok": False, "error": "Genesys token response did not include an access token."}
+
+  division_users_result = _genesys_list_users_in_division_by_name(clean_region, token_value, clean_division_name)
+  if not division_users_result.get("ok"):
+    return {
+      "ok": False,
+      "error": division_users_result.get("error", "Unable to load Genesys division users."),
+    }
+
+  ls_rows = _list_ls_genesys_did_patterns(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    pattern_prefix=GENESYS_LS_DID_LIST_PATTERN_PREFIX,
+    require_available_suffix=False,
+  )
+
+  def _norm_text(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+  assigned_by_userid: dict[str, list[dict]] = {}
+  assigned_by_name: dict[str, list[dict]] = {}
+
+  for row in ls_rows:
+    if bool(row.get("is_available", False)):
+      continue
+    assigned_user = str(row.get("assigned_user", "") or "").strip()
+    if not assigned_user:
+      continue
+
+    row_ref = {
+      "pattern": str(row.get("pattern", "") or "").strip(),
+      "route_partition": str(row.get("route_partition", "") or "").strip(),
+      "description": str(row.get("description", "") or "").strip(),
+      "assigned_user": assigned_user,
+      "cucm_userid": "",
+    }
+
+    assigned_name_key = _norm_text(assigned_user)
+    if assigned_name_key:
+      assigned_by_name.setdefault(assigned_name_key, []).append(row_ref)
+
+    cucm_lookup = _ls_did_lookup_assigned_user_in_cucm(
+      cucm_host,
+      cucm_user,
+      cucm_pass,
+      assigned_user,
+    )
+    cucm_userid = str(cucm_lookup.get("userid", "") or "").strip().lower()
+    if cucm_userid:
+      row_ref["cucm_userid"] = cucm_userid
+      assigned_by_userid.setdefault(cucm_userid, []).append(row_ref)
+
+  result_rows = []
+  missing_count = 0
+  assigned_count = 0
+
+  for user in division_users_result.get("rows", []):
+    if not isinstance(user, dict):
+      continue
+
+    username = str(user.get("username", "") or "").strip()
+    email = str(user.get("email", "") or "").strip()
+    name = str(user.get("name", "") or "").strip()
+    first_name = str(user.get("first_name", "") or "").strip()
+    last_name = str(user.get("last_name", "") or "").strip()
+    if not name:
+      name = " ".join([part for part in [first_name, last_name] if part]).strip()
+
+    email_local = email.split("@", 1)[0].strip().lower() if "@" in email else ""
+    user_keys = []
+    for candidate in [username.strip().lower(), email_local]:
+      if candidate and candidate not in user_keys:
+        user_keys.append(candidate)
+
+    match_rows: list[dict] = []
+    match_source = ""
+    for key in user_keys:
+      if key in assigned_by_userid:
+        match_rows = assigned_by_userid[key]
+        match_source = "userid"
+        break
+
+    if not match_rows:
+      name_key = _norm_text(name)
+      if name_key and name_key in assigned_by_name:
+        match_rows = assigned_by_name[name_key]
+        match_source = "name"
+
+    has_ls_did = bool(match_rows)
+    if has_ls_did:
+      assigned_count += 1
+    else:
+      missing_count += 1
+
+    patterns = []
+    for row_ref in match_rows:
+      pattern = str(row_ref.get("pattern", "") or "").strip()
+      if pattern and pattern not in patterns:
+        patterns.append(pattern)
+
+    result_rows.append({
+      "name": name,
+      "first_name": first_name,
+      "last_name": last_name,
+      "username": username,
+      "email": email,
+      "state": str(user.get("state", "") or "").strip(),
+      "division_name": str(user.get("division_name", "") or "").strip(),
+      "division_id": str(user.get("division_id", "") or "").strip(),
+      "has_ls_did": has_ls_did,
+      "missing_ls_did": not has_ls_did,
+      "ls_did_patterns": patterns,
+      "ls_did_pattern": patterns[0] if patterns else "",
+      "ls_did_assigned_user": str(match_rows[0].get("assigned_user", "") or "").strip() if match_rows else "",
+      "ls_did_route_partition": str(match_rows[0].get("route_partition", "") or "").strip() if match_rows else "",
+      "ls_did_cucm_userid": str(match_rows[0].get("cucm_userid", "") or "").strip() if match_rows else "",
+      "match_source": match_source,
+    })
+
+  result_rows.sort(key=lambda item: (0 if item.get("missing_ls_did") else 1, str(item.get("name", "")).lower(), str(item.get("email", "")).lower()))
+
+  return {
+    "ok": True,
+    "division_name": clean_division_name,
+    "region": clean_region,
+    "genesys_total_users": len(result_rows),
+    "missing_count": missing_count,
+    "assigned_count": assigned_count,
+    "genesys_pages_scanned": int(division_users_result.get("pages_scanned", 0) or 0),
+    "genesys_users_scanned": int(division_users_result.get("users_scanned", 0) or 0),
+    "results": result_rows,
+  }
+
+
+def _ls_did_missing_report_build_html(summary: dict, run_at: str) -> str:
+  rows = list(summary.get("results", []) or [])
+  division_name = str(summary.get("division_name", "Language Services") or "Language Services")
+  missing_count = int(summary.get("missing_count", 0) or 0)
+  assigned_count = int(summary.get("assigned_count", 0) or 0)
+  total = int(summary.get("genesys_total_users", len(rows)) or len(rows))
+
+  row_parts = []
+  for row in rows:
+    is_missing = bool(row.get("missing_ls_did", False))
+    bg = "#fff5f3" if is_missing else "#ffffff"
+    badge_bg = "#a63b00" if is_missing else "#2e7d32"
+    badge_label = "Missing" if is_missing else "Has LS DID"
+    patterns = ", ".join([str(p or "").strip() for p in (row.get("ls_did_patterns", []) or []) if str(p or "").strip()]) or "-"
+
+    row_parts.append(
+      f'<tr style="background:{bg}">'
+      f'<td style="padding:8px 12px;border-bottom:1px solid #eee">{escape(str(row.get("name", "") or "-"))}</td>'
+      f'<td style="padding:8px 12px;border-bottom:1px solid #eee;font-family:monospace">{escape(str(row.get("username", "") or "-"))}</td>'
+      f'<td style="padding:8px 12px;border-bottom:1px solid #eee">{escape(str(row.get("email", "") or "-"))}</td>'
+      f'<td style="padding:8px 12px;border-bottom:1px solid #eee">{escape(str(row.get("state", "") or "-"))}</td>'
+      f'<td style="padding:8px 12px;border-bottom:1px solid #eee"><span style="background:{badge_bg};color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">{badge_label}</span></td>'
+      f'<td style="padding:8px 12px;border-bottom:1px solid #eee;font-family:monospace">{escape(patterns)}</td>'
+      "</tr>"
+    )
+
+  rows_html = "\n".join(row_parts) if row_parts else (
+    '<tr><td colspan="6" style="padding:16px;text-align:center;color:#888">No users returned for this division.</td></tr>'
+  )
+
+  return f"""<!DOCTYPE html>
+<html>
+<head><meta charset=\"utf-8\"></head>
+<body style=\"font-family:Arial,sans-serif;color:#333;margin:0;padding:0\">
+<div style=\"max-width:980px;margin:24px auto;background:#fff;border:1px solid #ddd;border-radius:8px;overflow:hidden\">
+  <div style=\"background:#1a237e;color:#fff;padding:20px 28px\">
+    <h2 style=\"margin:0 0 4px 0\">Language Services Missing LS DID Report</h2>
+    <p style=\"margin:0;font-size:14px;opacity:.85\">Division: {escape(division_name)} &nbsp;|&nbsp; Run at: {escape(run_at)}</p>
+  </div>
+  <div style=\"padding:20px 28px\">
+    <div style=\"display:flex;gap:14px;margin-bottom:20px\">
+      <div style=\"background:#ffebee;border-radius:6px;padding:12px 20px;flex:1;text-align:center\">
+        <div style=\"font-size:26px;font-weight:bold;color:#b71c1c\">{missing_count}</div>
+        <div style=\"font-size:12px;color:#555\">Missing LS DID</div>
+      </div>
+      <div style=\"background:#e8f5e9;border-radius:6px;padding:12px 20px;flex:1;text-align:center\">
+        <div style=\"font-size:26px;font-weight:bold;color:#2e7d32\">{assigned_count}</div>
+        <div style=\"font-size:12px;color:#555\">Has LS DID</div>
+      </div>
+      <div style=\"background:#e3f2fd;border-radius:6px;padding:12px 20px;flex:1;text-align:center\">
+        <div style=\"font-size:26px;font-weight:bold;color:#1565c0\">{total}</div>
+        <div style=\"font-size:12px;color:#555\">Total Division Users</div>
+      </div>
+    </div>
+
+    <table style=\"width:100%;border-collapse:collapse;font-size:14px\">
+      <thead>
+        <tr style=\"background:#f5f5f5\">
+          <th style=\"padding:10px 12px;text-align:left;border-bottom:2px solid #ddd\">Name</th>
+          <th style=\"padding:10px 12px;text-align:left;border-bottom:2px solid #ddd\">Username</th>
+          <th style=\"padding:10px 12px;text-align:left;border-bottom:2px solid #ddd\">Email</th>
+          <th style=\"padding:10px 12px;text-align:left;border-bottom:2px solid #ddd\">Genesys State</th>
+          <th style=\"padding:10px 12px;text-align:left;border-bottom:2px solid #ddd\">LS DID Status</th>
+          <th style=\"padding:10px 12px;text-align:left;border-bottom:2px solid #ddd\">LS DID Pattern(s)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {rows_html}
+      </tbody>
+    </table>
+
+    <p style=\"margin:18px 0 0 0;font-size:12px;color:#aaa\">This is an automated report from the CUCM Voice Automation Portal.</p>
+  </div>
+</div>
+</body>
+</html>"""
+
+
+def _run_ls_did_missing_report(triggered_by: str = "scheduler") -> dict:
+  try:
+    cfg = _get_ls_did_report_settings()
+    if not cfg["enabled"] and str(triggered_by).startswith("scheduler"):
+      return {"success": False, "error": "Scheduler disabled."}
+
+    cucm_host = cfg["cucm_host"]
+    cucm_user = cfg["cucm_user"]
+    cucm_pass = cfg["cucm_pass"]
+    if not cucm_host or not cucm_user or not cucm_pass:
+      raise RuntimeError("CUCM credentials for LS DID report are not configured. Set them in the Page 2 panel settings.")
+
+    recipient = cfg["recipient"]
+    recipient_2 = cfg["recipient_2"]
+    recipients = [r for r in [recipient, recipient_2] if r]
+    if not recipients:
+      raise RuntimeError("No recipients configured for LS DID missing report.")
+
+    summary = _collect_language_services_missing_ls_did(
+      cucm_host=cucm_host,
+      cucm_user=cucm_user,
+      cucm_pass=cucm_pass,
+      division_name=cfg["division_name"],
+      region=GENESYS_CLOUD_REGION,
+    )
+    if not summary.get("ok"):
+      raise RuntimeError(str(summary.get("error", "Unable to build LS DID missing summary.")))
+
+    run_at = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+    subject = f"[CUCM] Language Services Missing LS DID Report - {run_at[:10]}"
+    html_body = _ls_did_missing_report_build_html(summary, run_at)
+    missing_rows = [row for row in list(summary.get("results", []) or []) if bool(row.get("missing_ls_did", False))]
+    plain_lines = [
+      "Language Services Missing LS DID Report",
+      f"Run at: {run_at}",
+      f"Division: {summary.get('division_name', 'Language Services')}",
+      f"Total users: {summary.get('genesys_total_users', 0)}",
+      f"Missing LS DID: {summary.get('missing_count', 0)}",
+      f"Has LS DID: {summary.get('assigned_count', 0)}",
+      "",
+      "Missing Users:",
+    ]
+    if missing_rows:
+      for row in missing_rows:
+        plain_lines.append(
+          "  " + " | ".join([
+            str(row.get("name", "") or "-"),
+            str(row.get("username", "") or "-"),
+            str(row.get("email", "") or "-"),
+          ])
+        )
+    else:
+      plain_lines.append("  None")
+    plain_body = "\n".join(plain_lines)
+
+    _send_smtp_email(
+      sender=cfg["from_address"] or "noreply@amnhealthcare.com",
+      recipients=recipients,
+      subject=subject,
+      body=plain_body,
+      html_body=html_body,
+    )
+
+    missing_pipe = "|".join(
+      str(row.get("username", "") or row.get("email", "") or row.get("name", "") or "").strip()
+      for row in missing_rows
+      if str(row.get("username", "") or row.get("email", "") or row.get("name", "") or "").strip()
+    ) or "none"
+
+    _append_audit_event(
+      action="ls_did_missing_report_sent",
+      cucm_host=cucm_host,
+      operator=triggered_by,
+      target=(
+        f"division={summary.get('division_name', 'Language Services')};"
+        f"total={summary.get('genesys_total_users', 0)};"
+        f"missing={summary.get('missing_count', 0)};"
+        f"assigned={summary.get('assigned_count', 0)}"
+      ),
+      account="|".join(recipients),
+      extension_deleted=missing_pipe,
+      output_filename=f"ls_did_missing_report_{run_at[:10].replace('-', '')}.html",
+      inline_mode=False,
+    )
+
+    return {
+      "success": True,
+      "run_at": run_at,
+      "recipients": recipients,
+      "summary": summary,
+      "missing_rows": missing_rows,
+    }
+  except Exception as exc:
+    logger.error("ls_did_missing_report failed: %s", exc, exc_info=True)
+    return {"success": False, "error": str(exc)}
+
+
+def _ls_did_missing_report_scheduler_loop():
+  """Daemon thread: fires weekly LS DID missing report at configured PST time/day."""
+  tz = ZoneInfo("America/Los_Angeles")
+  days = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+
+  while True:
+    try:
+      time.sleep(60)
+      cfg = _get_ls_did_report_settings()
+      if not cfg["enabled"]:
+        continue
+
+      now = datetime.datetime.now(tz=tz)
+      if now.hour != cfg["hour"] or now.minute != cfg["minute"]:
+        continue
+
+      target_weekday = days.index(cfg["weekly_day"]) if cfg["weekly_day"] in days else 0
+      if now.weekday() != target_weekday:
+        continue
+
+      fire_key = now.strftime("%Y-%m-%d")
+      with _LS_DID_REPORT_SCHEDULER_LOCK:
+        if _LS_DID_REPORT_SCHEDULER_LAST_FIRED.get("last") == fire_key:
+          continue
+        _LS_DID_REPORT_SCHEDULER_LAST_FIRED["last"] = fire_key
+
+      logger.info("ls_did_missing_report: firing for key=%s", fire_key)
+      result = _run_ls_did_missing_report(triggered_by="scheduler")
+      logger.info("ls_did_missing_report: result=%s", result)
+    except Exception as exc:
+      logger.error("ls_did_missing_report_scheduler_loop error: %s", exc, exc_info=True)
+
+
+_ls_did_missing_report_thread = None
+if _is_prod_runtime_host_strict():
+  _ls_did_missing_report_thread = threading.Thread(
+    target=_ls_did_missing_report_scheduler_loop,
+    name="ls-did-missing-report-scheduler",
+    daemon=True,
+  )
+  _ls_did_missing_report_thread.start()
+else:
+  logger.info("ls_did_missing_report scheduler disabled on non-PROD runtime host")
 
 
 # ---------------------------------------------------------------------------
@@ -23863,139 +24303,16 @@ def genesys_ls_did_language_services_missing_route(
   resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
   _update_cached_credentials(request, cucm_host=resolved_host, cucm_user=resolved_user)
 
-  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
-  token_result = _genesys_get_queue_access_token(clean_region)
-  if not token_result.get("ok"):
-    return JSONResponse({
-      "ok": False,
-      "error": token_result.get("error", "Genesys token request failed."),
-    }, status_code=400)
-
-  region = str(token_result.get("region", clean_region) or clean_region).strip().lower()
-  access_token = str(token_result.get("access_token", "") or "").strip()
-  if not access_token:
-    return JSONResponse({"ok": False, "error": "Genesys token response did not include an access token."}, status_code=400)
-
   division_name = "Language Services"
-  division_users_result = _genesys_list_users_in_division_by_name(region, access_token, division_name)
-  if not division_users_result.get("ok"):
-    return JSONResponse({
-      "ok": False,
-      "error": division_users_result.get("error", "Unable to load Genesys division users."),
-    }, status_code=400)
-
-  ls_rows = _list_ls_genesys_did_patterns(
+  summary = _collect_language_services_missing_ls_did(
     cucm_host=resolved_host,
     cucm_user=resolved_user,
     cucm_pass=resolved_pass,
-    pattern_prefix=GENESYS_LS_DID_LIST_PATTERN_PREFIX,
-    require_available_suffix=False,
+    division_name=division_name,
+    region=GENESYS_CLOUD_REGION,
   )
-
-  def _norm_text(value: str) -> str:
-    return " ".join(str(value or "").strip().lower().split())
-
-  assigned_by_userid: dict[str, list[dict]] = {}
-  assigned_by_name: dict[str, list[dict]] = {}
-
-  for row in ls_rows:
-    if bool(row.get("is_available", False)):
-      continue
-    assigned_user = str(row.get("assigned_user", "") or "").strip()
-    if not assigned_user:
-      continue
-
-    row_ref = {
-      "pattern": str(row.get("pattern", "") or "").strip(),
-      "route_partition": str(row.get("route_partition", "") or "").strip(),
-      "description": str(row.get("description", "") or "").strip(),
-      "assigned_user": assigned_user,
-      "cucm_userid": "",
-    }
-
-    assigned_name_key = _norm_text(assigned_user)
-    if assigned_name_key:
-      assigned_by_name.setdefault(assigned_name_key, []).append(row_ref)
-
-    cucm_lookup = _ls_did_lookup_assigned_user_in_cucm(
-      resolved_host,
-      resolved_user,
-      resolved_pass,
-      assigned_user,
-    )
-    cucm_userid = str(cucm_lookup.get("userid", "") or "").strip().lower()
-    if cucm_userid:
-      row_ref["cucm_userid"] = cucm_userid
-      assigned_by_userid.setdefault(cucm_userid, []).append(row_ref)
-
-  result_rows = []
-  missing_count = 0
-  assigned_count = 0
-
-  for user in division_users_result.get("rows", []):
-    if not isinstance(user, dict):
-      continue
-
-    username = str(user.get("username", "") or "").strip()
-    email = str(user.get("email", "") or "").strip()
-    name = str(user.get("name", "") or "").strip()
-    first_name = str(user.get("first_name", "") or "").strip()
-    last_name = str(user.get("last_name", "") or "").strip()
-    if not name:
-      name = " ".join([part for part in [first_name, last_name] if part]).strip()
-
-    email_local = email.split("@", 1)[0].strip().lower() if "@" in email else ""
-    user_keys = []
-    for candidate in [username.strip().lower(), email_local]:
-      if candidate and candidate not in user_keys:
-        user_keys.append(candidate)
-
-    match_rows: list[dict] = []
-    match_source = ""
-    for key in user_keys:
-      if key in assigned_by_userid:
-        match_rows = assigned_by_userid[key]
-        match_source = "userid"
-        break
-
-    if not match_rows:
-      name_key = _norm_text(name)
-      if name_key and name_key in assigned_by_name:
-        match_rows = assigned_by_name[name_key]
-        match_source = "name"
-
-    has_ls_did = bool(match_rows)
-    if has_ls_did:
-      assigned_count += 1
-    else:
-      missing_count += 1
-
-    patterns = []
-    for row_ref in match_rows:
-      pattern = str(row_ref.get("pattern", "") or "").strip()
-      if pattern and pattern not in patterns:
-        patterns.append(pattern)
-
-    result_rows.append({
-      "name": name,
-      "first_name": first_name,
-      "last_name": last_name,
-      "username": username,
-      "email": email,
-      "state": str(user.get("state", "") or "").strip(),
-      "division_name": str(user.get("division_name", "") or "").strip(),
-      "division_id": str(user.get("division_id", "") or "").strip(),
-      "has_ls_did": has_ls_did,
-      "missing_ls_did": not has_ls_did,
-      "ls_did_patterns": patterns,
-      "ls_did_pattern": patterns[0] if patterns else "",
-      "ls_did_assigned_user": str(match_rows[0].get("assigned_user", "") or "").strip() if match_rows else "",
-      "ls_did_route_partition": str(match_rows[0].get("route_partition", "") or "").strip() if match_rows else "",
-      "ls_did_cucm_userid": str(match_rows[0].get("cucm_userid", "") or "").strip() if match_rows else "",
-      "match_source": match_source,
-    })
-
-  result_rows.sort(key=lambda item: (0 if item.get("missing_ls_did") else 1, str(item.get("name", "")).lower(), str(item.get("email", "")).lower()))
+  if not summary.get("ok"):
+    return JSONResponse({"ok": False, "error": summary.get("error", "Unable to run Language Services LS DID lookup.")}, status_code=400)
 
   _append_audit_event(
     action="genesys_ls_did_language_services_missing",
@@ -24003,26 +24320,16 @@ def genesys_ls_did_language_services_missing_route(
     operator=resolved_user,
     target=(
       f"division={division_name};"
-      f"total_users={len(result_rows)};"
-      f"missing_ls_did={missing_count};"
-      f"assigned_ls_did={assigned_count};"
-      f"region={region}"
+      f"total_users={summary.get('genesys_total_users', 0)};"
+      f"missing_ls_did={summary.get('missing_count', 0)};"
+      f"assigned_ls_did={summary.get('assigned_count', 0)};"
+      f"region={summary.get('region', '')}"
     ),
     output_filename="inline_json_ok",
     inline_mode=True,
   )
 
-  return JSONResponse({
-    "ok": True,
-    "division_name": division_name,
-    "region": region,
-    "genesys_total_users": len(result_rows),
-    "missing_count": missing_count,
-    "assigned_count": assigned_count,
-    "genesys_pages_scanned": int(division_users_result.get("pages_scanned", 0) or 0),
-    "genesys_users_scanned": int(division_users_result.get("users_scanned", 0) or 0),
-    "results": result_rows,
-  })
+  return JSONResponse(summary)
 
 
 @app.post("/genesys/ls-did/release")
@@ -35394,6 +35701,11 @@ def menu_admin_page(request: Request):
     if blocked_cleanup_is_prod else ""
   )
 
+  ls_did_missing_report_nav_html = (
+    '<button type="button" class="portal-nav-btn" data-panel="ls-did-missing-report">Language Services Missing LS DID Report</button>'
+    if blocked_cleanup_is_prod else ""
+  )
+
   html = """
 <html>
   <head>
@@ -36050,6 +36362,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="ad-group-identifiers">Security Group Identifier (Read-Only)</button>
             <button type="button" class="portal-nav-btn" data-panel="sep-sms-report">SMS Separation Email Process</button>
             <button type="button" class="portal-nav-btn" data-panel="dn-avail-report">DN Number Pool Availability Report</button>
+            __LS_DID_MISSING_REPORT_NAV__
             __BLOCKED_CLEANUP_NAV__
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page4'">Server Certificate Manager (Page 4)</button>
           </div>
@@ -37098,6 +37411,82 @@ def menu_admin_page(request: Request):
         <button type="button" id="dn-report-history-btn" style="font-size:12px;padding:5px 14px;margin-bottom:10px;">Refresh History</button>
         <div id="dn-report-history-loading" style="color:#888;font-size:13px;display:none;">Loading...</div>
         <div id="dn-report-history-results" style="overflow-x:auto;"></div>
+      </section>
+
+      <section class="panel tool-panel" data-panel="ls-did-missing-report">
+        <h3>Language Services Missing LS DID Report</h3>
+        <p>Runs the same full lookup as the Page 1 button <strong>Language Services Missing LS DID</strong> and emails a weekly report showing who is missing an LS DID assignment.</p>
+
+        <div style="background:#f0f4fa;border:1px solid #c5d4e8;border-radius:6px;padding:18px;margin-bottom:20px;">
+          <h4 style="margin:0 0 14px 0;color:#002f6c;">Scheduler Settings</h4>
+          <div id="ls-did-report-config-loading" style="color:#888;font-size:13px;">Loading settings...</div>
+          <div id="ls-did-report-config-form-wrap" style="display:none">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px 20px;margin-bottom:14px;">
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Primary Recipient *</label>
+                <input id="ls-did-cfg-recipient" type="email" placeholder="admin@amnhealthcare.com" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Second Recipient <span style="font-weight:400;color:#888">(optional)</span></label>
+                <input id="ls-did-cfg-recipient-2" type="email" placeholder="Leave blank to disable" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">From Address</label>
+                <input id="ls-did-cfg-from" type="email" placeholder="noreply@amnhealthcare.com" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Enabled</label>
+                <select id="ls-did-cfg-enabled" style="width:100%;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <option value="true">OK Yes - weekly scheduler active</option>
+                  <option value="false">X No - paused</option>
+                </select>
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Weekly Day</label>
+                <select id="ls-did-cfg-weekly-day" style="width:100%;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <option value="monday">Monday</option>
+                  <option value="tuesday">Tuesday</option>
+                  <option value="wednesday">Wednesday</option>
+                  <option value="thursday">Thursday</option>
+                  <option value="friday">Friday</option>
+                  <option value="saturday">Saturday</option>
+                  <option value="sunday">Sunday</option>
+                </select>
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Send Time (PST/PDT)</label>
+                <div style="display:flex;gap:8px;align-items:center">
+                  <input id="ls-did-cfg-hour" type="number" min="0" max="23" placeholder="8" style="width:70px;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <span style="color:#555">:</span>
+                  <input id="ls-did-cfg-minute" type="number" min="0" max="59" placeholder="0" style="width:70px;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+                  <span style="font-size:12px;color:#888">24-hr PST/PDT</span>
+                </div>
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">Division Name</label>
+                <input id="ls-did-cfg-division" type="text" placeholder="Language Services" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+              <div>
+                <label style="font-size:12px;font-weight:600;color:#002f6c;display:block;margin-bottom:4px">CUCM Host</label>
+                <input id="ls-did-cfg-cucm-host" type="text" placeholder="lascucmpp01.ahs.int" style="width:100%;box-sizing:border-box;padding:7px 10px;border:1px solid #bcd;border-radius:4px;font-size:13px">
+              </div>
+            </div>
+            <button type="button" id="ls-did-report-save-btn" style="background:#1565c0;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;cursor:pointer;font-weight:600;">Save Settings</button>
+            <span id="ls-did-report-save-status" style="margin-left:12px;font-size:13px;"></span>
+          </div>
+        </div>
+
+        <div style="margin-bottom:20px;">
+          <button type="button" id="ls-did-report-run-btn" style="background:#1a237e;color:#fff;border:none;padding:10px 24px;border-radius:6px;font-size:14px;cursor:pointer;font-weight:600;">Run Report Now</button>
+          <span style="font-size:12px;color:#888;margin-left:12px;">Runs full Language Services Missing LS DID lookup now and emails results.</span>
+        </div>
+        <div id="ls-did-report-run-status" style="min-height:18px;margin-bottom:16px;"></div>
+        <div id="ls-did-report-run-preview" style="overflow-x:auto;margin-bottom:16px;"></div>
+
+        <h4 style="color:#002f6c;margin-bottom:8px;">Recent Send History</h4>
+        <button type="button" id="ls-did-report-history-btn" style="font-size:12px;padding:5px 14px;margin-bottom:10px;">Refresh History</button>
+        <div id="ls-did-report-history-loading" style="color:#888;font-size:13px;display:none;">Loading...</div>
+        <div id="ls-did-report-history-results" style="overflow-x:auto;"></div>
       </section>
 
       <section class="panel tool-panel" data-panel="blocked-cleanup">
@@ -39419,6 +39808,204 @@ def menu_admin_page(request: Request):
             }
           })();
 
+          // ---- Language Services Missing LS DID Report panel -----------------
+          (function () {
+            const cfgLoading = document.getElementById("ls-did-report-config-loading");
+            const cfgWrap = document.getElementById("ls-did-report-config-form-wrap");
+            const saveBtn = document.getElementById("ls-did-report-save-btn");
+            const saveStatus = document.getElementById("ls-did-report-save-status");
+            const runBtn = document.getElementById("ls-did-report-run-btn");
+            const runStatus = document.getElementById("ls-did-report-run-status");
+            const runPreview = document.getElementById("ls-did-report-run-preview");
+            const histBtn = document.getElementById("ls-did-report-history-btn");
+            const histLoading = document.getElementById("ls-did-report-history-loading");
+            const histResults = document.getElementById("ls-did-report-history-results");
+
+            function loadConfig() {
+              if (!cfgLoading) return;
+              cfgLoading.style.display = "";
+              if (cfgWrap) cfgWrap.style.display = "none";
+              fetch("/admin/ls-did-missing-report/config", { credentials: "same-origin" })
+                .then(r => r.json())
+                .then(data => {
+                  cfgLoading.style.display = "none";
+                  if (!cfgWrap) return;
+                  const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val ?? ""; };
+                  set("ls-did-cfg-recipient", data.recipient || "");
+                  set("ls-did-cfg-recipient-2", data.recipient_2 || "");
+                  set("ls-did-cfg-from", data.from_address || "");
+                  set("ls-did-cfg-enabled", data.enabled ? "true" : "false");
+                  set("ls-did-cfg-weekly-day", data.weekly_day || "monday");
+                  set("ls-did-cfg-hour", data.hour ?? 8);
+                  set("ls-did-cfg-minute", String(data.minute ?? 0).padStart(2, "0"));
+                  set("ls-did-cfg-division", data.division_name || "Language Services");
+                  set("ls-did-cfg-cucm-host", data.cucm_host || "");
+                  cfgWrap.style.display = "";
+                })
+                .catch(() => {
+                  if (cfgLoading) cfgLoading.textContent = "Failed to load settings.";
+                });
+            }
+
+            if (saveBtn) {
+              saveBtn.addEventListener("click", function () {
+                const recipient = (document.getElementById("ls-did-cfg-recipient")?.value || "").trim();
+                if (!recipient) {
+                  if (saveStatus) saveStatus.innerHTML = '<span style="color:#b71c1c">Primary recipient is required.</span>';
+                  return;
+                }
+                saveBtn.disabled = true;
+                if (saveStatus) saveStatus.textContent = "Saving...";
+
+                const payload = {
+                  recipient,
+                  recipient_2: (document.getElementById("ls-did-cfg-recipient-2")?.value || "").trim(),
+                  from_address: (document.getElementById("ls-did-cfg-from")?.value || "").trim(),
+                  enabled: document.getElementById("ls-did-cfg-enabled")?.value === "true",
+                  weekly_day: (document.getElementById("ls-did-cfg-weekly-day")?.value || "monday").trim(),
+                  hour: parseInt(document.getElementById("ls-did-cfg-hour")?.value || "8", 10),
+                  minute: parseInt(document.getElementById("ls-did-cfg-minute")?.value || "0", 10),
+                  division_name: (document.getElementById("ls-did-cfg-division")?.value || "Language Services").trim(),
+                  cucm_host: (document.getElementById("ls-did-cfg-cucm-host")?.value || "").trim(),
+                };
+
+                fetch("/admin/ls-did-missing-report/save-config", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  credentials: "same-origin",
+                  body: JSON.stringify(payload),
+                })
+                  .then(r => r.json())
+                  .then(data => {
+                    saveBtn.disabled = false;
+                    if (data.ok) {
+                      if (saveStatus) saveStatus.innerHTML = '<span style="color:#1b5e20;background:#e8f5e9;padding:4px 10px;border-radius:4px">OK Saved</span>';
+                    } else {
+                      if (saveStatus) saveStatus.innerHTML = `<span style="color:#b71c1c">X ${data.error || "Save failed"}</span>`;
+                    }
+                  })
+                  .catch(err => {
+                    saveBtn.disabled = false;
+                    if (saveStatus) saveStatus.innerHTML = `<span style="color:#b71c1c">Network error: ${err.message}</span>`;
+                  });
+              });
+            }
+
+            if (runBtn) {
+              runBtn.addEventListener("click", function () {
+                runBtn.disabled = true;
+                runBtn.textContent = "Running...";
+                if (runStatus) runStatus.innerHTML = '<span style="color:#555;font-size:13px;">Running Language Services Missing LS DID lookup and sending email...</span>';
+                if (runPreview) runPreview.innerHTML = "";
+
+                fetch("/admin/ls-did-missing-report/run", { method: "POST", credentials: "same-origin" })
+                  .then(r => r.json())
+                  .then(data => {
+                    runBtn.disabled = false;
+                    runBtn.textContent = "Run Report Now";
+                    if (!data.ok) {
+                      if (runStatus) runStatus.innerHTML = `<span style="color:#b71c1c;background:#ffebee;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">X ${data.error || "Unknown error"}</span>`;
+                      return;
+                    }
+
+                    if (runStatus) {
+                      runStatus.innerHTML = `<span style="color:#1b5e20;background:#e8f5e9;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">OK Sent to <strong>${(data.recipients || []).join(", ")}</strong> | Total: ${data.total_users || 0} | Missing: ${data.missing_count || 0} | Assigned: ${data.assigned_count || 0}</span>`;
+                    }
+
+                    if (runPreview) {
+                      const rows = data.missing_rows || [];
+                      if (!rows.length) {
+                        runPreview.innerHTML = '<p style="color:#1b5e20;font-size:13px;">No missing users found.</p>';
+                      } else {
+                        let html = '<table style="width:100%;font-size:13px;border-collapse:collapse">';
+                        html += '<thead><tr style="background:#f5f5f5">';
+                        html += '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Name</th>';
+                        html += '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Username</th>';
+                        html += '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Email</th>';
+                        html += '</tr></thead><tbody>';
+                        rows.forEach((r, i) => {
+                          const bg = i % 2 === 0 ? "#fff5f3" : "#ffffff";
+                          html += `<tr style="background:${bg}">`;
+                          html += `<td style="padding:6px 10px;border-bottom:1px solid #eee">${r.name || "-"}</td>`;
+                          html += `<td style="padding:6px 10px;border-bottom:1px solid #eee;font-family:monospace">${r.username || "-"}</td>`;
+                          html += `<td style="padding:6px 10px;border-bottom:1px solid #eee">${r.email || "-"}</td>`;
+                          html += '</tr>';
+                        });
+                        html += '</tbody></table>';
+                        runPreview.innerHTML = html;
+                      }
+                    }
+
+                    loadHistory();
+                  })
+                  .catch(err => {
+                    runBtn.disabled = false;
+                    runBtn.textContent = "Run Report Now";
+                    if (runStatus) runStatus.innerHTML = `<span style="color:#b71c1c;font-size:13px;">Network error: ${err.message}</span>`;
+                  });
+              });
+            }
+
+            function loadHistory() {
+              if (!histLoading || !histResults) return;
+              histLoading.style.display = "";
+              histResults.innerHTML = "";
+              fetch("/admin/ls-did-missing-report/history", { credentials: "same-origin" })
+                .then(r => r.json())
+                .then(data => {
+                  histLoading.style.display = "none";
+                  const rows = data.rows || [];
+                  if (!rows.length) {
+                    histResults.innerHTML = '<p style="color:#888;font-size:13px;">No sends logged yet.</p>';
+                    return;
+                  }
+                  let html = '<table style="width:100%;font-size:13px;border-collapse:collapse">'
+                    + '<thead><tr style="background:#f5f5f5">'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Sent At</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Division</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Total</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Missing</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Assigned</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Recipients</th>'
+                    + '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Triggered By</th>'
+                    + '</tr></thead><tbody>';
+                  rows.forEach((r, i) => {
+                    const bg = i % 2 === 0 ? "#fff" : "#f9f9f9";
+                    html += `<tr style="background:${bg}">`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;white-space:nowrap">${r.timestamp || ""}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee">${r.division || ""}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee">${r.total || ""}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;color:#a63b00;font-weight:700">${r.missing || ""}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;color:#1f7a3d;font-weight:700">${r.assigned || ""}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;font-size:12px">${(r.account || "").replace(/\|/g, "<br>")}</td>`
+                      + `<td style="padding:6px 10px;border-bottom:1px solid #eee;color:#888;font-size:12px">${r.operator || ""}</td>`
+                      + '</tr>';
+                  });
+                  html += '</tbody></table>';
+                  histResults.innerHTML = html;
+                })
+                .catch(() => {
+                  if (histLoading) histLoading.style.display = "none";
+                  if (histResults) histResults.innerHTML = '<p style="color:#c00;font-size:13px;">Failed to load history.</p>';
+                });
+            }
+
+            if (histBtn) histBtn.addEventListener("click", loadHistory);
+
+            const panelEl = document.querySelector('[data-panel="ls-did-missing-report"]');
+            if (panelEl) {
+              const obs = new MutationObserver(mutations => {
+                mutations.forEach(m => {
+                  if (m.attributeName === "class" && panelEl.classList.contains("active")) {
+                    loadConfig();
+                    loadHistory();
+                  }
+                });
+              });
+              obs.observe(panelEl, { attributes: true });
+            }
+          })();
+
           // ---- Blocked Number auto Cleanup panel -----------------------------
           (function () {
             const cfgLoading = document.getElementById("bc-config-loading");
@@ -39633,7 +40220,7 @@ def menu_admin_page(request: Request):
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION__", escape(BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION_DEFAULT)).replace("__BLOCKED_CLEANUP_NAV__", blocked_cleanup_nav_html)
+""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION__", escape(BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION_DEFAULT)).replace("__LS_DID_MISSING_REPORT_NAV__", ls_did_missing_report_nav_html).replace("__BLOCKED_CLEANUP_NAV__", blocked_cleanup_nav_html)
 
   return HTMLResponse(
     content=html,
@@ -46635,6 +47222,149 @@ def dn_avail_report_history_route(request: Request):
     })
     if len(history) >= 20:
       break
+  return JSONResponse({"ok": True, "rows": history})
+
+
+@app.get("/admin/ls-did-missing-report/config")
+def ls_did_missing_report_config_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  if not _is_prod_runtime_host_strict():
+    return JSONResponse({"ok": False, "error": "Language Services Missing LS DID report is available only on PROD web server."}, status_code=403)
+
+  cfg = _get_ls_did_report_settings()
+  schedule_label = f"{cfg['weekly_day'].capitalize()} at {cfg['hour']:02d}:{cfg['minute']:02d} PST/PDT"
+  return JSONResponse({
+    "ok": True,
+    "enabled": cfg["enabled"],
+    "recipient": cfg["recipient"],
+    "recipient_2": cfg["recipient_2"],
+    "from_address": cfg["from_address"],
+    "hour": cfg["hour"],
+    "minute": cfg["minute"],
+    "weekly_day": cfg["weekly_day"],
+    "division_name": cfg["division_name"],
+    "cucm_host": cfg["cucm_host"],
+    "schedule_label": schedule_label,
+  })
+
+
+@app.post("/admin/ls-did-missing-report/save-config")
+async def ls_did_missing_report_save_config_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  if not _is_prod_runtime_host_strict():
+    return JSONResponse({"ok": False, "error": "Language Services Missing LS DID report is available only on PROD web server."}, status_code=403)
+  try:
+    body = await request.json()
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Invalid JSON body"}, status_code=400)
+
+  recipient = (body.get("recipient") or "").strip()
+  if not recipient:
+    return JSONResponse({"ok": False, "error": "Primary recipient email is required"}, status_code=400)
+
+  weekly_day = (body.get("weekly_day") or "monday").strip().lower()
+  if weekly_day not in {"monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"}:
+    weekly_day = "monday"
+
+  try:
+    hour = int(body.get("hour", 8))
+    minute = int(body.get("minute", 0))
+  except (TypeError, ValueError):
+    return JSONResponse({"ok": False, "error": "Hour and minute must be integers"}, status_code=400)
+
+  if not (0 <= hour <= 23):
+    return JSONResponse({"ok": False, "error": "Hour must be 0-23"}, status_code=400)
+  if not (0 <= minute <= 59):
+    return JSONResponse({"ok": False, "error": "Minute must be 0-59"}, status_code=400)
+
+  enabled = str(body.get("enabled", "true")).strip().lower() in {"1", "true", "yes", "on"}
+  division_name = (body.get("division_name") or "Language Services").strip() or "Language Services"
+
+  settings = _load_settings()
+  settings["ls_did_report_enabled"] = "true" if enabled else "false"
+  settings["ls_did_report_recipient"] = recipient
+  settings["ls_did_report_recipient_2"] = (body.get("recipient_2") or "").strip()
+  settings["ls_did_report_from"] = (body.get("from_address") or "").strip()
+  settings["ls_did_report_hour"] = str(hour)
+  settings["ls_did_report_minute"] = str(minute)
+  settings["ls_did_report_weekly_day"] = weekly_day
+  settings["ls_did_report_division_name"] = division_name
+  settings["ls_did_report_cucm_host"] = (body.get("cucm_host") or "").strip()
+
+  if not _save_settings(settings):
+    return JSONResponse({"ok": False, "error": "Failed to save settings file"}, status_code=500)
+  return JSONResponse({"ok": True, "message": "Settings saved successfully."})
+
+
+@app.post("/admin/ls-did-missing-report/run")
+def ls_did_missing_report_run_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  if not _is_prod_runtime_host_strict():
+    return JSONResponse({"ok": False, "error": "Language Services Missing LS DID report is available only on PROD web server."}, status_code=403)
+
+  operator = str(session.get("username", "manual")).strip() or "manual"
+  result = _run_ls_did_missing_report(triggered_by=f"manual:{operator}")
+  if result.get("success"):
+    summary = result.get("summary", {}) if isinstance(result.get("summary", {}), dict) else {}
+    missing_rows = list(result.get("missing_rows", []) or [])
+    return JSONResponse({
+      "ok": True,
+      "run_at": result.get("run_at", ""),
+      "recipients": result.get("recipients", []),
+      "division_name": summary.get("division_name", "Language Services"),
+      "total_users": summary.get("genesys_total_users", 0),
+      "missing_count": summary.get("missing_count", 0),
+      "assigned_count": summary.get("assigned_count", 0),
+      "missing_rows": missing_rows,
+    })
+  return JSONResponse({"ok": False, "error": result.get("error", "Unknown error")}, status_code=500)
+
+
+@app.get("/admin/ls-did-missing-report/history")
+def ls_did_missing_report_history_route(request: Request):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  if not _is_prod_runtime_host_strict():
+    return JSONResponse({"ok": False, "error": "Language Services Missing LS DID report is available only on PROD web server."}, status_code=403)
+  if not os.path.exists(AUDIT_LOG_PATH):
+    return JSONResponse({"ok": True, "rows": []})
+
+  try:
+    with AUDIT_LOG_LOCK:
+      with open(AUDIT_LOG_PATH, "r", newline="", encoding="utf-8") as fh:
+        all_rows = list(csv.DictReader(fh))
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+  history = []
+  for row in reversed(all_rows):
+    if (row.get("action") or "").strip() != "ls_did_missing_report_sent":
+      continue
+    target_raw = row.get("target", "")
+    parsed = {}
+    for part in target_raw.split(";"):
+      if "=" in part:
+        k, v = part.split("=", 1)
+        parsed[k.strip()] = v.strip()
+    history.append({
+      "timestamp": row.get("timestamp", ""),
+      "division": parsed.get("division", ""),
+      "total": parsed.get("total", ""),
+      "missing": parsed.get("missing", ""),
+      "assigned": parsed.get("assigned", ""),
+      "account": row.get("account", ""),
+      "operator": row.get("operator", ""),
+    })
+    if len(history) >= 20:
+      break
+
   return JSONResponse({"ok": True, "rows": history})
 
 
