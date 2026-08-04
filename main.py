@@ -2924,6 +2924,66 @@ def _genesys_collect_paged_entities(
   return entities_all, pages_scanned, ""
 
 
+def _genesys_list_users_in_division_by_name(
+  region: str,
+  access_token: str,
+  division_name: str,
+) -> dict:
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+  target_division_name = " ".join(str(division_name or "").strip().lower().split())
+  if not target_division_name:
+    return {"ok": False, "error": "division_name is required."}
+
+  users_all, pages_scanned, users_err = _genesys_collect_paged_entities(
+    api_base,
+    access_token,
+    "/api/v2/users",
+    max(25, min(GENESYS_USERS_PAGE_SIZE, 200)),
+    300,
+  )
+  if users_err:
+    return {"ok": False, "error": users_err}
+
+  rows = []
+  for user in users_all:
+    if not isinstance(user, dict):
+      continue
+    division_obj = user.get("division") if isinstance(user.get("division"), dict) else {}
+    row_division_name = " ".join(str(division_obj.get("name", "") or "").strip().lower().split())
+    if row_division_name != target_division_name:
+      continue
+
+    email = str(user.get("email", "") or "").strip()
+    username = str(user.get("username", "") or "").strip()
+    first_name = str(user.get("firstName", "") or "").strip()
+    last_name = str(user.get("lastName", "") or "").strip()
+    display_name = str(user.get("name", "") or "").strip()
+    if not display_name:
+      display_name = " ".join([part for part in [first_name, last_name] if part]).strip()
+
+    rows.append({
+      "id": str(user.get("id", "") or "").strip(),
+      "name": display_name,
+      "first_name": first_name,
+      "last_name": last_name,
+      "email": email,
+      "username": username,
+      "state": str(user.get("state", "") or "").strip(),
+      "division_id": str(division_obj.get("id", "") or "").strip(),
+      "division_name": str(division_obj.get("name", "") or "").strip(),
+    })
+
+  rows.sort(key=lambda item: ((item.get("name") or "").lower(), (item.get("email") or "").lower()))
+  return {
+    "ok": True,
+    "region": clean_region,
+    "division_name": division_name,
+    "pages_scanned": pages_scanned,
+    "users_scanned": len(users_all),
+    "rows": rows,
+  }
+
+
 def _genesys_get_user_queues_paged(api_base: str, access_token: str, user_id: str) -> tuple[list[dict], str, int]:
   clean_user_id = str(user_id or "").strip()
   if not clean_user_id:
@@ -23793,6 +23853,178 @@ def genesys_ls_did_list_route(
   })
 
 
+@app.post("/genesys/ls-did/language-services-missing")
+def genesys_ls_did_language_services_missing_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=resolved_host, cucm_user=resolved_user)
+
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  token_result = _genesys_get_queue_access_token(clean_region)
+  if not token_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": token_result.get("error", "Genesys token request failed."),
+    }, status_code=400)
+
+  region = str(token_result.get("region", clean_region) or clean_region).strip().lower()
+  access_token = str(token_result.get("access_token", "") or "").strip()
+  if not access_token:
+    return JSONResponse({"ok": False, "error": "Genesys token response did not include an access token."}, status_code=400)
+
+  division_name = "Language Services"
+  division_users_result = _genesys_list_users_in_division_by_name(region, access_token, division_name)
+  if not division_users_result.get("ok"):
+    return JSONResponse({
+      "ok": False,
+      "error": division_users_result.get("error", "Unable to load Genesys division users."),
+    }, status_code=400)
+
+  ls_rows = _list_ls_genesys_did_patterns(
+    cucm_host=resolved_host,
+    cucm_user=resolved_user,
+    cucm_pass=resolved_pass,
+    pattern_prefix=GENESYS_LS_DID_LIST_PATTERN_PREFIX,
+    require_available_suffix=False,
+  )
+
+  def _norm_text(value: str) -> str:
+    return " ".join(str(value or "").strip().lower().split())
+
+  assigned_by_userid: dict[str, list[dict]] = {}
+  assigned_by_name: dict[str, list[dict]] = {}
+
+  for row in ls_rows:
+    if bool(row.get("is_available", False)):
+      continue
+    assigned_user = str(row.get("assigned_user", "") or "").strip()
+    if not assigned_user:
+      continue
+
+    row_ref = {
+      "pattern": str(row.get("pattern", "") or "").strip(),
+      "route_partition": str(row.get("route_partition", "") or "").strip(),
+      "description": str(row.get("description", "") or "").strip(),
+      "assigned_user": assigned_user,
+      "cucm_userid": "",
+    }
+
+    assigned_name_key = _norm_text(assigned_user)
+    if assigned_name_key:
+      assigned_by_name.setdefault(assigned_name_key, []).append(row_ref)
+
+    cucm_lookup = _ls_did_lookup_assigned_user_in_cucm(
+      resolved_host,
+      resolved_user,
+      resolved_pass,
+      assigned_user,
+    )
+    cucm_userid = str(cucm_lookup.get("userid", "") or "").strip().lower()
+    if cucm_userid:
+      row_ref["cucm_userid"] = cucm_userid
+      assigned_by_userid.setdefault(cucm_userid, []).append(row_ref)
+
+  result_rows = []
+  missing_count = 0
+  assigned_count = 0
+
+  for user in division_users_result.get("rows", []):
+    if not isinstance(user, dict):
+      continue
+
+    username = str(user.get("username", "") or "").strip()
+    email = str(user.get("email", "") or "").strip()
+    name = str(user.get("name", "") or "").strip()
+    first_name = str(user.get("first_name", "") or "").strip()
+    last_name = str(user.get("last_name", "") or "").strip()
+    if not name:
+      name = " ".join([part for part in [first_name, last_name] if part]).strip()
+
+    email_local = email.split("@", 1)[0].strip().lower() if "@" in email else ""
+    user_keys = []
+    for candidate in [username.strip().lower(), email_local]:
+      if candidate and candidate not in user_keys:
+        user_keys.append(candidate)
+
+    match_rows: list[dict] = []
+    match_source = ""
+    for key in user_keys:
+      if key in assigned_by_userid:
+        match_rows = assigned_by_userid[key]
+        match_source = "userid"
+        break
+
+    if not match_rows:
+      name_key = _norm_text(name)
+      if name_key and name_key in assigned_by_name:
+        match_rows = assigned_by_name[name_key]
+        match_source = "name"
+
+    has_ls_did = bool(match_rows)
+    if has_ls_did:
+      assigned_count += 1
+    else:
+      missing_count += 1
+
+    patterns = []
+    for row_ref in match_rows:
+      pattern = str(row_ref.get("pattern", "") or "").strip()
+      if pattern and pattern not in patterns:
+        patterns.append(pattern)
+
+    result_rows.append({
+      "name": name,
+      "first_name": first_name,
+      "last_name": last_name,
+      "username": username,
+      "email": email,
+      "state": str(user.get("state", "") or "").strip(),
+      "division_name": str(user.get("division_name", "") or "").strip(),
+      "division_id": str(user.get("division_id", "") or "").strip(),
+      "has_ls_did": has_ls_did,
+      "missing_ls_did": not has_ls_did,
+      "ls_did_patterns": patterns,
+      "ls_did_pattern": patterns[0] if patterns else "",
+      "ls_did_assigned_user": str(match_rows[0].get("assigned_user", "") or "").strip() if match_rows else "",
+      "ls_did_route_partition": str(match_rows[0].get("route_partition", "") or "").strip() if match_rows else "",
+      "ls_did_cucm_userid": str(match_rows[0].get("cucm_userid", "") or "").strip() if match_rows else "",
+      "match_source": match_source,
+    })
+
+  result_rows.sort(key=lambda item: (0 if item.get("missing_ls_did") else 1, str(item.get("name", "")).lower(), str(item.get("email", "")).lower()))
+
+  _append_audit_event(
+    action="genesys_ls_did_language_services_missing",
+    cucm_host=resolved_host,
+    operator=resolved_user,
+    target=(
+      f"division={division_name};"
+      f"total_users={len(result_rows)};"
+      f"missing_ls_did={missing_count};"
+      f"assigned_ls_did={assigned_count};"
+      f"region={region}"
+    ),
+    output_filename="inline_json_ok",
+    inline_mode=True,
+  )
+
+  return JSONResponse({
+    "ok": True,
+    "division_name": division_name,
+    "region": region,
+    "genesys_total_users": len(result_rows),
+    "missing_count": missing_count,
+    "assigned_count": assigned_count,
+    "genesys_pages_scanned": int(division_users_result.get("pages_scanned", 0) or 0),
+    "genesys_users_scanned": int(division_users_result.get("users_scanned", 0) or 0),
+    "results": result_rows,
+  })
+
+
 @app.post("/genesys/ls-did/release")
 def genesys_ls_did_release_route(
   request: Request,
@@ -27716,6 +27948,7 @@ __ADMIN_CARD__
       <div class="action-row">
         <button type="submit">Search User</button>
         <button type="button" id="genesys-ls-did-list-btn" style="background:linear-gradient(180deg,#1d4f91,#12386a);">List LS Genesys DID Users</button>
+        <button type="button" id="genesys-ls-did-language-services-btn" style="background:linear-gradient(180deg,#355978,#27435d);">Language Services Missing LS DID</button>
         <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
       </div>
     </form>
@@ -27727,6 +27960,7 @@ __ADMIN_CARD__
       (function () {
         const form = document.getElementById("genesys-ls-did-lookup-form");
         const listBtn = document.getElementById("genesys-ls-did-list-btn");
+        const languageServicesBtn = document.getElementById("genesys-ls-did-language-services-btn");
         const statusEl = document.getElementById("genesys-ls-did-status");
         const resultsEl = document.getElementById("genesys-ls-did-results");
 
@@ -27851,9 +28085,79 @@ __ADMIN_CARD__
           }
         }
 
+        async function loadLanguageServicesMissing() {
+          statusEl.textContent = "Loading Language Services users and checking LS DID coverage...";
+          resultsEl.innerHTML = "";
+          try {
+            const fd = new FormData();
+            fd.append("cucm_host", "__AUTH_CUCM_HOST__");
+            fd.append("cucm_user", "__AUTH_USER__");
+            fd.append("cucm_pass", "");
+            const resp = await fetch("/genesys/ls-did/language-services-missing", {
+              method: "POST",
+              body: fd,
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+            });
+            const payload = await resp.json();
+            if (!resp.ok || !payload.ok) {
+              const msg = payload.error || payload.detail || "Language Services lookup failed.";
+              throw new Error(msg);
+            }
+
+            const rows = payload.results || [];
+            if (!rows.length) {
+              statusEl.textContent = "No users returned for Genesys Division Language Services.";
+              return;
+            }
+
+            const missingCount = Number(payload.missing_count || 0);
+            const assignedCount = Number(payload.assigned_count || 0);
+            statusEl.textContent = "Language Services users: " + rows.length + ". Missing LS DID: " + missingCount + ". With LS DID: " + assignedCount + ".";
+
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Username</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Genesys State</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">LS DID Status</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">LS DID Pattern</th>';
+            html += '</tr></thead><tbody>';
+
+            rows.forEach(function (row, i) {
+              const isMissing = !!row.missing_ls_did;
+              const bg = isMissing ? "#fff5f3" : (i % 2 === 0 ? "#f7fbff" : "#ffffff");
+              const statusText = isMissing ? "Missing LS DID" : "Has LS DID";
+              const statusColor = isMissing ? "#a63b00" : "#1f7a3d";
+              const patternText = (row.ls_did_patterns && row.ls_did_patterns.length)
+                ? row.ls_did_patterns.join(", ")
+                : "-";
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px;">' + (row.name || "-") + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.username || "-") + '</td>';
+              html += '<td style="padding:7px 10px;">' + (row.email || "-") + '</td>';
+              html += '<td style="padding:7px 10px;">' + (row.state || "-") + '</td>';
+              html += '<td style="padding:7px 10px; font-weight:700; color:' + statusColor + ';">' + statusText + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + patternText + '</td>';
+              html += '</tr>';
+            });
+            html += '</tbody></table>';
+            resultsEl.innerHTML = html;
+          } catch (err) {
+            statusEl.textContent = "Language Services lookup failed: " + ((err && err.message) || "Unknown error.");
+          }
+        }
+
         if (listBtn) {
           listBtn.addEventListener("click", function () {
             loadLsDidList();
+          });
+        }
+
+        if (languageServicesBtn) {
+          languageServicesBtn.addEventListener("click", function () {
+            loadLanguageServicesMissing();
           });
         }
 
