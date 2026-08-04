@@ -10533,6 +10533,8 @@ def _ls_did_missing_report_scheduler_loop():
       cfg = _get_ls_did_report_settings()
       if not cfg["enabled"]:
         continue
+      if _is_lab_host(cfg.get("cucm_host", "")):
+        continue
 
       now = datetime.datetime.now(tz=tz)
       if now.hour != cfg["hour"] or now.minute != cfg["minute"]:
@@ -10556,15 +10558,12 @@ def _ls_did_missing_report_scheduler_loop():
 
 
 _ls_did_missing_report_thread = None
-if _is_prod_runtime_host_strict():
-  _ls_did_missing_report_thread = threading.Thread(
-    target=_ls_did_missing_report_scheduler_loop,
-    name="ls-did-missing-report-scheduler",
-    daemon=True,
-  )
-  _ls_did_missing_report_thread.start()
-else:
-  logger.info("ls_did_missing_report scheduler disabled on non-PROD runtime host")
+_ls_did_missing_report_thread = threading.Thread(
+  target=_ls_did_missing_report_scheduler_loop,
+  name="ls-did-missing-report-scheduler",
+  daemon=True,
+)
+_ls_did_missing_report_thread.start()
 
 
 # ---------------------------------------------------------------------------
@@ -35701,9 +35700,10 @@ def menu_admin_page(request: Request):
     if blocked_cleanup_is_prod else ""
   )
 
+  ls_did_report_is_prod_context = not _is_lab_host(auth_cucm_host)
   ls_did_missing_report_nav_html = (
     '<button type="button" class="portal-nav-btn" data-panel="ls-did-missing-report">Language Services Missing LS DID Report</button>'
-    if blocked_cleanup_is_prod else ""
+    if ls_did_report_is_prod_context else ""
   )
 
   html = """
@@ -47230,8 +47230,8 @@ def ls_did_missing_report_config_route(request: Request):
   session = _get_auth_session(request)
   if not session or not _is_admin_user(str(session.get("username", ""))):
     return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
-  if not _is_prod_runtime_host_strict():
-    return JSONResponse({"ok": False, "error": "Language Services Missing LS DID report is available only on PROD web server."}, status_code=403)
+  if _is_lab_host(str(session.get("cucm_host", "") or "")):
+    return JSONResponse({"ok": False, "error": "Language Services Missing LS DID report is available only in Production Voice Servers context."}, status_code=403)
 
   cfg = _get_ls_did_report_settings()
   schedule_label = f"{cfg['weekly_day'].capitalize()} at {cfg['hour']:02d}:{cfg['minute']:02d} PST/PDT"
@@ -47255,8 +47255,8 @@ async def ls_did_missing_report_save_config_route(request: Request):
   session = _get_auth_session(request)
   if not session or not _is_admin_user(str(session.get("username", ""))):
     return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
-  if not _is_prod_runtime_host_strict():
-    return JSONResponse({"ok": False, "error": "Language Services Missing LS DID report is available only on PROD web server."}, status_code=403)
+  if _is_lab_host(str(session.get("cucm_host", "") or "")):
+    return JSONResponse({"ok": False, "error": "Language Services Missing LS DID report is available only in Production Voice Servers context."}, status_code=403)
   try:
     body = await request.json()
   except Exception:
@@ -47305,8 +47305,8 @@ def ls_did_missing_report_run_route(request: Request):
   session = _get_auth_session(request)
   if not session or not _is_admin_user(str(session.get("username", ""))):
     return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
-  if not _is_prod_runtime_host_strict():
-    return JSONResponse({"ok": False, "error": "Language Services Missing LS DID report is available only on PROD web server."}, status_code=403)
+  if _is_lab_host(str(session.get("cucm_host", "") or "")):
+    return JSONResponse({"ok": False, "error": "Language Services Missing LS DID report is available only in Production Voice Servers context."}, status_code=403)
 
   operator = str(session.get("username", "manual")).strip() or "manual"
   result = _run_ls_did_missing_report(triggered_by=f"manual:{operator}")
@@ -47331,8 +47331,8 @@ def ls_did_missing_report_history_route(request: Request):
   session = _get_auth_session(request)
   if not session or not _is_admin_user(str(session.get("username", ""))):
     return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
-  if not _is_prod_runtime_host_strict():
-    return JSONResponse({"ok": False, "error": "Language Services Missing LS DID report is available only on PROD web server."}, status_code=403)
+  if _is_lab_host(str(session.get("cucm_host", "") or "")):
+    return JSONResponse({"ok": False, "error": "Language Services Missing LS DID report is available only in Production Voice Servers context."}, status_code=403)
   if not os.path.exists(AUDIT_LOG_PATH):
     return JSONResponse({"ok": True, "rows": []})
 
