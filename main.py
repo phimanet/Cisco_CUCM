@@ -27883,12 +27883,52 @@ __ADMIN_CARD__
               return;
             }
 
-            statusEl.textContent = "Found " + results.length + " user(s). Select Assign Available LS DID.";
+            const existingByUserid = {};
+            try {
+              const listFd = new FormData();
+              listFd.append("cucm_host", "__AUTH_CUCM_HOST__");
+              listFd.append("cucm_user", "__AUTH_USER__");
+              listFd.append("cucm_pass", "");
+              const listResp = await fetch("/genesys/ls-did/list", {
+                method: "POST",
+                body: listFd,
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+              });
+              const listPayload = await listResp.json();
+              if (listResp.ok && listPayload.ok) {
+                (listPayload.results || []).forEach(function (row) {
+                  const existingUserid = (row.cucm_userid || "").trim().toLowerCase();
+                  if (!existingUserid || row.is_available) {
+                    return;
+                  }
+                  if (!existingByUserid[existingUserid]) {
+                    existingByUserid[existingUserid] = [];
+                  }
+                  existingByUserid[existingUserid].push(row);
+                });
+              }
+            } catch (_listErr) {
+              // Keep search working even if LS DID list lookup fails.
+            }
+
+            let alreadyAssignedCount = 0;
+            results.forEach(function (r) {
+              const uidKey = (r.userid || "").trim().toLowerCase();
+              if (uidKey && existingByUserid[uidKey] && existingByUserid[uidKey].length) {
+                alreadyAssignedCount += 1;
+              }
+            });
+
+            statusEl.textContent = "Found " + results.length + " user(s). " + (alreadyAssignedCount
+              ? (alreadyAssignedCount + " already have LS DID assignment(s); Set Available is shown for those users.")
+              : "Select Assign Available LS DID.");
             let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
             html += '<thead><tr style="background:#005eb8; color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Current LS DID</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
             html += '</tr></thead><tbody>';
 
@@ -27898,18 +27938,93 @@ __ADMIN_CARD__
               const lastName = (r.last_name || "").trim();
               const name = (r.display_name || (firstName + " " + lastName)).trim() || (r.userid || "");
               const uid = (r.userid || "").trim();
+              const uidKey = uid.toLowerCase();
               const email = (r.email || "-").trim();
+              const existingRows = uidKey && existingByUserid[uidKey] ? existingByUserid[uidKey] : [];
+              const lsDidList = existingRows.map(function (row) {
+                return (row.pattern || "").trim();
+              }).filter(function (value) {
+                return !!value;
+              });
+              const hasExistingDid = lsDidList.length > 0;
+              const currentLsDidDisplay = hasExistingDid ? lsDidList.join(", ") : "-";
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
               html += '<td style="padding:7px 10px;">' + name + '</td>';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
               html += '<td style="padding:7px 10px;">' + email + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + currentLsDidDisplay + '</td>';
               html += '<td style="padding:7px 10px;">';
-              html += '<button type="button" data-ls-user="' + uid + '" data-ls-first="' + firstName + '" data-ls-last="' + lastName + '" style="background:#237741; color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Assign Available LS DID</button>';
+              if (hasExistingDid) {
+                existingRows.forEach(function (existingRow) {
+                  const existingPattern = (existingRow.pattern || "").trim();
+                  const existingPartition = (existingRow.route_partition || "").trim();
+                  const existingAssignedUser = (existingRow.assigned_user || "").trim() || name;
+                  const existingCucmUserid = (existingRow.cucm_userid || "").trim();
+                  if (!existingPattern || !existingPartition) {
+                    return;
+                  }
+                  html += '<button type="button" data-ls-search-release-pattern="' + existingPattern + '" data-ls-search-release-partition="' + existingPartition + '" data-ls-search-release-user="' + existingAssignedUser + '" data-ls-search-release-cucm-userid="' + existingCucmUserid + '" style="background:linear-gradient(180deg,#a63b00,#7d2b00); color:#fff; border:none; border-radius:5px; padding:3px 7px; font-weight:700; font-size:12px; line-height:1.1; white-space:nowrap; cursor:pointer; margin-right:6px; margin-bottom:4px;">Set Available (' + existingPattern + ')</button>';
+                });
+              } else {
+                html += '<button type="button" data-ls-user="' + uid + '" data-ls-first="' + firstName + '" data-ls-last="' + lastName + '" style="background:#237741; color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Assign Available LS DID</button>';
+              }
               html += '</td>';
               html += '</tr>';
             });
             html += '</tbody></table>';
             resultsEl.innerHTML = html;
+
+            resultsEl.querySelectorAll("button[data-ls-search-release-pattern]").forEach(function (btn) {
+              btn.addEventListener("click", async function () {
+                const pattern = (btn.getAttribute("data-ls-search-release-pattern") || "").trim();
+                const routePartition = (btn.getAttribute("data-ls-search-release-partition") || "").trim();
+                const assignedUser = (btn.getAttribute("data-ls-search-release-user") || "").trim();
+                const cucmUserid = (btn.getAttribute("data-ls-search-release-cucm-userid") || "").trim();
+                if (!pattern || !routePartition) {
+                  return;
+                }
+
+                const confirmMsg = cucmUserid
+                  ? ("Set " + pattern + " back to Available and clear LDAP phone fields for " + cucmUserid + "?")
+                  : ("Set " + pattern + " back to Available? LDAP clear will be skipped because user is not found in CUCM.");
+                if (!window.confirm(confirmMsg)) {
+                  return;
+                }
+
+                statusEl.textContent = "Releasing " + pattern + " to Available...";
+                try {
+                  const releaseData = new FormData();
+                  releaseData.append("cucm_host", "__AUTH_CUCM_HOST__");
+                  releaseData.append("cucm_user", "__AUTH_USER__");
+                  releaseData.append("cucm_pass", "");
+                  releaseData.append("pattern", pattern);
+                  releaseData.append("route_partition", routePartition);
+                  releaseData.append("assigned_user", assignedUser);
+                  releaseData.append("cucm_userid", cucmUserid);
+
+                  const releaseResp = await fetch("/genesys/ls-did/release", {
+                    method: "POST",
+                    body: releaseData,
+                    credentials: "same-origin",
+                    headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                  });
+                  const releasePayload = await releaseResp.json();
+                  if (!releaseResp.ok || !releasePayload.ok) {
+                    const msg = releasePayload.error || releasePayload.detail || "Release failed.";
+                    throw new Error(msg);
+                  }
+
+                  const ldapMsg = releasePayload.ldap_attempted
+                    ? ("LDAP clear: " + (releasePayload.ldap_status || "Unknown") + " - " + (releasePayload.ldap_details || ""))
+                    : "LDAP clear skipped (user not found in CUCM).";
+                  statusEl.textContent = "Released " + pattern + " to Available. " + ldapMsg;
+
+                  form.dispatchEvent(new Event("submit", { cancelable: true }));
+                } catch (releaseErr) {
+                  statusEl.textContent = "Release failed: " + ((releaseErr && releaseErr.message) || "Unknown error.");
+                }
+              });
+            });
 
             resultsEl.querySelectorAll("button[data-ls-user]").forEach(function (btn) {
               btn.addEventListener("click", async function () {
