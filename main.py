@@ -172,6 +172,7 @@ SMTP_USE_STARTTLS = (os.getenv("SMTP_USE_STARTTLS", "false") or "false").strip()
   "on",
 }
 SMTP_DEFAULT_FROM = (os.getenv("SMTP_DEFAULT_FROM", "") or "").strip()
+DN_DELETE_NOTIFY_RECIPIENT = (os.getenv("DN_DELETE_NOTIFY_RECIPIENT", "Laura.Alvarez@amnhealthcare.com") or "Laura.Alvarez@amnhealthcare.com").strip()
 AUDIT_LOG_EMAIL_DOMAIN = (os.getenv("AUDIT_LOG_EMAIL_DOMAIN", "amnhealthcare.com") or "amnhealthcare.com").strip().lstrip("@")
 GENESYS_UPDATE_NOTIFY_RECIPIENTS = [
   item.strip()
@@ -36555,6 +36556,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="rpo">Extract RPO Phones</button>
             <button type="button" class="portal-nav-btn" data-panel="adddn">Add Directory Numbers (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="exportdn">Export Directory Numbers</button>
+            <button type="button" class="portal-nav-btn" data-panel="delete-unassigned-dn">Delete Directory Number from CUCM</button>
             <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
             <button type="button" class="portal-nav-btn" data-panel="translookup">Translation Pattern Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="transtemplate">Translation Pattern Template</button>
@@ -36735,6 +36737,36 @@ def menu_admin_page(request: Request):
 
           <button type="submit">Export Directory Numbers</button>
         </form>
+      </section>
+
+      <section class="panel tool-panel" data-panel="delete-unassigned-dn">
+        <h3>Delete Directory Number from CUCM</h3>
+        <p>Lookup unassigned Directory Numbers and delete single or multiple entries.</p>
+        <p style="color:#355978; margin-top:6px;"><strong>Notification:</strong> an email is sent to <strong>Laura.Alvarez@amnhealthcare.com</strong> for every delete attempt.</p>
+
+        <form id="admin-unassigned-dn-form">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+
+          <div class="compact-inline-row">
+            <span>DN Pattern (supports %):</span>
+            <input name="pattern_query" value="7%" placeholder="7%" style="min-width:260px;">
+          </div><br>
+
+          <div class="compact-inline-row">
+            <span>Route Partition:</span>
+            <input name="route_partition" value="ENT_DEVICE_PT" placeholder="ENT_DEVICE_PT" style="min-width:260px;">
+          </div><br>
+
+          <div style="display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="submit">Lookup Unassigned DNs</button>
+            <button type="button" id="admin-unassigned-dn-delete-selected" style="background:linear-gradient(180deg,#9f1239,#7f1d1d);">Delete Selected</button>
+          </div>
+        </form>
+
+        <p id="admin-unassigned-dn-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Set search filters, then click Lookup Unassigned DNs.</p>
+        <div id="admin-unassigned-dn-results" style="overflow-x:auto;"></div>
       </section>
 
       <section class="panel tool-panel" data-panel="exportusers">
@@ -38530,6 +38562,182 @@ def menu_admin_page(request: Request):
             btn.addEventListener("click", async function () {
               await submitWithAction(action);
             });
+          });
+        })();
+      </script>
+
+      <script>
+        (function () {
+          const form = document.getElementById("admin-unassigned-dn-form");
+          const statusEl = document.getElementById("admin-unassigned-dn-status");
+          const resultsEl = document.getElementById("admin-unassigned-dn-results");
+          const deleteSelectedBtn = document.getElementById("admin-unassigned-dn-delete-selected");
+
+          if (!form || !statusEl || !resultsEl || !deleteSelectedBtn) {
+            return;
+          }
+
+          let currentRows = [];
+
+          function escapeHtml(value) {
+            return String(value == null ? "" : value)
+              .replace(/&/g, "&amp;")
+              .replace(/</g, "&lt;")
+              .replace(/>/g, "&gt;")
+              .replace(/\"/g, "&quot;")
+              .replace(/'/g, "&#39;");
+          }
+
+          function selectedItemsFromTable() {
+            const selected = [];
+            resultsEl.querySelectorAll('input[data-unassigned-dn-check="1"]:checked').forEach(function (checkbox) {
+              const pattern = String(checkbox.getAttribute("data-pattern") || "").trim();
+              const partition = String(checkbox.getAttribute("data-partition") || "").trim();
+              if (pattern && partition) {
+                selected.push({ pattern: pattern, route_partition: partition });
+              }
+            });
+            return selected;
+          }
+
+          async function runDelete(items) {
+            if (!items || !items.length) {
+              statusEl.textContent = "Select at least one DN to delete.";
+              return;
+            }
+
+            statusEl.textContent = "Deleting selected Directory Numbers...";
+            try {
+              const fd = new FormData(form);
+              fd.append("dns_json", JSON.stringify(items));
+              const resp = await fetch("/admin/dn-unassigned/delete", {
+                method: "POST",
+                body: fd,
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+              });
+              const payload = await resp.json();
+              if (!resp.ok || !payload.ok) {
+                const msg = payload.error || (payload.error && payload.error.message) || payload.detail || "Delete failed.";
+                throw new Error(msg);
+              }
+
+              const deleted = Number(payload.deleted_count || 0);
+              const requested = Number(payload.requested_count || 0);
+              const skipped = Number(payload.skipped_count || 0);
+              statusEl.textContent = "Delete complete. Requested: " + requested + ", Deleted: " + deleted + ", Skipped: " + skipped + ".";
+
+              await runLookup();
+            } catch (err) {
+              statusEl.textContent = "Delete failed: " + ((err && err.message) || "Unknown error.");
+            }
+          }
+
+          function renderRows(rows) {
+            currentRows = rows || [];
+            if (!currentRows.length) {
+              resultsEl.innerHTML = "";
+              return;
+            }
+
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;"><input type="checkbox" id="admin-unassigned-dn-check-all"></th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Pattern</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Route Partition</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Description</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Alerting Name</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Active</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
+            html += '</tr></thead><tbody>';
+
+            currentRows.forEach(function (row, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const pattern = String((row && row.pattern) || "").trim();
+              const partition = String((row && row.route_partition) || "").trim();
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px;"><input type="checkbox" data-unassigned-dn-check="1" data-pattern="' + escapeHtml(pattern) + '" data-partition="' + escapeHtml(partition) + '"></td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + escapeHtml(pattern || "-") + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + escapeHtml(partition || "-") + '</td>';
+              html += '<td style="padding:7px 10px;">' + escapeHtml((row && row.description) || "-") + '</td>';
+              html += '<td style="padding:7px 10px;">' + escapeHtml((row && row.alerting_name) || "-") + '</td>';
+              html += '<td style="padding:7px 10px;">' + (row && row.active ? "Yes" : "No") + '</td>';
+              html += '<td style="padding:7px 10px;">';
+              html += '<button type="button" data-unassigned-dn-delete="1" data-pattern="' + escapeHtml(pattern) + '" data-partition="' + escapeHtml(partition) + '" style="background:linear-gradient(180deg,#9f1239,#7f1d1d);">Delete DN</button>';
+              html += '</td>';
+              html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            resultsEl.innerHTML = html;
+
+            const checkAll = document.getElementById("admin-unassigned-dn-check-all");
+            if (checkAll) {
+              checkAll.addEventListener("change", function () {
+                const checked = !!checkAll.checked;
+                resultsEl.querySelectorAll('input[data-unassigned-dn-check="1"]').forEach(function (box) {
+                  box.checked = checked;
+                });
+              });
+            }
+
+            resultsEl.querySelectorAll('button[data-unassigned-dn-delete="1"]').forEach(function (btn) {
+              btn.addEventListener("click", async function () {
+                const pattern = String(btn.getAttribute("data-pattern") || "").trim();
+                const partition = String(btn.getAttribute("data-partition") || "").trim();
+                if (!pattern || !partition) {
+                  return;
+                }
+                const confirmed = window.confirm("Delete Directory Number " + pattern + "/" + partition + "?");
+                if (!confirmed) {
+                  return;
+                }
+                await runDelete([{ pattern: pattern, route_partition: partition }]);
+              });
+            });
+          }
+
+          async function runLookup() {
+            statusEl.textContent = "Looking up unassigned Directory Numbers...";
+            resultsEl.innerHTML = "";
+            try {
+              const fd = new FormData(form);
+              const resp = await fetch("/admin/dn-unassigned/list", {
+                method: "POST",
+                body: fd,
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+              });
+              const payload = await resp.json();
+              if (!resp.ok || !payload.ok) {
+                const msg = payload.error || (payload.error && payload.error.message) || payload.detail || "Lookup failed.";
+                throw new Error(msg);
+              }
+
+              const rows = payload.results || [];
+              statusEl.textContent = "Found " + rows.length + " unassigned Directory Number(s).";
+              renderRows(rows);
+            } catch (err) {
+              statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+            }
+          }
+
+          form.addEventListener("submit", async function (event) {
+            event.preventDefault();
+            await runLookup();
+          });
+
+          deleteSelectedBtn.addEventListener("click", async function () {
+            const selected = selectedItemsFromTable();
+            if (!selected.length) {
+              statusEl.textContent = "Select one or more rows, then click Delete Selected.";
+              return;
+            }
+            const confirmed = window.confirm("Delete " + selected.length + " selected Directory Number(s)?");
+            if (!confirmed) {
+              return;
+            }
+            await runDelete(selected);
           });
         })();
       </script>
@@ -44870,6 +45078,373 @@ def lookup_translation_pattern_route(
 
     results = lookup_translation_patterns(cucm_host, cucm_user, cucm_pass, clean_pattern)
     return JSONResponse({"ok": True, "query": clean_pattern, "results": results})
+
+
+def _axl_post_raw_text(session: requests.Session, cucm_host: str, soap_xml: str, op_name: str) -> str:
+  response = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=soap_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    verify=False,
+    timeout=60,
+  )
+  if response.status_code != 200:
+    raise RuntimeError(f"{op_name} failed HTTP {response.status_code}: {response.text[:800]}")
+  return response.text
+
+
+def _axl_has_associated_devices(session: requests.Session, cucm_host: str, pattern: str, route_partition: str) -> bool:
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (route_partition or "").strip()
+  if not clean_pattern or not clean_partition:
+    return True
+
+  soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getLine sequence=\"1\">
+      <pattern>{xml_escape(clean_pattern)}</pattern>
+      <routePartitionName>{xml_escape(clean_partition)}</routePartitionName>
+      <returnedTags>
+        <pattern/>
+        <routePartitionName/>
+        <associatedDevices>
+          <device/>
+        </associatedDevices>
+      </returnedTags>
+    </axl:getLine>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  xml_text = _axl_post_raw_text(session, cucm_host, soap, "getLine")
+  root = ET.fromstring(xml_text)
+  for elem in root.iter():
+    tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+    if tag == "device" and (elem.text or "").strip():
+      return True
+  return False
+
+
+def _axl_remove_line(session: requests.Session, cucm_host: str, pattern: str, route_partition: str) -> None:
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (route_partition or "").strip()
+  if not clean_pattern or not clean_partition:
+    raise RuntimeError("pattern and route_partition are required")
+
+  soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:removeLine sequence=\"1\">
+      <pattern>{xml_escape(clean_pattern)}</pattern>
+      <routePartitionName>{xml_escape(clean_partition)}</routePartitionName>
+    </axl:removeLine>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  _axl_post_raw_text(session, cucm_host, soap, "removeLine")
+
+
+def _lookup_unassigned_directory_numbers(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  pattern_query: str,
+  route_partition: str,
+  limit: int = 300,
+) -> list[dict]:
+  clean_pattern = (pattern_query or "").strip()
+  clean_partition = (route_partition or "").strip()
+
+  search_pattern = clean_pattern or "%"
+  if "%" not in search_pattern and "_" not in search_pattern:
+    search_pattern = f"%{search_pattern}%"
+
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  partition_block = f"<routePartitionName>{xml_escape(clean_partition)}</routePartitionName>" if clean_partition else ""
+  soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:listLine sequence=\"1\">
+      <searchCriteria>
+        <pattern>{xml_escape(search_pattern)}</pattern>
+        {partition_block}
+      </searchCriteria>
+      <returnedTags>
+        <pattern/>
+        <routePartitionName/>
+        <description/>
+        <alertingName/>
+        <active/>
+        <associatedDevices>
+          <device/>
+        </associatedDevices>
+      </returnedTags>
+    </axl:listLine>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  xml_text = _axl_post_raw_text(session, cucm_host, soap, "listLine")
+  root = ET.fromstring(xml_text)
+  rows = []
+  for elem in root.iter():
+    tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+    if tag != "line":
+      continue
+
+    pattern = ""
+    partition = ""
+    description = ""
+    alerting_name = ""
+    active_raw = ""
+    device_count = 0
+
+    for child in list(elem):
+      ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+      if ctag == "pattern":
+        pattern = (child.text or "").strip()
+      elif ctag == "routePartitionName":
+        partition = (child.text or "").strip()
+      elif ctag == "description":
+        description = (child.text or "").strip()
+      elif ctag == "alertingName":
+        alerting_name = (child.text or "").strip()
+      elif ctag == "active":
+        active_raw = (child.text or "").strip().lower()
+      elif ctag == "associatedDevices":
+        for d in list(child):
+          dtag = d.tag.split("}")[-1] if "}" in d.tag else d.tag
+          if dtag == "device" and (d.text or "").strip():
+            device_count += 1
+
+    if not pattern or not partition:
+      continue
+    if clean_partition and partition != clean_partition:
+      continue
+    if device_count > 0:
+      continue
+
+    rows.append({
+      "pattern": pattern,
+      "route_partition": partition,
+      "description": description,
+      "alerting_name": alerting_name,
+      "active": active_raw in {"true", "t", "1", "yes"},
+      "device_count": device_count,
+    })
+
+  rows.sort(key=lambda item: (str(item.get("route_partition", "") or ""), str(item.get("pattern", "") or "")))
+  return rows[: max(1, min(int(limit or 300), 1000))]
+
+
+def _send_unassigned_dn_delete_email(
+  cucm_host: str,
+  operator: str,
+  pattern: str,
+  route_partition: str,
+  status: str,
+  detail: str,
+) -> None:
+  sender = SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com"
+  recipient = DN_DELETE_NOTIFY_RECIPIENT
+  subject = f"[CUCM] Delete Directory Number {status}: {pattern}/{route_partition}"
+  timestamp_text = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+  body = "\n".join([
+    "Directory Number delete action notification",
+    f"Timestamp: {timestamp_text}",
+    f"Operator: {operator}",
+    f"CUCM Host: {cucm_host}",
+    f"Pattern: {pattern}",
+    f"Route Partition: {route_partition}",
+    f"Status: {status}",
+    f"Detail: {detail}",
+  ])
+  html_body = f"""
+<html>
+  <body style=\"font-family:Segoe UI,Arial,sans-serif;color:#12304a;\">
+    <h3 style=\"margin-bottom:8px;\">CUCM Directory Number Delete Notification</h3>
+    <table style=\"border-collapse:collapse;font-size:14px;\">
+      <tr><td style=\"padding:4px 10px 4px 0;\"><strong>Timestamp</strong></td><td>{escape(timestamp_text)}</td></tr>
+      <tr><td style=\"padding:4px 10px 4px 0;\"><strong>Operator</strong></td><td>{escape(operator)}</td></tr>
+      <tr><td style=\"padding:4px 10px 4px 0;\"><strong>CUCM Host</strong></td><td>{escape(cucm_host)}</td></tr>
+      <tr><td style=\"padding:4px 10px 4px 0;\"><strong>Pattern</strong></td><td>{escape(pattern)}</td></tr>
+      <tr><td style=\"padding:4px 10px 4px 0;\"><strong>Route Partition</strong></td><td>{escape(route_partition)}</td></tr>
+      <tr><td style=\"padding:4px 10px 4px 0;\"><strong>Status</strong></td><td>{escape(status)}</td></tr>
+      <tr><td style=\"padding:4px 10px 4px 0;\"><strong>Detail</strong></td><td>{escape(detail)}</td></tr>
+    </table>
+  </body>
+</html>
+"""
+  _send_smtp_email(
+    sender=sender,
+    recipients=[recipient],
+    subject=subject,
+    body=body,
+    html_body=html_body,
+  )
+
+
+@app.post("/admin/dn-unassigned/list")
+def admin_unassigned_dn_list_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  pattern_query: str = Form("7%"),
+  route_partition: str = Form("ENT_DEVICE_PT"),
+  limit: str = Form("300"),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+  try:
+    clean_limit = int(str(limit or "300").strip() or "300")
+  except Exception:
+    clean_limit = 300
+
+  rows = _lookup_unassigned_directory_numbers(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    pattern_query=pattern_query,
+    route_partition=route_partition,
+    limit=clean_limit,
+  )
+
+  return JSONResponse({
+    "ok": True,
+    "count": len(rows),
+    "results": rows,
+  })
+
+
+@app.post("/admin/dn-unassigned/delete")
+def admin_unassigned_dn_delete_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  dns_json: str = Form(""),
+  pattern: str = Form(""),
+  route_partition: str = Form(""),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+
+  targets: list[dict] = []
+  if (dns_json or "").strip():
+    try:
+      parsed = json.loads(dns_json)
+      if isinstance(parsed, list):
+        for item in parsed:
+          if isinstance(item, dict):
+            targets.append({
+              "pattern": str(item.get("pattern", "") or "").strip(),
+              "route_partition": str(item.get("route_partition", "") or "").strip(),
+            })
+    except Exception as exc:
+      return JSONResponse({"ok": False, "error": f"Invalid dns_json payload: {exc}"}, status_code=400)
+
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (route_partition or "").strip()
+  if clean_pattern and clean_partition:
+    targets.append({"pattern": clean_pattern, "route_partition": clean_partition})
+
+  deduped = []
+  seen = set()
+  for item in targets:
+    p = str(item.get("pattern", "") or "").strip()
+    rp = str(item.get("route_partition", "") or "").strip()
+    if not p or not rp:
+      continue
+    key = (p, rp)
+    if key in seen:
+      continue
+    seen.add(key)
+    deduped.append({"pattern": p, "route_partition": rp})
+
+  if not deduped:
+    return JSONResponse({"ok": False, "error": "No valid Directory Numbers were provided."}, status_code=400)
+
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  results = []
+  deleted_count = 0
+  skipped_count = 0
+
+  for item in deduped:
+    p = item["pattern"]
+    rp = item["route_partition"]
+    status = "Skipped"
+    detail = ""
+    deleted = False
+
+    try:
+      if _axl_has_associated_devices(session, cucm_host, p, rp):
+        status = "Skipped"
+        detail = "DN is currently assigned to one or more devices; delete was not performed."
+        skipped_count += 1
+      else:
+        _axl_remove_line(session, cucm_host, p, rp)
+        status = "Deleted"
+        detail = "DN removed from CUCM."
+        deleted = True
+        deleted_count += 1
+    except Exception as exc:
+      status = "Failed"
+      detail = str(exc)
+      skipped_count += 1
+
+    email_sent = True
+    email_error = ""
+    try:
+      _send_unassigned_dn_delete_email(
+        cucm_host=cucm_host,
+        operator=cucm_user,
+        pattern=p,
+        route_partition=rp,
+        status=status,
+        detail=detail,
+      )
+    except Exception as exc:
+      email_sent = False
+      email_error = str(exc)
+
+    results.append({
+      "pattern": p,
+      "route_partition": rp,
+      "status": status,
+      "detail": detail,
+      "deleted": deleted,
+      "email_sent": email_sent,
+      "email_error": email_error,
+    })
+
+  _append_audit_event(
+    action="delete_unassigned_directory_number",
+    cucm_host=cucm_host,
+    operator=cucm_user,
+    target=f"requested={len(deduped)};deleted={deleted_count};skipped={skipped_count}",
+    output_filename="inline_json_ok",
+    inline_mode=True,
+  )
+
+  return JSONResponse({
+    "ok": True,
+    "requested_count": len(deduped),
+    "deleted_count": deleted_count,
+    "skipped_count": skipped_count,
+    "results": results,
+  })
 
 
 def _update_translation_pattern_to_available_2481001(
