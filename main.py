@@ -27782,7 +27782,7 @@ __ADMIN_CARD__
               const cucmUserid = (row.cucm_userid || "").trim() || "-";
               const releaseBtn = row.is_available
                 ? '<span style="color:#6b7280;">-</span>'
-                : ('<button type="button" data-ls-release-pattern="' + (row.pattern || "") + '" data-ls-release-partition="' + (row.route_partition || "") + '" data-ls-release-user="' + assignedUser + '" data-ls-release-cucm-userid="' + (row.cucm_userid || "") + '" style="background:linear-gradient(180deg,#a63b00,#7d2b00); color:#fff; border:none; border-radius:6px; padding:6px 10px; font-weight:700; cursor:pointer;">Set Available</button>');
+                : ('<button type="button" data-ls-release-pattern="' + (row.pattern || "") + '" data-ls-release-partition="' + (row.route_partition || "") + '" data-ls-release-user="' + assignedUser + '" data-ls-release-cucm-userid="' + (row.cucm_userid || "") + '" style="background:linear-gradient(180deg,#a63b00,#7d2b00); color:#fff; border:none; border-radius:5px; padding:3px 7px; font-weight:700; font-size:12px; line-height:1.1; white-space:nowrap; cursor:pointer;">Set Available</button>');
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.pattern || "") + '</td>';
               html += '<td style="padding:7px 10px;">' + assignedUser + '</td>';
