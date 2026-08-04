@@ -28865,7 +28865,6 @@ __ADMIN_CARD__
             html += '<thead><tr style="background:#005eb8; color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Line 1</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Forward All</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Forward To</th>';
@@ -28886,7 +28885,6 @@ __ADMIN_CARD__
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
               html += '<td style="padding:7px 10px;">' + escapeHtml(row.name || "-") + '</td>';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + escapeHtml(userId || "-") + '</td>';
-              html += '<td style="padding:7px 10px;">' + escapeHtml(row.email || "-") + '</td>';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + escapeHtml(lineDisplay) + '</td>';
               html += '<td data-forward-cell="1" style="padding:7px 10px; font-family:Consolas,monospace;">' + escapeHtml(forwardCurrent) + '</td>';
               html += '<td style="padding:7px 10px;">';
