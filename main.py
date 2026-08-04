@@ -10365,7 +10365,6 @@ def _ls_did_missing_report_build_html(summary: dict, run_at: str) -> str:
     row_parts.append(
       f'<tr style="background:{bg}">'
       f'<td style="padding:8px 12px;border-bottom:1px solid #eee">{escape(str(row.get("name", "") or "-"))}</td>'
-      f'<td style="padding:8px 12px;border-bottom:1px solid #eee;font-family:monospace">{escape(str(row.get("username", "") or "-"))}</td>'
       f'<td style="padding:8px 12px;border-bottom:1px solid #eee">{escape(str(row.get("email", "") or "-"))}</td>'
       f'<td style="padding:8px 12px;border-bottom:1px solid #eee">{escape(str(row.get("state", "") or "-"))}</td>'
       f'<td style="padding:8px 12px;border-bottom:1px solid #eee"><span style="background:{badge_bg};color:#fff;padding:2px 8px;border-radius:4px;font-size:12px">{badge_label}</span></td>'
@@ -10374,7 +10373,7 @@ def _ls_did_missing_report_build_html(summary: dict, run_at: str) -> str:
     )
 
   rows_html = "\n".join(row_parts) if row_parts else (
-    '<tr><td colspan="6" style="padding:16px;text-align:center;color:#888">No users returned for this division.</td></tr>'
+    '<tr><td colspan="5" style="padding:16px;text-align:center;color:#888">No users returned for this division.</td></tr>'
   )
 
   return f"""<!DOCTYPE html>
@@ -10406,7 +10405,6 @@ def _ls_did_missing_report_build_html(summary: dict, run_at: str) -> str:
       <thead>
         <tr style=\"background:#f5f5f5\">
           <th style=\"padding:10px 12px;text-align:left;border-bottom:2px solid #ddd\">Name</th>
-          <th style=\"padding:10px 12px;text-align:left;border-bottom:2px solid #ddd\">Username</th>
           <th style=\"padding:10px 12px;text-align:left;border-bottom:2px solid #ddd\">Email</th>
           <th style=\"padding:10px 12px;text-align:left;border-bottom:2px solid #ddd\">Genesys State</th>
           <th style=\"padding:10px 12px;text-align:left;border-bottom:2px solid #ddd\">LS DID Status</th>
@@ -10472,7 +10470,6 @@ def _run_ls_did_missing_report(triggered_by: str = "scheduler") -> dict:
         plain_lines.append(
           "  " + " | ".join([
             str(row.get("name", "") or "-"),
-            str(row.get("username", "") or "-"),
             str(row.get("email", "") or "-"),
           ])
         )
@@ -28423,7 +28420,6 @@ __ADMIN_CARD__
             let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
             html += '<thead><tr style="background:#005eb8; color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Username</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Genesys State</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">LS DID Status</th>';
@@ -28440,7 +28436,6 @@ __ADMIN_CARD__
                 : "-";
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
               html += '<td style="padding:7px 10px;">' + (row.name || "-") + '</td>';
-              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.username || "-") + '</td>';
               html += '<td style="padding:7px 10px;">' + (row.email || "-") + '</td>';
               html += '<td style="padding:7px 10px;">' + (row.state || "-") + '</td>';
               html += '<td style="padding:7px 10px; font-weight:700; color:' + statusColor + ';">' + statusText + '</td>';
@@ -39920,14 +39915,12 @@ def menu_admin_page(request: Request):
                         let html = '<table style="width:100%;font-size:13px;border-collapse:collapse">';
                         html += '<thead><tr style="background:#f5f5f5">';
                         html += '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Name</th>';
-                        html += '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Username</th>';
                         html += '<th style="padding:7px 10px;text-align:left;border-bottom:2px solid #ddd">Email</th>';
                         html += '</tr></thead><tbody>';
                         rows.forEach((r, i) => {
                           const bg = i % 2 === 0 ? "#fff5f3" : "#ffffff";
                           html += `<tr style="background:${bg}">`;
                           html += `<td style="padding:6px 10px;border-bottom:1px solid #eee">${r.name || "-"}</td>`;
-                          html += `<td style="padding:6px 10px;border-bottom:1px solid #eee;font-family:monospace">${r.username || "-"}</td>`;
                           html += `<td style="padding:6px 10px;border-bottom:1px solid #eee">${r.email || "-"}</td>`;
                           html += '</tr>';
                         });
