@@ -36741,7 +36741,7 @@ def menu_admin_page(request: Request):
 
       <section class="panel tool-panel" data-panel="delete-unassigned-dn">
         <h3>Delete Directory Number from CUCM</h3>
-        <p>Lookup unassigned Directory Numbers and delete single or multiple entries.</p>
+        <p>Lookup Directory Numbers that are both <strong>NOT Active</strong> and <strong>Unassigned</strong> (same available-style pool used for Jabber assignment), then delete single or multiple entries.</p>
         <p style="color:#355978; margin-top:6px;"><strong>Notification:</strong> an email is sent to <strong>Laura.Alvarez@amnhealthcare.com</strong> for every delete attempt.</p>
 
         <form id="admin-unassigned-dn-form">
@@ -36765,7 +36765,7 @@ def menu_admin_page(request: Request):
           </div>
         </form>
 
-        <p id="admin-unassigned-dn-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Set search filters, then click Lookup Unassigned DNs.</p>
+        <p id="admin-unassigned-dn-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Set search filters, then click Lookup Unassigned DNs (NOT Active + Unassigned only).</p>
         <div id="admin-unassigned-dn-results" style="overflow-x:auto;"></div>
       </section>
 
@@ -38715,7 +38715,7 @@ def menu_admin_page(request: Request):
               }
 
               const rows = payload.results || [];
-              statusEl.textContent = "Found " + rows.length + " unassigned Directory Number(s).";
+              statusEl.textContent = "Found " + rows.length + " NOT Active + unassigned Directory Number(s).";
               renderRows(rows);
             } catch (err) {
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
@@ -45126,6 +45126,38 @@ def _axl_has_associated_devices(session: requests.Session, cucm_host: str, patte
   return False
 
 
+def _axl_is_line_inactive(session: requests.Session, cucm_host: str, pattern: str, route_partition: str) -> bool:
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (route_partition or "").strip()
+  if not clean_pattern or not clean_partition:
+    return False
+
+  soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getLine sequence=\"1\">
+      <pattern>{xml_escape(clean_pattern)}</pattern>
+      <routePartitionName>{xml_escape(clean_partition)}</routePartitionName>
+      <returnedTags>
+        <active/>
+      </returnedTags>
+    </axl:getLine>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  xml_text = _axl_post_raw_text(session, cucm_host, soap, "getLine")
+  root = ET.fromstring(xml_text)
+  active_text = ""
+  for elem in root.iter():
+    tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+    if tag == "active":
+      active_text = (elem.text or "").strip().lower()
+      break
+
+  return active_text not in {"true", "t", "1", "yes"}
+
+
 def _axl_remove_line(session: requests.Session, cucm_host: str, pattern: str, route_partition: str) -> None:
   clean_pattern = (pattern or "").strip()
   clean_partition = (route_partition or "").strip()
@@ -45228,6 +45260,10 @@ def _lookup_unassigned_directory_numbers(
     if clean_partition and partition != clean_partition:
       continue
     if device_count > 0:
+      continue
+
+    is_inactive = active_raw not in {"true", "t", "1", "yes"}
+    if not is_inactive:
       continue
 
     rows.append({
@@ -45392,6 +45428,10 @@ def admin_unassigned_dn_delete_route(
       if _axl_has_associated_devices(session, cucm_host, p, rp):
         status = "Skipped"
         detail = "DN is currently assigned to one or more devices; delete was not performed."
+        skipped_count += 1
+      elif not _axl_is_line_inactive(session, cucm_host, p, rp):
+        status = "Skipped"
+        detail = "DN is active; only NOT Active (available-style) DNs can be deleted by this tool."
         skipped_count += 1
       else:
         _axl_remove_line(session, cucm_host, p, rp)
