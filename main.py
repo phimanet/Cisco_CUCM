@@ -14912,6 +14912,90 @@ def _list_ls_genesys_did_patterns(
     return rows
 
 
+def _ls_did_lookup_assigned_user_in_cucm(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  assigned_user: str,
+) -> dict:
+  clean_name = str(assigned_user or "").strip()
+  if not clean_name:
+    return {
+      "checked": False,
+      "found": False,
+      "status": "Unassigned",
+      "match_count": 0,
+      "display_name": "",
+      "userid": "",
+      "error": "",
+    }
+
+  parts = clean_name.split()
+  if len(parts) < 2:
+    return {
+      "checked": False,
+      "found": False,
+      "status": "Name format invalid",
+      "match_count": 0,
+      "display_name": "",
+      "userid": "",
+      "error": "Assigned user name does not contain first and last name.",
+    }
+
+  first_name = parts[0].strip()
+  last_name = " ".join(parts[1:]).strip()
+
+  try:
+    results = search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_name)
+  except Exception as exc:
+    return {
+      "checked": True,
+      "found": False,
+      "status": "Lookup error",
+      "match_count": 0,
+      "display_name": "",
+      "userid": "",
+      "error": str(exc),
+    }
+
+  exact_matches = []
+  target_name = clean_name.casefold()
+  for item in results:
+    item_first = str(item.get("first_name", "") or "").strip()
+    item_last = str(item.get("last_name", "") or "").strip()
+    display_name = str(item.get("display_name", "") or "").strip() or " ".join([p for p in [item_first, item_last] if p]).strip()
+    if display_name.casefold() == target_name:
+      exact_matches.append(item)
+
+  candidates = exact_matches if exact_matches else results
+  if not candidates:
+    return {
+      "checked": True,
+      "found": False,
+      "status": "Not Found in CUCM",
+      "match_count": 0,
+      "display_name": "",
+      "userid": "",
+      "error": "",
+    }
+
+  selected = candidates[0]
+  selected_first = str(selected.get("first_name", "") or "").strip()
+  selected_last = str(selected.get("last_name", "") or "").strip()
+  selected_display = str(selected.get("display_name", "") or "").strip() or " ".join([p for p in [selected_first, selected_last] if p]).strip()
+  selected_userid = str(selected.get("userid", "") or "").strip()
+
+  return {
+    "checked": True,
+    "found": True,
+    "status": "Active in CUCM",
+    "match_count": len(candidates),
+    "display_name": selected_display,
+    "userid": selected_userid,
+    "error": "",
+  }
+
+
 def _update_translation_pattern_description(
   cucm_host: str,
   cucm_user: str,
@@ -23593,6 +23677,40 @@ def genesys_ls_did_list_route(
     require_available_suffix=False,
   )
 
+  stale_count = 0
+  active_count = 0
+  for row in rows:
+    assigned_user = str(row.get("assigned_user", "") or "").strip()
+    is_available = bool(row.get("is_available", False))
+    if is_available or not assigned_user:
+      row["cucm_user_checked"] = False
+      row["cucm_user_found"] = False
+      row["cucm_user_status"] = "Available"
+      row["cucm_match_count"] = 0
+      row["cucm_userid"] = ""
+      row["cucm_display_name"] = ""
+      row["cucm_lookup_error"] = ""
+      continue
+
+    user_status = _ls_did_lookup_assigned_user_in_cucm(
+      resolved_host,
+      resolved_user,
+      resolved_pass,
+      assigned_user,
+    )
+    row["cucm_user_checked"] = bool(user_status.get("checked", False))
+    row["cucm_user_found"] = bool(user_status.get("found", False))
+    row["cucm_user_status"] = str(user_status.get("status", "") or "")
+    row["cucm_match_count"] = int(user_status.get("match_count", 0) or 0)
+    row["cucm_userid"] = str(user_status.get("userid", "") or "")
+    row["cucm_display_name"] = str(user_status.get("display_name", "") or "")
+    row["cucm_lookup_error"] = str(user_status.get("error", "") or "")
+
+    if row["cucm_user_found"]:
+      active_count += 1
+    else:
+      stale_count += 1
+
   pattern_probe_rows = _list_translation_patterns_by_pattern(
     resolved_host,
     resolved_user,
@@ -23618,6 +23736,8 @@ def genesys_ls_did_list_route(
   return JSONResponse({
     "ok": True,
     "count": len(rows),
+    "active_count": active_count,
+    "stale_count": stale_count,
     "pattern_prefix": GENESYS_LS_DID_LIST_PATTERN_PREFIX,
     "description_prefix": GENESYS_LS_DID_DESCRIPTION_PREFIX,
     "pattern_probe_count": len(pattern_probe_rows),
@@ -27501,24 +27621,31 @@ __ADMIN_CARD__
               return;
             }
 
-            statusEl.textContent = "Loaded " + rows.length + " LS Genesys DID pattern(s).";
+            const activeCount = Number(payload.active_count || 0);
+            const staleCount = Number(payload.stale_count || 0);
+            statusEl.textContent = "Loaded " + rows.length + " LS Genesys DID pattern(s). Active in CUCM: " + activeCount + ", Not Found: " + staleCount + ".";
             let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
             html += '<thead><tr style="background:#005eb8; color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Pattern</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Route Partition</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Assigned User</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Status</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">CUCM Active</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">CUCM UserID</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Description</th>';
             html += '</tr></thead><tbody>';
             rows.forEach(function (row, i) {
               const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
               const assignedUser = (row.assigned_user || "").trim() || "-";
               const state = row.is_available ? "Available" : "Assigned";
+              const cucmActive = (row.cucm_user_status || "").trim() || (row.cucm_user_found ? "Active in CUCM" : "Not Found in CUCM");
+              const cucmColor = row.cucm_user_found ? "#1f7a3d" : (row.is_available ? "#1f7a3d" : "#7a1020");
+              const cucmUserid = (row.cucm_userid || "").trim() || "-";
               html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.pattern || "") + '</td>';
-              html += '<td style="padding:7px 10px;">' + (row.route_partition || "") + '</td>';
               html += '<td style="padding:7px 10px;">' + assignedUser + '</td>';
               html += '<td style="padding:7px 10px; font-weight:700; color:' + (row.is_available ? "#1f7a3d" : "#12386a") + ';">' + state + '</td>';
+              html += '<td style="padding:7px 10px; font-weight:700; color:' + cucmColor + ';">' + cucmActive + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + cucmUserid + '</td>';
               html += '<td style="padding:7px 10px;">' + (row.description || "") + '</td>';
               html += '</tr>';
             });
