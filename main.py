@@ -24296,36 +24296,41 @@ def genesys_ls_did_language_services_missing_route(
   cucm_user: str = Form(""),
   cucm_pass: str = Form(""),
 ):
-  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-  _update_cached_credentials(request, cucm_host=resolved_host, cucm_user=resolved_user)
+  try:
+    resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=resolved_host, cucm_user=resolved_user)
 
-  division_name = "Language Services"
-  summary = _collect_language_services_missing_ls_did(
-    cucm_host=resolved_host,
-    cucm_user=resolved_user,
-    cucm_pass=resolved_pass,
-    division_name=division_name,
-    region=GENESYS_CLOUD_REGION,
-  )
-  if not summary.get("ok"):
-    return JSONResponse({"ok": False, "error": summary.get("error", "Unable to run Language Services LS DID lookup.")}, status_code=400)
+    division_name = "Language Services"
+    summary = _collect_language_services_missing_ls_did(
+      cucm_host=resolved_host,
+      cucm_user=resolved_user,
+      cucm_pass=resolved_pass,
+      division_name=division_name,
+      region=GENESYS_CLOUD_REGION,
+    )
+    if not summary.get("ok"):
+      return JSONResponse({"ok": False, "error": summary.get("error", "Unable to run Language Services LS DID lookup.")}, status_code=400)
 
-  _append_audit_event(
-    action="genesys_ls_did_language_services_missing",
-    cucm_host=resolved_host,
-    operator=resolved_user,
-    target=(
-      f"division={division_name};"
-      f"total_users={summary.get('genesys_total_users', 0)};"
-      f"missing_ls_did={summary.get('missing_count', 0)};"
-      f"assigned_ls_did={summary.get('assigned_count', 0)};"
-      f"region={summary.get('region', '')}"
-    ),
-    output_filename="inline_json_ok",
-    inline_mode=True,
-  )
+    _append_audit_event(
+      action="genesys_ls_did_language_services_missing",
+      cucm_host=resolved_host,
+      operator=resolved_user,
+      target=(
+        f"division={division_name};"
+        f"total_users={summary.get('genesys_total_users', 0)};"
+        f"missing_ls_did={summary.get('missing_count', 0)};"
+        f"assigned_ls_did={summary.get('assigned_count', 0)};"
+        f"region={summary.get('region', '')}"
+      ),
+      output_filename="inline_json_ok",
+      inline_mode=True,
+    )
 
-  return JSONResponse(summary)
+    return JSONResponse(summary)
+  except RuntimeError as exc:
+    return JSONResponse({"ok": False, "error": str(exc) or "Session credentials expired. Please log in again."}, status_code=401)
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": f"Language Services lookup failed: {exc}"}, status_code=500)
 
 
 @app.post("/genesys/ls-did/release")
@@ -28401,7 +28406,14 @@ __ADMIN_CARD__
               credentials: "same-origin",
               headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
             });
-            const payload = await resp.json();
+            const raw = await resp.text();
+            let payload = null;
+            try {
+              payload = raw ? JSON.parse(raw) : {};
+            } catch (_parseErr) {
+              const brief = String(raw || "").replace(/\s+/g, " ").trim().slice(0, 140);
+              throw new Error(brief || "Server returned a non-JSON response. Please refresh and try again.");
+            }
             if (!resp.ok || !payload.ok) {
               const msg = payload.error || payload.detail || "Language Services lookup failed.";
               throw new Error(msg);
