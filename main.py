@@ -27929,7 +27929,6 @@ __ADMIN_CARD__
     <section class="tool-panel" data-panel="genesys-ls-user-did-assignment">
     <h3>Genesys LS User DID Assignment</h3>
     <p>Lookup by last and first name, then assign the next available translation pattern matching <strong>72760XXXXX</strong> where description starts with <strong>LS Genesys DID</strong> and ends with <strong>Available</strong>.</p>
-    <p style="color:#355978; margin-top:6px;">Assigned description format is always: <strong>LS GENESYS DID 72760XXXXX Firstname Lastname</strong>.</p>
     <form id="genesys-ls-did-lookup-form" class="jabber-check-form" style="max-width:720px;">
       <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
       <input type="hidden" name="cucm_user" value="__AUTH_USER__">
