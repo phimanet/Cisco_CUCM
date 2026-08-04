@@ -25926,6 +25926,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
           <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
           <button type="button" class="portal-nav-btn" data-panel="genesys-ls-user-did-assignment">Genesys LS User DID Assignment</button>
+          <button type="button" class="portal-nav-btn" data-panel="jabber-forwarding-tool">Cisco Jabber Forwarding Tool</button>
         </div>
       </aside>
 
@@ -28701,6 +28702,218 @@ __ADMIN_CARD__
                 } catch (assignErr) {
                   statusEl.textContent = "Assignment failed: " + ((assignErr && assignErr.message) || "Unknown error.");
                 }
+              });
+            });
+          } catch (err) {
+            statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+          }
+        });
+      })();
+    </script>
+    </section>
+
+    <section class="tool-panel" data-panel="jabber-forwarding-tool">
+    <h3>Cisco Jabber Forwarding Tool</h3>
+    <p>Lookup by last and first name to view the person's Line 1 and current Forward All destination. Use Set Forward or Remove Forward to assist employees who cannot access Jabber.</p>
+    <p><strong>Note:</strong> If forwarding to an outside number, prepend with <strong>71</strong> (example: <strong>718005551212</strong>).</p>
+
+    <form id="jabber-forwarding-lookup-form" class="jabber-check-form" style="max-width:760px;">
+      <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+      <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+      <input type="hidden" name="cucm_pass" value="">
+
+      <div class="compact-inline-row">
+        <span>Last Name:</span>
+        <input name="last_name" placeholder="Smith" required>
+      </div><br>
+
+      <div class="compact-inline-row">
+        <span>First Name (optional):</span>
+        <input name="first_name" placeholder="John">
+      </div><br>
+
+      <div class="action-row">
+        <button type="submit">Search User</button>
+        <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+      </div>
+    </form>
+
+    <p id="jabber-forwarding-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter name and click Search User.</p>
+    <div id="jabber-forwarding-results" style="overflow-x:auto;"></div>
+
+    <script>
+      (function () {
+        const form = document.getElementById("jabber-forwarding-lookup-form");
+        const statusEl = document.getElementById("jabber-forwarding-status");
+        const resultsEl = document.getElementById("jabber-forwarding-results");
+
+        if (!form || !statusEl || !resultsEl) {
+          return;
+        }
+
+        function escapeHtml(value) {
+          return String(value == null ? "" : value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/\"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        async function runForwardUpdate(action, btn) {
+          const row = btn.closest("tr");
+          if (!row) {
+            return;
+          }
+
+          const userId = String(btn.getAttribute("data-userid") || "").trim();
+          const pattern = String(btn.getAttribute("data-pattern") || "").trim();
+          const partition = String(btn.getAttribute("data-partition") || "").trim();
+          const input = row.querySelector('input[data-forward-input="1"]');
+          const forwardTo = input ? String(input.value || "").trim() : "";
+
+          if (!pattern || !partition) {
+            statusEl.textContent = "Line 1 pattern/partition is missing for this user; cannot update forwarding.";
+            return;
+          }
+
+          if (action === "set" && !forwardTo) {
+            statusEl.textContent = "Enter a forward destination before clicking Set Forward.";
+            if (input) input.focus();
+            return;
+          }
+
+          const confirmText = action === "set"
+            ? ("Set Forward All for " + userId + " (" + pattern + ") to " + forwardTo + "?")
+            : ("Remove Forward All for " + userId + " (" + pattern + ")?");
+          if (!window.confirm(confirmText)) {
+            return;
+          }
+
+          statusEl.textContent = action === "set"
+            ? ("Applying forward for " + userId + "...")
+            : ("Removing forward for " + userId + "...");
+
+          try {
+            const fd = new FormData();
+            fd.append("cucm_host", "__AUTH_CUCM_HOST__");
+            fd.append("cucm_user", "__AUTH_USER__");
+            fd.append("cucm_pass", "");
+            fd.append("action", action);
+            fd.append("userid", userId);
+            fd.append("pattern", pattern);
+            fd.append("route_partition", partition);
+            fd.append("forward_to", forwardTo);
+
+            const resp = await fetch("/jabber-forwarding/update", {
+              method: "POST",
+              body: fd,
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+            });
+            const payload = await resp.json();
+            if (!resp.ok || !payload.ok) {
+              const msg = payload.error || (payload.error && payload.error.message) || payload.detail || "Forwarding update failed.";
+              throw new Error(msg);
+            }
+
+            const currentForward = String(payload.forward_all_destination || "").trim() || "(none)";
+            const forwardCell = row.querySelector('td[data-forward-cell="1"]');
+            if (forwardCell) {
+              forwardCell.textContent = currentForward;
+            }
+            if (input && action === "remove") {
+              input.value = "";
+            }
+            statusEl.textContent = action === "set"
+              ? ("Forward All updated for " + userId + " to " + currentForward + ".")
+              : ("Forward All removed for " + userId + ".");
+          } catch (err) {
+            statusEl.textContent = "Forwarding update failed: " + ((err && err.message) || "Unknown error.");
+          }
+        }
+
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          statusEl.textContent = "Searching users and loading Line 1 forwarding details...";
+          resultsEl.innerHTML = "";
+
+          try {
+            const fd = new FormData(form);
+            const resp = await fetch("/jabber-forwarding/lookup", {
+              method: "POST",
+              body: fd,
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+            });
+
+            const payload = await resp.json();
+            if (!resp.ok || !payload.ok) {
+              const msg = payload.error || (payload.error && payload.error.message) || payload.detail || "Lookup failed.";
+              throw new Error(msg);
+            }
+
+            const rows = payload.results || [];
+            if (!rows.length) {
+              statusEl.textContent = "No users found matching that name.";
+              return;
+            }
+
+            statusEl.textContent = "Found " + rows.length + " user(s). Review Line 1 and Forward All details below.";
+
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Line 1</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Forward All</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Forward To</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
+            html += '</tr></thead><tbody>';
+
+            rows.forEach(function (row, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const userId = String(row.userid || "").trim();
+              const linePattern = String(row.line1_pattern || "").trim();
+              const linePartition = String(row.line1_route_partition || "").trim();
+              const lineDisplay = linePattern
+                ? (linePattern + (linePartition ? (" (" + linePartition + ")") : ""))
+                : "-";
+              const canUpdate = !!linePattern && !!linePartition;
+              const forwardCurrent = String(row.forward_all_destination || "").trim() || "(none)";
+
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px;">' + escapeHtml(row.name || "-") + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + escapeHtml(userId || "-") + '</td>';
+              html += '<td style="padding:7px 10px;">' + escapeHtml(row.email || "-") + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + escapeHtml(lineDisplay) + '</td>';
+              html += '<td data-forward-cell="1" style="padding:7px 10px; font-family:Consolas,monospace;">' + escapeHtml(forwardCurrent) + '</td>';
+              html += '<td style="padding:7px 10px;">';
+              html += '<input data-forward-input="1" placeholder="Example: 718005551212" style="width:180px;" value="' + escapeHtml(forwardCurrent === "(none)" ? "" : forwardCurrent) + '" ' + (canUpdate ? '' : 'disabled') + '>';
+              html += '</td>';
+              html += '<td style="padding:7px 10px; white-space:nowrap;">';
+              if (canUpdate) {
+                html += '<button type="button" data-forward-action="set" data-userid="' + escapeHtml(userId) + '" data-pattern="' + escapeHtml(linePattern) + '" data-partition="' + escapeHtml(linePartition) + '" style="margin-right:6px; background:#237741; color:#fff; border:none; border-radius:6px; padding:5px 9px; font-weight:700; cursor:pointer;">Set Forward</button>';
+                html += '<button type="button" data-forward-action="remove" data-userid="' + escapeHtml(userId) + '" data-pattern="' + escapeHtml(linePattern) + '" data-partition="' + escapeHtml(linePartition) + '" style="background:#7a1020; color:#fff; border:none; border-radius:6px; padding:5px 9px; font-weight:700; cursor:pointer;">Remove Forward</button>';
+              } else {
+                html += '<span style="color:#7a1020; font-size:12px;">No Line 1 found</span>';
+              }
+              html += '</td>';
+              html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            resultsEl.innerHTML = html;
+
+            resultsEl.querySelectorAll('button[data-forward-action="set"]').forEach(function (btn) {
+              btn.addEventListener("click", function () {
+                runForwardUpdate("set", btn);
+              });
+            });
+            resultsEl.querySelectorAll('button[data-forward-action="remove"]').forEach(function (btn) {
+              btn.addEventListener("click", function () {
+                runForwardUpdate("remove", btn);
               });
             });
           } catch (err) {
@@ -45711,6 +45924,372 @@ def lookup_person_route(
       raise
     except Exception as exc:
       raise RuntimeError(f"Person lookup failed: {exc}") from exc
+
+
+def _axl_local_name(tag: str) -> str:
+  return tag.split("}")[-1] if "}" in tag else tag
+
+
+def _axl_child_text(parent: ET.Element, child_name: str) -> str:
+  for child in list(parent):
+    if _axl_local_name(child.tag) == child_name:
+      return (child.text or "").strip()
+  return ""
+
+
+def _axl_find_child(parent: ET.Element, child_name: str) -> ET.Element | None:
+  for child in list(parent):
+    if _axl_local_name(child.tag) == child_name:
+      return child
+  return None
+
+
+def _jabber_forwarding_axl_post(session: requests.Session, cucm_host: str, soap_xml: str, op_name: str) -> ET.Element:
+  response = session.post(
+    f"https://{cucm_host}:8443/axl/",
+    data=soap_xml.encode("utf-8"),
+    headers={"Content-Type": "text/xml"},
+    verify=False,
+    timeout=60,
+  )
+  if response.status_code != 200:
+    raise RuntimeError(f"{op_name} failed HTTP {response.status_code}: {response.text[:300]}")
+  try:
+    return ET.fromstring(response.text)
+  except Exception as exc:
+    raise RuntimeError(f"{op_name} returned invalid XML: {exc}") from exc
+
+
+def _jabber_forwarding_get_line1_for_user(session: requests.Session, cucm_host: str, userid: str) -> dict:
+  clean_userid = (userid or "").strip()
+  if not clean_userid:
+    return {"pattern": "", "route_partition": ""}
+
+  soap_get_user = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getUser sequence=\"1\">
+      <userid>{xml_escape(clean_userid)}</userid>
+      <returnedTags>
+        <userid/>
+        <primaryExtension>
+          <pattern/>
+          <routePartitionName/>
+        </primaryExtension>
+        <associatedDevices>
+          <device/>
+        </associatedDevices>
+      </returnedTags>
+    </axl:getUser>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  root = _jabber_forwarding_axl_post(session, cucm_host, soap_get_user, "getUser")
+
+  user_node = None
+  for elem in root.iter():
+    if _axl_local_name(elem.tag) == "user":
+      user_node = elem
+      break
+  if user_node is None:
+    return {"pattern": "", "route_partition": ""}
+
+  primary_ext = _axl_find_child(user_node, "primaryExtension")
+  if primary_ext is not None:
+    pattern = _axl_child_text(primary_ext, "pattern")
+    route_partition = _axl_child_text(primary_ext, "routePartitionName")
+    if pattern and route_partition:
+      return {"pattern": pattern, "route_partition": route_partition}
+
+  assoc_devices = []
+  assoc_node = _axl_find_child(user_node, "associatedDevices")
+  if assoc_node is not None:
+    for item in list(assoc_node):
+      if _axl_local_name(item.tag) != "device":
+        continue
+      dev_name = (item.text or "").strip()
+      if dev_name:
+        assoc_devices.append(dev_name)
+
+  for device_name in assoc_devices:
+    soap_get_phone = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getPhone sequence=\"1\">
+      <name>{xml_escape(device_name)}</name>
+      <returnedTags>
+        <name/>
+        <lines>
+          <line>
+            <index/>
+            <dirn>
+              <pattern/>
+              <routePartitionName/>
+            </dirn>
+          </line>
+        </lines>
+      </returnedTags>
+    </axl:getPhone>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    try:
+      phone_root = _jabber_forwarding_axl_post(session, cucm_host, soap_get_phone, f"getPhone({device_name})")
+    except Exception:
+      continue
+
+    phone_node = None
+    for elem in phone_root.iter():
+      if _axl_local_name(elem.tag) == "phone":
+        phone_node = elem
+        break
+    if phone_node is None:
+      continue
+
+    lines_node = _axl_find_child(phone_node, "lines")
+    if lines_node is None:
+      continue
+
+    candidate_lines = []
+    for line in list(lines_node):
+      if _axl_local_name(line.tag) != "line":
+        continue
+      index_text = _axl_child_text(line, "index")
+      dirn = _axl_find_child(line, "dirn")
+      if dirn is None:
+        continue
+      pattern = _axl_child_text(dirn, "pattern")
+      route_partition = _axl_child_text(dirn, "routePartitionName")
+      if not pattern or not route_partition:
+        continue
+      try:
+        index_value = int(index_text)
+      except Exception:
+        index_value = 999
+      candidate_lines.append((index_value, pattern, route_partition))
+
+    if candidate_lines:
+      candidate_lines.sort(key=lambda item: item[0])
+      _, pattern, route_partition = candidate_lines[0]
+      return {"pattern": pattern, "route_partition": route_partition}
+
+  return {"pattern": "", "route_partition": ""}
+
+
+def _jabber_forwarding_get_forward_all_destination(session: requests.Session, cucm_host: str, pattern: str, route_partition: str) -> str:
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (route_partition or "").strip()
+  if not clean_pattern or not clean_partition:
+    return ""
+
+  soap_get_line = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getLine sequence=\"1\">
+      <pattern>{xml_escape(clean_pattern)}</pattern>
+      <routePartitionName>{xml_escape(clean_partition)}</routePartitionName>
+      <returnedTags>
+        <pattern/>
+        <routePartitionName/>
+        <callForwardAll>
+          <destination/>
+        </callForwardAll>
+      </returnedTags>
+    </axl:getLine>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  root = _jabber_forwarding_axl_post(session, cucm_host, soap_get_line, "getLine")
+  line_node = None
+  for elem in root.iter():
+    if _axl_local_name(elem.tag) == "line":
+      line_node = elem
+      break
+  if line_node is None:
+    return ""
+
+  call_forward_all = _axl_find_child(line_node, "callForwardAll")
+  if call_forward_all is None:
+    return ""
+  return _axl_child_text(call_forward_all, "destination")
+
+
+def _jabber_forwarding_update_forward_all(session: requests.Session, cucm_host: str, pattern: str, route_partition: str, destination: str) -> None:
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (route_partition or "").strip()
+  if not clean_pattern or not clean_partition:
+    raise RuntimeError("pattern and route_partition are required.")
+
+  clean_destination = (destination or "").strip()
+  soap_update_line = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:updateLine sequence=\"1\">
+      <pattern>{xml_escape(clean_pattern)}</pattern>
+      <routePartitionName>{xml_escape(clean_partition)}</routePartitionName>
+      <callForwardAll>
+        <destination>{xml_escape(clean_destination)}</destination>
+      </callForwardAll>
+    </axl:updateLine>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+  _jabber_forwarding_axl_post(session, cucm_host, soap_update_line, "updateLine")
+
+
+@app.post("/jabber-forwarding/lookup")
+def jabber_forwarding_lookup_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  last_name: str = Form(""),
+  first_name: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=resolved_host, cucm_user=resolved_user)
+
+  clean_last = (last_name or "").strip()
+  clean_first = (first_name or "").strip()
+  if not clean_last:
+    return JSONResponse({"ok": False, "error": "Last Name is required."}, status_code=400)
+
+  people = search_persons_by_name(resolved_host, resolved_user, resolved_pass, clean_last, clean_first)
+  if not people:
+    return JSONResponse({
+      "ok": True,
+      "count": 0,
+      "results": [],
+      "query": {"last_name": clean_last, "first_name": clean_first},
+    })
+
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(resolved_user, resolved_pass)
+
+  rows = []
+  for person in people:
+    userid = str(person.get("userid", "") or "").strip()
+    name = str(person.get("display_name", "") or "").strip() or " ".join([
+      str(person.get("first_name", "") or "").strip(),
+      str(person.get("last_name", "") or "").strip(),
+    ]).strip() or userid
+    email = str(person.get("email", "") or "").strip()
+
+    line1_pattern = ""
+    line1_partition = ""
+    forward_all_destination = ""
+    line_lookup_error = ""
+
+    try:
+      line1 = _jabber_forwarding_get_line1_for_user(session, resolved_host, userid)
+      line1_pattern = str(line1.get("pattern", "") or "").strip()
+      line1_partition = str(line1.get("route_partition", "") or "").strip()
+      if line1_pattern and line1_partition:
+        forward_all_destination = _jabber_forwarding_get_forward_all_destination(
+          session,
+          resolved_host,
+          line1_pattern,
+          line1_partition,
+        )
+    except Exception as exc:
+      line_lookup_error = str(exc)
+
+    rows.append({
+      "name": name,
+      "userid": userid,
+      "email": email,
+      "line1_pattern": line1_pattern,
+      "line1_route_partition": line1_partition,
+      "forward_all_destination": forward_all_destination,
+      "line_lookup_error": line_lookup_error,
+    })
+
+  return JSONResponse({
+    "ok": True,
+    "count": len(rows),
+    "results": rows,
+    "query": {"last_name": clean_last, "first_name": clean_first},
+  })
+
+
+@app.post("/jabber-forwarding/update")
+def jabber_forwarding_update_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  action: str = Form(""),
+  userid: str = Form(""),
+  pattern: str = Form(""),
+  route_partition: str = Form(""),
+  forward_to: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=resolved_host, cucm_user=resolved_user)
+
+  clean_action = (action or "").strip().lower()
+  clean_userid = (userid or "").strip()
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (route_partition or "").strip()
+  clean_forward_to = (forward_to or "").strip()
+
+  if clean_action not in {"set", "remove"}:
+    return JSONResponse({"ok": False, "error": "action must be set or remove."}, status_code=400)
+  if not clean_pattern or not clean_partition:
+    return JSONResponse({"ok": False, "error": "pattern and route_partition are required."}, status_code=400)
+
+  if clean_action == "set":
+    normalized_forward = re.sub(r"[^0-9+#*]", "", clean_forward_to)
+    if not normalized_forward:
+      return JSONResponse({"ok": False, "error": "Forward destination is required for Set Forward."}, status_code=400)
+  else:
+    normalized_forward = ""
+
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(resolved_user, resolved_pass)
+
+  _jabber_forwarding_update_forward_all(
+    session=session,
+    cucm_host=resolved_host,
+    pattern=clean_pattern,
+    route_partition=clean_partition,
+    destination=normalized_forward,
+  )
+
+  current_forward = _jabber_forwarding_get_forward_all_destination(
+    session=session,
+    cucm_host=resolved_host,
+    pattern=clean_pattern,
+    route_partition=clean_partition,
+  )
+
+  _append_audit_event(
+    action="jabber_forwarding_update",
+    cucm_host=resolved_host,
+    operator=resolved_user,
+    target=f"userid={clean_userid};pattern={clean_pattern};partition={clean_partition};action={clean_action};forward_to={normalized_forward or '(none)'}",
+    account=clean_userid,
+    extension_deleted=clean_pattern,
+    output_filename="inline_json_ok",
+    inline_mode=True,
+  )
+
+  return JSONResponse({
+    "ok": True,
+    "action": clean_action,
+    "userid": clean_userid,
+    "pattern": clean_pattern,
+    "route_partition": clean_partition,
+    "forward_to_submitted": normalized_forward,
+    "forward_all_destination": current_forward,
+  })
 
 
 @app.post("/project-greenlight/person-lookup")
