@@ -14832,7 +14832,6 @@ def _list_ls_genesys_did_patterns(
 
     clean_prefix = (pattern_prefix or "").strip() or "727"
     pattern_search = f"{clean_prefix}%"
-    description_search = f"{GENESYS_LS_DID_DESCRIPTION_PREFIX}%"
     suffix_l = GENESYS_LS_DID_AVAILABLE_SUFFIX.casefold()
 
     soap_xml = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
@@ -14842,7 +14841,6 @@ def _list_ls_genesys_did_patterns(
     <axl:listTransPattern sequence=\"1\">
       <searchCriteria>
         <pattern>{xml_escape(pattern_search)}</pattern>
-        <description>{xml_escape(description_search)}</description>
       </searchCriteria>
       <returnedTags>
         <pattern/>
@@ -23595,6 +23593,19 @@ def genesys_ls_did_list_route(
     require_available_suffix=False,
   )
 
+  pattern_probe_rows = _list_translation_patterns_by_pattern(
+    resolved_host,
+    resolved_user,
+    resolved_pass,
+    f"{GENESYS_LS_DID_LIST_PATTERN_PREFIX}%",
+  )
+  desc_prefix_l = GENESYS_LS_DID_DESCRIPTION_PREFIX.casefold()
+  prefix_match_count = 0
+  for row in pattern_probe_rows:
+    description = str(row.get("description", "") or "").strip().casefold()
+    if description.startswith(desc_prefix_l):
+      prefix_match_count += 1
+
   _append_audit_event(
     action="genesys_ls_did_list",
     cucm_host=resolved_host,
@@ -23609,6 +23620,8 @@ def genesys_ls_did_list_route(
     "count": len(rows),
     "pattern_prefix": GENESYS_LS_DID_LIST_PATTERN_PREFIX,
     "description_prefix": GENESYS_LS_DID_DESCRIPTION_PREFIX,
+    "pattern_probe_count": len(pattern_probe_rows),
+    "description_prefix_match_count": prefix_match_count,
     "results": rows,
   })
 
