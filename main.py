@@ -38742,36 +38742,7 @@ def menu_admin_page(request: Request):
               let validationErrors = 0;
               let mergedSearchPatterns = [];
 
-              if (!rawPattern) {
-                const shardPatterns = ["2%", "3%", "4%", "5%", "6%", "7%", "8%", "9%"];
-                const merged = {};
-                for (let i = 0; i < shardPatterns.length; i++) {
-                  const shard = shardPatterns[i];
-                  statusEl.textContent = "Looking up unassigned Directory Numbers... shard " + (i + 1) + "/" + shardPatterns.length + " (" + shard + ")";
-                  const payload = await fetchLookupForPattern(shard);
-                  const shardRows = payload.results || [];
-                  const dbg = payload.debug || {};
-
-                  listedRows += Number(dbg.listed_rows || 0);
-                  uniqueCandidates += Number(dbg.unique_candidates || 0);
-                  skippedHasDevices += Number(dbg.skipped_has_devices || 0);
-                  skippedActive += Number(dbg.skipped_active || 0);
-                  validationErrors += Number(dbg.validation_errors || 0);
-                  if (Array.isArray(dbg.search_patterns)) {
-                    mergedSearchPatterns = mergedSearchPatterns.concat(dbg.search_patterns);
-                  }
-
-                  shardRows.forEach(function (row) {
-                    const pattern = String((row && row.pattern) || "").trim();
-                    const partition = String((row && row.route_partition) || "").trim();
-                    if (!pattern || !partition) {
-                      return;
-                    }
-                    merged[partition + "|" + pattern] = row;
-                  });
-                }
-                rows = Object.keys(merged).map(function (key) { return merged[key]; });
-              } else {
+              {
                 const payload = await fetchLookupForPattern(rawPattern);
                 rows = payload.results || [];
                 const dbg = payload.debug || {};
@@ -38790,13 +38761,8 @@ def menu_admin_page(request: Request):
               });
 
               const searchPatterns = mergedSearchPatterns.join("|");
-              statusEl.textContent = "Found " + rows.length + " NOT Active + unassigned Directory Number(s). "
-                + "[listed=" + listedRows
-                + ", unique=" + uniqueCandidates
-                + ", assigned=" + skippedHasDevices
-                + ", active=" + skippedActive
-                + ", validation_errors=" + validationErrors
-                + ", search_patterns=" + searchPatterns + "]";
+              statusEl.textContent = "Found " + rows.length + " NOT Active + unassigned Directory Number(s)."
+                + (searchPatterns ? " [filter=" + searchPatterns + "]" : " [all in ENT_DEVICE_PT]");
               renderRows(rows);
             } catch (err) {
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
@@ -45310,127 +45276,97 @@ def _lookup_unassigned_directory_numbers(
   # Keep this workflow aligned to the Jabber-assignable DN pool partition.
   clean_partition = "ENT_DEVICE_PT"
 
-  # Mirror Cisco Jabber DN selection pools when no explicit pattern is provided.
-  dn_mapping = _get_dn_mapping()
-  jabber_prefixes: list[str] = []
-  for key in ["general", "strike", "recruiter"]:
-    prefix = str((dn_mapping.get(key) or ("", ""))[0] or "").strip()
-    if prefix and prefix not in jabber_prefixes:
-      jabber_prefixes.append(prefix)
-
+  # Build optional LIKE filters from the pattern input (comma/space separated).
+  # Only digits and SQL wildcards are allowed to keep the query injection-safe.
+  like_clauses: list[str] = []
   search_patterns: list[str] = []
   if clean_pattern:
-    # Accept comma/newline/space separated patterns in one lookup.
     raw_tokens = [token.strip() for token in re.split(r"[,;\s]+", clean_pattern) if token.strip()]
     if not raw_tokens:
       raw_tokens = [clean_pattern]
-
     seen_patterns: set[str] = set()
     for raw_token in raw_tokens:
       token = raw_token
       if "%" not in token and "_" not in token:
         # Numeric token is treated as a prefix lookup (469 -> 469%).
-        if token.isdigit():
-          token = f"{token}%"
-        else:
-          token = f"%{token}%"
-      if token in seen_patterns:
+        token = f"{token}%" if token.isdigit() else f"%{token}%"
+      safe_token = re.sub(r"[^0-9%_]", "", token)
+      if not safe_token or safe_token in seen_patterns:
         continue
-      seen_patterns.add(token)
-      search_patterns.append(token)
-  else:
-    # Blank search uses prefix shards to avoid large wildcard timeout scans.
-    for first_digit in ["2", "3", "4", "5", "6", "7", "8", "9"]:
-      search_patterns.append(f"{first_digit}%")
+      seen_patterns.add(safe_token)
+      search_patterns.append(safe_token)
+      like_clauses.append(f"n.dnorpattern LIKE '{safe_token}'")
 
   session = requests.Session()
   session.verify = False
   session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
-  rows_by_key: dict[tuple[str, str], dict] = {}
   debug_stats: dict[str, object] = {
     "search_patterns": list(search_patterns),
-    "axl_first": "default",
+    "axl_first": "executeSQLQuery",
     "listed_rows": 0,
     "unique_candidates": 0,
-    "fast_path_hits": 0,
-    "fallback_getline_checks": 0,
-    "metadata_unknown": 0,
-    "skipped_has_devices": 0,
-    "skipped_active": 0,
-    "validation_errors": 0,
+    "final_rows": 0,
     "first_error": "",
   }
 
-  is_blank_search = not clean_pattern
+  # Single fast query: unassigned (no device map row) + inactive (iscallable = 'f')
+  # DNs in the target partition. Mirrors the CUCM Unassigned DN report and avoids
+  # any per-DN getLine round-trips.
+  where_parts = [
+    "m.fkdevice IS NULL",
+    "n.tkpatternusage = '2'",
+    "n.iscallable = 'f'",
+    f"r.name = '{clean_partition}'",
+  ]
+  if like_clauses:
+    where_parts.append("(" + " OR ".join(like_clauses) + ")")
 
-  for search_pattern in search_patterns:
-    soap = f"""<?xml version="1.0" encoding="utf-8"?>
-<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  sql = (
+    "SELECT n.dnorpattern AS pattern, r.name AS route_partition, "
+    "n.description AS description, n.iscallable AS iscallable "
+    "FROM numplan n "
+    "LEFT OUTER JOIN devicenumplanmap m ON m.fknumplan = n.pkid "
+    "LEFT JOIN routepartition r ON n.fkroutepartition = r.pkid "
+    "WHERE " + " AND ".join(where_parts)
+  )
+
+  soap = f"""<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
   <soapenv:Header/>
   <soapenv:Body>
-    <axl:listLine sequence=\"1\">
-      <searchCriteria>
-        <pattern>{xml_escape(search_pattern)}</pattern>
-        <routePartitionName>{xml_escape(clean_partition)}</routePartitionName>
-      </searchCriteria>
-      <returnedTags>
-        <pattern/>
-        <routePartitionName/>
-        <description/>
-        <alertingName/>
-        <active/>
-        <associatedDevices>
-          <device/>
-        </associatedDevices>
-      </returnedTags>
-    </axl:listLine>
+    <axl:executeSQLQuery>
+      <sql>{xml_escape(sql)}</sql>
+    </axl:executeSQLQuery>
   </soapenv:Body>
 </soapenv:Envelope>"""
 
-    xml_text = _axl_post_raw_text(session, cucm_host, soap, "listLine")
+  rows_by_key: dict[tuple[str, str], dict] = {}
+  try:
+    xml_text = _axl_post_raw_text(session, cucm_host, soap, "executeSQLQuery")
     root = ET.fromstring(xml_text)
     for elem in root.iter():
       tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-      if tag != "line":
+      if tag != "row":
         continue
 
       pattern = ""
       partition = ""
       description = ""
-      alerting_name = ""
-      active_raw = ""
-      device_count = 0
-      has_active_data = False
-      has_device_data = False
-
       for child in list(elem):
         ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-        if ctag == "pattern":
+        if ctag in ("pattern", "dnorpattern"):
           pattern = (child.text or "").strip()
-        elif ctag == "routePartitionName":
+        elif ctag == "route_partition":
           partition = (child.text or "").strip()
         elif ctag == "description":
           description = (child.text or "").strip()
-        elif ctag == "alertingName":
-          alerting_name = (child.text or "").strip()
-        elif ctag == "active":
-          has_active_data = True
-          active_raw = (child.text or "").strip().lower()
-        elif ctag == "associatedDevices":
-          has_device_data = True
-          for assoc_child in list(child):
-            assoc_tag = assoc_child.tag.split("}")[-1] if "}" in assoc_child.tag else assoc_child.tag
-            if assoc_tag == "device" and (assoc_child.text or "").strip():
-              device_count += 1
 
       if not pattern:
         continue
       if not partition:
         partition = clean_partition
-      if partition != clean_partition:
-        continue
 
       debug_stats["listed_rows"] = int(debug_stats["listed_rows"]) + 1
       key = (pattern, partition)
@@ -45439,38 +45375,18 @@ def _lookup_unassigned_directory_numbers(
           "pattern": pattern,
           "route_partition": partition,
           "description": description,
-          "alerting_name": alerting_name,
-          "active": active_raw in {"true", "t", "1", "yes"},
-          "active_known": has_active_data,
-          "has_devices_known": has_device_data,
-          "device_count": device_count,
+          "alerting_name": "",
+          "active": False,
         }
+  except Exception as exc:
+    debug_stats["first_error"] = f"AXL executeSQLQuery failed: {exc}"
+    raise
 
   debug_stats["unique_candidates"] = len(rows_by_key)
 
   max_rows = max(1, min(int(limit or 300), 1000))
-  rows: list[dict] = []
-  for key in sorted(rows_by_key.keys(), key=lambda item: (item[1], item[0])):
-    row = rows_by_key[key]
-    active_known = bool(row.get("active_known"))
-    listed_active = bool(row.get("active"))
-
-    # Source of truth from the CUCM export: an unassigned DN reports
-    # line.active = false, while an assigned/in-use DN reports active = true.
-    # Filtering on the active flag that listLine already returned avoids any
-    # per-DN getLine round-trips, so the lookup stays fast.
-    if listed_active:
-      debug_stats["skipped_active"] = int(debug_stats["skipped_active"]) + 1
-      continue
-    if not active_known:
-      debug_stats["metadata_unknown"] = int(debug_stats["metadata_unknown"]) + 1
-      continue
-
-    rows.append(row)
-    if len(rows) >= max_rows:
-      break
-
-  rows.sort(key=lambda item: (str(item.get("route_partition", "") or ""), str(item.get("pattern", "") or "")))
+  rows = [rows_by_key[key] for key in sorted(rows_by_key.keys(), key=lambda item: (item[1], item[0]))]
+  rows = rows[:max_rows]
   debug_stats["final_rows"] = len(rows)
   return rows, debug_stats
 
