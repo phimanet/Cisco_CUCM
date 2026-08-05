@@ -47515,15 +47515,25 @@ def _lookup_jabber_registration_statuses(
         device_name = ""
         tkstatus = ""
         status_name = ""
+        name_values: list[str] = []
         for child in list(elem):
           child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
           text = (child.text or "").strip()
-          if child_tag in {"device_name", "name"}:
+          if child_tag == "name":
+            name_values.append(text)
+          elif child_tag == "device_name":
             device_name = text
           elif child_tag == "tkstatus":
             tkstatus = text
-          elif child_tag in {"status_name", "status"}:
+          elif child_tag in {"status_name", "status", "statusname", "name1"}:
             status_name = text
+
+        # Some CUCM executeSQLQuery responses emit duplicate <name> tags and/or name1.
+        # First name is device name; second name is status name when explicit aliases are not preserved.
+        if not device_name and name_values:
+          device_name = name_values[0]
+        if not status_name and len(name_values) > 1:
+          status_name = name_values[1]
 
         if device_name:
           canonical_name = names_by_lower.get(device_name.lower(), device_name)
