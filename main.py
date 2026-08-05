@@ -36751,7 +36751,7 @@ def menu_admin_page(request: Request):
 
           <div class="compact-inline-row">
             <span>DN Pattern (supports %):</span>
-            <input name="pattern_query" value="7%" placeholder="7%" style="min-width:260px;">
+            <input name="pattern_query" value="" placeholder="(blank = Jabber available pools)" style="min-width:260px;">
           </div><br>
 
           <div class="compact-inline-row">
@@ -45187,19 +45187,39 @@ def _lookup_unassigned_directory_numbers(
   limit: int = 300,
 ) -> list[dict]:
   clean_pattern = (pattern_query or "").strip()
-  clean_partition = (route_partition or "").strip()
+  clean_partition = (route_partition or "").strip() or "ENT_DEVICE_PT"
 
-  search_pattern = clean_pattern or "%"
-  if "%" not in search_pattern and "_" not in search_pattern:
-    search_pattern = f"%{search_pattern}%"
+  # Mirror Cisco Jabber DN selection pools when no explicit pattern is provided.
+  dn_mapping = _get_dn_mapping()
+  jabber_prefixes: list[str] = []
+  for key in ["general", "strike", "recruiter"]:
+    prefix = str((dn_mapping.get(key) or ("", ""))[0] or "").strip()
+    if prefix and prefix not in jabber_prefixes:
+      jabber_prefixes.append(prefix)
+
+  search_patterns: list[str] = []
+  if clean_pattern:
+    search_pattern = clean_pattern
+    if "%" not in search_pattern and "_" not in search_pattern:
+      search_pattern = f"%{search_pattern}%"
+    search_patterns.append(search_pattern)
+  else:
+    if jabber_prefixes:
+      for prefix in jabber_prefixes:
+        search_patterns.append(f"{prefix}%")
+    else:
+      search_patterns.append("%")
 
   session = requests.Session()
   session.verify = False
   session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
-  partition_block = f"<routePartitionName>{xml_escape(clean_partition)}</routePartitionName>" if clean_partition else ""
-  soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+  rows_by_key: dict[tuple[str, str], dict] = {}
+  partition_block = f"<routePartitionName>{xml_escape(clean_partition)}</routePartitionName>"
+
+  for search_pattern in search_patterns:
+    soap = f"""<?xml version="1.0" encoding="utf-8"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
   <soapenv:Header/>
   <soapenv:Body>
@@ -45222,61 +45242,70 @@ def _lookup_unassigned_directory_numbers(
   </soapenv:Body>
 </soapenv:Envelope>"""
 
-  xml_text = _axl_post_raw_text(session, cucm_host, soap, "listLine")
-  root = ET.fromstring(xml_text)
-  rows = []
-  for elem in root.iter():
-    tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-    if tag != "line":
+    xml_text = _axl_post_raw_text(session, cucm_host, soap, "listLine")
+    root = ET.fromstring(xml_text)
+    for elem in root.iter():
+      tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+      if tag != "line":
+        continue
+
+      pattern = ""
+      partition = ""
+      description = ""
+      alerting_name = ""
+      active_raw = ""
+
+      for child in list(elem):
+        ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+        if ctag == "pattern":
+          pattern = (child.text or "").strip()
+        elif ctag == "routePartitionName":
+          partition = (child.text or "").strip()
+        elif ctag == "description":
+          description = (child.text or "").strip()
+        elif ctag == "alertingName":
+          alerting_name = (child.text or "").strip()
+        elif ctag == "active":
+          active_raw = (child.text or "").strip().lower()
+
+      if not pattern or not partition:
+        continue
+      if partition != clean_partition:
+        continue
+
+      key = (pattern, partition)
+      if key not in rows_by_key:
+        rows_by_key[key] = {
+          "pattern": pattern,
+          "route_partition": partition,
+          "description": description,
+          "alerting_name": alerting_name,
+          "active": active_raw in {"true", "t", "1", "yes"},
+          "device_count": 0,
+        }
+
+  max_rows = max(1, min(int(limit or 300), 1000))
+  rows: list[dict] = []
+  for key in sorted(rows_by_key.keys(), key=lambda item: (item[1], item[0])):
+    row = rows_by_key[key]
+    pattern = str(row.get("pattern", "") or "").strip()
+    partition = str(row.get("route_partition", "") or "").strip()
+
+    try:
+      if _axl_has_associated_devices(session, cucm_host, pattern, partition):
+        continue
+      if not _axl_is_line_inactive(session, cucm_host, pattern, partition):
+        continue
+    except Exception:
+      # If we cannot positively prove not-active + unassigned, do not show it.
       continue
 
-    pattern = ""
-    partition = ""
-    description = ""
-    alerting_name = ""
-    active_raw = ""
-    device_count = 0
-
-    for child in list(elem):
-      ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-      if ctag == "pattern":
-        pattern = (child.text or "").strip()
-      elif ctag == "routePartitionName":
-        partition = (child.text or "").strip()
-      elif ctag == "description":
-        description = (child.text or "").strip()
-      elif ctag == "alertingName":
-        alerting_name = (child.text or "").strip()
-      elif ctag == "active":
-        active_raw = (child.text or "").strip().lower()
-      elif ctag == "associatedDevices":
-        for d in list(child):
-          dtag = d.tag.split("}")[-1] if "}" in d.tag else d.tag
-          if dtag == "device" and (d.text or "").strip():
-            device_count += 1
-
-    if not pattern or not partition:
-      continue
-    if clean_partition and partition != clean_partition:
-      continue
-    if device_count > 0:
-      continue
-
-    is_inactive = active_raw not in {"true", "t", "1", "yes"}
-    if not is_inactive:
-      continue
-
-    rows.append({
-      "pattern": pattern,
-      "route_partition": partition,
-      "description": description,
-      "alerting_name": alerting_name,
-      "active": active_raw in {"true", "t", "1", "yes"},
-      "device_count": device_count,
-    })
+    rows.append(row)
+    if len(rows) >= max_rows:
+      break
 
   rows.sort(key=lambda item: (str(item.get("route_partition", "") or ""), str(item.get("pattern", "") or "")))
-  return rows[: max(1, min(int(limit or 300), 1000))]
+  return rows
 
 
 def _send_unassigned_dn_delete_email(
