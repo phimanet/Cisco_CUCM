@@ -38600,6 +38600,19 @@ def menu_admin_page(request: Request):
             return selected;
           }
 
+          async function parseJsonResponse(resp, defaultMessage) {
+            const rawText = await resp.text();
+            let payload = null;
+            try {
+              payload = rawText ? JSON.parse(rawText) : {};
+            } catch (_err) {
+              const preview = String(rawText || "").replace(/\s+/g, " ").slice(0, 180);
+              const statusText = "HTTP " + resp.status + (resp.statusText ? (" " + resp.statusText) : "");
+              throw new Error((defaultMessage || "Request failed") + " (" + statusText + ")" + (preview ? (": " + preview) : ""));
+            }
+            return payload || {};
+          }
+
           async function runDelete(items) {
             if (!items || !items.length) {
               statusEl.textContent = "Select at least one DN to delete.";
@@ -38616,7 +38629,7 @@ def menu_admin_page(request: Request):
                 credentials: "same-origin",
                 headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
               });
-              const payload = await resp.json();
+              const payload = await parseJsonResponse(resp, "Delete failed");
               if (!resp.ok || !payload.ok) {
                 const msg = payload.error || (payload.error && payload.error.message) || payload.detail || "Delete failed.";
                 throw new Error(msg);
@@ -38712,7 +38725,7 @@ def menu_admin_page(request: Request):
                 credentials: "same-origin",
                 headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
               });
-              const payload = await resp.json();
+              const payload = await parseJsonResponse(resp, "Lookup failed");
               if (!resp.ok || !payload.ok) {
                 const msg = payload.error || (payload.error && payload.error.message) || payload.detail || "Lookup failed.";
                 throw new Error(msg);
