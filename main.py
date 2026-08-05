@@ -36751,7 +36751,7 @@ def menu_admin_page(request: Request):
 
           <div class="compact-inline-row">
             <span>DN Pattern (supports %):</span>
-            <input name="pattern_query" value="" placeholder="(blank = Jabber available pools)" style="min-width:260px;">
+            <input name="pattern_query" value="" placeholder="examples: 469% or 469,945,817 (blank = first digit 2-9 sweep)" style="min-width:260px;">
           </div><br>
 
           <div class="compact-inline-row">
@@ -45210,19 +45210,33 @@ def _lookup_unassigned_directory_numbers(
 
   search_patterns: list[str] = []
   if clean_pattern:
-    search_pattern = clean_pattern
-    if "%" not in search_pattern and "_" not in search_pattern:
-      search_pattern = f"%{search_pattern}%"
-    search_patterns.append(search_pattern)
+    # Accept comma/newline/space separated patterns in one lookup.
+    raw_tokens = [token.strip() for token in re.split(r"[,;\s]+", clean_pattern) if token.strip()]
+    if not raw_tokens:
+      raw_tokens = [clean_pattern]
+
+    seen_patterns: set[str] = set()
+    for raw_token in raw_tokens:
+      token = raw_token
+      if "%" not in token and "_" not in token:
+        # Numeric token is treated as a prefix lookup (469 -> 469%).
+        if token.isdigit():
+          token = f"{token}%"
+        else:
+          token = f"%{token}%"
+      if token in seen_patterns:
+        continue
+      seen_patterns.add(token)
+      search_patterns.append(token)
   else:
-    if jabber_prefixes:
-      for prefix in jabber_prefixes:
-        search_patterns.append(f"{prefix}%")
-    else:
-      search_patterns.append("%")
-    # Safety fallback: always include full partition scan for blank searches.
-    if "%" not in search_patterns:
-      search_patterns.append("%")
+    # Default blank lookup sweeps first-digit pools 2-9.
+    for first_digit in ["2", "3", "4", "5", "6", "7", "8", "9"]:
+      search_patterns.append(f"{first_digit}%")
+    # Keep configured Jabber pools in scope too.
+    for prefix in jabber_prefixes:
+      scoped = f"{prefix}%"
+      if scoped not in search_patterns:
+        search_patterns.append(scoped)
 
   session = requests.Session()
   session.verify = False
