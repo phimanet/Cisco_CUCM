@@ -36751,7 +36751,7 @@ def menu_admin_page(request: Request):
 
           <div class="compact-inline-row">
             <span>DN Pattern (supports %):</span>
-            <input name="pattern_query" value="2%" placeholder="examples: 469% or 469,945,817 (blank = first digit 2-9 sweep)" style="min-width:260px;">
+            <input name="pattern_query" value="" placeholder="blank = all unassigned in ENT_DEVICE_PT (or 469%, 469,945,817)" style="min-width:260px;">
           </div><br>
 
           <div class="compact-inline-row">
@@ -45444,7 +45444,7 @@ def admin_unassigned_dn_list_route(
   cucm_host: str = Form(""),
   cucm_user: str = Form(""),
   cucm_pass: str = Form(""),
-  pattern_query: str = Form("2%"),
+  pattern_query: str = Form(""),
   route_partition: str = Form("ENT_DEVICE_PT"),
   limit: str = Form("300"),
 ):
