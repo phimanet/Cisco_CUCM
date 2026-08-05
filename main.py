@@ -36751,7 +36751,7 @@ def menu_admin_page(request: Request):
 
           <div class="compact-inline-row">
             <span>DN Pattern (supports %):</span>
-            <input name="pattern_query" value="" placeholder="examples: 469% or 469,945,817 (blank = first digit 2-9 sweep)" style="min-width:260px;">
+            <input name="pattern_query" value="2%" placeholder="examples: 469% or 469,945,817 (blank = first digit 2-9 sweep)" style="min-width:260px;">
           </div><br>
 
           <div class="compact-inline-row">
@@ -38714,29 +38714,82 @@ def menu_admin_page(request: Request):
             statusEl.textContent = "Looking up unassigned Directory Numbers...";
             resultsEl.innerHTML = "";
             try {
-              const fd = new FormData(form);
-              const rawPattern = String(fd.get("pattern_query") || "").trim();
-              fd.set("pattern_query", rawPattern);
-              const resp = await fetch("/admin/dn-unassigned/list", {
-                method: "POST",
-                body: fd,
-                credentials: "same-origin",
-                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
-              });
-              const payload = await parseJsonResponse(resp, "Lookup failed");
-              if (!resp.ok || !payload.ok) {
-                const msg = payload.error || (payload.error && payload.error.message) || payload.detail || "Lookup failed.";
-                throw new Error(msg);
+              const baseFd = new FormData(form);
+              const rawPattern = String(baseFd.get("pattern_query") || "").trim();
+
+              const fetchLookupForPattern = async function (patternValue) {
+                const fd = new FormData(form);
+                fd.set("pattern_query", String(patternValue || "").trim());
+                const resp = await fetch("/admin/dn-unassigned/list", {
+                  method: "POST",
+                  body: fd,
+                  credentials: "same-origin",
+                  headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                });
+                const payload = await parseJsonResponse(resp, "Lookup failed");
+                if (!resp.ok || !payload.ok) {
+                  const msg = payload.error || (payload.error && payload.error.message) || payload.detail || "Lookup failed.";
+                  throw new Error(msg);
+                }
+                return payload;
+              };
+
+              let rows = [];
+              let listedRows = 0;
+              let uniqueCandidates = 0;
+              let skippedHasDevices = 0;
+              let skippedActive = 0;
+              let validationErrors = 0;
+              let mergedSearchPatterns = [];
+
+              if (!rawPattern) {
+                const shardPatterns = ["2%", "3%", "4%", "5%", "6%", "7%", "8%", "9%"];
+                const merged = {};
+                for (let i = 0; i < shardPatterns.length; i++) {
+                  const shard = shardPatterns[i];
+                  statusEl.textContent = "Looking up unassigned Directory Numbers... shard " + (i + 1) + "/" + shardPatterns.length + " (" + shard + ")";
+                  const payload = await fetchLookupForPattern(shard);
+                  const shardRows = payload.results || [];
+                  const dbg = payload.debug || {};
+
+                  listedRows += Number(dbg.listed_rows || 0);
+                  uniqueCandidates += Number(dbg.unique_candidates || 0);
+                  skippedHasDevices += Number(dbg.skipped_has_devices || 0);
+                  skippedActive += Number(dbg.skipped_active || 0);
+                  validationErrors += Number(dbg.validation_errors || 0);
+                  if (Array.isArray(dbg.search_patterns)) {
+                    mergedSearchPatterns = mergedSearchPatterns.concat(dbg.search_patterns);
+                  }
+
+                  shardRows.forEach(function (row) {
+                    const pattern = String((row && row.pattern) || "").trim();
+                    const partition = String((row && row.route_partition) || "").trim();
+                    if (!pattern || !partition) {
+                      return;
+                    }
+                    merged[partition + "|" + pattern] = row;
+                  });
+                }
+                rows = Object.keys(merged).map(function (key) { return merged[key]; });
+              } else {
+                const payload = await fetchLookupForPattern(rawPattern);
+                rows = payload.results || [];
+                const dbg = payload.debug || {};
+                listedRows = Number(dbg.listed_rows || 0);
+                uniqueCandidates = Number(dbg.unique_candidates || 0);
+                skippedHasDevices = Number(dbg.skipped_has_devices || 0);
+                skippedActive = Number(dbg.skipped_active || 0);
+                validationErrors = Number(dbg.validation_errors || 0);
+                mergedSearchPatterns = Array.isArray(dbg.search_patterns) ? dbg.search_patterns.slice() : [];
               }
 
-              const rows = payload.results || [];
-              const dbg = payload.debug || {};
-              const listedRows = Number(dbg.listed_rows || 0);
-              const uniqueCandidates = Number(dbg.unique_candidates || 0);
-              const skippedHasDevices = Number(dbg.skipped_has_devices || 0);
-              const skippedActive = Number(dbg.skipped_active || 0);
-              const validationErrors = Number(dbg.validation_errors || 0);
-              const searchPatterns = Array.isArray(dbg.search_patterns) ? dbg.search_patterns.join("|") : "";
+              rows.sort(function (a, b) {
+                const ak = String((a && a.route_partition) || "") + "|" + String((a && a.pattern) || "");
+                const bk = String((b && b.route_partition) || "") + "|" + String((b && b.pattern) || "");
+                return ak.localeCompare(bk);
+              });
+
+              const searchPatterns = mergedSearchPatterns.join("|");
               statusEl.textContent = "Found " + rows.length + " NOT Active + unassigned Directory Number(s). "
                 + "[listed=" + listedRows
                 + ", unique=" + uniqueCandidates
@@ -45501,7 +45554,7 @@ def admin_unassigned_dn_list_route(
   cucm_host: str = Form(""),
   cucm_user: str = Form(""),
   cucm_pass: str = Form(""),
-  pattern_query: str = Form(""),
+  pattern_query: str = Form("2%"),
   route_partition: str = Form("ENT_DEVICE_PT"),
   limit: str = Form("300"),
 ):
