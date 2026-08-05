@@ -27838,6 +27838,117 @@ __ADMIN_CARD__
     <h3 class="offboard-h3">Offboard User - Delete all Jabber and Voicemail Box (Option 10)</h3>
     <p>Authentication note: Uses cached login credentials from your current session for Unity voicemail and Active Directory actions.</p>
     __DN_DELETE_INDICATOR__
+
+    <div class="offboard-search-wrap" style="margin:0 0 16px 0;padding:14px;border:1px solid #c8dbee;border-radius:8px;background:#f7fbff;">
+      <h4 style="margin:0 0 8px 0;color:#002f6c;">Look Up Employee by Name (optional)</h4>
+      <p style="margin:0 0 10px 0;font-size:13px;color:#4e6a84;">Search to review the user's extension, email, and Jabber devices, then click <strong>Select for Separation</strong> to load them into the form below. Nothing is deleted until you run the Offboard action.</p>
+      <form id="offboard-search-form" class="jabber-check-form">
+        <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
+        <input type="hidden" name="include_teams_status" value="1">
+        <div class="search-filter-row">
+          <input name="last_name" placeholder="Last Name *" required>
+          <input name="first_name" placeholder="First Name (optional)">
+          <button id="offboard-search-btn" type="submit">Search</button>
+        </div>
+      </form>
+      <p id="offboard-search-status" style="margin:10px 0 0 0;font-size:13px;color:#12304a;">Enter a last name and click Search.</p>
+      <div id="offboard-search-results" style="overflow-x:auto;margin-top:8px;"></div>
+    </div>
+
+    <script>
+      (function () {
+        const form = document.getElementById("offboard-search-form");
+        const statusEl = document.getElementById("offboard-search-status");
+        const resultsEl = document.getElementById("offboard-search-results");
+        if (!form || !statusEl || !resultsEl) return;
+
+        function selectForSeparation(uid) {
+          const target = document.querySelector('#offboard-user-form input[name="target_user"]');
+          if (target) {
+            target.value = uid || "";
+            target.focus();
+          }
+          const anchor = document.getElementById("offboard-user-form")
+            || document.querySelector('.tool-panel[data-panel="offboard"]');
+          if (anchor) anchor.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          statusEl.textContent = "Searching...";
+          resultsEl.innerHTML = "";
+          try {
+            const formData = new FormData(form);
+            const response = await fetch("/lookup/person", { method: "POST", body: formData, credentials: "same-origin" });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              const msg = (payload.error && payload.error.message) || "Search failed.";
+              const normalized = String(msg || "").toLowerCase();
+              if (response.status === 401 || normalized.includes("credentials expired") || normalized.includes("log in again") || normalized.includes("missing cucm credentials")) {
+                throw new Error("Session credentials expired. Please log in again.");
+              }
+              throw new Error(msg);
+            }
+            const results = payload.results || [];
+            if (!results.length) {
+              statusEl.textContent = "No users found matching that name.";
+              return;
+            }
+            statusEl.textContent = "Found " + results.length + " user(s). Review, then click Select for Separation.";
+
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#7a1020; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Jabber Devices</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
+            html += '</tr></thead><tbody>';
+
+            results.forEach(function (r, i) {
+              const bg = i % 2 === 0 ? "#fff5f5" : "#ffffff";
+              const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+              const ext = r.primary_extension || "\u2014";
+              const email = r.email || "\u2014";
+              const telephone = r.telephone || "\u2014";
+              const uid = r.userid || "";
+              const devList = (r.devices || []).map(function (d) {
+                const exts = (d.extensions || []).join(", ") || "\u2014";
+                return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
+              }).join("<br>") || "\u2014";
+              const btnStyle = "display:inline-block;padding:5px 10px;font-size:12px;font-weight:700;border-radius:5px;border:none;cursor:pointer;background:#b91c1c;color:#fff;";
+              const actionBtn = '<button type="button" style="' + btnStyle + '" data-separate-uid="' + uid + '">Select for Separation \u2192</button>';
+
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #eccfd0;">';
+              html += '<td style="padding:7px 10px;">' + name + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + uid + '</td>';
+              html += '<td style="padding:7px 10px; font-weight:700; color:#7a1020;">' + ext + '</td>';
+              html += '<td style="padding:7px 10px;">' + email + '</td>';
+              html += '<td style="padding:7px 10px;">' + telephone + '</td>';
+              html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
+              html += '<td style="padding:7px 10px;">' + actionBtn + '</td>';
+              html += '</tr>';
+            });
+
+            html += '</tbody></table>';
+            resultsEl.innerHTML = html;
+
+            resultsEl.querySelectorAll('button[data-separate-uid]').forEach(function (btn) {
+              btn.addEventListener("click", function () {
+                selectForSeparation(btn.getAttribute("data-separate-uid") || "");
+              });
+            });
+          } catch (err) {
+            statusEl.textContent = "Error: " + (err && err.message ? err.message : "Search failed.");
+          }
+        });
+      })();
+    </script>
+
     <div class="offboard-layout">
       <form id="offboard-user-form" class="target-user-form offboard-form" action="javascript:void(0)" method="post" onsubmit="return false;">
                 <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
