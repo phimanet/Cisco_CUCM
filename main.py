@@ -45452,44 +45452,18 @@ def _lookup_unassigned_directory_numbers(
   rows: list[dict] = []
   for key in sorted(rows_by_key.keys(), key=lambda item: (item[1], item[0])):
     row = rows_by_key[key]
-    pattern = str(row.get("pattern", "") or "").strip()
-    partition = str(row.get("route_partition", "") or "").strip()
     active_known = bool(row.get("active_known"))
-    has_devices_known = bool(row.get("has_devices_known"))
     listed_active = bool(row.get("active"))
-    listed_device_count = int(row.get("device_count") or 0)
 
-    # Fast path: rely on listLine metadata when both active + associatedDevices are present.
-    if has_devices_known and listed_device_count > 0:
-      debug_stats["skipped_has_devices"] = int(debug_stats["skipped_has_devices"]) + 1
-      continue
-    if active_known and listed_active:
+    # Source of truth from the CUCM export: an unassigned DN reports
+    # line.active = false, while an assigned/in-use DN reports active = true.
+    # Filtering on the active flag that listLine already returned avoids any
+    # per-DN getLine round-trips, so the lookup stays fast.
+    if listed_active:
       debug_stats["skipped_active"] = int(debug_stats["skipped_active"]) + 1
       continue
-    if active_known and has_devices_known and listed_device_count == 0 and not listed_active:
-      debug_stats["fast_path_hits"] = int(debug_stats["fast_path_hits"]) + 1
-      rows.append(row)
-      if len(rows) >= max_rows:
-        break
-      continue
-
-    if is_blank_search:
+    if not active_known:
       debug_stats["metadata_unknown"] = int(debug_stats["metadata_unknown"]) + 1
-
-    try:
-      debug_stats["fallback_getline_checks"] = int(debug_stats["fallback_getline_checks"]) + 1
-      has_devices, is_inactive = _axl_get_line_status(session, cucm_host, pattern, partition)
-      if has_devices:
-        debug_stats["skipped_has_devices"] = int(debug_stats["skipped_has_devices"]) + 1
-        continue
-      if not is_inactive:
-        debug_stats["skipped_active"] = int(debug_stats["skipped_active"]) + 1
-        continue
-    except Exception:
-      # If we cannot positively prove not-active + unassigned, do not show it.
-      debug_stats["validation_errors"] = int(debug_stats["validation_errors"]) + 1
-      if not str(debug_stats.get("first_error", "") or ""):
-        debug_stats["first_error"] = "AXL getLine validation failed for one or more candidates."
       continue
 
     rows.append(row)
