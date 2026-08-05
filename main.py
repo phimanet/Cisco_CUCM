@@ -15837,6 +15837,82 @@ def _release_ls_genesys_did(
   }
 
 
+def _release_ls_genesys_dids_for_user(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  target_user: str,
+  display_name: str = "",
+) -> list[dict]:
+  clean_target = (target_user or "").strip()
+  clean_display = (display_name or "").strip()
+  candidate_names = []
+  for value in [clean_display, clean_target]:
+    normalized = " ".join(str(value or "").strip().lower().split())
+    if normalized and normalized not in candidate_names:
+      candidate_names.append(normalized)
+
+  if not candidate_names:
+    return []
+
+  rows = _list_ls_genesys_did_patterns(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    pattern_prefix=GENESYS_LS_DID_LIST_PATTERN_PREFIX,
+    require_available_suffix=False,
+  )
+
+  released_rows: list[dict] = []
+  for row in rows:
+    if bool(row.get("is_available", False)):
+      continue
+
+    assigned_user = str(row.get("assigned_user", "") or "").strip()
+    assigned_key = " ".join(assigned_user.lower().split())
+    if not assigned_key or assigned_key not in candidate_names:
+      continue
+
+    pattern = str(row.get("pattern", "") or "").strip()
+    route_partition = str(row.get("route_partition", "") or "").strip()
+    if not pattern or not route_partition:
+      released_rows.append({
+        "pattern": pattern,
+        "route_partition": route_partition,
+        "status": "Failed",
+        "details": "LS Genesys DID match found but pattern or route partition was missing.",
+      })
+      continue
+
+    try:
+      release_result = _release_ls_genesys_did(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        pattern=pattern,
+        route_partition=route_partition,
+      )
+      released_rows.append({
+        "pattern": pattern,
+        "route_partition": route_partition,
+        "status": "Success",
+        "details": f"Released LS Genesys DID {pattern}/{route_partition} back to Available",
+        "old_description": release_result.get("old_description", ""),
+        "new_description": release_result.get("new_description", ""),
+        "assigned_user": assigned_user,
+      })
+    except Exception as exc:
+      released_rows.append({
+        "pattern": pattern,
+        "route_partition": route_partition,
+        "status": "Failed",
+        "details": f"Could not release LS Genesys DID {pattern}/{route_partition}: {exc}",
+        "assigned_user": assigned_user,
+      })
+
+  return released_rows
+
+
 def _list_blocked_inbound_patterns(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[dict]:
     session = requests.Session()
     session.verify = False
@@ -48412,6 +48488,10 @@ def decommission_user_csf_voicemail_route(
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
     _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
     clean_target_user = (target_user or "").strip()
+    try:
+      _, clean_display_name = _lookup_user_contact(cucm_host, cucm_user, cucm_pass, clean_target_user)
+    except Exception:
+      clean_display_name = clean_target_user
     data, filename = decommission_user_csf_voicemail(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
@@ -48462,7 +48542,50 @@ def decommission_user_csf_voicemail_route(
                     ])
             data = _to_bytes(data) + del_rows.getvalue().encode("utf-8")
 
-    if b"No CSF/BOT/TCT devices associated to user" in _to_bytes(data):
+    ls_genesys_rows = _release_ls_genesys_dids_for_user(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        target_user=clean_target_user,
+        display_name=clean_display_name,
+    )
+    if ls_genesys_rows:
+      ls_rows = io.StringIO()
+      ls_writer = csv.writer(ls_rows)
+      for ls_row in ls_genesys_rows:
+        ls_writer.writerow([
+          "Release LS Genesys DID",
+          ls_row.get("status", "Success"),
+          ls_row.get("details", ""),
+        ])
+      data = _to_bytes(data) + ls_rows.getvalue().encode("utf-8")
+      _append_audit_event(
+        action="separation_ls_genesys_did_released",
+        cucm_host=cucm_host,
+        operator=cucm_user,
+        target=(
+          f"account={clean_target_user};"
+          f"display_name={clean_display_name};"
+          f"count={len(ls_genesys_rows)}"
+        ),
+        account=clean_target_user,
+        extension_added="",
+        extension_deleted=",".join([str(item.get("pattern", "") or "").strip() for item in ls_genesys_rows if str(item.get("pattern", "") or "").strip()]),
+        output_filename=filename,
+        inline_mode=inline,
+      )
+
+    try:
+      teams_candidate = lookup_teams_telephony_removal_candidate(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        target_user=clean_target_user,
+      )
+    except Exception:
+      teams_candidate = {"match_found": False}
+
+    if teams_candidate.get("match_found"):
       teams_data, teams_filename = remove_teams_telephony_user(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
