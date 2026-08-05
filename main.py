@@ -45268,8 +45268,12 @@ def _lookup_unassigned_directory_numbers(
         elif ctag == "active":
           active_raw = (child.text or "").strip().lower()
 
-      if not pattern or not partition:
+      if not pattern:
         continue
+      if not partition:
+        # DN availability report relies on listLine pattern-only responses.
+        # Treat missing partition in listLine as the requested partition.
+        partition = clean_partition
       if partition != clean_partition:
         continue
 
