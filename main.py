@@ -47528,16 +47528,19 @@ def _lookup_jabber_registration_statuses(
         tkstatus = ""
         status_name = ""
         name_values: list[str] = []
+        column_values: list[str] = []
         for child in list(elem):
           child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
           text = (child.text or "").strip()
-          if child_tag == "name":
+          tag_norm = re.sub(r"[^a-z0-9]", "", str(child_tag or "").lower())
+          column_values.append(text)
+          if tag_norm == "name":
             name_values.append(text)
-          elif child_tag == "device_name":
+          elif tag_norm in {"devicename", "phonename"}:
             device_name = text
-          elif child_tag == "tkstatus":
+          elif tag_norm in {"tkstatus", "statusenum"}:
             tkstatus = text
-          elif child_tag in {"status_name", "status", "statusname", "name1"}:
+          elif tag_norm in {"statusname", "status", "name1", "name2", "name3"}:
             status_name = text
 
         # Some CUCM executeSQLQuery responses emit duplicate <name> tags and/or name1.
@@ -47546,6 +47549,14 @@ def _lookup_jabber_registration_statuses(
           device_name = name_values[0]
         if not status_name and len(name_values) > 1:
           status_name = name_values[1]
+
+        # Last-resort positional mapping for unusual executeSQLQuery column tags.
+        if not device_name and column_values:
+          device_name = column_values[0]
+        if not tkstatus and len(column_values) > 1:
+          tkstatus = column_values[1]
+        if not status_name and len(column_values) > 2:
+          status_name = column_values[2]
 
         if device_name:
           canonical_name = names_by_lower.get(device_name.lower(), device_name)
