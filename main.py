@@ -38702,6 +38702,10 @@ def menu_admin_page(request: Request):
             resultsEl.innerHTML = "";
             try {
               const fd = new FormData(form);
+              const rawPattern = String(fd.get("pattern_query") || "").trim();
+              if (!rawPattern) {
+                fd.set("pattern_query", "%");
+              }
               const resp = await fetch("/admin/dn-unassigned/list", {
                 method: "POST",
                 body: fd,
@@ -38721,12 +38725,14 @@ def menu_admin_page(request: Request):
               const skippedHasDevices = Number(dbg.skipped_has_devices || 0);
               const skippedActive = Number(dbg.skipped_active || 0);
               const validationErrors = Number(dbg.validation_errors || 0);
+              const searchPatterns = Array.isArray(dbg.search_patterns) ? dbg.search_patterns.join("|") : "";
               statusEl.textContent = "Found " + rows.length + " NOT Active + unassigned Directory Number(s). "
                 + "[listed=" + listedRows
                 + ", unique=" + uniqueCandidates
                 + ", assigned=" + skippedHasDevices
                 + ", active=" + skippedActive
-                + ", validation_errors=" + validationErrors + "]";
+                + ", validation_errors=" + validationErrors
+                + ", search_patterns=" + searchPatterns + "]";
               renderRows(rows);
             } catch (err) {
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
@@ -45230,14 +45236,8 @@ def _lookup_unassigned_directory_numbers(
       seen_patterns.add(token)
       search_patterns.append(token)
   else:
-    # Default blank lookup sweeps first-digit pools 2-9.
-    for first_digit in ["2", "3", "4", "5", "6", "7", "8", "9"]:
-      search_patterns.append(f"{first_digit}%")
-    # Keep configured Jabber pools in scope too.
-    for prefix in jabber_prefixes:
-      scoped = f"{prefix}%"
-      if scoped not in search_patterns:
-        search_patterns.append(scoped)
+    # Blank means full ENT_DEVICE_PT sweep.
+    search_patterns.append("%")
 
   session = requests.Session()
   session.verify = False
@@ -45255,7 +45255,7 @@ def _lookup_unassigned_directory_numbers(
     "first_error": "",
   }
 
-  if not clean_pattern:
+  if search_patterns == ["%"]:
     # Match the DN availability report/Jabber pool lookup exactly.
     for scoped_pattern in search_patterns:
       soap = f"""<?xml version="1.0" encoding="utf-8"?>
