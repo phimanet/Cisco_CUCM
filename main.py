@@ -38715,7 +38715,18 @@ def menu_admin_page(request: Request):
               }
 
               const rows = payload.results || [];
-              statusEl.textContent = "Found " + rows.length + " NOT Active + unassigned Directory Number(s).";
+              const dbg = payload.debug || {};
+              const listedRows = Number(dbg.listed_rows || 0);
+              const uniqueCandidates = Number(dbg.unique_candidates || 0);
+              const skippedHasDevices = Number(dbg.skipped_has_devices || 0);
+              const skippedActive = Number(dbg.skipped_active || 0);
+              const validationErrors = Number(dbg.validation_errors || 0);
+              statusEl.textContent = "Found " + rows.length + " NOT Active + unassigned Directory Number(s). "
+                + "[listed=" + listedRows
+                + ", unique=" + uniqueCandidates
+                + ", assigned=" + skippedHasDevices
+                + ", active=" + skippedActive
+                + ", validation_errors=" + validationErrors + "]";
               renderRows(rows);
             } catch (err) {
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
@@ -45185,7 +45196,7 @@ def _lookup_unassigned_directory_numbers(
   pattern_query: str,
   route_partition: str,
   limit: int = 300,
-) -> list[dict]:
+) -> tuple[list[dict], dict]:
   clean_pattern = (pattern_query or "").strip()
   clean_partition = (route_partition or "").strip() or "ENT_DEVICE_PT"
 
@@ -45216,6 +45227,15 @@ def _lookup_unassigned_directory_numbers(
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   rows_by_key: dict[tuple[str, str], dict] = {}
+  debug_stats: dict[str, object] = {
+    "search_patterns": list(search_patterns),
+    "listed_rows": 0,
+    "unique_candidates": 0,
+    "skipped_has_devices": 0,
+    "skipped_active": 0,
+    "validation_errors": 0,
+    "first_error": "",
+  }
 
   if not clean_pattern and jabber_prefixes:
     # Match the DN availability report/Jabber pool lookup exactly.
@@ -45253,6 +45273,7 @@ def _lookup_unassigned_directory_numbers(
         if not pattern:
           continue
 
+        debug_stats["listed_rows"] = int(debug_stats["listed_rows"]) + 1
         key = (pattern, clean_partition)
         if key not in rows_by_key:
           rows_by_key[key] = {
@@ -45317,6 +45338,7 @@ def _lookup_unassigned_directory_numbers(
         if partition != clean_partition:
           continue
 
+        debug_stats["listed_rows"] = int(debug_stats["listed_rows"]) + 1
         key = (pattern, partition)
         if key not in rows_by_key:
           rows_by_key[key] = {
@@ -45328,6 +45350,8 @@ def _lookup_unassigned_directory_numbers(
             "device_count": 0,
           }
 
+  debug_stats["unique_candidates"] = len(rows_by_key)
+
   max_rows = max(1, min(int(limit or 300), 1000))
   rows: list[dict] = []
   for key in sorted(rows_by_key.keys(), key=lambda item: (item[1], item[0])):
@@ -45337,11 +45361,16 @@ def _lookup_unassigned_directory_numbers(
 
     try:
       if _axl_has_associated_devices(session, cucm_host, pattern, partition):
+        debug_stats["skipped_has_devices"] = int(debug_stats["skipped_has_devices"]) + 1
         continue
       if not _axl_is_line_inactive(session, cucm_host, pattern, partition):
+        debug_stats["skipped_active"] = int(debug_stats["skipped_active"]) + 1
         continue
     except Exception:
       # If we cannot positively prove not-active + unassigned, do not show it.
+      debug_stats["validation_errors"] = int(debug_stats["validation_errors"]) + 1
+      if not str(debug_stats.get("first_error", "") or ""):
+        debug_stats["first_error"] = "AXL getLine validation failed for one or more candidates."
       continue
 
     rows.append(row)
@@ -45349,7 +45378,8 @@ def _lookup_unassigned_directory_numbers(
       break
 
   rows.sort(key=lambda item: (str(item.get("route_partition", "") or ""), str(item.get("pattern", "") or "")))
-  return rows
+  debug_stats["final_rows"] = len(rows)
+  return rows, debug_stats
 
 
 def _send_unassigned_dn_delete_email(
@@ -45417,7 +45447,7 @@ def admin_unassigned_dn_list_route(
   except Exception:
     clean_limit = 300
 
-  rows = _lookup_unassigned_directory_numbers(
+  rows, debug_stats = _lookup_unassigned_directory_numbers(
     cucm_host=cucm_host,
     cucm_user=cucm_user,
     cucm_pass=cucm_pass,
@@ -45430,6 +45460,7 @@ def admin_unassigned_dn_list_route(
     "ok": True,
     "count": len(rows),
     "results": rows,
+    "debug": debug_stats,
   })
 
 
