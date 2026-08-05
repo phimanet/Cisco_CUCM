@@ -9975,13 +9975,24 @@ def _run_sep_dn_delete_report(triggered_by: str = "scheduler") -> dict:
     def _cell(row, key):
       return escape(str(row.get(key, "") or ""))
 
+    def _partition_from_target(target_text: str) -> str:
+      match = re.search(r"(?:^|;)partition=([^;]+)", str(target_text or ""))
+      return (match.group(1).strip() if match else "")
+
     if rows:
+      report_rows = []
+      for r in rows:
+        row_copy = dict(r)
+        row_copy["route_partition"] = _partition_from_target(r.get("target", ""))
+        report_rows.append(row_copy)
+
       body_rows = "".join(
         f"<tr><td style='padding:6px 10px;border:1px solid #ccc;'>{_cell(r, 'timestamp')}</td>"
         f"<td style='padding:6px 10px;border:1px solid #ccc;'>{_cell(r, 'account')}</td>"
         f"<td style='padding:6px 10px;border:1px solid #ccc;'>{_cell(r, 'extension_deleted')}</td>"
+        f"<td style='padding:6px 10px;border:1px solid #ccc;'>{_cell(r, 'route_partition')}</td>"
         f"<td style='padding:6px 10px;border:1px solid #ccc;'>{_cell(r, 'operator')}</td></tr>"
-        for r in rows
+        for r in report_rows
       )
       table_html = (
         "<table style='border-collapse:collapse;font-family:Segoe UI,Arial,sans-serif;font-size:13px;'>"
@@ -9989,10 +10000,14 @@ def _run_sep_dn_delete_report(triggered_by: str = "scheduler") -> dict:
         "<th style='padding:6px 10px;border:1px solid #ccc;'>Deleted (PST)</th>"
         "<th style='padding:6px 10px;border:1px solid #ccc;'>Separated Account</th>"
         "<th style='padding:6px 10px;border:1px solid #ccc;'>Directory Number</th>"
+        "<th style='padding:6px 10px;border:1px solid #ccc;'>Route Partition</th>"
         "<th style='padding:6px 10px;border:1px solid #ccc;'>Operator</th></tr>"
         f"{body_rows}</table>"
       )
-      text_lines = [f"{r.get('timestamp','')}  {r.get('extension_deleted','')}  ({r.get('account','')})" for r in rows]
+      text_lines = [
+        f"{r.get('timestamp','')}  {r.get('extension_deleted','')}/{r.get('route_partition','')}  ({r.get('account','')})"
+        for r in report_rows
+      ]
       text_body = "\n".join(text_lines)
     else:
       table_html = "<p>No directory numbers were permanently deleted during this period.</p>"
