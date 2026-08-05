@@ -157,6 +157,24 @@ def _parse_phone_lines(xml_text):
     return []
 
 
+def _parse_phone_status(xml_text):
+    if not xml_text:
+        return ""
+    try:
+        root = ET.fromstring(xml_text)
+    except Exception:
+        return ""
+
+    for elem in root.iter():
+        if _strip_ns(elem.tag) != "phone":
+            continue
+        status_node = _find_child(elem, "status")
+        if status_node is not None and status_node.text:
+            return status_node.text.strip()
+        return ""
+    return ""
+
+
 def _device_type(name):
     upper = (name or "").upper()
     if upper.startswith("CSF"):
@@ -303,12 +321,15 @@ def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_nam
             try:
                 phone_xml = _axl_post(session, cucm_host, _soap_get_phone(dev_name))
                 lines = _parse_phone_lines(phone_xml)
+                status = _parse_phone_status(phone_xml)
             except Exception:
                 lines = []
+                status = ""
             devices.append({
                 "name": dev_name,
                 "type": _device_type(dev_name),
                 "extensions": lines,
+                "status": status,
             })
             if not primary_ext and lines:
                 primary_ext = lines[0]
