@@ -45247,6 +45247,7 @@ def _lookup_unassigned_directory_numbers(
   rows_by_key: dict[tuple[str, str], dict] = {}
   debug_stats: dict[str, object] = {
     "search_patterns": list(search_patterns),
+    "axl_first": "default",
     "listed_rows": 0,
     "unique_candidates": 0,
     "skipped_has_devices": 0,
@@ -45457,29 +45458,32 @@ def admin_unassigned_dn_list_route(
   route_partition: str = Form("ENT_DEVICE_PT"),
   limit: str = Form("300"),
 ):
-  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
-
   try:
-    clean_limit = int(str(limit or "300").strip() or "300")
-  except Exception:
-    clean_limit = 300
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
 
-  rows, debug_stats = _lookup_unassigned_directory_numbers(
-    cucm_host=cucm_host,
-    cucm_user=cucm_user,
-    cucm_pass=cucm_pass,
-    pattern_query=pattern_query,
-    route_partition=route_partition,
-    limit=clean_limit,
-  )
+    try:
+      clean_limit = int(str(limit or "300").strip() or "300")
+    except Exception:
+      clean_limit = 300
 
-  return JSONResponse({
-    "ok": True,
-    "count": len(rows),
-    "results": rows,
-    "debug": debug_stats,
-  })
+    rows, debug_stats = _lookup_unassigned_directory_numbers(
+      cucm_host=cucm_host,
+      cucm_user=cucm_user,
+      cucm_pass=cucm_pass,
+      pattern_query=pattern_query,
+      route_partition=route_partition,
+      limit=clean_limit,
+    )
+
+    return JSONResponse({
+      "ok": True,
+      "count": len(rows),
+      "results": rows,
+      "debug": debug_stats,
+    })
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
 @app.post("/admin/dn-unassigned/delete")
