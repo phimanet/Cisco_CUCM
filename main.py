@@ -47371,6 +47371,8 @@ def _lookup_jabber_registration_statuses(
   if not clean_names:
     return {}
 
+  names_by_lower = {name.lower(): name for name in clean_names}
+
   session = requests.Session()
   session.verify = False
   session.trust_env = False
@@ -47393,9 +47395,94 @@ def _lookup_jabber_registration_statuses(
     except Exception:
       return "Unknown"
 
+  # Prefer RIS realtime status because AXL device.tkstatus may lag actual registration.
+  ris_hosts = _axl_list_process_nodes(cucm_host, cucm_user, cucm_pass) or [cucm_host]
+  ris_urls = [
+    "https://{host}:8443/realtimeservice2/services/RISService70",
+    "https://{host}:8443/realtimeservice/services/RISService70",
+  ]
+
+  def _ris_query_chunk(chunk_names: list[str]) -> bool:
+    if not chunk_names:
+      return False
+
+    item_xml = "".join(
+      f"<item><Item>{xml_escape(name)}</Item></item>" for name in chunk_names
+    )
+    soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:ris=\"http://schemas.cisco.com/ast/soap\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ris:selectCmDevice>
+      <StateInfo></StateInfo>
+      <CmSelectionCriteria>
+        <MaxReturnedDevices>{max(50, len(chunk_names) + 20)}</MaxReturnedDevices>
+        <DeviceClass>Phone</DeviceClass>
+        <Model>255</Model>
+        <Status>Any</Status>
+        <NodeName></NodeName>
+        <SelectBy>Name</SelectBy>
+        <SelectItems>{item_xml}</SelectItems>
+        <Protocol>Any</Protocol>
+        <DownloadStatus>Any</DownloadStatus>
+      </CmSelectionCriteria>
+    </ris:selectCmDevice>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    for ris_host in ris_hosts:
+      for ris_url_tmpl in ris_urls:
+        ris_url = ris_url_tmpl.format(host=ris_host)
+        try:
+          response = session.post(
+            ris_url,
+            data=soap_xml.encode("utf-8"),
+            headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 selectCmDevice"},
+            timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
+          )
+        except Exception:
+          continue
+        if response.status_code != 200:
+          continue
+
+        try:
+          root = ET.fromstring(response.text)
+        except Exception:
+          continue
+
+        found_any = False
+        for node in root.iter():
+          cm_devices = _find_xml_child(node, "CmDevices")
+          if cm_devices is None:
+            continue
+          for dev in list(cm_devices):
+            dev_name = (_find_xml_child_text(dev, "Name") or "").strip()
+            if not dev_name:
+              continue
+            canonical_name = names_by_lower.get(dev_name.lower())
+            if not canonical_name:
+              continue
+            status_text = (_find_xml_child_text(dev, "Status") or "").strip()
+            status_map[canonical_name] = {
+              "status": _status_label("", status_text),
+              "tkstatus": "",
+              "status_name": status_text,
+            }
+            found_any = True
+
+        if found_any:
+          return True
+
+    return False
+
+  ris_chunk_size = 120
+  for start in range(0, len(clean_names), ris_chunk_size):
+    _ris_query_chunk(clean_names[start:start + ris_chunk_size])
+
   chunk_size = 120
-  for start in range(0, len(clean_names), chunk_size):
-    chunk = clean_names[start:start + chunk_size]
+  pending_names = [name for name in clean_names if name not in status_map]
+  for start in range(0, len(pending_names), chunk_size):
+    chunk = pending_names[start:start + chunk_size]
     if not chunk:
       continue
     names_sql = ",".join("'" + name.replace("'", "''") + "'" for name in chunk)
@@ -47439,7 +47526,8 @@ def _lookup_jabber_registration_statuses(
             status_name = text
 
         if device_name:
-          status_map[device_name] = {
+          canonical_name = names_by_lower.get(device_name.lower(), device_name)
+          status_map[canonical_name] = {
             "status": _status_label(tkstatus, status_name),
             "tkstatus": tkstatus,
             "status_name": status_name,
