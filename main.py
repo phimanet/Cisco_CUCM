@@ -47383,6 +47383,8 @@ def _lookup_jabber_registration_statuses(
   def _status_label(tkstatus_value: str, status_name_value: str) -> str:
     status_name_clean = str(status_name_value or "").strip()
     lowered = status_name_clean.lower()
+    if "unregistered" in lowered:
+      return "Unregistered"
     if "register" in lowered:
       return "Registered"
     if lowered:
@@ -47406,23 +47408,21 @@ def _lookup_jabber_registration_statuses(
     if not chunk_names:
       return False
 
-    item_xml = "".join(
-      f"<item><Item>{xml_escape(name)}</Item></item>" for name in chunk_names
-    )
-    soap_xml = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+    def _build_ris_soap(select_items_xml: str, max_returned: int) -> str:
+      return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:ris=\"http://schemas.cisco.com/ast/soap\">
   <soapenv:Header/>
   <soapenv:Body>
     <ris:selectCmDevice>
       <StateInfo></StateInfo>
       <CmSelectionCriteria>
-        <MaxReturnedDevices>{max(50, len(chunk_names) + 20)}</MaxReturnedDevices>
+        <MaxReturnedDevices>{max_returned}</MaxReturnedDevices>
         <DeviceClass>Phone</DeviceClass>
         <Model>255</Model>
         <Status>Any</Status>
         <NodeName></NodeName>
         <SelectBy>Name</SelectBy>
-        <SelectItems>{item_xml}</SelectItems>
+        <SelectItems>{select_items_xml}</SelectItems>
         <Protocol>Any</Protocol>
         <DownloadStatus>Any</DownloadStatus>
       </CmSelectionCriteria>
@@ -47430,48 +47430,60 @@ def _lookup_jabber_registration_statuses(
   </soapenv:Body>
 </soapenv:Envelope>"""
 
+    item_xml = "".join(
+      f"<item><Item>{xml_escape(name)}</Item></item>" for name in chunk_names
+    )
+    soap_xml = _build_ris_soap(item_xml, max(50, len(chunk_names) + 20))
+    wildcard_soap_xml = _build_ris_soap("<item><Item>*</Item></item>", 2000)
+    chunk_name_lowers = {name.lower() for name in chunk_names}
+
     for ris_host in ris_hosts:
       for ris_url_tmpl in ris_urls:
         ris_url = ris_url_tmpl.format(host=ris_host)
-        try:
-          response = session.post(
-            ris_url,
-            data=soap_xml.encode("utf-8"),
-            headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 selectCmDevice"},
-            timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
-          )
-        except Exception:
-          continue
-        if response.status_code != 200:
-          continue
-
-        try:
-          root = ET.fromstring(response.text)
-        except Exception:
-          continue
-
-        found_any = False
-        for node in root.iter():
-          cm_devices = _find_xml_child(node, "CmDevices")
-          if cm_devices is None:
+        for active_soap_xml, use_wildcard in ((soap_xml, False), (wildcard_soap_xml, True)):
+          try:
+            response = session.post(
+              ris_url,
+              data=active_soap_xml.encode("utf-8"),
+              headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 selectCmDevice"},
+              timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
+            )
+          except Exception:
             continue
-          for dev in list(cm_devices):
-            dev_name = (_find_xml_child_text(dev, "Name") or "").strip()
-            if not dev_name:
-              continue
-            canonical_name = names_by_lower.get(dev_name.lower())
-            if not canonical_name:
-              continue
-            status_text = (_find_xml_child_text(dev, "Status") or "").strip()
-            status_map[canonical_name] = {
-              "status": _status_label("", status_text),
-              "tkstatus": "",
-              "status_name": status_text,
-            }
-            found_any = True
 
-        if found_any:
-          return True
+          if response.status_code != 200:
+            continue
+
+          try:
+            root = ET.fromstring(response.text)
+          except Exception:
+            continue
+
+          found_any = False
+          for node in root.iter():
+            cm_devices = _find_xml_child(node, "CmDevices")
+            if cm_devices is None:
+              continue
+            for dev in list(cm_devices):
+              dev_name = (_find_xml_child_text(dev, "Name") or "").strip()
+              if not dev_name:
+                continue
+              dev_name_lower = dev_name.lower()
+              if use_wildcard and dev_name_lower not in chunk_name_lowers:
+                continue
+              canonical_name = names_by_lower.get(dev_name_lower)
+              if not canonical_name:
+                continue
+              status_text = (_find_xml_child_text(dev, "Status") or "").strip()
+              status_map[canonical_name] = {
+                "status": _status_label("", status_text),
+                "tkstatus": "",
+                "status_name": status_text,
+              }
+              found_any = True
+
+          if found_any:
+            return True
 
     return False
 
