@@ -38715,6 +38715,8 @@ def menu_admin_page(request: Request):
             resultsEl.innerHTML = "";
             try {
               const fd = new FormData(form);
+              const rawPattern = String(fd.get("pattern_query") || "").trim();
+              fd.set("pattern_query", rawPattern);
               const resp = await fetch("/admin/dn-unassigned/list", {
                 method: "POST",
                 body: fd,
@@ -45458,7 +45460,7 @@ def admin_unassigned_dn_list_route(
   cucm_host: str = Form(""),
   cucm_user: str = Form(""),
   cucm_pass: str = Form(""),
-  pattern_query: str = Form("7%"),
+  pattern_query: str = Form(""),
   route_partition: str = Form("ENT_DEVICE_PT"),
   limit: str = Form("300"),
 ):
