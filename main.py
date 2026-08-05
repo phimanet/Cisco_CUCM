@@ -36756,7 +36756,7 @@ def menu_admin_page(request: Request):
 
           <div class="compact-inline-row">
             <span>Route Partition:</span>
-            <input name="route_partition" value="ENT_DEVICE_PT" placeholder="ENT_DEVICE_PT" style="min-width:260px;">
+            <input name="route_partition" value="ENT_DEVICE_PT" readonly style="min-width:260px; background:#f4f8fc; color:#355978;">
           </div><br>
 
           <div style="display:flex; gap:8px; flex-wrap:wrap;">
@@ -45198,7 +45198,8 @@ def _lookup_unassigned_directory_numbers(
   limit: int = 300,
 ) -> tuple[list[dict], dict]:
   clean_pattern = (pattern_query or "").strip()
-  clean_partition = (route_partition or "").strip() or "ENT_DEVICE_PT"
+  # Keep this workflow aligned to the Jabber-assignable DN pool partition.
+  clean_partition = "ENT_DEVICE_PT"
 
   # Mirror Cisco Jabber DN selection pools when no explicit pattern is provided.
   dn_mapping = _get_dn_mapping()
