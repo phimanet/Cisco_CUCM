@@ -45216,8 +45216,56 @@ def _lookup_unassigned_directory_numbers(
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   rows_by_key: dict[tuple[str, str], dict] = {}
-  for search_pattern in search_patterns:
-    soap = f"""<?xml version="1.0" encoding="utf-8"?>
+
+  if not clean_pattern and jabber_prefixes:
+    # Match the DN availability report/Jabber pool lookup exactly.
+    for prefix in jabber_prefixes:
+      soap = f"""<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:listLine sequence=\"1\">
+      <searchCriteria>
+        <pattern>{xml_escape(prefix)}%</pattern>
+        <routePartitionName>{xml_escape(clean_partition)}</routePartitionName>
+      </searchCriteria>
+      <returnedTags>
+        <pattern/>
+      </returnedTags>
+    </axl:listLine>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+      xml_text = _axl_post_raw_text(session, cucm_host, soap, "listLine")
+      root = ET.fromstring(xml_text)
+      for elem in root.iter():
+        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        if tag != "line":
+          continue
+
+        pattern = ""
+        for child in list(elem):
+          ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+          if ctag == "pattern":
+            pattern = (child.text or "").strip()
+            break
+
+        if not pattern:
+          continue
+
+        key = (pattern, clean_partition)
+        if key not in rows_by_key:
+          rows_by_key[key] = {
+            "pattern": pattern,
+            "route_partition": clean_partition,
+            "description": "",
+            "alerting_name": "",
+            "active": False,
+            "device_count": 0,
+          }
+  else:
+    for search_pattern in search_patterns:
+      soap = f"""<?xml version="1.0" encoding="utf-8"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
   <soapenv:Header/>
   <soapenv:Body>
@@ -45231,59 +45279,54 @@ def _lookup_unassigned_directory_numbers(
         <description/>
         <alertingName/>
         <active/>
-        <associatedDevices>
-          <device/>
-        </associatedDevices>
       </returnedTags>
     </axl:listLine>
   </soapenv:Body>
 </soapenv:Envelope>"""
 
-    xml_text = _axl_post_raw_text(session, cucm_host, soap, "listLine")
-    root = ET.fromstring(xml_text)
-    for elem in root.iter():
-      tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-      if tag != "line":
-        continue
+      xml_text = _axl_post_raw_text(session, cucm_host, soap, "listLine")
+      root = ET.fromstring(xml_text)
+      for elem in root.iter():
+        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        if tag != "line":
+          continue
 
-      pattern = ""
-      partition = ""
-      description = ""
-      alerting_name = ""
-      active_raw = ""
+        pattern = ""
+        partition = ""
+        description = ""
+        alerting_name = ""
+        active_raw = ""
 
-      for child in list(elem):
-        ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-        if ctag == "pattern":
-          pattern = (child.text or "").strip()
-        elif ctag == "routePartitionName":
-          partition = (child.text or "").strip()
-        elif ctag == "description":
-          description = (child.text or "").strip()
-        elif ctag == "alertingName":
-          alerting_name = (child.text or "").strip()
-        elif ctag == "active":
-          active_raw = (child.text or "").strip().lower()
+        for child in list(elem):
+          ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+          if ctag == "pattern":
+            pattern = (child.text or "").strip()
+          elif ctag == "routePartitionName":
+            partition = (child.text or "").strip()
+          elif ctag == "description":
+            description = (child.text or "").strip()
+          elif ctag == "alertingName":
+            alerting_name = (child.text or "").strip()
+          elif ctag == "active":
+            active_raw = (child.text or "").strip().lower()
 
-      if not pattern:
-        continue
-      if not partition:
-        # DN availability report relies on listLine pattern-only responses.
-        # Treat missing partition in listLine as the requested partition.
-        partition = clean_partition
-      if partition != clean_partition:
-        continue
+        if not pattern:
+          continue
+        if not partition:
+          partition = clean_partition
+        if partition != clean_partition:
+          continue
 
-      key = (pattern, partition)
-      if key not in rows_by_key:
-        rows_by_key[key] = {
-          "pattern": pattern,
-          "route_partition": partition,
-          "description": description,
-          "alerting_name": alerting_name,
-          "active": active_raw in {"true", "t", "1", "yes"},
-          "device_count": 0,
-        }
+        key = (pattern, partition)
+        if key not in rows_by_key:
+          rows_by_key[key] = {
+            "pattern": pattern,
+            "route_partition": partition,
+            "description": description,
+            "alerting_name": alerting_name,
+            "active": active_raw in {"true", "t", "1", "yes"},
+            "device_count": 0,
+          }
 
   max_rows = max(1, min(int(limit or 300), 1000))
   rows: list[dict] = []
