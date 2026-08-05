@@ -45220,6 +45220,9 @@ def _lookup_unassigned_directory_numbers(
         search_patterns.append(f"{prefix}%")
     else:
       search_patterns.append("%")
+    # Safety fallback: always include full partition scan for blank searches.
+    if "%" not in search_patterns:
+      search_patterns.append("%")
 
   session = requests.Session()
   session.verify = False
@@ -45237,16 +45240,16 @@ def _lookup_unassigned_directory_numbers(
     "first_error": "",
   }
 
-  if not clean_pattern and jabber_prefixes:
+  if not clean_pattern:
     # Match the DN availability report/Jabber pool lookup exactly.
-    for prefix in jabber_prefixes:
+    for scoped_pattern in search_patterns:
       soap = f"""<?xml version="1.0" encoding="utf-8"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
   <soapenv:Header/>
   <soapenv:Body>
     <axl:listLine sequence=\"1\">
       <searchCriteria>
-        <pattern>{xml_escape(prefix)}%</pattern>
+        <pattern>{xml_escape(scoped_pattern)}</pattern>
         <routePartitionName>{xml_escape(clean_partition)}</routePartitionName>
       </searchCriteria>
       <returnedTags>
