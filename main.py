@@ -45216,8 +45216,6 @@ def _lookup_unassigned_directory_numbers(
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
   rows_by_key: dict[tuple[str, str], dict] = {}
-  partition_block = f"<routePartitionName>{xml_escape(clean_partition)}</routePartitionName>"
-
   for search_pattern in search_patterns:
     soap = f"""<?xml version="1.0" encoding="utf-8"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
@@ -45226,7 +45224,6 @@ def _lookup_unassigned_directory_numbers(
     <axl:listLine sequence=\"1\">
       <searchCriteria>
         <pattern>{xml_escape(search_pattern)}</pattern>
-        {partition_block}
       </searchCriteria>
       <returnedTags>
         <pattern/>
