@@ -45250,11 +45250,6 @@ def _lookup_unassigned_directory_numbers(
     # Blank search uses prefix shards to avoid large wildcard timeout scans.
     for first_digit in ["2", "3", "4", "5", "6", "7", "8", "9"]:
       search_patterns.append(f"{first_digit}%")
-    # Keep known Jabber pools included without duplicates.
-    for prefix in jabber_prefixes:
-      scoped = f"{prefix}%"
-      if scoped not in search_patterns:
-        search_patterns.append(scoped)
 
   session = requests.Session()
   session.verify = False
@@ -45269,11 +45264,14 @@ def _lookup_unassigned_directory_numbers(
     "unique_candidates": 0,
     "fast_path_hits": 0,
     "fallback_getline_checks": 0,
+    "metadata_unknown": 0,
     "skipped_has_devices": 0,
     "skipped_active": 0,
     "validation_errors": 0,
     "first_error": "",
   }
+
+  is_blank_search = not clean_pattern
 
   for search_pattern in search_patterns:
     soap = f"""<?xml version="1.0" encoding="utf-8"?>
@@ -45381,6 +45379,12 @@ def _lookup_unassigned_directory_numbers(
       rows.append(row)
       if len(rows) >= max_rows:
         break
+      continue
+
+    if is_blank_search:
+      # Performance path for blank searches: avoid expensive per-DN getLine calls.
+      # CUCM listLine metadata is used as authoritative filter for speed.
+      debug_stats["metadata_unknown"] = int(debug_stats["metadata_unknown"]) + 1
       continue
 
     try:
