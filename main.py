@@ -26578,6 +26578,7 @@ __ADMIN_CARD__
         <input type="hidden" name="cucm_user" value="__AUTH_USER__">
         <input type="hidden" name="cucm_pass" value="">
         <input type="hidden" name="include_teams_status" value="1">
+        <input type="hidden" name="include_jabber_registration" value="1">
 
         <div class="search-filter-row">
           <input name="last_name" placeholder="Last Name *" required>
@@ -26650,6 +26651,7 @@ __ADMIN_CARD__
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Jabber Registration</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Jabber Devices</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
             html += '</tr></thead><tbody>';
@@ -26671,9 +26673,13 @@ __ADMIN_CARD__
                 ? (teamsExt ? `Yes (${teamsExt})` : "Yes")
                 : (teamsState === "Unknown" ? "Unknown" : "Not Found");
               const teamsColor = teamsIsUser ? "#0f6d35" : (teamsState === "Unknown" ? "#7a1020" : "#6b7280");
+              const regSummary = (r.jabber_registration_summary || "No Jabber device").trim();
+              const regColor = regSummary.startsWith("0/") ? "#b91c1c" : (regSummary.indexOf("Registered") >= 0 ? "#0f6d35" : "#6b7280");
               const devList = (r.devices || []).map(function (d) {
                 const exts = (d.extensions || []).join(", ") || "\u2014";
-                return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
+                const reg = (d.registration_status || "").trim();
+                const regBadge = reg ? " <span style='display:inline-block;margin-left:6px;padding:1px 6px;border-radius:10px;background:#eef2ff;color:#1e3a8a;font-size:11px;font-weight:700;'>" + reg + "</span>" : "";
+                return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>" + regBadge;
               }).join("<br>") || "\u2014";
 
               const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;";
@@ -26696,6 +26702,7 @@ __ADMIN_CARD__
               html += '<td style="padding:7px 10px;">' + email + '</td>';
               html += '<td style="padding:7px 10px;">' + telephone + '</td>';
               html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
+              html += '<td style="padding:7px 10px; font-weight:700; color:' + regColor + ';">' + regSummary + '</td>';
               html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
               html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(4,max-content);gap:4px;align-items:start;">' + actionBtns + '</div></td>';
               html += '</tr>';
@@ -37136,6 +37143,7 @@ def menu_admin_page(request: Request):
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
           <input type="hidden" name="include_teams_status" value="1">
+          <input type="hidden" name="include_jabber_registration" value="1">
           <div class="search-filter-row">
             <input name="last_name" placeholder="Last Name *" required>
             <input name="first_name" placeholder="First Name (optional)">
@@ -38517,6 +38525,7 @@ def menu_admin_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Jabber Registration</th>';
               html += '<th style="padding:8px 10px; text-align:left;">Jabber Devices</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
               html += '</tr></thead><tbody>';
@@ -38538,9 +38547,13 @@ def menu_admin_page(request: Request):
                   ? (teamsExt ? `Yes (${teamsExt})` : "Yes")
                   : (teamsState === "Unknown" ? "Unknown" : "Not Found");
                 const teamsColor = teamsIsUser ? "#0f6d35" : (teamsState === "Unknown" ? "#7a1020" : "#6b7280");
+                const regSummary = (r.jabber_registration_summary || "No Jabber device").trim();
+                const regColor = regSummary.startsWith("0/") ? "#b91c1c" : (regSummary.indexOf("Registered") >= 0 ? "#0f6d35" : "#6b7280");
                 const devList = (r.devices || []).map(function (d) {
                   const exts = (d.extensions || []).join(", ") || "\u2014";
-                  return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
+                  const reg = (d.registration_status || "").trim();
+                  const regBadge = reg ? " <span style='display:inline-block;margin-left:6px;padding:1px 6px;border-radius:10px;background:#eef2ff;color:#1e3a8a;font-size:11px;font-weight:700;'>" + reg + "</span>" : "";
+                  return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>" + regBadge;
                 }).join("<br>") || "\u2014";
 
                 const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;color:#fff;";
@@ -38561,6 +38574,7 @@ def menu_admin_page(request: Request):
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
                 html += '<td style="padding:7px 10px;">' + telephone + '</td>';
                 html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
+                html += '<td style="padding:7px 10px; font-weight:700; color:' + regColor + ';">' + regSummary + '</td>';
                 html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
                 html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(3,max-content);gap:4px;align-items:start;">' + actionBtn + '</div></td>';
                 html += '</tr>';
@@ -47158,6 +47172,7 @@ def lookup_person_route(
   last_name: str = Form(""),
     first_name: str = Form(""),
   include_teams_status: str = Form(""),
+  include_jabber_registration: str = Form(""),
   include_separation_indicators: str = Form(""),
   include_twilio_lookup: str = Form(""),
   include_aerialink_lookup: str = Form(""),
@@ -47169,6 +47184,7 @@ def lookup_person_route(
       clean_last = (last_name or "").strip()
       clean_first = (first_name or "").strip()
       include_teams = str(include_teams_status or "").strip().lower() in {"1", "true", "yes", "on"}
+      include_reg = str(include_jabber_registration or "").strip().lower() in {"1", "true", "yes", "on"}
       include_sep_indicators = str(include_separation_indicators or "").strip().lower() in {"1", "true", "yes", "on"}
       include_twilio = str(include_twilio_lookup or "").strip().lower() in {"1", "true", "yes", "on"}
       include_aerialink = str(include_aerialink_lookup or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -47208,6 +47224,45 @@ def lookup_person_route(
         for user in results:
           telephone = (user.get("telephone") or "").strip()
           user["aerialink_lookup"] = _lookup_aerialink_account_code_by_phone(telephone)
+
+      if include_reg:
+        jabber_prefixes = ("CSF", "BOT", "TCT", "TAB")
+        jabber_device_names: list[str] = []
+        seen_jabber_names: set[str] = set()
+        for user in results:
+          for device in (user.get("devices") or []):
+            if not isinstance(device, dict):
+              continue
+            device_name = str(device.get("name", "") or "").strip()
+            if not device_name or not device_name.upper().startswith(jabber_prefixes):
+              continue
+            if device_name in seen_jabber_names:
+              continue
+            seen_jabber_names.add(device_name)
+            jabber_device_names.append(device_name)
+
+        reg_map = _lookup_jabber_registration_statuses(cucm_host, cucm_user, cucm_pass, jabber_device_names)
+
+        for user in results:
+          user_jabber_statuses: list[str] = []
+          for device in (user.get("devices") or []):
+            if not isinstance(device, dict):
+              continue
+            device_name = str(device.get("name", "") or "").strip()
+            if not device_name or not device_name.upper().startswith(jabber_prefixes):
+              continue
+            reg_info = reg_map.get(device_name, {"status": "Unknown"})
+            reg_text = str(reg_info.get("status", "Unknown") or "Unknown").strip() or "Unknown"
+            device["registration_status"] = reg_text
+            user_jabber_statuses.append(reg_text)
+
+          if not user_jabber_statuses:
+            user["jabber_registration_summary"] = "No Jabber device"
+          else:
+            registered_count = sum(
+              1 for status_text in user_jabber_statuses if str(status_text).strip().lower().startswith("registered")
+            )
+            user["jabber_registration_summary"] = f"{registered_count}/{len(user_jabber_statuses)} Registered"
 
       if include_sep_indicators:
         ls_rows = _list_ls_genesys_did_patterns(
@@ -47293,6 +47348,109 @@ def lookup_person_route(
 
 def _axl_local_name(tag: str) -> str:
   return tag.split("}")[-1] if "}" in tag else tag
+
+
+def _lookup_jabber_registration_statuses(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  device_names: list[str],
+) -> dict[str, dict]:
+  clean_names = []
+  seen = set()
+  for raw_name in device_names or []:
+    name = str(raw_name or "").strip()
+    if not name or name in seen:
+      continue
+    seen.add(name)
+    clean_names.append(name)
+
+  if not clean_names:
+    return {}
+
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  status_map: dict[str, dict] = {}
+
+  def _status_label(tkstatus_value: str, status_name_value: str) -> str:
+    status_name_clean = str(status_name_value or "").strip()
+    lowered = status_name_clean.lower()
+    if "register" in lowered:
+      return "Registered"
+    if lowered:
+      return status_name_clean
+    try:
+      tk_num = int(str(tkstatus_value or "").strip())
+      if tk_num == 1:
+        return "Registered"
+      return f"Unregistered (tkstatus={tk_num})"
+    except Exception:
+      return "Unknown"
+
+  chunk_size = 120
+  for start in range(0, len(clean_names), chunk_size):
+    chunk = clean_names[start:start + chunk_size]
+    if not chunk:
+      continue
+    names_sql = ",".join("'" + name.replace("'", "''") + "'" for name in chunk)
+    sql = (
+      "SELECT d.name AS device_name, d.tkstatus AS tkstatus, "
+      "COALESCE(ts.name,'') AS status_name "
+      "FROM device d "
+      "LEFT JOIN typestatus ts ON ts.enum = d.tkstatus "
+      f"WHERE d.name IN ({names_sql})"
+    )
+
+    soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:executeSQLQuery>
+      <sql>{xml_escape(sql)}</sql>
+    </axl:executeSQLQuery>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+    try:
+      xml_text = _axl_post_raw_text(session, cucm_host, soap, "executeSQLQuery")
+      root = ET.fromstring(xml_text)
+      for elem in root.iter():
+        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        if tag != "row":
+          continue
+
+        device_name = ""
+        tkstatus = ""
+        status_name = ""
+        for child in list(elem):
+          child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+          text = (child.text or "").strip()
+          if child_tag in {"device_name", "name"}:
+            device_name = text
+          elif child_tag == "tkstatus":
+            tkstatus = text
+          elif child_tag in {"status_name", "status"}:
+            status_name = text
+
+        if device_name:
+          status_map[device_name] = {
+            "status": _status_label(tkstatus, status_name),
+            "tkstatus": tkstatus,
+            "status_name": status_name,
+          }
+    except Exception:
+      for name in chunk:
+        if name not in status_map:
+          status_map[name] = {"status": "Unknown", "tkstatus": "", "status_name": ""}
+
+  for name in clean_names:
+    if name not in status_map:
+      status_map[name] = {"status": "Unknown", "tkstatus": "", "status_name": ""}
+
+  return status_map
 
 
 def _axl_child_text(parent: ET.Element, child_name: str) -> str:
