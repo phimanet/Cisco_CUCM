@@ -45186,6 +45186,45 @@ def _axl_is_line_inactive(session: requests.Session, cucm_host: str, pattern: st
   return active_text not in {"true", "t", "1", "yes"}
 
 
+def _axl_get_line_status(session: requests.Session, cucm_host: str, pattern: str, route_partition: str) -> tuple[bool, bool]:
+  """Return (has_associated_devices, is_inactive) using a single getLine call."""
+  clean_pattern = (pattern or "").strip()
+  clean_partition = (route_partition or "").strip()
+  if not clean_pattern or not clean_partition:
+    return True, False
+
+  soap = f"""<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getLine sequence="1">
+      <pattern>{xml_escape(clean_pattern)}</pattern>
+      <routePartitionName>{xml_escape(clean_partition)}</routePartitionName>
+      <returnedTags>
+        <active/>
+        <associatedDevices>
+          <device/>
+        </associatedDevices>
+      </returnedTags>
+    </axl:getLine>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  xml_text = _axl_post_raw_text(session, cucm_host, soap, "getLine")
+  root = ET.fromstring(xml_text)
+  active_text = ""
+  has_devices = False
+  for elem in root.iter():
+    tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+    if tag == "active":
+      active_text = (elem.text or "").strip().lower()
+    elif tag == "device" and (elem.text or "").strip():
+      has_devices = True
+
+  is_inactive = active_text not in {"true", "t", "1", "yes"}
+  return has_devices, is_inactive
+
+
 def _axl_remove_line(session: requests.Session, cucm_host: str, pattern: str, route_partition: str) -> None:
   clean_pattern = (pattern or "").strip()
   clean_partition = (route_partition or "").strip()
@@ -45382,17 +45421,15 @@ def _lookup_unassigned_directory_numbers(
       continue
 
     if is_blank_search:
-      # Performance path for blank searches: avoid expensive per-DN getLine calls.
-      # CUCM listLine metadata is used as authoritative filter for speed.
       debug_stats["metadata_unknown"] = int(debug_stats["metadata_unknown"]) + 1
-      continue
 
     try:
       debug_stats["fallback_getline_checks"] = int(debug_stats["fallback_getline_checks"]) + 1
-      if _axl_has_associated_devices(session, cucm_host, pattern, partition):
+      has_devices, is_inactive = _axl_get_line_status(session, cucm_host, pattern, partition)
+      if has_devices:
         debug_stats["skipped_has_devices"] = int(debug_stats["skipped_has_devices"]) + 1
         continue
-      if not _axl_is_line_inactive(session, cucm_host, pattern, partition):
+      if not is_inactive:
         debug_stats["skipped_active"] = int(debug_stats["skipped_active"]) + 1
         continue
     except Exception:
