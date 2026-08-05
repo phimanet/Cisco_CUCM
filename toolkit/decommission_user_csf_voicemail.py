@@ -511,7 +511,6 @@ def decommission_user_csf_voicemail(
                 "Skipped",
                 "No CSF/BOT/TCT devices associated to user",
             ])
-            return out.getvalue().encode("utf-8"), filename
 
         phone_candidates = []
         for device_name in target_device_names:
@@ -535,8 +534,7 @@ def decommission_user_csf_voicemail(
             )
 
         if not phone_candidates:
-            log_writer.writerow(["Get Phone", "Failed", "Could not fetch any CSF/BOT/TCT phone details"])
-            return out.getvalue().encode("utf-8"), filename
+            log_writer.writerow(["Get Phone", "Skipped", "Could not fetch any CSF/BOT/TCT phone details"])
 
         dn_targets = []
         seen_dn_keys = set()

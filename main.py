@@ -48462,6 +48462,33 @@ def decommission_user_csf_voicemail_route(
                     ])
             data = _to_bytes(data) + del_rows.getvalue().encode("utf-8")
 
+    if b"No CSF/BOT/TCT devices associated to user" in _to_bytes(data):
+      teams_data, teams_filename = remove_teams_telephony_user(
+        cucm_host=cucm_host,
+        cucm_user=cucm_user,
+        cucm_pass=cucm_pass,
+        target_user=clean_target_user,
+        ad_username=cucm_user,
+        ad_password=cucm_pass,
+        skip_ad_clear=True,
+      )
+      teams_lines = teams_data.decode("utf-8", errors="replace").splitlines()
+      if len(teams_lines) > 1:
+        teams_body = "\n".join(teams_lines[1:]).strip()
+        if teams_body:
+          data = _to_bytes(data) + (teams_body + "\n").encode("utf-8")
+      _append_audit_event(
+        action="separation_teams_telephony_removed",
+        cucm_host=cucm_host,
+        operator=cucm_user,
+        target=f"account={clean_target_user};source_file={teams_filename}",
+        account=clean_target_user,
+        extension_added="",
+        extension_deleted="",
+        output_filename=filename,
+        inline_mode=inline,
+      )
+
     # Mandatory separation step: remove the separated user from the Unified Messaging
     # security group. If they are not a member, this is a no-op success.
     um_status, um_detail = _remove_unified_messaging_security_group_membership(

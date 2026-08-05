@@ -308,6 +308,7 @@ def remove_teams_telephony_user(
     target_user,
     ad_username="",
     ad_password="",
+    skip_ad_clear=False,
 ):
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     clean_target = (target_user or "").strip()
@@ -381,12 +382,13 @@ def remove_teams_telephony_user(
                 "username": (ad_username or "").strip(),
                 "password": ad_password,
             }
-        ad_ok, ad_message = clear_ad_phone_fields(lookup.get("target_user", clean_target), ad_context)
-        writer.writerow([
-            "Clear AD Phone Fields",
-            "Success" if ad_ok else "Failed",
-            ad_message,
-        ])
+        if not skip_ad_clear:
+            ad_ok, ad_message = clear_ad_phone_fields(lookup.get("target_user", clean_target), ad_context)
+            writer.writerow([
+                "Clear AD Phone Fields",
+                "Success" if ad_ok else "Failed",
+                ad_message,
+            ])
 
     except Exception as exc:
         writer.writerow(["Script", "Error", str(exc)])
