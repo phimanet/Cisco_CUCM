@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-07-02
+- Date: 2026-08-04
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -273,6 +273,27 @@ Priority keys:
 - Genesys user result rows now update in-place after single or batch build runs (WebRTC phone column + action state), and the page displays a batch summary with failed-user details.
 - WebRTC build helper now uses the official Genesys default-station flow after phone creation and can resolve the target user by email when that is the available identifier.
 - Genesys fallback renderer now exposes explicit queue checkboxes, queued build actions, and richer debug JSON for copy/paste when the richer JS path does not bind.
+
+### 2026-08-04
+- Rebuilt the **Delete Directory Number from CUCM** lookup (Page 2) to use a single AXL `executeSQLQuery` instead of the slow `listLine` + per-DN `getLine` N+1 loop, eliminating 504 timeouts.
+- Query: `numplan n LEFT OUTER JOIN devicenumplanmap m ON m.fknumplan = n.pkid LEFT JOIN routepartition r ON n.fkroutepartition = r.pkid WHERE m.fkdevice IS NULL AND n.tkpatternusage = '2' AND n.iscallable = 'f' AND r.name = 'ENT_DEVICE_PT'` (+ optional `dnorpattern LIKE` filters, digits/`%`/`_` only for injection safety).
+- Validated against CUCM source of truth: blank = all 175 unassigned+NOT-active DNs in `ENT_DEVICE_PT`; `2%` = the 2 known DNs (2142451718, 2142739284). Confirmed via operator CUCM export (`line.active=false` + no `associatedDevices` = unassigned).
+- Fixed the `2%` default: cleared both the input field `value` and the route `Form()` default so a blank field returns all (status now shows `[all in ENT_DEVICE_PT]`).
+- Delete path unchanged — still uses safe AXL `removeLine` (writes stay on AXL; only searches use SQL). Test deletion of `2142451718` confirmed working.
+- Deployed to LAB and PROD; aligned on commit `6a16292`.
+- Decision: use `executeSQLQuery` only for searches when explicitly requested per-workflow; never convert adds/deletes/modifies to raw SQL.
+
+### 2026-08-03
+- **Disk-full incident**: Both LAB (`/dev/sda5` 294G, 100% full) and PROD (`/dev/mapper/vg1-lv--opt` 20G, 100% full) filled up, causing all routes that write to disk (audit log, job output) to fail with 500.
+- **LAB root cause**: SIP capture listener was filling `/opt/cucm-web/logs/sip-call-search/` (8 GB) with no effective cap; cleared manually with `rm -rf /opt/cucm-web/logs/sip-call-search/`.
+- **PROD root cause**: DR backup script (`/usr/local/sbin/cucm-dr-backup.sh`) was including `/opt/cucm-web/backups/` in its own tar archive, causing exponential growth (126M → 8.9G over 6 weeks); freed space by deleting old archives and snap dirs.
+- **Code fixes applied (commit `7fe9159`)**:
+  - SIP capture listener now sleeps 60 s on `ENOSPC` instead of hot-looping and flooding the journal.
+  - `_append_audit_event` and `_prune_audit_log_locked` now catch `OSError` so disk-full no longer crashes routes with a 500.
+  - Default SIP total-size cap lowered from 12 288 MB to 4 096 MB (overridable via `SIP_CALL_SEARCH_DEFAULT_TOTAL_MB` env var).
+- **DR backup script fixed on both servers**: Added `--exclude` for `backups/`, `logs/sip-call-search/`, and `__pycache__`; also prunes old `snap-*/` dirs alongside `.tgz` retention. Next Saturday backup expected ~200 MB instead of 9 GB+.
+- **PROD disk status after cleanup**: `/opt` at 55% (8.5 GB free); Aug 1 backup (8.9 GB) remains as the single kept archive.
+- **LAB disk status after cleanup**: `/` at 68% (91 GB free).
 
 ### 2026-07-24
 - Sinch TN order and TN termination now email the submitter after successful completion, including the submitted TN list in the notification.
