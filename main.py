@@ -47574,6 +47574,46 @@ def _lookup_jabber_registration_statuses(
     if name not in status_map:
       status_map[name] = {"status": "Unknown", "tkstatus": "", "status_name": ""}
 
+  unresolved_names = [
+    name for name in clean_names
+    if str((status_map.get(name) or {}).get("status", "")).strip().lower() == "unknown"
+  ]
+
+  # Last-resort fallback: query getPhone per unresolved device.
+  # This is slower, so it is only used when RIS/SQL did not return a usable state.
+  for name in unresolved_names:
+    soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getPhone>
+      <name>{xml_escape(name)}</name>
+      <returnedTags>
+        <name/>
+        <status/>
+      </returnedTags>
+    </axl:getPhone>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+    try:
+      xml_text = _axl_post_raw_text(session, cucm_host, soap, "getPhone")
+      root = ET.fromstring(xml_text)
+      status_text = ""
+      for elem in root.iter():
+        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+        if tag == "status":
+          status_text = (elem.text or "").strip()
+          if status_text:
+            break
+      if status_text:
+        status_map[name] = {
+          "status": _status_label("", status_text),
+          "tkstatus": "",
+          "status_name": status_text,
+        }
+    except Exception:
+      continue
+
   return status_map
 
 
