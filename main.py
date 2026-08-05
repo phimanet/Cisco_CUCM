@@ -28043,6 +28043,7 @@ __ADMIN_CARD__
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Separation Path</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Jabber Devices</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Action</th>';
             html += '</tr></thead><tbody>';
@@ -28054,6 +28055,18 @@ __ADMIN_CARD__
               const email = r.email || "\u2014";
               const telephone = r.telephone || "\u2014";
               const uid = r.userid || "";
+              const platforms = Array.isArray(r.separation_platforms) ? r.separation_platforms : [String(r.separation_indicator || "Standard")];
+              const platformBadges = platforms.map(function (p) {
+                const label = String(p || "").trim();
+                const upper = label.toUpperCase();
+                let bg = "#6b7280";
+                if (upper.indexOf("JABBER") >= 0) bg = "#7a1020";
+                else if (upper.indexOf("TEAMS") >= 0) bg = "#1d4ed8";
+                else if (upper.indexOf("GENESYS") >= 0) bg = "#0f766e";
+                return '<span style="display:inline-block;margin:2px 6px 2px 0;padding:2px 8px;border-radius:999px;background:' + bg + ';color:#fff;font-size:11px;font-weight:700;white-space:nowrap;">' + label + '</span>';
+              }).join("");
+              const lsPatterns = (r.ls_genesys_patterns || []).join(", ");
+              const platformDetail = lsPatterns ? (platformBadges + '<div style="font-size:11px;color:#4b5563;margin-top:2px;">LS DID: ' + lsPatterns + '</div>') : platformBadges;
               const devList = (r.devices || []).map(function (d) {
                 const exts = (d.extensions || []).join(", ") || "\u2014";
                 return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
@@ -28067,6 +28080,7 @@ __ADMIN_CARD__
               html += '<td style="padding:7px 10px; font-weight:700; color:#7a1020;">' + ext + '</td>';
               html += '<td style="padding:7px 10px;">' + email + '</td>';
               html += '<td style="padding:7px 10px;">' + telephone + '</td>';
+              html += '<td style="padding:7px 10px;">' + platformDetail + '</td>';
               html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
               html += '<td style="padding:7px 10px;">' + actionBtn + '</td>';
               html += '</tr>';
@@ -47191,6 +47205,90 @@ def lookup_person_route(
         for user in results:
           telephone = (user.get("telephone") or "").strip()
           user["aerialink_lookup"] = _lookup_aerialink_account_code_by_phone(telephone)
+
+      if include_teams:
+        ls_rows = _list_ls_genesys_did_patterns(
+          cucm_host=cucm_host,
+          cucm_user=cucm_user,
+          cucm_pass=cucm_pass,
+          pattern_prefix=GENESYS_LS_DID_LIST_PATTERN_PREFIX,
+          require_available_suffix=False,
+        )
+
+        def _norm_name(value: str) -> str:
+          return " ".join(str(value or "").strip().lower().split())
+
+        ls_by_userid: dict[str, list[dict]] = {}
+        ls_by_name: dict[str, list[dict]] = {}
+        for row in ls_rows:
+          if bool(row.get("is_available", False)):
+            continue
+          assigned_user = str(row.get("assigned_user", "") or "").strip()
+          if not assigned_user:
+            continue
+          row_ref = {
+            "pattern": str(row.get("pattern", "") or "").strip(),
+            "route_partition": str(row.get("route_partition", "") or "").strip(),
+            "assigned_user": assigned_user,
+          }
+          assigned_name_key = _norm_name(assigned_user)
+          if assigned_name_key:
+            ls_by_name.setdefault(assigned_name_key, []).append(row_ref)
+
+          try:
+            cucm_lookup = _ls_did_lookup_assigned_user_in_cucm(
+              cucm_host,
+              cucm_user,
+              cucm_pass,
+              assigned_user,
+            )
+            ls_userid = str(cucm_lookup.get("userid", "") or "").strip().lower()
+            if ls_userid:
+              ls_by_userid.setdefault(ls_userid, []).append(row_ref)
+          except Exception:
+            continue
+
+        jabber_prefixes = ("CSF", "BOT", "TCT", "TAB")
+        for user in results:
+          uid = str(user.get("userid", "") or "").strip()
+          devices = user.get("devices", []) or []
+          has_jabber = any(
+            str((d or {}).get("name", "") or "").strip().upper().startswith(jabber_prefixes)
+            for d in devices
+            if isinstance(d, dict)
+          )
+
+          teams_meta = user.get("teams_telephony") if isinstance(user.get("teams_telephony"), dict) else {}
+          has_teams = bool(teams_meta.get("is_teams_user"))
+
+          uid_key = uid.lower()
+          name_key = _norm_name(
+            str(user.get("display_name", "") or "").strip()
+            or " ".join([
+              str(user.get("first_name", "") or "").strip(),
+              str(user.get("last_name", "") or "").strip(),
+            ]).strip()
+          )
+          ls_matches = ls_by_userid.get(uid_key, []) if uid_key else []
+          if not ls_matches and name_key:
+            ls_matches = ls_by_name.get(name_key, [])
+          has_genesys_ls = bool(ls_matches)
+
+          platform_labels = []
+          if has_jabber:
+            platform_labels.append("Jabber")
+          if has_teams:
+            platform_labels.append("Teams")
+          if has_genesys_ls:
+            platform_labels.append("Genesys LS DID")
+          if not platform_labels:
+            platform_labels.append("Standard")
+
+          user["separation_platforms"] = platform_labels
+          user["separation_indicator"] = " + ".join(platform_labels)
+          user["ls_genesys_patterns"] = [
+            str(item.get("pattern", "") or "").strip() for item in ls_matches if str(item.get("pattern", "") or "").strip()
+          ]
       return JSONResponse({
           "ok": True,
           "count": len(results),
