@@ -27985,6 +27985,7 @@ __ADMIN_CARD__
         <input type="hidden" name="cucm_user" value="__AUTH_USER__">
         <input type="hidden" name="cucm_pass" value="">
         <input type="hidden" name="include_teams_status" value="1">
+        <input type="hidden" name="include_separation_indicators" value="1">
         <div class="search-filter-row">
           <input name="last_name" placeholder="Last Name *" required>
           <input name="first_name" placeholder="First Name (optional)">
@@ -47157,6 +47158,7 @@ def lookup_person_route(
   last_name: str = Form(""),
     first_name: str = Form(""),
   include_teams_status: str = Form(""),
+  include_separation_indicators: str = Form(""),
   include_twilio_lookup: str = Form(""),
   include_aerialink_lookup: str = Form(""),
   twilio_lookup_account: str = Form("default"),
@@ -47167,6 +47169,7 @@ def lookup_person_route(
       clean_last = (last_name or "").strip()
       clean_first = (first_name or "").strip()
       include_teams = str(include_teams_status or "").strip().lower() in {"1", "true", "yes", "on"}
+      include_sep_indicators = str(include_separation_indicators or "").strip().lower() in {"1", "true", "yes", "on"}
       include_twilio = str(include_twilio_lookup or "").strip().lower() in {"1", "true", "yes", "on"}
       include_aerialink = str(include_aerialink_lookup or "").strip().lower() in {"1", "true", "yes", "on"}
       twilio_acct = str(twilio_lookup_account or "default").strip().lower()
@@ -47206,7 +47209,7 @@ def lookup_person_route(
           telephone = (user.get("telephone") or "").strip()
           user["aerialink_lookup"] = _lookup_aerialink_account_code_by_phone(telephone)
 
-      if include_teams:
+      if include_sep_indicators:
         ls_rows = _list_ls_genesys_did_patterns(
           cucm_host=cucm_host,
           cucm_user=cucm_user,
@@ -47234,19 +47237,6 @@ def lookup_person_route(
           assigned_name_key = _norm_name(assigned_user)
           if assigned_name_key:
             ls_by_name.setdefault(assigned_name_key, []).append(row_ref)
-
-          try:
-            cucm_lookup = _ls_did_lookup_assigned_user_in_cucm(
-              cucm_host,
-              cucm_user,
-              cucm_pass,
-              assigned_user,
-            )
-            ls_userid = str(cucm_lookup.get("userid", "") or "").strip().lower()
-            if ls_userid:
-              ls_by_userid.setdefault(ls_userid, []).append(row_ref)
-          except Exception:
-            continue
 
         jabber_prefixes = ("CSF", "BOT", "TCT", "TAB")
         for user in results:
