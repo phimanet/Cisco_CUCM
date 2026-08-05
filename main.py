@@ -610,6 +610,11 @@ DEFAULT_SETTINGS = {
   "sep_report_minute": "",
   "sep_report_frequency": "",
   "sep_report_weekly_day": "",
+  # Separation DN total-delete + weekly Monday report (editable via DN Prefix Settings)
+  "sep_dn_delete_enabled": "false",
+  "sep_dn_delete_recipient": "Laura.Alvarez@amnhealthcare.com",
+  "sep_dn_delete_recipient_2": "",
+  "sep_dn_delete_from": "noreply@amnhealthcare.com",
   # DN Availability report scheduler (editable via Page 2 panel)
   "dn_report_enabled": "true",
   "dn_report_recipient": "",
@@ -5624,6 +5629,48 @@ def _get_sep_report_settings() -> dict:
   }
 
 
+def _get_sep_dn_delete_settings() -> dict:
+  """Live settings for the separation DN total-delete + weekly Monday report."""
+  s = _load_settings()
+
+  def _str(key, fallback=""):
+    v = (s.get(key) or "").strip()
+    return v if v else fallback
+
+  enabled_raw = (s.get("sep_dn_delete_enabled") or "").strip().lower()
+  enabled = enabled_raw in {"1", "true", "yes", "on"}
+
+  return {
+    "enabled": enabled,
+    "recipient": _str("sep_dn_delete_recipient", "Laura.Alvarez@amnhealthcare.com"),
+    "recipient_2": _str("sep_dn_delete_recipient_2", ""),
+    "from_address": _str("sep_dn_delete_from", "noreply@amnhealthcare.com"),
+    "hour": 8,
+    "minute": 0,
+    "weekly_day": "monday",
+  }
+
+
+def _dn_delete_indicator_html(compact: bool = False) -> str:
+  """Badge showing whether Separate Employee permanently deletes DNs from CUCM."""
+  on = _get_sep_dn_delete_settings().get("enabled")
+  if on:
+    text = "DN Total-Delete: ON - separated numbers are permanently deleted"
+    bg, border, color = "#fdecea", "#d97706", "#b45309"
+  else:
+    text = "DN Total-Delete: OFF - numbers stay inactive/reusable"
+    bg, border, color = "#eef2f7", "#c8dbee", "#4e6a84"
+  if compact:
+    return (
+      f"<span style='display:inline-block;margin-top:4px;padding:2px 8px;border-radius:10px;"
+      f"font-size:11px;font-weight:700;background:{bg};border:1px solid {border};color:{color};'>{text}</span>"
+    )
+  return (
+    f"<div style='margin:0 0 12px 0;padding:8px 12px;border-radius:6px;font-size:13px;font-weight:600;"
+    f"background:{bg};border:1px solid {border};color:{color};'>{text} &mdash; edit in DN Prefix Settings.</div>"
+  )
+
+
 def _get_dn_report_settings() -> dict:
   """Return live DN availability report settings from settings.json with env/constant fallbacks."""
   s = _load_settings()
@@ -9869,6 +9916,157 @@ if _is_prod_runtime_host_strict():
   _sep_report_thread.start()
 else:
   logger.info("separation_sms_report scheduler disabled on non-PROD runtime host")
+
+
+# ---------------------------------------------------------------------------
+# Separation DN Total-Delete - weekly Monday 08:00 PST report of deleted DNs
+# ---------------------------------------------------------------------------
+_SEP_DN_DELETE_SCHEDULER_LAST_FIRED: dict[str, str] = {}
+_SEP_DN_DELETE_SCHEDULER_LOCK = threading.Lock()
+
+
+def _sep_dn_delete_read_rows(start_dt, end_dt) -> list[dict]:
+  """Read audit rows for permanently deleted separation DNs in [start_dt, end_dt)."""
+  if not os.path.exists(AUDIT_LOG_PATH):
+    return []
+  try:
+    with AUDIT_LOG_LOCK:
+      with open(AUDIT_LOG_PATH, "r", newline="", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+  except Exception:
+    return []
+
+  matched: list[dict] = []
+  for row in rows:
+    if (row.get("action") or "").strip() != "separation_dn_totally_deleted":
+      continue
+    ts_text = (row.get("timestamp") or "").strip()
+    try:
+      ts = datetime.datetime.strptime(ts_text, AUDIT_TIMESTAMP_FORMAT)
+    except (ValueError, TypeError):
+      continue
+    if start_dt <= ts < end_dt:
+      matched.append(row)
+  return matched
+
+
+def _run_sep_dn_delete_report(triggered_by: str = "scheduler") -> dict:
+  """Email the prior week's permanently deleted separation DNs. PROD runtime only."""
+  try:
+    if not _is_prod_runtime_host_strict():
+      return {"success": False, "error": "restricted to PROD web server runtime"}
+
+    cfg = _get_sep_dn_delete_settings()
+    tz = ZoneInfo("America/Los_Angeles")
+    now_pst = datetime.datetime.now(tz=tz).replace(tzinfo=None)
+    # Reporting window: previous Monday 00:00 through the following Sunday 23:59.
+    this_monday = (now_pst - datetime.timedelta(days=now_pst.weekday())).replace(
+      hour=0, minute=0, second=0, microsecond=0
+    )
+    start_dt = this_monday - datetime.timedelta(days=7)
+    end_dt = this_monday
+    range_label = (
+      f"{start_dt.strftime('%Y-%m-%d')} (Mon) through "
+      f"{(end_dt - datetime.timedelta(days=1)).strftime('%Y-%m-%d')} (Sun)"
+    )
+
+    rows = _sep_dn_delete_read_rows(start_dt, end_dt)
+
+    def _cell(row, key):
+      return escape(str(row.get(key, "") or ""))
+
+    if rows:
+      body_rows = "".join(
+        f"<tr><td style='padding:6px 10px;border:1px solid #ccc;'>{_cell(r, 'timestamp')}</td>"
+        f"<td style='padding:6px 10px;border:1px solid #ccc;'>{_cell(r, 'account')}</td>"
+        f"<td style='padding:6px 10px;border:1px solid #ccc;'>{_cell(r, 'extension_deleted')}</td>"
+        f"<td style='padding:6px 10px;border:1px solid #ccc;'>{_cell(r, 'operator')}</td></tr>"
+        for r in rows
+      )
+      table_html = (
+        "<table style='border-collapse:collapse;font-family:Segoe UI,Arial,sans-serif;font-size:13px;'>"
+        "<tr style='background:#002f6c;color:#fff;'>"
+        "<th style='padding:6px 10px;border:1px solid #ccc;'>Deleted (PST)</th>"
+        "<th style='padding:6px 10px;border:1px solid #ccc;'>Separated Account</th>"
+        "<th style='padding:6px 10px;border:1px solid #ccc;'>Directory Number</th>"
+        "<th style='padding:6px 10px;border:1px solid #ccc;'>Operator</th></tr>"
+        f"{body_rows}</table>"
+      )
+      text_lines = [f"{r.get('timestamp','')}  {r.get('extension_deleted','')}  ({r.get('account','')})" for r in rows]
+      text_body = "\n".join(text_lines)
+    else:
+      table_html = "<p>No directory numbers were permanently deleted during this period.</p>"
+      text_body = "No directory numbers were permanently deleted during this period."
+
+    subject = f"Weekly CUCM Deleted DNs (Separation) - {range_label} - {len(rows)} number(s)"
+    intro = (
+      f"<p style='font-family:Segoe UI,Arial,sans-serif;'>The following directory numbers were "
+      f"<strong>permanently deleted from CUCM</strong> by the Separate Employee workflow for the week "
+      f"of {escape(range_label)}. Please delete these numbers at Sinch as needed.</p>"
+    )
+    html_body = f"<div>{intro}{table_html}</div>"
+    body = f"Weekly CUCM Deleted DNs (Separation) - {range_label}\n\n{text_body}\n"
+
+    recipients = [r for r in [cfg["recipient"], cfg["recipient_2"]] if r]
+    if not recipients:
+      return {"success": False, "error": "no recipient configured"}
+
+    _send_smtp_email(
+      sender=cfg["from_address"] or "noreply@amnhealthcare.com",
+      recipients=recipients,
+      subject=subject,
+      body=body,
+      html_body=html_body,
+    )
+    _append_audit_event(
+      action="separation_dn_delete_report_sent",
+      cucm_host="",
+      operator=triggered_by,
+      target=f"recipients={';'.join(recipients)};count={len(rows)};window={range_label}",
+      account="",
+      extension_added="",
+      extension_deleted="",
+      output_filename="",
+      inline_mode=False,
+    )
+    return {"success": True, "count": len(rows), "recipients": recipients, "window": range_label}
+  except Exception as exc:
+    logger.error("sep_dn_delete_report error: %s", exc, exc_info=True)
+    return {"success": False, "error": str(exc)}
+
+
+def _sep_dn_delete_scheduler_loop():
+  tz = ZoneInfo("America/Los_Angeles")
+  while True:
+    try:
+      time.sleep(60)
+      cfg = _get_sep_dn_delete_settings()
+      if not cfg["enabled"]:
+        continue
+      now = datetime.datetime.now(tz=tz)
+      if now.weekday() != 0:  # Monday only
+        continue
+      if now.hour != cfg["hour"] or now.minute != cfg["minute"]:
+        continue
+      fire_key = now.strftime("%Y-%m-%d")
+      with _SEP_DN_DELETE_SCHEDULER_LOCK:
+        if _SEP_DN_DELETE_SCHEDULER_LAST_FIRED.get("last") == fire_key:
+          continue
+        _SEP_DN_DELETE_SCHEDULER_LAST_FIRED["last"] = fire_key
+      logger.info("sep_dn_delete_report: firing report for key=%s", fire_key)
+      result = _run_sep_dn_delete_report(triggered_by="scheduler")
+      logger.info("sep_dn_delete_report: result=%s", result)
+    except Exception as exc:
+      logger.error("sep_dn_delete_scheduler_loop error: %s", exc, exc_info=True)
+
+
+# Start the separation DN-delete weekly report scheduler only on PROD runtime.
+_sep_dn_delete_thread = None
+if _is_prod_runtime_host_strict():
+  _sep_dn_delete_thread = threading.Thread(target=_sep_dn_delete_scheduler_loop, name="sep-dn-delete-scheduler", daemon=True)
+  _sep_dn_delete_thread.start()
+else:
+  logger.info("sep_dn_delete_report scheduler disabled on non-PROD runtime host")
 
 
 # ---------------------------------------------------------------------------
@@ -16215,6 +16413,32 @@ def _extract_deleted_dns_from_offboard_output(csv_data) -> list[str]:
                 deleted_dns.append(dn)
 
     return deleted_dns
+
+
+def _extract_deleted_dn_pairs_from_offboard_output(csv_data) -> list[tuple[str, str]]:
+    """Return (pattern, partition) pairs marked inactive/reusable during offboard."""
+    csv_text = _to_bytes(csv_data).decode("utf-8", errors="replace")
+    reader = csv.reader(io.StringIO(csv_text))
+    pairs: list[tuple[str, str]] = []
+
+    for row in reader:
+        if len(row) < 3:
+            continue
+        step = (row[0] or "").strip()
+        status = (row[1] or "").strip().lower()
+        details = (row[2] or "").strip()
+        if step != "Update Line Inactive" or status != "success":
+            continue
+
+        # Expected format: "Marked <pattern>/<partition> inactive and reusable"
+        match = re.search(r"Marked\s+([^/\s]+)\/(\S+?)\s+inactive", details)
+        if match:
+            pattern = match.group(1).strip()
+            partition = match.group(2).strip()
+            if pattern and (pattern, partition) not in pairs:
+                pairs.append((pattern, partition))
+
+    return pairs
 
 
 def _csv_has_success_step(csv_data, step_names: set[str]) -> bool:
@@ -27613,7 +27837,7 @@ __ADMIN_CARD__
 
     <h3 class="offboard-h3">Offboard User - Delete all Jabber and Voicemail Box (Option 10)</h3>
     <p>Authentication note: Uses cached login credentials from your current session for Unity voicemail and Active Directory actions.</p>
-
+    __DN_DELETE_INDICATOR__
     <div class="offboard-layout">
       <form id="offboard-user-form" class="target-user-form offboard-form" action="javascript:void(0)" method="post" onsubmit="return false;">
                 <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
@@ -31031,7 +31255,7 @@ __ADMIN_CARD__
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__GREENLIGHT_CARD__", greenlight_card_html).replace("__SIP_CALL_SEARCH_CARD__", sip_card_html).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DN_TYPE_RECRUITER_LABEL__", dn_type_recruiter_label).replace("__DN_TYPE_GENERAL_LABEL__", dn_type_general_label).replace("__DN_TYPE_STRIKE_LABEL__", dn_type_strike_label)
+""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__GREENLIGHT_CARD__", greenlight_card_html).replace("__SIP_CALL_SEARCH_CARD__", sip_card_html).replace("__ADMIN_CARD__", admin_card_html).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__HAS_CACHED_UNITY_PASS__", "true" if has_cached_unity_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DN_TYPE_RECRUITER_LABEL__", dn_type_recruiter_label).replace("__DN_TYPE_GENERAL_LABEL__", dn_type_general_label).replace("__DN_TYPE_STRIKE_LABEL__", dn_type_strike_label).replace("__DN_DELETE_INDICATOR__", _dn_delete_indicator_html())
 
   return HTMLResponse(
     content=html,
@@ -36567,6 +36791,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=teams-telephony'">Create Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=teams-telephony-remove'">Remove Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM (Main Ops)</button>
+            <div style="margin:-4px 0 6px 0;">__DN_DELETE_INDICATOR2__</div>
             <button type="button" class="portal-nav-btn" data-panel="hunt-list-members">Hunt List Members (Search Line Groups)</button>
             <button type="button" class="portal-nav-btn" data-panel="linegroup-admin">Update Hunt List Line Group</button>
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
@@ -40691,7 +40916,7 @@ def menu_admin_page(request: Request):
     </main>
   </body>
 </html>
-""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION__", escape(BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION_DEFAULT)).replace("__LS_DID_MISSING_REPORT_NAV__", ls_did_missing_report_nav_html).replace("__BLOCKED_CLEANUP_NAV__", blocked_cleanup_nav_html)
+""".replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION__", escape(BLOCKED_CALLERID_TEMPLATE_ROUTE_PARTITION_DEFAULT)).replace("__LS_DID_MISSING_REPORT_NAV__", ls_did_missing_report_nav_html).replace("__BLOCKED_CLEANUP_NAV__", blocked_cleanup_nav_html).replace("__DN_DELETE_INDICATOR2__", _dn_delete_indicator_html(compact=True))
 
   return HTMLResponse(
     content=html,
@@ -43414,7 +43639,11 @@ def settings_page(request: Request):
   
   settings = _load_settings()
   auth_user = escape(session_username)
-  
+
+  sep_dn_delete_on = (settings.get('sep_dn_delete_enabled', 'false') or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+  sep_dn_delete_true_sel = 'selected' if sep_dn_delete_on else ''
+  sep_dn_delete_false_sel = '' if sep_dn_delete_on else 'selected'
+
   html = f"""
 <html>
   <head>
@@ -43579,6 +43808,27 @@ def settings_page(request: Request):
             <div class="help-text">Used when building Recruiter Jabber phones</div>
           </div>
 
+          <div class="form-group" style="border:2px solid #d97706;border-radius:6px;padding:14px;background:#fff8ef;">
+            <label for="sep_dn_delete_enabled" style="color:#b45309;">Separation: Totally Delete DN from CUCM</label>
+            <select id="sep_dn_delete_enabled" name="sep_dn_delete_enabled" style="width:100%;padding:10px 12px;border:1px solid var(--amn-border);border-radius:4px;font-size:14px;box-sizing:border-box;">
+              <option value="false" {sep_dn_delete_false_sel}>OFF - keep numbers inactive/reusable (default)</option>
+              <option value="true" {sep_dn_delete_true_sel}>ON - permanently delete separated numbers</option>
+            </select>
+            <div class="help-text">When ON, Separate Employee (Option 10) permanently deletes each released DN from CUCM, logs it, and includes it in the weekly Monday 8:00 AM PST email so staff can remove the numbers at Sinch. When OFF, separation is unchanged.</div>
+          </div>
+
+          <div class="form-group">
+            <label for="sep_dn_delete_recipient">Deleted-DN Weekly Email - Primary Recipient</label>
+            <input type="text" id="sep_dn_delete_recipient" name="sep_dn_delete_recipient" value="{escape(settings.get('sep_dn_delete_recipient', 'Laura.Alvarez@amnhealthcare.com'))}" maxlength="254">
+            <div class="help-text">Where the weekly deleted-number report is sent (PROD only)</div>
+          </div>
+
+          <div class="form-group">
+            <label for="sep_dn_delete_recipient_2">Deleted-DN Weekly Email - Secondary Recipient (optional)</label>
+            <input type="text" id="sep_dn_delete_recipient_2" name="sep_dn_delete_recipient_2" value="{escape(settings.get('sep_dn_delete_recipient_2', ''))}" maxlength="254">
+            <div class="help-text">Optional additional recipient (leave blank for none)</div>
+          </div>
+
           <div class="form-group">
             <label for="admin_users">Additional Admin Users</label>
             <input type="text" id="admin_users" name="admin_users" value="{escape(settings.get('admin_users', ''))}" maxlength="800">
@@ -43637,6 +43887,11 @@ def settings_page(request: Request):
             <button type="submit" class="btn-save">Save Changes</button>
             <button type="button" class="btn-cancel" onclick="window.location.href='/menu-admin'">Cancel</button>
           </div>
+
+          <div style="margin-top:14px;">
+            <button type="button" id="dnDeleteTestBtn" style="width:100%;padding:10px;border:1px solid #d97706;border-radius:4px;background:#fff8ef;color:#b45309;font-weight:600;cursor:pointer;">Send Weekly Deleted-DN Email Now (test, PROD only)</button>
+            <div id="dnDeleteTestMsg" class="help-text" style="margin-top:6px;"></div>
+          </div>
         </form>
       </div>
       
@@ -43656,6 +43911,9 @@ def settings_page(request: Request):
           strike_prefix: document.getElementById('strike_prefix').value.trim(),
           recruiter_prefix: document.getElementById('recruiter_prefix').value.trim(),
           admin_users: document.getElementById('admin_users').value.trim(),
+          sep_dn_delete_enabled: document.getElementById('sep_dn_delete_enabled').value.trim(),
+          sep_dn_delete_recipient: document.getElementById('sep_dn_delete_recipient').value.trim(),
+          sep_dn_delete_recipient_2: document.getElementById('sep_dn_delete_recipient_2').value.trim(),
           twilio_loa_recipient_name: document.getElementById('twilio_loa_recipient_name').value.trim(),
           twilio_loa_recipient_email: document.getElementById('twilio_loa_recipient_email').value.trim(),
           twilio_loa_recipient_phone: document.getElementById('twilio_loa_recipient_phone').value.trim(),
@@ -43691,6 +43949,21 @@ def settings_page(request: Request):
           messageEl.innerHTML = '<div class="alert alert-error">Network error: ' + escape(err.message) + '</div>';
         }}
       }});
+
+      const dnTestBtn = document.getElementById('dnDeleteTestBtn');
+      if (dnTestBtn) {{
+        dnTestBtn.addEventListener('click', async () => {{
+          const msg = document.getElementById('dnDeleteTestMsg');
+          msg.textContent = 'Sending...';
+          try {{
+            const resp = await fetch('/admin/sep-dn-delete-report/run', {{ method: 'POST', credentials: 'same-origin' }});
+            const result = await resp.json();
+            msg.textContent = result.ok ? (result.message || 'Sent.') : ('Error: ' + (result.error || 'failed'));
+          }} catch (err) {{
+            msg.textContent = 'Network error: ' + err.message;
+          }}
+        }});
+      }}
     </script>
   </body>
 </html>
@@ -43743,6 +44016,9 @@ def update_settings_api(request: Request, body: dict = None):
     strike_prefix = (body.get("strike_prefix", "") or "").strip()
     recruiter_prefix = (body.get("recruiter_prefix", "") or "").strip()
     admin_users = (body.get("admin_users", "") or "").strip()
+    sep_dn_delete_enabled = (body.get("sep_dn_delete_enabled", "") or "").strip().lower()
+    sep_dn_delete_recipient = (body.get("sep_dn_delete_recipient", "") or "").strip()
+    sep_dn_delete_recipient_2 = (body.get("sep_dn_delete_recipient_2", "") or "").strip()
     twilio_loa_recipient_name = (body.get("twilio_loa_recipient_name", "") or "").strip()
     twilio_loa_recipient_email = (body.get("twilio_loa_recipient_email", "") or "").strip()
     twilio_loa_recipient_phone = (body.get("twilio_loa_recipient_phone", "") or "").strip()
@@ -43783,8 +44059,13 @@ def update_settings_api(request: Request, body: dict = None):
     for label, value in sip_numeric_fields.items():
       if value and not value.isdigit():
         return JSONResponse({"ok": False, "error": f"{label} must be numeric"}, status_code=400)
-    
-    new_settings = {
+
+    if sep_dn_delete_enabled and sep_dn_delete_enabled not in {"1", "true", "yes", "on", "0", "false", "no", "off"}:
+      return JSONResponse({"ok": False, "error": "Totally Delete DN must be true or false"}, status_code=400)
+
+    # Preserve any settings this form does not manage (e.g. report scheduler config).
+    new_settings = _load_settings()
+    new_settings.update({
       "general_fte_prefix": general_fte_prefix,
       "strike_prefix": strike_prefix,
       "recruiter_prefix": recruiter_prefix,
@@ -43797,8 +44078,11 @@ def update_settings_api(request: Request, body: dict = None):
       "sip_call_search_retention_days": sip_call_search_retention_days or str(SIP_CALL_SEARCH_DEFAULT_RETENTION_DAYS),
       "sip_call_search_per_file_mb": sip_call_search_per_file_mb or str(SIP_CALL_SEARCH_DEFAULT_PER_FILE_MB),
       "sip_call_search_total_mb": sip_call_search_total_mb or str(SIP_CALL_SEARCH_DEFAULT_TOTAL_MB),
-    }
-    
+      "sep_dn_delete_enabled": ("true" if sep_dn_delete_enabled in {"1", "true", "yes", "on"} else "false"),
+      "sep_dn_delete_recipient": sep_dn_delete_recipient or "Laura.Alvarez@amnhealthcare.com",
+      "sep_dn_delete_recipient_2": sep_dn_delete_recipient_2,
+    })
+
     if _save_settings(new_settings):
       return JSONResponse({"ok": True, "message": "Settings saved successfully"})
     else:
@@ -43806,6 +44090,21 @@ def update_settings_api(request: Request, body: dict = None):
   
   except Exception as e:
     return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/admin/sep-dn-delete-report/run")
+def run_sep_dn_delete_report_route(request: Request):
+  """Manually send the weekly deleted-DN separation email (PROD runtime only)."""
+  session = _get_auth_session(request)
+  if not session:
+    return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+  if not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  result = _run_sep_dn_delete_report(triggered_by=str(session.get("username", "manual")))
+  if result.get("success"):
+    recips = ", ".join(result.get("recipients", []))
+    return JSONResponse({"ok": True, "message": f"Sent to {recips} - {result.get('count', 0)} number(s) for {result.get('window', '')}"})
+  return JSONResponse({"ok": False, "error": result.get("error", "failed")}, status_code=400)
 
 
 @app.get("/download/add-directorynumbers-template")
@@ -47964,6 +48263,47 @@ def decommission_user_csf_voicemail_route(
         ad_password=cucm_pass,
     )
     deleted_dns = _extract_deleted_dns_from_offboard_output(data)
+
+    # Optional: totally delete the separated DNs from CUCM (DN Prefix Settings toggle).
+    # When enabled, each inactive DN is permanently removed via AXL removeLine, logged
+    # to the audit trail, and appended to the CSV output. Runs on both LAB and PROD.
+    dn_delete_cfg = _get_sep_dn_delete_settings()
+    if dn_delete_cfg.get("enabled") and cucm_pass:
+        dn_pairs = _extract_deleted_dn_pairs_from_offboard_output(data)
+        if dn_pairs:
+            del_session = requests.Session()
+            del_session.verify = False
+            del_session.trust_env = False
+            del_session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+            del_rows = io.StringIO()
+            del_writer = csv.writer(del_rows)
+            for del_pattern, del_partition in dn_pairs:
+                try:
+                    _axl_remove_line(del_session, cucm_host, del_pattern, del_partition)
+                    del_writer.writerow([
+                        "Total-Delete DN",
+                        "Success",
+                        f"Permanently deleted {del_pattern}/{del_partition} from CUCM",
+                    ])
+                    _append_audit_event(
+                        action="separation_dn_totally_deleted",
+                        cucm_host=cucm_host,
+                        operator=cucm_user,
+                        target=f"account={clean_target_user};dn={del_pattern};partition={del_partition}",
+                        account=clean_target_user,
+                        extension_added="",
+                        extension_deleted=del_pattern,
+                        output_filename=filename,
+                        inline_mode=inline,
+                    )
+                except Exception as del_exc:
+                    del_writer.writerow([
+                        "Total-Delete DN",
+                        "Failed",
+                        f"Could not delete {del_pattern}/{del_partition}: {del_exc}",
+                    ])
+            data = _to_bytes(data) + del_rows.getvalue().encode("utf-8")
+
     deleted_dn_text = "|".join(deleted_dns) if deleted_dns else "none"
     audit_target = (
       f"account={clean_target_user};dn_deleted={deleted_dn_text};deleted_count={len(deleted_dns)}"
