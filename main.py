@@ -38715,10 +38715,6 @@ def menu_admin_page(request: Request):
             resultsEl.innerHTML = "";
             try {
               const fd = new FormData(form);
-              const rawPattern = String(fd.get("pattern_query") || "").trim();
-              if (!rawPattern) {
-                fd.set("pattern_query", "%");
-              }
               const resp = await fetch("/admin/dn-unassigned/list", {
                 method: "POST",
                 body: fd,
@@ -45249,8 +45245,14 @@ def _lookup_unassigned_directory_numbers(
       seen_patterns.add(token)
       search_patterns.append(token)
   else:
-    # Blank means full ENT_DEVICE_PT sweep.
-    search_patterns.append("%")
+    # Blank search uses prefix shards to avoid large wildcard timeout scans.
+    for first_digit in ["2", "3", "4", "5", "6", "7", "8", "9"]:
+      search_patterns.append(f"{first_digit}%")
+    # Keep known Jabber pools included without duplicates.
+    for prefix in jabber_prefixes:
+      scoped = f"{prefix}%"
+      if scoped not in search_patterns:
+        search_patterns.append(scoped)
 
   session = requests.Session()
   session.verify = False
@@ -45263,68 +45265,23 @@ def _lookup_unassigned_directory_numbers(
     "axl_first": "default",
     "listed_rows": 0,
     "unique_candidates": 0,
+    "fast_path_hits": 0,
+    "fallback_getline_checks": 0,
     "skipped_has_devices": 0,
     "skipped_active": 0,
     "validation_errors": 0,
     "first_error": "",
   }
 
-  if search_patterns == ["%"]:
-    # Match the DN availability report/Jabber pool lookup exactly.
-    for scoped_pattern in search_patterns:
-      soap = f"""<?xml version="1.0" encoding="utf-8"?>
-<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
-  <soapenv:Header/>
-  <soapenv:Body>
-    <axl:listLine sequence=\"1\">
-      <searchCriteria>
-        <pattern>{xml_escape(scoped_pattern)}</pattern>
-        <routePartitionName>{xml_escape(clean_partition)}</routePartitionName>
-      </searchCriteria>
-      <returnedTags>
-        <pattern/>
-      </returnedTags>
-    </axl:listLine>
-  </soapenv:Body>
-</soapenv:Envelope>"""
-
-      xml_text = _axl_post_raw_text(session, cucm_host, soap, "listLine")
-      root = ET.fromstring(xml_text)
-      for elem in root.iter():
-        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-        if tag != "line":
-          continue
-
-        pattern = ""
-        for child in list(elem):
-          ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-          if ctag == "pattern":
-            pattern = (child.text or "").strip()
-            break
-
-        if not pattern:
-          continue
-
-        debug_stats["listed_rows"] = int(debug_stats["listed_rows"]) + 1
-        key = (pattern, clean_partition)
-        if key not in rows_by_key:
-          rows_by_key[key] = {
-            "pattern": pattern,
-            "route_partition": clean_partition,
-            "description": "",
-            "alerting_name": "",
-            "active": False,
-            "device_count": 0,
-          }
-  else:
-    for search_pattern in search_patterns:
-      soap = f"""<?xml version="1.0" encoding="utf-8"?>
+  for search_pattern in search_patterns:
+    soap = f"""<?xml version="1.0" encoding="utf-8"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
   <soapenv:Header/>
   <soapenv:Body>
     <axl:listLine sequence=\"1\">
       <searchCriteria>
         <pattern>{xml_escape(search_pattern)}</pattern>
+        <routePartitionName>{xml_escape(clean_partition)}</routePartitionName>
       </searchCriteria>
       <returnedTags>
         <pattern/>
@@ -45332,55 +45289,70 @@ def _lookup_unassigned_directory_numbers(
         <description/>
         <alertingName/>
         <active/>
+        <associatedDevices>
+          <device/>
+        </associatedDevices>
       </returnedTags>
     </axl:listLine>
   </soapenv:Body>
 </soapenv:Envelope>"""
 
-      xml_text = _axl_post_raw_text(session, cucm_host, soap, "listLine")
-      root = ET.fromstring(xml_text)
-      for elem in root.iter():
-        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-        if tag != "line":
-          continue
+    xml_text = _axl_post_raw_text(session, cucm_host, soap, "listLine")
+    root = ET.fromstring(xml_text)
+    for elem in root.iter():
+      tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
+      if tag != "line":
+        continue
 
-        pattern = ""
-        partition = ""
-        description = ""
-        alerting_name = ""
-        active_raw = ""
+      pattern = ""
+      partition = ""
+      description = ""
+      alerting_name = ""
+      active_raw = ""
+      device_count = 0
+      has_active_data = False
+      has_device_data = False
 
-        for child in list(elem):
-          ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-          if ctag == "pattern":
-            pattern = (child.text or "").strip()
-          elif ctag == "routePartitionName":
-            partition = (child.text or "").strip()
-          elif ctag == "description":
-            description = (child.text or "").strip()
-          elif ctag == "alertingName":
-            alerting_name = (child.text or "").strip()
-          elif ctag == "active":
-            active_raw = (child.text or "").strip().lower()
+      for child in list(elem):
+        ctag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+        if ctag == "pattern":
+          pattern = (child.text or "").strip()
+        elif ctag == "routePartitionName":
+          partition = (child.text or "").strip()
+        elif ctag == "description":
+          description = (child.text or "").strip()
+        elif ctag == "alertingName":
+          alerting_name = (child.text or "").strip()
+        elif ctag == "active":
+          has_active_data = True
+          active_raw = (child.text or "").strip().lower()
+        elif ctag == "associatedDevices":
+          has_device_data = True
+          for assoc_child in list(child):
+            assoc_tag = assoc_child.tag.split("}")[-1] if "}" in assoc_child.tag else assoc_child.tag
+            if assoc_tag == "device" and (assoc_child.text or "").strip():
+              device_count += 1
 
-        if not pattern:
-          continue
-        if not partition:
-          partition = clean_partition
-        if partition != clean_partition:
-          continue
+      if not pattern:
+        continue
+      if not partition:
+        partition = clean_partition
+      if partition != clean_partition:
+        continue
 
-        debug_stats["listed_rows"] = int(debug_stats["listed_rows"]) + 1
-        key = (pattern, partition)
-        if key not in rows_by_key:
-          rows_by_key[key] = {
-            "pattern": pattern,
-            "route_partition": partition,
-            "description": description,
-            "alerting_name": alerting_name,
-            "active": active_raw in {"true", "t", "1", "yes"},
-            "device_count": 0,
-          }
+      debug_stats["listed_rows"] = int(debug_stats["listed_rows"]) + 1
+      key = (pattern, partition)
+      if key not in rows_by_key:
+        rows_by_key[key] = {
+          "pattern": pattern,
+          "route_partition": partition,
+          "description": description,
+          "alerting_name": alerting_name,
+          "active": active_raw in {"true", "t", "1", "yes"},
+          "active_known": has_active_data,
+          "has_devices_known": has_device_data,
+          "device_count": device_count,
+        }
 
   debug_stats["unique_candidates"] = len(rows_by_key)
 
@@ -45390,8 +45362,27 @@ def _lookup_unassigned_directory_numbers(
     row = rows_by_key[key]
     pattern = str(row.get("pattern", "") or "").strip()
     partition = str(row.get("route_partition", "") or "").strip()
+    active_known = bool(row.get("active_known"))
+    has_devices_known = bool(row.get("has_devices_known"))
+    listed_active = bool(row.get("active"))
+    listed_device_count = int(row.get("device_count") or 0)
+
+    # Fast path: rely on listLine metadata when both active + associatedDevices are present.
+    if has_devices_known and listed_device_count > 0:
+      debug_stats["skipped_has_devices"] = int(debug_stats["skipped_has_devices"]) + 1
+      continue
+    if active_known and listed_active:
+      debug_stats["skipped_active"] = int(debug_stats["skipped_active"]) + 1
+      continue
+    if active_known and has_devices_known and listed_device_count == 0 and not listed_active:
+      debug_stats["fast_path_hits"] = int(debug_stats["fast_path_hits"]) + 1
+      rows.append(row)
+      if len(rows) >= max_rows:
+        break
+      continue
 
     try:
+      debug_stats["fallback_getline_checks"] = int(debug_stats["fallback_getline_checks"]) + 1
       if _axl_has_associated_devices(session, cucm_host, pattern, partition):
         debug_stats["skipped_has_devices"] = int(debug_stats["skipped_has_devices"]) + 1
         continue
