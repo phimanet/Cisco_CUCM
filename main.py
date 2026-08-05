@@ -16554,6 +16554,53 @@ def _ensure_unified_messaging_security_group_membership(
   return "Success", message or f"Already a member of {UNIFIED_MESSAGING_SECURITY_GROUP} (source={add_source})"
 
 
+def _remove_unified_messaging_security_group_membership(
+  target_user: str,
+  cucm_user: str,
+  cucm_pass: str,
+) -> tuple[str, str]:
+  clean_target_user = (target_user or "").strip()
+  if not clean_target_user:
+    return "Skipped", "Target user is blank; membership removal skipped"
+
+  auth_context = {
+    "username": (cucm_user or "").strip(),
+    "password": (cucm_pass or "").strip(),
+  }
+
+  check_ok, check_result, check_error = manage_ad_group_membership(
+    clean_target_user,
+    UNIFIED_MESSAGING_SECURITY_GROUP,
+    "check",
+    auth_context=auth_context,
+  )
+  if not check_ok:
+    return "Failed", f"Membership check failed for {UNIFIED_MESSAGING_SECURITY_GROUP}: {check_error or 'Unknown error'}"
+
+  check_source = str((check_result or {}).get("source", "")).strip() or "unknown"
+  if not bool((check_result or {}).get("isMember")):
+    return "Success", f"Not a member of {UNIFIED_MESSAGING_SECURITY_GROUP}; nothing to remove (source={check_source})"
+
+  remove_ok, remove_result, remove_error = manage_ad_group_membership(
+    clean_target_user,
+    UNIFIED_MESSAGING_SECURITY_GROUP,
+    "remove",
+    auth_context=auth_context,
+  )
+  if not remove_ok:
+    if not bool((remove_result or {}).get("isMember")):
+      remove_source_fail = str((remove_result or {}).get("source", "")).strip() or check_source
+      return "Success", f"Not a member of {UNIFIED_MESSAGING_SECURITY_GROUP}; nothing to remove (source={remove_source_fail})"
+    return "Failed", f"Failed to remove from {UNIFIED_MESSAGING_SECURITY_GROUP}: {remove_error or 'Unknown error'}"
+
+  remove_source_ok = str((remove_result or {}).get("source", "")).strip() or check_source
+  removed = bool((remove_result or {}).get("changed"))
+  remove_message = str((remove_result or {}).get("message", "")).strip()
+  if removed:
+    return "Success", f"Removed from {UNIFIED_MESSAGING_SECURITY_GROUP} (source={remove_source_ok})"
+  return "Success", remove_message or f"Not a member of {UNIFIED_MESSAGING_SECURITY_GROUP}; nothing to remove (source={remove_source_ok})"
+
+
 def _lookup_user_contact(cucm_host: str, cucm_user: str, cucm_pass: str, target_user: str) -> tuple[str, str]:
     clean_target = (target_user or "").strip()
     if not clean_target:
@@ -48414,6 +48461,28 @@ def decommission_user_csf_voicemail_route(
                         f"Could not delete {del_pattern}/{del_partition}: {del_exc}",
                     ])
             data = _to_bytes(data) + del_rows.getvalue().encode("utf-8")
+
+    # Mandatory separation step: remove the separated user from the Unified Messaging
+    # security group. If they are not a member, this is a no-op success.
+    um_status, um_detail = _remove_unified_messaging_security_group_membership(
+        clean_target_user, cucm_user, cucm_pass
+    )
+    um_rows = io.StringIO()
+    csv.writer(um_rows).writerow([
+        "Remove Unified Messaging Security Group", um_status, um_detail,
+    ])
+    data = _to_bytes(data) + um_rows.getvalue().encode("utf-8")
+    _append_audit_event(
+        action="separation_um_group_removed",
+        cucm_host=cucm_host,
+        operator=cucm_user,
+        target=f"account={clean_target_user};group={UNIFIED_MESSAGING_SECURITY_GROUP};status={um_status}",
+        account=clean_target_user,
+        extension_added="",
+        extension_deleted="",
+        output_filename=filename,
+        inline_mode=inline,
+    )
 
     deleted_dn_text = "|".join(deleted_dns) if deleted_dns else "none"
     audit_target = (
