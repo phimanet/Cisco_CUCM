@@ -26590,6 +26590,7 @@ __ADMIN_CARD__
 
       <section class="jabber-check-output" aria-live="polite" style="margin-top:0;">
         <h4>Search Results</h4>
+        <p style="margin:4px 0 8px 0;font-size:12px;color:#4e6a84;">QA Guard: <strong>Jabber Registration</strong> shows live device registration state for Jabber devices only. <strong>Teams Telephony</strong> shows whether a strict Teams DID translation pattern match exists.</p>
         <p id="person-lookup-status" class="jabber-check-status">Enter a last name and click Search.</p>
         <div id="person-lookup-results" style="overflow-x: auto;"></div>
       </section>
@@ -27999,6 +28000,7 @@ __ADMIN_CARD__
           <button id="offboard-search-btn" type="submit">Search</button>
         </div>
       </form>
+      <p style="margin:8px 0 0 0;font-size:12px;color:#4e6a84;">QA Guard: <strong>Separation Path</strong> indicates which automation branch is expected (Jabber, Teams, Genesys LS DID). Use this to verify route selection before running offboard.</p>
       <p id="offboard-search-status" style="margin:10px 0 0 0;font-size:13px;color:#12304a;">Enter a last name and click Search.</p>
       <div id="offboard-search-results" style="overflow-x:auto;margin-top:8px;"></div>
     </div>
@@ -37151,6 +37153,7 @@ def menu_admin_page(request: Request):
           </div>
         </form>
 
+        <p style="margin:8px 0 8px 0;font-size:12px;color:#4e6a84;">QA Guard: <strong>Jabber Registration</strong> shows live device registration state for Jabber devices only. <strong>Teams Telephony</strong> reflects strict Teams DID translation pattern match status.</p>
         <p id="admin-person-lookup-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
         <div id="admin-person-lookup-results" style="overflow-x:auto;"></div>
       </section>
