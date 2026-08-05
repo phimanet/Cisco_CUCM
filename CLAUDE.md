@@ -88,6 +88,14 @@ Priority keys:
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
 
+### 2026-08-04 (Separation DN total-delete + weekly report)
+- Added optional **"Totally Delete DN from CUCM"** toggle on the DN Prefix Settings page (OFF by default). When ON, Separate Employee (Option 10) permanently deletes each released DN via safe AXL `removeLine` (no raw SQL writes), logs each to the audit trail as `separation_dn_totally_deleted`, and appends `Total-Delete DN` rows to the CSV output. Runs on BOTH LAB and PROD. When OFF, separation is unchanged.
+- Added editable primary/secondary email recipients (primary default `Laura.Alvarez@amnhealthcare.com`) and a weekly **Monday 08:00 AM PST** email (PROD-only) reporting the **prior full week (Mon–Sun)** of permanently deleted DNs so staff can remove them at Sinch. Includes a "Send Weekly Deleted-DN Email Now" test button on the settings page (`/admin/sep-dn-delete-report/run`).
+- Added ON/OFF indicator badges on the Separate Employee entry points on Page 1 (offboard panel banner) and Page 2 (nav button badge).
+- Safe fix: `/api/settings` save now preserves unmanaged keys (report scheduler config) instead of overwriting the whole settings file.
+- Commit `b411b3e`; deployed and validated in PROD (working perfectly).
+
+
 ### 2026-06-19
 - Added portal version labeling in UI: current web pages marked as v1.0; queued enhancement marker for v1.01 (VeraSMART automation).
 - Added Administrative Items LAB-only v1.01 scaffold panel: VeraSMART queue CSV template download, queue upload endpoint, and run-status view placeholders.
