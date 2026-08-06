@@ -10452,6 +10452,49 @@ def _collect_language_services_missing_ls_did(
   for row in ls_rows:
     if bool(row.get("is_available", False)):
       continue
+  # Single SQL query to build name→userid map instead of N per-row AXL lookups
+  _ls_user_by_name: dict[str, str] = {}
+  try:
+    _ls_session = requests.Session()
+    _ls_session.verify = False
+    _ls_session.trust_env = False
+    _ls_session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+    _ls_sql_soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:executeSQLQuery>
+      <sql>SELECT userid, firstname, lastname, displayname FROM enduser</sql>
+    </axl:executeSQLQuery>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+    _ls_resp = _ls_session.post(
+      f"https://{cucm_host}:8443/axl/",
+      data=_ls_sql_soap.encode("utf-8"),
+      headers={"Content-Type": "text/xml"},
+      timeout=60,
+    )
+    if _ls_resp.status_code == 200:
+      _ls_root = ET.fromstring(_ls_resp.text)
+      for _ls_elem in _ls_root.iter():
+        if _ls_elem.tag.split("}")[-1] != "row":
+          continue
+        _lu: dict[str, str] = {}
+        for _lc in list(_ls_elem):
+          _lu[_lc.tag.split("}")[-1]] = (_lc.text or "").strip()
+        _lfn = _lu.get("firstname", "")
+        _lln = _lu.get("lastname", "")
+        _ldn = _lu.get("displayname", "") or f"{_lfn} {_lln}".strip()
+        _luid = _lu.get("userid", "").strip().lower()
+        for _lkey in [f"{_lfn} {_lln}".strip().casefold(), _ldn.casefold()]:
+          if _lkey and _lkey not in _ls_user_by_name:
+            _ls_user_by_name[_lkey] = _luid
+  except Exception:
+    pass
+
+  for row in ls_rows:
+    if bool(row.get("is_available", False)):
+      continue
     assigned_user = str(row.get("assigned_user", "") or "").strip()
     if not assigned_user:
       continue
@@ -10468,13 +10511,7 @@ def _collect_language_services_missing_ls_did(
     if assigned_name_key:
       assigned_by_name.setdefault(assigned_name_key, []).append(row_ref)
 
-    cucm_lookup = _ls_did_lookup_assigned_user_in_cucm(
-      cucm_host,
-      cucm_user,
-      cucm_pass,
-      assigned_user,
-    )
-    cucm_userid = str(cucm_lookup.get("userid", "") or "").strip().lower()
+    cucm_userid = _ls_user_by_name.get(assigned_user.casefold(), "")
     if cucm_userid:
       row_ref["cucm_userid"] = cucm_userid
       assigned_by_userid.setdefault(cucm_userid, []).append(row_ref)
