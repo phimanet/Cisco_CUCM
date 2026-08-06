@@ -24583,6 +24583,49 @@ def genesys_ls_did_list_route(
     require_available_suffix=False,
   )
 
+  # Build a single in-memory user lookup from one SQL call instead of N per-row AXL calls.
+  user_by_name: dict[str, dict] = {}
+  try:
+    _session = requests.Session()
+    _session.verify = False
+    _session.trust_env = False
+    _session.auth = HTTPBasicAuth(resolved_user, resolved_pass)
+    _sql_soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:executeSQLQuery>
+      <sql>SELECT userid, firstname, lastname, displayname FROM enduser</sql>
+    </axl:executeSQLQuery>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+    _resp = _session.post(
+      f"https://{resolved_host}:8443/axl/",
+      data=_sql_soap.encode("utf-8"),
+      headers={"Content-Type": "text/xml"},
+      timeout=60,
+    )
+    if _resp.status_code == 200:
+      _root = ET.fromstring(_resp.text)
+      for _elem in _root.iter():
+        if _elem.tag.split("}")[-1] != "row":
+          continue
+        _u: dict[str, str] = {}
+        for _c in list(_elem):
+          _u[_c.tag.split("}")[-1]] = (_c.text or "").strip()
+        _fn = _u.get("firstname", "")
+        _ln = _u.get("lastname", "")
+        _dn = _u.get("displayname", "") or f"{_fn} {_ln}".strip()
+        _uid = _u.get("userid", "")
+        for _key in [
+          f"{_fn} {_ln}".strip().casefold(),
+          _dn.casefold(),
+        ]:
+          if _key and _key not in user_by_name:
+            user_by_name[_key] = {"userid": _uid, "display_name": _dn or f"{_fn} {_ln}".strip()}
+  except Exception:
+    pass  # fall through to per-row "Not checked" state if SQL fails
+
   stale_count = 0
   active_count = 0
   for row in rows:
@@ -24598,37 +24641,31 @@ def genesys_ls_did_list_route(
       row["cucm_lookup_error"] = ""
       continue
 
-    user_status = _ls_did_lookup_assigned_user_in_cucm(
-      resolved_host,
-      resolved_user,
-      resolved_pass,
-      assigned_user,
-    )
-    row["cucm_user_checked"] = bool(user_status.get("checked", False))
-    row["cucm_user_found"] = bool(user_status.get("found", False))
-    row["cucm_user_status"] = str(user_status.get("status", "") or "")
-    row["cucm_match_count"] = int(user_status.get("match_count", 0) or 0)
-    row["cucm_userid"] = str(user_status.get("userid", "") or "")
-    row["cucm_display_name"] = str(user_status.get("display_name", "") or "")
-    row["cucm_lookup_error"] = str(user_status.get("error", "") or "")
-
-    if row["cucm_user_found"]:
+    hit = user_by_name.get(assigned_user.casefold())
+    if hit:
+      row["cucm_user_checked"] = True
+      row["cucm_user_found"] = True
+      row["cucm_user_status"] = "Listed in CUCM (Still with AMN)"
+      row["cucm_match_count"] = 1
+      row["cucm_userid"] = hit["userid"]
+      row["cucm_display_name"] = hit["display_name"]
+      row["cucm_lookup_error"] = ""
       active_count += 1
     else:
+      row["cucm_user_checked"] = bool(user_by_name)
+      row["cucm_user_found"] = False
+      row["cucm_user_status"] = "Not Found in CUCM (Review for Available)" if user_by_name else "Lookup unavailable"
+      row["cucm_match_count"] = 0
+      row["cucm_userid"] = ""
+      row["cucm_display_name"] = ""
+      row["cucm_lookup_error"] = ""
       stale_count += 1
 
-  pattern_probe_rows = _list_translation_patterns_by_pattern(
-    resolved_host,
-    resolved_user,
-    resolved_pass,
-    f"{GENESYS_LS_DID_LIST_PATTERN_PREFIX}%",
-  )
   desc_prefix_l = GENESYS_LS_DID_DESCRIPTION_PREFIX.casefold()
-  prefix_match_count = 0
-  for row in pattern_probe_rows:
-    description = str(row.get("description", "") or "").strip().casefold()
-    if description.startswith(desc_prefix_l):
-      prefix_match_count += 1
+  prefix_match_count = sum(
+    1 for r in rows
+    if str(r.get("description", "") or "").strip().casefold().startswith(desc_prefix_l)
+  )
 
   _append_audit_event(
     action="genesys_ls_did_list",
@@ -24646,7 +24683,7 @@ def genesys_ls_did_list_route(
     "stale_count": stale_count,
     "pattern_prefix": GENESYS_LS_DID_LIST_PATTERN_PREFIX,
     "description_prefix": GENESYS_LS_DID_DESCRIPTION_PREFIX,
-    "pattern_probe_count": len(pattern_probe_rows),
+    "pattern_probe_count": len(rows),
     "description_prefix_match_count": prefix_match_count,
     "results": rows,
   })
