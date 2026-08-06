@@ -26578,19 +26578,22 @@ __ADMIN_CARD__
         <input type="hidden" name="cucm_user" value="__AUTH_USER__">
         <input type="hidden" name="cucm_pass" value="">
         <input type="hidden" name="include_teams_status" value="1">
-        <input type="hidden" name="include_jabber_registration" value="1">
 
         <div class="search-filter-row">
           <input name="last_name" placeholder="Last Name *" required>
           <input name="first_name" placeholder="First Name (optional)">
           <button id="person-lookup-btn" type="submit">Search</button>
+          <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#355978;white-space:nowrap;">
+            <input type="checkbox" name="include_jabber_registration" value="1">
+            Live Registration Check
+          </label>
           <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
         </div>
       </form>
 
       <section class="jabber-check-output" aria-live="polite" style="margin-top:0;">
         <h4>Search Results</h4>
-        <p style="margin:4px 0 8px 0;font-size:12px;color:#4e6a84;">QA Guard: <strong>Jabber Registration</strong> shows live device registration state for Jabber devices only. <strong>Teams Telephony</strong> shows whether a strict Teams DID translation pattern match exists.</p>
+        <p style="margin:4px 0 8px 0;font-size:12px;color:#4e6a84;">QA Guard: <strong>Jabber Registration</strong> shows live device registration state for Jabber devices only when <strong>Live Registration Check</strong> is enabled. <strong>Teams Telephony</strong> shows whether a strict Teams DID translation pattern match exists.</p>
         <p id="person-lookup-status" class="jabber-check-status">Enter a last name and click Search.</p>
         <div id="person-lookup-results" style="overflow-x: auto;"></div>
       </section>
@@ -26674,7 +26677,8 @@ __ADMIN_CARD__
                 ? (teamsExt ? `Yes (${teamsExt})` : "Yes")
                 : (teamsState === "Unknown" ? "Unknown" : "Not Found");
               const teamsColor = teamsIsUser ? "#0f6d35" : (teamsState === "Unknown" ? "#7a1020" : "#6b7280");
-              const regSummary = (r.jabber_registration_summary || "No Jabber device").trim();
+              const regSummaryRaw = (r.jabber_registration_summary || "").trim();
+              const regSummary = regSummaryRaw || "Skipped (Fast Mode)";
               const regColor = regSummary.startsWith("0/") ? "#b91c1c" : (regSummary.indexOf("Registered") >= 0 ? "#0f6d35" : "#6b7280");
               const devList = (r.devices || []).map(function (d) {
                 const exts = (d.extensions || []).join(", ") || "\u2014";
@@ -37145,15 +37149,18 @@ def menu_admin_page(request: Request):
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
           <input type="hidden" name="include_teams_status" value="1">
-          <input type="hidden" name="include_jabber_registration" value="1">
           <div class="search-filter-row">
             <input name="last_name" placeholder="Last Name *" required>
             <input name="first_name" placeholder="First Name (optional)">
             <button type="submit">Search</button>
+            <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#355978;white-space:nowrap;">
+              <input type="checkbox" name="include_jabber_registration" value="1">
+              Live Registration Check
+            </label>
           </div>
         </form>
 
-        <p style="margin:8px 0 8px 0;font-size:12px;color:#4e6a84;">QA Guard: <strong>Jabber Registration</strong> shows live device registration state for Jabber devices only. <strong>Teams Telephony</strong> reflects strict Teams DID translation pattern match status.</p>
+        <p style="margin:8px 0 8px 0;font-size:12px;color:#4e6a84;">QA Guard: <strong>Jabber Registration</strong> shows live device registration state for Jabber devices only when <strong>Live Registration Check</strong> is enabled. <strong>Teams Telephony</strong> reflects strict Teams DID translation pattern match status.</p>
         <p id="admin-person-lookup-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
         <div id="admin-person-lookup-results" style="overflow-x:auto;"></div>
       </section>
@@ -38550,7 +38557,8 @@ def menu_admin_page(request: Request):
                   ? (teamsExt ? `Yes (${teamsExt})` : "Yes")
                   : (teamsState === "Unknown" ? "Unknown" : "Not Found");
                 const teamsColor = teamsIsUser ? "#0f6d35" : (teamsState === "Unknown" ? "#7a1020" : "#6b7280");
-                const regSummary = (r.jabber_registration_summary || "No Jabber device").trim();
+                const regSummaryRaw = (r.jabber_registration_summary || "").trim();
+                const regSummary = regSummaryRaw || "Skipped (Fast Mode)";
                 const regColor = regSummary.startsWith("0/") ? "#b91c1c" : (regSummary.indexOf("Registered") >= 0 ? "#0f6d35" : "#6b7280");
                 const devList = (r.devices || []).map(function (d) {
                   const exts = (d.extensions || []).join(", ") || "\u2014";
