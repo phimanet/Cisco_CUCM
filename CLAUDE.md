@@ -20,7 +20,29 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [ ] Add lightweight health check and structured error responses for web routes.
 - [ ] Add minimal regression tests for toolkit functions that generate CSV outputs.
 
-## Enhancement Backlog
+## Code Improvement Backlog
+_Identified 2026-08-06 by full codebase efficiency audit. Do NOT implement without explicit approval — safe fallback tag `websave-2026-08-06` (commit `365a9a4`) is the reference point._
+
+### CI-1 — Delete dead function `_ls_did_lookup_assigned_user_in_cucm` [LOW RISK]
+- **File**: `main.py` line ~15662
+- **Why**: All callers were removed during the LS DID list/language-services optimization. Function is never called. ~60 lines of dead code.
+- **Action**: Delete the function block.
+- **Status**: Not started
+
+### CI-2 — Replace `search_persons_by_name` with SQL join in `toolkit/person_lookup.py` [HIGH RISK, HIGH REWARD]
+- **File**: `toolkit/person_lookup.py`
+- **Why**: Current implementation does 1× `listUser` + N× `getUser` + N×M× `getPhone` — up to 40+ AXL calls for a 10-user result with 3 devices each. A single SQL join can replace all of this.
+- **SQL**: `SELECT u.userid, u.firstname, u.lastname, u.mailid, u.telephonenumber, u.displayname, d.name AS device_name, n.dnorpattern AS extension FROM enduser u LEFT JOIN enduserdevicemap edm ON edm.fkenduser = u.pkid LEFT JOIN device d ON d.pkid = edm.fkdevice LEFT JOIN devicenumplanmap dm ON dm.fkdevice = d.pkid AND dm.numplanindex = 1 LEFT JOIN numplan n ON n.pkid = dm.fknumplan WHERE u.lastname LIKE '%Smith%'`
+- **Impact**: Affects ALL panels that search by name — Person Lookup, Jabber Build, Name Change, Offboard, Jabber Check, SMS, Genesys, and more (~12 routes). Requires full regression test after change.
+- **Status**: Not started — requires controlled LAB-only test first
+
+### CI-3 — Optimize `_greenlight_collect_people_from_email` per-email AXL calls [MEDIUM RISK]
+- **File**: `main.py` line ~13977
+- **Why**: For each email in a bulk Greenlight CSV, it calls `_greenlight_list_users_by_userid` + `search_persons_by_name` multiple times per email (2-4 calls per email for candidate userid variants). With 50 emails in a CSV, this is 100-200 serial AXL calls even with thread parallelism.
+- **Action**: Replace with `SELECT userid, firstname, lastname, mailid, telephonenumber, displayname FROM enduser WHERE mailid = 'email@...'` — one SQL call per email instead of 2-4 AXL calls. Already runs in ThreadPoolExecutor so the parallelism benefit is preserved.
+- **Status**: Not started
+
+
 - [x] [P1][Done] Person Lookup by name — search CUCM end users by last name + optional first name; returns extension, email, and all associated devices with type labels (CSF/TCT/BOT). First item on the menu, inline table results.
 
 
