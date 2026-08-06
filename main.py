@@ -12697,22 +12697,22 @@ def _ris_fetch_jabber_registrations(cucm_host: str, cucm_user: str, cucm_pass: s
   <soapenv:Header/>
   <soapenv:Body>
     <ris:selectCmDevice>
-      <StateInfo></StateInfo>
-      <CmSelectionCriteria>
-        <MaxReturnedDevices>2000</MaxReturnedDevices>
-        <DeviceClass>Phone</DeviceClass>
-        <Model>255</Model>
-        <Status>Any</Status>
-        <NodeName></NodeName>
-        <SelectBy>Name</SelectBy>
-        <SelectItems>
-          <item>
-            <Item>*</Item>
-          </item>
-        </SelectItems>
-        <Protocol>Any</Protocol>
-        <DownloadStatus>Any</DownloadStatus>
-      </CmSelectionCriteria>
+      <ris:StateInfo></ris:StateInfo>
+      <ris:CmSelectionCriteria>
+        <ris:MaxReturnedDevices>2000</ris:MaxReturnedDevices>
+        <ris:DeviceClass>Phone</ris:DeviceClass>
+        <ris:Model>255</ris:Model>
+        <ris:Status>Any</ris:Status>
+        <ris:NodeName></ris:NodeName>
+        <ris:SelectBy>Name</ris:SelectBy>
+        <ris:SelectItems>
+          <ris:item>
+            <ris:Item>*</ris:Item>
+          </ris:item>
+        </ris:SelectItems>
+        <ris:Protocol>Any</ris:Protocol>
+        <ris:DownloadStatus>Any</ris:DownloadStatus>
+      </ris:CmSelectionCriteria>
     </ris:selectCmDevice>
   </soapenv:Body>
 </soapenv:Envelope>"""
@@ -45025,24 +45025,24 @@ def debug_jabber_reg_route(
   ris_hosts = _axl_list_process_nodes(resolved_host, resolved_user, resolved_pass) or [resolved_host]
   results["ris_hosts"] = ris_hosts
 
-  select_items = f"<item><Item>{xml_escape(device_name)}</Item></item>"
+  select_items = f"<ris:item><ris:Item>{xml_escape(device_name)}</ris:Item></ris:item>"
   soap = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:ris=\"http://schemas.cisco.com/ast/soap\">
   <soapenv:Header/>
   <soapenv:Body>
     <ris:selectCmDevice>
-      <StateInfo></StateInfo>
-      <CmSelectionCriteria>
-        <MaxReturnedDevices>10</MaxReturnedDevices>
-        <DeviceClass>Phone</DeviceClass>
-        <Model>255</Model>
-        <Status>Any</Status>
-        <NodeName></NodeName>
-        <SelectBy>Name</SelectBy>
-        <SelectItems>{select_items}</SelectItems>
-        <Protocol>Any</Protocol>
-        <DownloadStatus>Any</DownloadStatus>
-      </CmSelectionCriteria>
+      <ris:StateInfo></ris:StateInfo>
+      <ris:CmSelectionCriteria>
+        <ris:MaxReturnedDevices>10</ris:MaxReturnedDevices>
+        <ris:DeviceClass>Phone</ris:DeviceClass>
+        <ris:Model>255</ris:Model>
+        <ris:Status>Any</ris:Status>
+        <ris:NodeName></ris:NodeName>
+        <ris:SelectBy>Name</ris:SelectBy>
+        <ris:SelectItems>{select_items}</ris:SelectItems>
+        <ris:Protocol>Any</ris:Protocol>
+        <ris:DownloadStatus>Any</ris:DownloadStatus>
+      </ris:CmSelectionCriteria>
     </ris:selectCmDevice>
   </soapenv:Body>
 </soapenv:Envelope>"""
@@ -45094,7 +45094,7 @@ def debug_jabber_reg_route(
     except Exception as exc:
       results["getphone"] = {"error": str(exc)}
 
-    sql = f"SELECT d.name AS device_name, d.tkstatus AS tkstatus, COALESCE(ts.name,'') AS status_name FROM device d LEFT JOIN typestatus ts ON ts.enum = d.tkstatus WHERE d.name = '{device_name.replace(chr(39), '')}'"
+    sql = f"SELECT d.name AS device_name FROM device d WHERE d.name = '{device_name.replace(chr(39), '')}'"
     soap_sql = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
   <soapenv:Header/>
@@ -47570,27 +47570,27 @@ def _lookup_jabber_registration_statuses(
   <soapenv:Header/>
   <soapenv:Body>
     <ris:selectCmDevice>
-      <StateInfo></StateInfo>
-      <CmSelectionCriteria>
-        <MaxReturnedDevices>{max_returned}</MaxReturnedDevices>
-        <DeviceClass>Phone</DeviceClass>
-        <Model>255</Model>
-        <Status>Any</Status>
-        <NodeName></NodeName>
-        <SelectBy>Name</SelectBy>
-        <SelectItems>{select_items_xml}</SelectItems>
-        <Protocol>Any</Protocol>
-        <DownloadStatus>Any</DownloadStatus>
-      </CmSelectionCriteria>
+      <ris:StateInfo></ris:StateInfo>
+      <ris:CmSelectionCriteria>
+        <ris:MaxReturnedDevices>{max_returned}</ris:MaxReturnedDevices>
+        <ris:DeviceClass>Phone</ris:DeviceClass>
+        <ris:Model>255</ris:Model>
+        <ris:Status>Any</ris:Status>
+        <ris:NodeName></ris:NodeName>
+        <ris:SelectBy>Name</ris:SelectBy>
+        <ris:SelectItems>{select_items_xml}</ris:SelectItems>
+        <ris:Protocol>Any</ris:Protocol>
+        <ris:DownloadStatus>Any</ris:DownloadStatus>
+      </ris:CmSelectionCriteria>
     </ris:selectCmDevice>
   </soapenv:Body>
 </soapenv:Envelope>"""
 
     item_xml = "".join(
-      f"<item><Item>{xml_escape(name)}</Item></item>" for name in chunk_names
+      f"<ris:item><ris:Item>{xml_escape(name)}</ris:Item></ris:item>" for name in chunk_names
     )
     soap_xml = _build_ris_soap(item_xml, max(50, len(chunk_names) + 20))
-    wildcard_soap_xml = _build_ris_soap("<item><Item>*</Item></item>", 2000)
+    wildcard_soap_xml = _build_ris_soap("<ris:item><ris:Item>*</ris:Item></ris:item>", 2000)
     chunk_name_lowers = {name.lower() for name in chunk_names}
 
     for ris_host in ris_hosts:
@@ -47654,13 +47654,8 @@ def _lookup_jabber_registration_statuses(
     if not chunk:
       continue
     names_sql = ",".join("'" + name.replace("'", "''") + "'" for name in chunk)
-    sql = (
-      "SELECT d.name AS device_name, d.tkstatus AS tkstatus, "
-      "COALESCE(ts.name,'') AS status_name "
-      "FROM device d "
-      "LEFT JOIN typestatus ts ON ts.enum = d.tkstatus "
-      f"WHERE d.name IN ({names_sql})"
-    )
+    # tkstatus/typestatus removed — CUCM 15.x dropped that column; RIS is the authoritative source
+    sql = f"SELECT d.name AS device_name FROM device d WHERE d.name IN ({names_sql})"
 
     soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
