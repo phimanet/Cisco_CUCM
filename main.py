@@ -26655,7 +26655,6 @@ __ADMIN_CARD__
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Jabber Registration</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Jabber Devices</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
             html += '</tr></thead><tbody>';
@@ -26677,9 +26676,6 @@ __ADMIN_CARD__
                 ? (teamsExt ? `Yes (${teamsExt})` : "Yes")
                 : (teamsState === "Unknown" ? "Unknown" : "Not Found");
               const teamsColor = teamsIsUser ? "#0f6d35" : (teamsState === "Unknown" ? "#7a1020" : "#6b7280");
-              const regSummaryRaw = (r.jabber_registration_summary || "").trim();
-              const regSummary = regSummaryRaw || "Skipped (Fast Mode)";
-              const regColor = regSummary.startsWith("0/") ? "#b91c1c" : (regSummary.indexOf("Registered") >= 0 ? "#0f6d35" : "#6b7280");
               const devList = (r.devices || []).map(function (d) {
                 const exts = (d.extensions || []).join(", ") || "\u2014";
                 const reg = (d.registration_status || "").trim();
@@ -26707,7 +26703,6 @@ __ADMIN_CARD__
               html += '<td style="padding:7px 10px;">' + email + '</td>';
               html += '<td style="padding:7px 10px;">' + telephone + '</td>';
               html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
-              html += '<td style="padding:7px 10px; font-weight:700; color:' + regColor + ';">' + regSummary + '</td>';
               html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
               html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(4,max-content);gap:4px;align-items:start;">' + actionBtns + '</div></td>';
               html += '</tr>';
@@ -38535,7 +38530,6 @@ def menu_admin_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Jabber Registration</th>';
               html += '<th style="padding:8px 10px; text-align:left;">Jabber Devices</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
               html += '</tr></thead><tbody>';
@@ -38557,9 +38551,6 @@ def menu_admin_page(request: Request):
                   ? (teamsExt ? `Yes (${teamsExt})` : "Yes")
                   : (teamsState === "Unknown" ? "Unknown" : "Not Found");
                 const teamsColor = teamsIsUser ? "#0f6d35" : (teamsState === "Unknown" ? "#7a1020" : "#6b7280");
-                const regSummaryRaw = (r.jabber_registration_summary || "").trim();
-                const regSummary = regSummaryRaw || "Skipped (Fast Mode)";
-                const regColor = regSummary.startsWith("0/") ? "#b91c1c" : (regSummary.indexOf("Registered") >= 0 ? "#0f6d35" : "#6b7280");
                 const devList = (r.devices || []).map(function (d) {
                   const exts = (d.extensions || []).join(", ") || "\u2014";
                   const reg = (d.registration_status || "").trim();
@@ -38585,8 +38576,7 @@ def menu_admin_page(request: Request):
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
                 html += '<td style="padding:7px 10px;">' + telephone + '</td>';
                 html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
-                html += '<td style="padding:7px 10px; font-weight:700; color:' + regColor + ';">' + regSummary + '</td>';
-                html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
+                html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>'
                 html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(3,max-content);gap:4px;align-items:start;">' + actionBtn + '</div></td>';
                 html += '</tr>';
               });
