@@ -26680,7 +26680,7 @@ __ADMIN_CARD__
                 const exts = (d.extensions || []).join(", ") || "\u2014";
                 const reg = (d.registration_status || "").trim();
                 const regBadge = reg ? " <span style='display:inline-block;margin-left:6px;padding:1px 6px;border-radius:10px;background:#eef2ff;color:#1e3a8a;font-size:11px;font-weight:700;'>" + reg + "</span>" : "";
-                return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>" + regBadge;
+                return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>" + exts + "</span>" + regBadge;
               }).join("<br>") || "\u2014";
 
               const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;";
@@ -27947,7 +27947,7 @@ __ADMIN_CARD__
                 const uid = r.userid || "";
                 const devList = (r.devices || []).map(function (d) {
                   const exts = (d.extensions || []).join(", ") || "\u2014";
-                  return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
+                  return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>" + exts + "</span>";
                 }).join("<br>") || "\u2014";
 
                 const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;color:#fff;";
@@ -28078,7 +28078,7 @@ __ADMIN_CARD__
               const platformDetail = lsPatterns ? (platformBadges + '<div style="font-size:11px;color:#4b5563;margin-top:2px;">LS DID: ' + lsPatterns + '</div>') : platformBadges;
               const devList = (r.devices || []).map(function (d) {
                 const exts = (d.extensions || []).join(", ") || "\u2014";
-                return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
+                return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>" + exts + "</span>";
               }).join("<br>") || "\u2014";
               const btnStyle = "display:inline-block;padding:5px 10px;font-size:12px;font-weight:700;border-radius:5px;border:none;cursor:pointer;background:#b91c1c;color:#fff;";
               const actionBtn = '<button type="button" style="' + btnStyle + '" data-separate-uid="' + uid + '">Select for Separation \u2192</button>';
@@ -30699,7 +30699,7 @@ __ADMIN_CARD__
               const uid = r.userid || "";
               const devList = (r.devices || []).map(function (d) {
                 const exts = (d.extensions || []).join(", ") || "\u2014";
-                return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
+                return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>" + exts + "</span>";
               }).join("<br>") || "\u2014";
 
               const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;color:#fff;";
@@ -38555,7 +38555,7 @@ def menu_admin_page(request: Request):
                   const exts = (d.extensions || []).join(", ") || "\u2014";
                   const reg = (d.registration_status || "").trim();
                   const regBadge = reg ? " <span style='display:inline-block;margin-left:6px;padding:1px 6px;border-radius:10px;background:#eef2ff;color:#1e3a8a;font-size:11px;font-weight:700;'>" + reg + "</span>" : "";
-                  return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>" + regBadge;
+                  return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>" + exts + "</span>" + regBadge;
                 }).join("<br>") || "\u2014";
 
                 const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;color:#fff;";
@@ -38848,7 +38848,7 @@ def menu_admin_page(request: Request):
                 const uid = r.userid || "";
                 const devList = (r.devices || []).map(function (d) {
                   const exts = (d.extensions || []).join(", ") || "\u2014";
-                  return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>[" + d.type + "] " + exts + "</span>";
+                  return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>" + exts + "</span>";
                 }).join("<br>") || "\u2014";
 
                 const btnStyle = "display:inline-block;margin:0;padding:4px 8px;font-size:11px;font-weight:600;border-radius:5px;border:none;cursor:pointer;color:#fff;";
