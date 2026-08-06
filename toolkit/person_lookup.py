@@ -168,9 +168,26 @@ def _parse_phone_status(xml_text):
     for elem in root.iter():
         if _strip_ns(elem.tag) != "phone":
             continue
-        status_node = _find_child(elem, "status")
-        if status_node is not None and status_node.text:
-            return status_node.text.strip()
+
+        def _child_text(parent, names):
+            for child in list(parent):
+                tag = _strip_ns(child.tag).lower()
+                if tag in names and child.text:
+                    value = child.text.strip()
+                    if value:
+                        return value
+            return ""
+
+        # Prefer human-readable status text when present.
+        status_text = _child_text(elem, {"status", "devicestatus"})
+        if status_text:
+            return status_text
+
+        # Fallback to numeric tkstatus if CUCM omits status label.
+        tkstatus_text = _child_text(elem, {"tkstatus", "statusenum"})
+        if tkstatus_text:
+            return tkstatus_text
+
         return ""
     return ""
 

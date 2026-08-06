@@ -47246,6 +47246,11 @@ def lookup_person_route(
           if not raw:
             return ""
           lowered = raw.lower()
+          if lowered.isdigit():
+            try:
+              return "Registered" if int(lowered) == 1 else "Unregistered"
+            except Exception:
+              return ""
           if "unregistered" in lowered:
             return "Unregistered"
           if "register" in lowered:
