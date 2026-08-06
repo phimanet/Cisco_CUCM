@@ -45000,6 +45000,127 @@ def dashboard_script():
   )
 
 
+@app.get("/debug/jabber-reg")
+def debug_jabber_reg_route(
+    request: Request,
+    device: str = Query(""),
+    cucm_host: str = Query(""),
+    cucm_user: str = Query(""),
+    cucm_pass: str = Query(""),
+):
+  """Diagnostic: run raw RIS selectCmDevice and AXL getPhone for a device name and return all payloads."""
+  try:
+    resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  except Exception as exc:
+    return JSONResponse({"error": f"Credential resolution failed: {exc}"}, status_code=401)
+
+  device_name = (device or "").strip() or "*"
+  results: dict = {"device_queried": device_name, "ris": [], "axl_sql": None, "getphone": None}
+
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(resolved_user, resolved_pass)
+
+  ris_hosts = _axl_list_process_nodes(resolved_host, resolved_user, resolved_pass) or [resolved_host]
+  results["ris_hosts"] = ris_hosts
+
+  select_items = f"<item><Item>{xml_escape(device_name)}</Item></item>"
+  soap = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:ris=\"http://schemas.cisco.com/ast/soap\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <ris:selectCmDevice>
+      <StateInfo></StateInfo>
+      <CmSelectionCriteria>
+        <MaxReturnedDevices>10</MaxReturnedDevices>
+        <DeviceClass>Phone</DeviceClass>
+        <Model>255</Model>
+        <Status>Any</Status>
+        <NodeName></NodeName>
+        <SelectBy>Name</SelectBy>
+        <SelectItems>{select_items}</SelectItems>
+        <Protocol>Any</Protocol>
+        <DownloadStatus>Any</DownloadStatus>
+      </CmSelectionCriteria>
+    </ris:selectCmDevice>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  for ris_host in ris_hosts[:2]:
+    for url_tmpl in [
+      "https://{host}:8443/realtimeservice2/services/RISService70",
+      "https://{host}:8443/realtimeservice/services/RISService70",
+    ]:
+      url = url_tmpl.format(host=ris_host)
+      try:
+        resp = session.post(
+          url,
+          data=soap.encode("utf-8"),
+          headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 selectCmDevice"},
+          timeout=15,
+        )
+        results["ris"].append({
+          "url": url,
+          "status_code": resp.status_code,
+          "body_preview": resp.text[:3000],
+        })
+        if resp.status_code == 200:
+          break
+      except Exception as exc:
+        results["ris"].append({"url": url, "error": str(exc)})
+
+  if device_name and device_name != "*":
+    soap_phone = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:getPhone sequence=\"1\">
+      <name>{xml_escape(device_name)}</name>
+    </axl:getPhone>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+    try:
+      resp_phone = session.post(
+        f"https://{resolved_host}:8443/axl/",
+        data=soap_phone.encode("utf-8"),
+        headers={"Content-Type": "text/xml"},
+        timeout=30,
+      )
+      results["getphone"] = {
+        "status_code": resp_phone.status_code,
+        "body_preview": resp_phone.text[:3000],
+      }
+    except Exception as exc:
+      results["getphone"] = {"error": str(exc)}
+
+    sql = f"SELECT d.name AS device_name, d.tkstatus AS tkstatus, COALESCE(ts.name,'') AS status_name FROM device d LEFT JOIN typestatus ts ON ts.enum = d.tkstatus WHERE d.name = '{device_name.replace(chr(39), '')}'"
+    soap_sql = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:executeSQLQuery>
+      <sql>{xml_escape(sql)}</sql>
+    </axl:executeSQLQuery>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+    try:
+      resp_sql = session.post(
+        f"https://{resolved_host}:8443/axl/",
+        data=soap_sql.encode("utf-8"),
+        headers={"Content-Type": "text/xml"},
+        timeout=30,
+      )
+      results["axl_sql"] = {
+        "status_code": resp_sql.status_code,
+        "body_preview": resp_sql.text[:3000],
+      }
+    except Exception as exc:
+      results["axl_sql"] = {"error": str(exc)}
+
+  return JSONResponse(results)
+
+
 @app.get("/healthz")
 def healthz():
   now_epoch = time.time()
@@ -47267,8 +47388,10 @@ def lookup_person_route(
             if not device_name or not device_name.upper().startswith(jabber_prefixes):
               continue
             existing_status = _normalize_existing_reg(device.get("status", ""))
-            if existing_status:
+            # Only use AXL cached value when definitively known; Unknown/Rejected still need live RIS check
+            if existing_status and existing_status.lower() in {"registered", "unregistered"}:
               device["registration_status"] = existing_status
+              device["_reg_source"] = "axl_cached"
               continue
             if device_name in seen_jabber_names:
               continue
@@ -47635,12 +47758,22 @@ def _lookup_jabber_registration_statuses(
           phone_node = elem
           break
       if phone_node is not None:
+        tkstatus_fallback = ""
         for child in list(phone_node):
           child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
           if child_tag == "status":
             status_text = (child.text or "").strip()
             if status_text:
               break
+          elif child_tag == "tkstatus" and not status_text:
+            tkstatus_fallback = (child.text or "").strip()
+        # Map numeric tkstatus when no text status element was returned by CUCM
+        if not status_text and tkstatus_fallback:
+          try:
+            tk = int(tkstatus_fallback)
+            status_text = "Registered" if tk == 1 else ("Unregistered" if tk == 2 else ("Rejected" if tk == 3 else ""))
+          except Exception:
+            pass
       if not status_text:
         for elem in root.iter():
           tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
@@ -47651,7 +47784,7 @@ def _lookup_jabber_registration_statuses(
       if status_text:
         status_map[name] = {
           "status": _status_label("", status_text),
-          "tkstatus": "",
+          "tkstatus": tkstatus_fallback if tkstatus_fallback else "",
           "status_name": status_text,
         }
     except Exception:
