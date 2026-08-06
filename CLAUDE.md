@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-08-04
+- Date: 2026-08-06
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -88,7 +88,14 @@ Priority keys:
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
 
-### 2026-08-04 (Separation DN total-delete + weekly report)
+### 2026-08-06 (Jabber Device Registration Status fixed)
+- Root cause 1: RIS SOAP body used bare XML child elements (`<StateInfo>`, `<CmSelectionCriteria>`, etc.) without the `ris:` namespace prefix. CUCM 15.x Axis2 rejects these with HTTP 500 `Unexpected subelement StateInfo`. Fixed all three RIS SOAP blocks in `main.py` to use `ris:` prefix on all child elements and `<ris:item>/<ris:Item>` for SelectItems.
+- Root cause 2: AXL SQL fallback queried `device.tkstatus` and joined `typestatus` table — both removed in CUCM 15.x, returning SQL error `-217`. Removed those columns from query; RIS is now the sole registration status source.
+- Root cause 3: `_normalize_existing_reg("Unknown")` returned `"Unknown"` (truthy), causing the `if existing_status: continue` short-circuit to skip RIS lookup entirely. Fixed to only short-circuit on definitively `"Registered"` or `"Unregistered"`.
+- Added `/debug/jabber-reg?device=<name>` diagnostic endpoint (GET, session-authenticated) that shows raw RIS + AXL SQL + getPhone payloads for rapid troubleshooting.
+- Result: Person Lookup now shows correct live registration status (e.g., CSF=Registered, TCT=Unregistered, summary 1/2 Registered). Commits `1e70ca5`, `2260b03`.
+
+
 - Added optional **"Totally Delete DN from CUCM"** toggle on the DN Prefix Settings page (OFF by default). When ON, Separate Employee (Option 10) permanently deletes each released DN via safe AXL `removeLine` (no raw SQL writes), logs each to the audit trail as `separation_dn_totally_deleted`, and appends `Total-Delete DN` rows to the CSV output. Runs on BOTH LAB and PROD. When OFF, separation is unchanged.
 - Added editable primary/secondary email recipients (primary default `Laura.Alvarez@amnhealthcare.com`) and a weekly **Monday 08:00 AM PST** email (PROD-only) reporting the **prior full week (Mon–Sun)** of permanently deleted DNs so staff can remove them at Sinch. Includes a "Send Weekly Deleted-DN Email Now" test button on the settings page (`/admin/sep-dn-delete-report/run`).
 - Added ON/OFF indicator badges on the Separate Employee entry points on Page 1 (offboard panel banner) and Page 2 (nav button badge).
