@@ -172,6 +172,9 @@ SMTP_USE_STARTTLS = (os.getenv("SMTP_USE_STARTTLS", "false") or "false").strip()
   "on",
 }
 SMTP_DEFAULT_FROM = (os.getenv("SMTP_DEFAULT_FROM", "") or "").strip()
+# Emails in this set always redirect to the operator for testing (LAB and PROD)
+_CHANGE_EXT_TEST_EMAILS: set = {e.strip().lower() for e in (os.getenv("CHANGE_EXT_TEST_EMAILS", "alfredo.salcedo@amnhealthcare.com") or "").split(",") if e.strip()}
+_CHANGE_EXT_EMAIL_REDIRECT_TO: str = (os.getenv("CHANGE_EXT_EMAIL_REDIRECT_TO", "phimane.tiaokhiao@amnhealthcare.com") or "phimane.tiaokhiao@amnhealthcare.com").strip()
 DN_DELETE_NOTIFY_RECIPIENT = (os.getenv("DN_DELETE_NOTIFY_RECIPIENT", "Laura.Alvarez@amnhealthcare.com") or "Laura.Alvarez@amnhealthcare.com").strip()
 AUDIT_LOG_EMAIL_DOMAIN = (os.getenv("AUDIT_LOG_EMAIL_DOMAIN", "amnhealthcare.com") or "amnhealthcare.com").strip().lstrip("@")
 GENESYS_UPDATE_NOTIFY_RECIPIENTS = [
@@ -51097,9 +51100,13 @@ def change_jabber_extension_run_route(
             f"If you want the forwarding removed early, contact your IT administrator.\n\n"
           )
         body += "This is an automated notification from the Cisco Voice Server portal.\n"
-        # LAB test: redirect all notification emails to operator instead of actual user
-        _send_smtp_email(to_addresses=["phimane.tiaokhiao@amnhealthcare.com"], subject=f"[LAB TEST - intended for {user_email}] {subject}", body=body, sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com")
-        _step("Send Notification Email", "Success", f"LAB TEST: redirected to phimane.tiaokhiao@amnhealthcare.com (would go to {user_email} in prod)")
+        # redirect to operator for known test users; send directly for real users
+        if user_email.lower() in _CHANGE_EXT_TEST_EMAILS:
+          _send_smtp_email(to_addresses=[_CHANGE_EXT_EMAIL_REDIRECT_TO], subject=f"[TEST USER - intended for {user_email}] {subject}", body=body, sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com")
+          _step("Send Notification Email", "Success", f"Test user redirect → {_CHANGE_EXT_EMAIL_REDIRECT_TO} (would go to {user_email})")
+        else:
+          _send_smtp_email(to_addresses=[user_email], subject=subject, body=body, sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com")
+          _step("Send Notification Email", "Success", f"Sent to {user_email}")
       except Exception as e:
         _step("Send Notification Email", "Failed", str(e))
     else:
@@ -51232,7 +51239,9 @@ def change_jabber_extension_cancel_forward_route(
           f"Your new extension {new_ext} remains active. The old number {clean_old} has been returned to the available pool.\n\n"
           f"This is an automated notification from the Cisco Voice Server portal.\n"
         )
-        _send_smtp_email(to_addresses=[user_email], subject=subject, body=body, sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com")
+        _send_smtp_email(to_addresses=[user_email] if user_email.lower() not in _CHANGE_EXT_TEST_EMAILS else [_CHANGE_EXT_EMAIL_REDIRECT_TO],
+          subject=subject if user_email.lower() not in _CHANGE_EXT_TEST_EMAILS else f"[TEST USER - intended for {user_email}] {subject}",
+          body=body, sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com")
       except Exception:
         pass
 
