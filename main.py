@@ -50442,6 +50442,55 @@ def _change_ext_store_pending_cleanup(cucm_host: str, old_ext: str, route_partit
   _save_settings(settings)
 
 
+def _change_ext_update_self_service_user_id(session: requests.Session, cucm_host: str, userid: str, self_service_value: str) -> dict:
+  """Update End User Self-Service User ID via AXL updateUser.
+
+  CUCM AXL schema names vary by release/docs in some environments, so we try
+  a small set of known variants and return the first successful update.
+  """
+  clean_userid = (userid or "").strip()
+  clean_value = (self_service_value or "").strip()
+  if not clean_userid:
+    return {"ok": False, "error": "userid is required"}
+  if not clean_value:
+    return {"ok": False, "error": "self-service value is required"}
+
+  candidate_tags = [
+    "selfService",
+    "selfServiceUserId",
+    "selfServiceUserID",
+    "selfServiceUserid",
+    "selfServiceId",
+  ]
+  errors = []
+
+  for tag_name in candidate_tags:
+    soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:updateUser sequence=\"1\">
+      <userid>{xml_escape(clean_userid)}</userid>
+      <{tag_name}>{xml_escape(clean_value)}</{tag_name}>
+    </axl:updateUser>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+    try:
+      resp = session.post(
+        f"https://{cucm_host}:8443/axl/",
+        data=soap.encode("utf-8"),
+        headers={"Content-Type": "text/xml"},
+        timeout=60,
+      )
+      if resp.status_code == 200:
+        return {"ok": True, "field": tag_name, "value": clean_value}
+      errors.append(f"{tag_name}: HTTP {resp.status_code}: {(resp.text or '')[:180]}")
+    except Exception as exc:
+      errors.append(f"{tag_name}: {exc}")
+
+  return {"ok": False, "error": " ; ".join(errors[:3]) or "AXL updateUser failed"}
+
+
 @app.get("/change-extension", response_class=HTMLResponse)
 def change_extension_page(request: Request):
   session = _get_auth_session(request) or {}
@@ -51088,7 +51137,20 @@ def change_jabber_extension_run_route(
     else:
       _step("Update Unity Mailbox", "Skipped", "Unity host not provided or new extension unknown")
 
-    # Step 7: Update AD phone fields
+    # Step 7: Update CUCM End User Self-Service User ID
+    if new_ext:
+      try:
+        ss_result = _change_ext_update_self_service_user_id(session, resolved_host, clean_uid, new_ext)
+        if ss_result.get("ok"):
+          _step("Update End User Self-Service User ID", "Success", f"Set to {new_ext} via {ss_result.get('field', 'updateUser')}")
+        else:
+          _step("Update End User Self-Service User ID", "Failed", ss_result.get("error", "Unknown error"))
+      except Exception as e:
+        _step("Update End User Self-Service User ID", "Failed", str(e))
+    else:
+      _step("Update End User Self-Service User ID", "Skipped", "New extension unknown")
+
+    # Step 8: Update AD phone fields
     if new_ext:
       try:
         update_ad_phone_fields_only(target_user=clean_uid, phone_number=new_ext, ad_username=resolved_user, ad_password=resolved_pass)
@@ -51098,7 +51160,7 @@ def change_jabber_extension_run_route(
     else:
       _step("Update AD Phone Fields", "Skipped", "New extension unknown")
 
-    # Step 8: Send notification email to user
+    # Step 9: Send notification email to user
     if user_email and new_ext:
       try:
         subject = f"Your Jabber Extension Has Changed to {new_ext}"
