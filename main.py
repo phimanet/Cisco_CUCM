@@ -50513,14 +50513,14 @@ def change_extension_page(request: Request):
     <h2>Change Extension Number for Jabber</h2>
     <p class="subtitle">Search by last name, select a user, choose the new number type and Unity host, then run. The old number gets a 30-day forwarding pattern and the user is emailed their new number.</p>
 
-    <form id="chext-search-form">
+    <form id="chext-search-form" method="post" action="javascript:void(0)">
       <input type="hidden" name="cucm_host" value="{escape(auth_cucm_host)}">
       <input type="hidden" name="cucm_user" value="{escape(session_username)}">
       <input type="hidden" name="cucm_pass" value="">
       <div class="search-row">
-        <input id="chext-last" name="last_name" type="text" placeholder="Last name *" required>
+        <input id="chext-last" name="last_name" type="text" placeholder="Last name *">
         <input id="chext-first" name="first_name" type="text" placeholder="First name (optional)">
-        <button type="submit" class="btn btn-primary">Search</button>
+        <button type="button" class="btn btn-primary" onclick="window._chextDoSearch()">Search</button>
       </div>
     </form>
     <div id="chext-status">Enter a last name and click Search.</div>
@@ -50562,7 +50562,6 @@ def change_extension_page(request: Request):
 
 <script>
 (function () {{
-  var form = document.getElementById("chext-search-form");
   var statusEl = document.getElementById("chext-status");
   var resultsEl = document.getElementById("chext-results");
   var actionEl = document.getElementById("chext-action");
@@ -50576,31 +50575,42 @@ def change_extension_page(request: Request):
   var runResultsEl = document.getElementById("chext-run-results");
   var pendingEl = document.getElementById("chext-pending");
   var refreshBtn = document.getElementById("chext-refresh-btn");
-  if (!form || !statusEl || !resultsEl) return;
 
   var selectedUser = null;
   function esc(s) {{ var d = document.createElement("div"); d.textContent = String(s || ""); return d.innerHTML; }}
 
   function clearSel() {{
     selectedUser = null;
-    actionEl.style.display = "none";
-    runStatusEl.textContent = "";
-    runResultsEl.innerHTML = "";
-    smsWarn.style.display = "none";
+    if (actionEl) actionEl.style.display = "none";
+    if (runStatusEl) runStatusEl.textContent = "";
+    if (runResultsEl) runResultsEl.innerHTML = "";
+    if (smsWarn) smsWarn.style.display = "none";
   }}
 
-  form.addEventListener("submit", async function (e) {{
-    e.preventDefault();
-    var lastName = form.last_name.value.trim();
-    if (!lastName) {{ statusEl.textContent = "Enter a last name."; return; }}
-    statusEl.textContent = "Searching\u2026";
+  window._chextDoSearch = async function () {{
+    var lastEl = document.getElementById("chext-last");
+    var firstEl = document.getElementById("chext-first");
+    var lastName = lastEl ? lastEl.value.trim() : "";
+    if (!lastName) {{ if (statusEl) statusEl.textContent = "Enter a last name."; return; }}
+    if (statusEl) statusEl.textContent = "Searching\u2026";
     clearSel();
-    resultsEl.innerHTML = "";
+    if (resultsEl) resultsEl.innerHTML = "";
     try {{
-      var resp = await fetch("/lookup/person", {{ method: "POST", body: new FormData(form), credentials: "same-origin" }});
+      var fd = new FormData();
+      fd.append("cucm_host", "{escape(auth_cucm_host)}");
+      fd.append("cucm_user", "{escape(session_username)}");
+      fd.append("cucm_pass", "");
+      fd.append("last_name", lastName);
+      fd.append("first_name", firstEl ? firstEl.value.trim() : "");
+      var resp = await fetch("/lookup/person", {{ method: "POST", body: fd, credentials: "same-origin" }});
       var data = await resp.json();
-      if (!data.ok || !data.results || !data.results.length) {{ statusEl.textContent = "No users found."; return; }}
-      statusEl.textContent = "Found " + data.results.length + " user(s). Select one to change their extension.";
+      if (!data.ok || !data.results || !data.results.length) {{ if (statusEl) statusEl.textContent = "No users found."; return; }}
+      if (statusEl) statusEl.textContent = "Found " + data.results.length + " user(s). Select one to change their extension.";
+      var html = "<table><thead><tr><th>Name</th><th>User ID</th><th>Extension</th><th>Jabber Devices</th><th></th></tr></thead><tbody>";
+      data.results.forEach(function (r, i) {{
+      var data = await resp.json();
+      if (!data.ok || !data.results || !data.results.length) {{ if (statusEl) statusEl.textContent = "No users found."; return; }}
+      if (statusEl) statusEl.textContent = "Found " + data.results.length + " user(s). Select one to change their extension.";
       var html = "<table><thead><tr><th>Name</th><th>User ID</th><th>Extension</th><th>Jabber Devices</th><th></th></tr></thead><tbody>";
       data.results.forEach(function (r, i) {{
         var name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
@@ -50608,15 +50618,18 @@ def change_extension_page(request: Request):
         html += "<tr><td style='font-weight:600;'>" + esc(name) + "</td><td style='font-size:12px;'>" + esc(r.userid) + "</td><td><strong>" + esc(r.primary_extension || "\u2014") + "</strong></td><td style='font-size:11px;color:#555;'>" + esc(devs.map(function (d) {{ return d.name; }}).join(", ") || "\u2014") + "</td><td><button type='button' data-idx='" + i + "' class='btn btn-primary' style='padding:4px 10px;font-size:12px;'>Select \u2192</button></td></tr>";
       }});
       html += "</tbody></table>";
-      resultsEl.innerHTML = html;
-      resultsEl.querySelectorAll("button[data-idx]").forEach(function (btn) {{
+      if (resultsEl) resultsEl.innerHTML = html;
+      if (resultsEl) resultsEl.querySelectorAll("button[data-idx]").forEach(function (btn) {{
         btn.addEventListener("click", function () {{
           selectedUser = data.results[parseInt(btn.getAttribute("data-idx"), 10)];
           loadActionForm(selectedUser);
         }});
       }});
-    }} catch (err) {{ statusEl.textContent = "Search failed: " + (err.message || err); }}
-  }});
+    }} catch (err) {{ if (statusEl) statusEl.textContent = "Search failed: " + (err.message || err); }}
+  }};
+
+  var lastInput = document.getElementById("chext-last");
+  if (lastInput) lastInput.addEventListener("keydown", function(e) {{ if (e.key === "Enter") {{ e.preventDefault(); window._chextDoSearch(); }} }});
 
   function loadActionForm(user) {{
     var name = user.display_name || ((user.first_name || "") + " " + (user.last_name || "")).trim() || user.userid;
