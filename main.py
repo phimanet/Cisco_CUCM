@@ -27881,40 +27881,22 @@ __ADMIN_CARD__
 
     <script>
     (function() {
-      var lastEl = document.getElementById("chext-last");
-      var firstEl = document.getElementById("chext-first");
-      var statusEl = document.getElementById("chext-status");
-      var resultsEl = document.getElementById("chext-search-results");
-      var actionBlock = document.getElementById("chext-action-block");
-      var selectedInfo = document.getElementById("chext-selected-info");
-      var smsWarning = document.getElementById("chext-sms-warning");
-      var dnTypeEl = document.getElementById("chext-dn-type");
-      var unityHostEl = document.getElementById("chext-unity-host");
-      var runBtn = document.getElementById("chext-run-btn");
-      var cancelSelBtn = document.getElementById("chext-cancel-sel-btn");
-      var runStatusEl = document.getElementById("chext-run-status");
-      var runResultsEl = document.getElementById("chext-run-results");
-      var pendingListEl = document.getElementById("chext-pending-list");
-      var refreshPendingBtn = document.getElementById("chext-refresh-pending-btn");
-      if (!statusEl || !resultsEl || !runBtn || !cancelSelBtn) return;
+      function _chext_esc(s) { var d = document.createElement("div"); d.textContent = String(s || ""); return d.innerHTML; }
+      var _chextSelectedUser = null;
 
-      let selectedUser = null;
-      function esc(s) { const d = document.createElement("div"); d.textContent = String(s || ""); return d.innerHTML; }
-
-      function clearSelection() {
-        selectedUser = null;
-        actionBlock.style.display = "none";
-        runStatusEl.textContent = "";
-        runResultsEl.innerHTML = "";
-        smsWarning.style.display = "none";
-      }
-
+      // Defined unconditionally so onclick can always call it
       window.runChextSearch = async function() {
+        var lastEl = document.getElementById("chext-last");
+        var firstEl = document.getElementById("chext-first");
+        var statusEl = document.getElementById("chext-status");
+        var resultsEl = document.getElementById("chext-search-results");
+        if (!statusEl || !resultsEl) return;
         var lastName = lastEl ? lastEl.value.trim() : "";
-        if (!lastName) { if(statusEl) statusEl.textContent = "Enter a last name."; return; }
-        if(statusEl) statusEl.textContent = "Searching...";
-        clearSelection();
-        if(resultsEl) resultsEl.innerHTML = "";
+        if (!lastName) { statusEl.textContent = "Enter a last name."; return; }
+        statusEl.textContent = "Searching...";
+        resultsEl.innerHTML = "";
+        var actionBlock = document.getElementById("chext-action-block");
+        if (actionBlock) actionBlock.style.display = "none";
         try {
           var fd = new FormData();
           fd.append("last_name", lastName);
@@ -27923,17 +27905,17 @@ __ADMIN_CARD__
           var data = await resp.json();
           if (!data.ok || !data.results || !data.results.length) { statusEl.textContent = "No users found."; return; }
           statusEl.textContent = "Found " + data.results.length + " user(s). Select one to change their extension.";
-          let html = "<table style='width:100%;border-collapse:collapse;font-size:13px;'><thead><tr style='background:#1d4f91;color:#fff;'><th style='padding:5px 10px;text-align:left;'>Name</th><th style='padding:5px 10px;'>User ID</th><th style='padding:5px 10px;'>Extension</th><th style='padding:5px 10px;'>Jabber Devices</th><th style='padding:5px 10px;'></th></tr></thead><tbody>";
+          var html = "<table style='width:100%;border-collapse:collapse;font-size:13px;'><thead><tr style='background:#1d4f91;color:#fff;'><th style='padding:5px 10px;text-align:left;'>Name</th><th style='padding:5px 10px;'>User ID</th><th style='padding:5px 10px;'>Extension</th><th style='padding:5px 10px;'>Jabber Devices</th><th style='padding:5px 10px;'></th></tr></thead><tbody>";
           data.results.forEach(function(r, i) {
-            const bg = i % 2 === 0 ? "#f7fbff" : "#fff";
-            const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
-            const jabberDevs = (r.devices || []).filter(function(d) { return /^(CSF|TCT|BOT|TAB)/i.test(d.name || ""); });
-            const devText = jabberDevs.map(function(d) { return d.name; }).join(", ") || "\u2014";
+            var bg = i % 2 === 0 ? "#f7fbff" : "#fff";
+            var name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+            var jabberDevs = (r.devices || []).filter(function(d) { return /^(CSF|TCT|BOT|TAB)/i.test(d.name || ""); });
+            var devText = jabberDevs.map(function(d) { return d.name; }).join(", ") || "\u2014";
             html += "<tr style='background:" + bg + ";border-bottom:1px solid #e2eaf3;'>";
-            html += "<td style='padding:5px 10px;font-weight:600;'>" + esc(name) + "</td>";
-            html += "<td style='padding:5px 10px;font-size:12px;'>" + esc(r.userid) + "</td>";
-            html += "<td style='padding:5px 10px;'><strong>" + esc(r.primary_extension || "\u2014") + "</strong></td>";
-            html += "<td style='padding:5px 10px;font-size:11px;color:#555;'>" + esc(devText) + "</td>";
+            html += "<td style='padding:5px 10px;font-weight:600;'>" + _chext_esc(name) + "</td>";
+            html += "<td style='padding:5px 10px;font-size:12px;'>" + _chext_esc(r.userid) + "</td>";
+            html += "<td style='padding:5px 10px;'><strong>" + _chext_esc(r.primary_extension || "\u2014") + "</strong></td>";
+            html += "<td style='padding:5px 10px;font-size:11px;color:#555;'>" + _chext_esc(devText) + "</td>";
             html += "<td style='padding:5px 10px;'><button type='button' data-idx='" + i + "' style='background:#1d4f91;color:#fff;border:none;border-radius:5px;padding:4px 12px;cursor:pointer;font-size:12px;font-weight:700;'>Select \u2192 Change Ext</button></td>";
             html += "</tr>";
           });
@@ -27941,126 +27923,117 @@ __ADMIN_CARD__
           resultsEl.innerHTML = html;
           resultsEl.querySelectorAll("button[data-idx]").forEach(function(btn) {
             btn.addEventListener("click", function() {
-              selectedUser = data.results[parseInt(btn.getAttribute("data-idx"), 10)];
-              loadActionForm(selectedUser);
+              _chextSelectedUser = data.results[parseInt(btn.getAttribute("data-idx"), 10)];
+              window._chextLoadActionForm(_chextSelectedUser);
             });
           });
-        } catch(err) { if(statusEl) statusEl.textContent = "Search failed: " + (err.message || err); }
+        } catch(err) { statusEl.textContent = "Search failed: " + (err.message || err); }
       };
-      if (lastEl) { lastEl.addEventListener("keydown", function(e) { if (e.key === "Enter") { e.preventDefault(); window.runChextSearch(); } }); }
 
-      function loadActionForm(user) {
-        const name = user.display_name || ((user.first_name || "") + " " + (user.last_name || "")).trim() || user.userid;
-        const jabberDevs = (user.devices || []).filter(function(d) { return /^(CSF|TCT|BOT|TAB)/i.test(d.name || ""); });
-        const devText = jabberDevs.map(function(d) { return d.name; }).join(", ") || "none";
-        selectedInfo.innerHTML =
-          "<strong>" + esc(name) + "</strong> &nbsp;(<code>" + esc(user.userid) + "</code>)" +
-          "<br>Current extension: <strong>" + esc(user.primary_extension || "\u2014") + "</strong>" +
-          " &nbsp;|&nbsp; Jabber devices: <strong>" + esc(devText) + "</strong>" +
-          (user.email ? " &nbsp;|&nbsp; Email: " + esc(user.email) : "");
-
-        // Show SMS warning if there is a telephone (simple advisory, actual check runs on submit)
-        const hasPhone = !!(user.telephone || user.primary_extension);
-        if (hasPhone) {
-          smsWarning.style.display = "block";
-          smsWarning.textContent = "\u26A0 After running, verify SMS hosting on old extension with Aerialink / Twilio if applicable.";
-        } else {
-          smsWarning.style.display = "none";
+      window._chextLoadActionForm = function(user) {
+        var actionBlock = document.getElementById("chext-action-block");
+        var selectedInfo = document.getElementById("chext-selected-info");
+        var smsWarning = document.getElementById("chext-sms-warning");
+        var unityHostEl = document.getElementById("chext-unity-host");
+        var runStatusEl = document.getElementById("chext-run-status");
+        var runResultsEl = document.getElementById("chext-run-results");
+        if (!actionBlock || !selectedInfo) return;
+        var name = user.display_name || ((user.first_name || "") + " " + (user.last_name || "")).trim() || user.userid;
+        var jabberDevs = (user.devices || []).filter(function(d) { return /^(CSF|TCT|BOT|TAB)/i.test(d.name || ""); });
+        var devText = jabberDevs.map(function(d) { return d.name; }).join(", ") || "none";
+        selectedInfo.innerHTML = "<strong>" + _chext_esc(name) + "</strong> &nbsp;(<code>" + _chext_esc(user.userid) + "</code>)" +
+          "<br>Current extension: <strong>" + _chext_esc(user.primary_extension || "\u2014") + "</strong>" +
+          " &nbsp;|&nbsp; Jabber devices: <strong>" + _chext_esc(devText) + "</strong>" +
+          (user.email ? " &nbsp;|&nbsp; Email: " + _chext_esc(user.email) : "");
+        if (smsWarning) { smsWarning.style.display = !!(user.telephone || user.primary_extension) ? "block" : "none"; smsWarning.textContent = "\u26A0 After running, verify SMS hosting on old extension with Aerialink / Twilio if applicable."; }
+        if (unityHostEl && !unityHostEl.value) {
+          var f = new FormData(); f.append("target_user", user.userid);
+          fetch("/change-jabber-extension/preview", { method: "POST", body: f, credentials: "same-origin" })
+            .then(function(r) { return r.json(); }).then(function(d) { if (d.unity_host) unityHostEl.value = d.unity_host; }).catch(function() {});
         }
-
-        // Auto-detect Unity host based on environment
-        if (!unityHostEl.value) {
-          fetch("/change-jabber-extension/preview", { method: "POST", body: (function() { const f = new FormData(); f.append("target_user", user.userid); return f; })(), credentials: "same-origin" })
-            .then(function(r) { return r.json(); })
-            .then(function(d) { if (d.unity_host) unityHostEl.value = d.unity_host; })
-            .catch(function() {});
-        }
-
         actionBlock.style.display = "block";
-        runStatusEl.textContent = "";
-        runResultsEl.innerHTML = "";
-      }
+        if (runStatusEl) runStatusEl.textContent = "";
+        if (runResultsEl) runResultsEl.innerHTML = "";
+      };
 
-      cancelSelBtn.addEventListener("click", clearSelection);
-
-      runBtn.addEventListener("click", async function() {
-        if (!selectedUser) return;
-        const dnTypeLabel = dnTypeEl.options[dnTypeEl.selectedIndex].text;
-        if (!confirm("Change extension for " + (selectedUser.display_name || selectedUser.userid) + "?\n\nNew number type: " + dnTypeLabel + "\nOld extension: " + (selectedUser.primary_extension || "none") + "\n\nThis will:\n\u2022 Delete existing Jabber devices\n\u2022 Build new devices with a " + dnTypeLabel + " number\n\u2022 Create a 30-day forwarding pattern on the old number\n\u2022 Email the user their new extension\n\nContinue?")) return;
-        runBtn.disabled = true;
-        runStatusEl.textContent = "Running\u2026";
-        runResultsEl.innerHTML = "";
+      window._chextLoadPendingForwards = async function() {
+        var pendingListEl = document.getElementById("chext-pending-list");
+        if (!pendingListEl) return;
         try {
-          const fd = new FormData();
-          fd.append("target_user", selectedUser.userid);
-          fd.append("dn_type", dnTypeEl.value);
-          fd.append("unity_host", unityHostEl.value.trim());
-          const resp = await fetch("/change-jabber-extension/run", { method: "POST", body: fd, credentials: "same-origin" });
-          const data = await resp.json();
-          if (data.steps) {
-            let html = "<table style='width:100%;border-collapse:collapse;font-size:13px;'><thead><tr style='background:#1d4f91;color:#fff;'><th style='padding:6px 10px;text-align:left;'>Step</th><th style='padding:6px 10px;width:80px;'>Status</th><th style='padding:6px 10px;text-align:left;'>Details</th></tr></thead><tbody>";
-            data.steps.forEach(function(s, i) {
-              const bg = i % 2 === 0 ? "#f7fbff" : "#fff";
-              const color = s.status === "Success" ? "#0f6d35" : s.status === "Skipped" ? "#6b7280" : "#b00020";
-              html += "<tr style='background:" + bg + ";border-bottom:1px solid #e2eaf3;'><td style='padding:5px 10px;'>" + esc(s.step) + "</td><td style='padding:5px 10px;font-weight:700;color:" + color + ";'>" + esc(s.status) + "</td><td style='padding:5px 10px;font-size:12px;'>" + esc(s.details || "") + "</td></tr>";
-            });
-            html += "</tbody></table>";
-            if (data.new_ext) html += "<p style='margin:8px 0 0;font-size:13px;font-weight:700;color:#0f6d35;'>\u2705 New extension: " + esc(data.new_ext) + "</p>";
-            runResultsEl.innerHTML = html;
-          }
-          const allOk = (data.steps || []).every(function(s) { return s.status === "Success" || s.status === "Skipped"; });
-          runStatusEl.textContent = allOk ? "\u2705 Done." : "\u26A0 Completed with errors \u2014 review steps above.";
-          runStatusEl.style.color = allOk ? "#0f6d35" : "#b00020";
-          if (allOk) { loadPendingForwards(); clearSelection(); }
-        } catch(err) {
-          runStatusEl.textContent = "Run failed: " + (err.message || err);
-        } finally { runBtn.disabled = false; }
-      });
-
-      async function loadPendingForwards() {
-        try {
-          const resp = await fetch("/change-jabber-extension/pending-forwards", { credentials: "same-origin" });
-          const data = await resp.json();
-          if (!data.ok || !data.entries || !data.entries.length) {
-            pendingListEl.innerHTML = "<p style='font-size:13px;color:#6b7280;margin:0;'>No active forwarding patterns.</p>";
-            return;
-          }
-          let html = "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='background:#355978;color:#fff;'><th style='padding:5px 10px;text-align:left;'>User</th><th style='padding:5px 10px;'>Old Ext</th><th style='padding:5px 10px;'>New Ext</th><th style='padding:5px 10px;'>Changed</th><th style='padding:5px 10px;'>Auto-Delete</th><th style='padding:5px 10px;'>Status</th><th style='padding:5px 10px;'>Action</th></tr></thead><tbody>";
+          var resp = await fetch("/change-jabber-extension/pending-forwards", { credentials: "same-origin" });
+          var data = await resp.json();
+          if (!data.ok || !data.entries || !data.entries.length) { pendingListEl.innerHTML = "<p style='font-size:13px;color:#6b7280;margin:0;'>No active forwarding patterns.</p>"; return; }
+          var html = "<table style='width:100%;border-collapse:collapse;font-size:12px;'><thead><tr style='background:#355978;color:#fff;'><th style='padding:5px 10px;text-align:left;'>User</th><th style='padding:5px 10px;'>Old Ext</th><th style='padding:5px 10px;'>New Ext</th><th style='padding:5px 10px;'>Auto-Delete</th><th style='padding:5px 10px;'>Status</th><th style='padding:5px 10px;'>Action</th></tr></thead><tbody>";
           data.entries.forEach(function(e, i) {
-            const bg = i % 2 === 0 ? "#f7fbff" : "#fff";
-            const expired = e.expired;
-            html += "<tr style='background:" + bg + ";border-bottom:1px solid #e2eaf3;'>";
-            html += "<td style='padding:5px 10px;'>" + esc(e.display_name || e.userid || "") + "</td>";
-            html += "<td style='padding:5px 10px;font-weight:700;'>" + esc(e.old_ext || "") + "</td>";
-            html += "<td style='padding:5px 10px;'>" + esc(e.new_ext || "") + "</td>";
-            html += "<td style='padding:5px 10px;'>" + esc(e.change_date || "") + "</td>";
-            html += "<td style='padding:5px 10px;" + (expired ? "color:#b00020;font-weight:700;" : "") + "'>" + esc(e.expires || "") + "</td>";
-            html += "<td style='padding:5px 10px;font-weight:700;color:" + (expired ? "#b00020" : "#0f6d35") + ";'>" + (expired ? "Expired" : "Active") + "</td>";
-            html += "<td style='padding:5px 10px;'><button type='button' data-old='" + esc(e.old_ext || "") + "' style='background:#b00020;color:#fff;border:none;border-radius:4px;padding:3px 9px;font-size:11px;cursor:pointer;'>Cancel</button></td>";
-            html += "</tr>";
+            var bg = i % 2 === 0 ? "#f7fbff" : "#fff";
+            var expired = e.expired;
+            html += "<tr style='background:" + bg + ";border-bottom:1px solid #e2eaf3;'><td style='padding:5px 10px;'>" + _chext_esc(e.display_name || e.userid || "") + "</td><td style='padding:5px 10px;font-weight:700;'>" + _chext_esc(e.old_ext || "") + "</td><td style='padding:5px 10px;'>" + _chext_esc(e.new_ext || "") + "</td><td style='padding:5px 10px;" + (expired ? "color:#b00020;font-weight:700;" : "") + "'>" + _chext_esc(e.expires || "") + "</td><td style='padding:5px 10px;font-weight:700;color:" + (expired ? "#b00020" : "#0f6d35") + ";'>" + (expired ? "Expired" : "Active") + "</td><td style='padding:5px 10px;'><button type='button' data-old='" + _chext_esc(e.old_ext || "") + "' style='background:#b00020;color:#fff;border:none;border-radius:4px;padding:3px 9px;font-size:11px;cursor:pointer;'>Cancel</button></td></tr>";
           });
           html += "</tbody></table>";
           pendingListEl.innerHTML = html;
           pendingListEl.querySelectorAll("button[data-old]").forEach(function(btn) {
             btn.addEventListener("click", async function() {
-              const oldExt = btn.getAttribute("data-old");
-              if (!confirm("Cancel forwarding from " + oldExt + " now?\n\nOld number released, user notified by email.")) return;
+              var oldExt = btn.getAttribute("data-old");
+              if (!confirm("Cancel forwarding from " + oldExt + " now?")) return;
               btn.disabled = true;
               try {
-                const fd = new FormData();
-                fd.append("old_ext", oldExt);
-                const resp = await fetch("/change-jabber-extension/cancel-forward", { method: "POST", body: fd, credentials: "same-origin" });
-                const d = await resp.json();
-                if (d.ok) loadPendingForwards();
-                else { alert("Cancel failed: " + (d.error || "unknown")); btn.disabled = false; }
+                var fd = new FormData(); fd.append("old_ext", oldExt);
+                var resp = await fetch("/change-jabber-extension/cancel-forward", { method: "POST", body: fd, credentials: "same-origin" });
+                var d = await resp.json();
+                if (d.ok) window._chextLoadPendingForwards(); else { alert("Cancel failed: " + (d.error || "unknown")); btn.disabled = false; }
               } catch(err) { alert(err.message || err); btn.disabled = false; }
             });
           });
-        } catch { pendingListEl.innerHTML = "<p style='font-size:13px;color:#b00020;'>Failed to load pending forwards.</p>"; }
-      }
+        } catch(e) { pendingListEl.innerHTML = "<p style='font-size:13px;color:#b00020;'>Failed to load pending forwards.</p>"; }
+      };
 
-      refreshPendingBtn.addEventListener("click", loadPendingForwards);
-      loadPendingForwards();
+      // Bind run, cancel, refresh, enter-key after registering globals
+      document.addEventListener("DOMContentLoaded", function() {
+        var runBtn = document.getElementById("chext-run-btn");
+        var cancelSelBtn = document.getElementById("chext-cancel-sel-btn");
+        var refreshBtn = document.getElementById("chext-refresh-pending-btn");
+        var lastEl = document.getElementById("chext-last");
+        if (runBtn) runBtn.addEventListener("click", async function() {
+          if (!_chextSelectedUser) return;
+          var dnTypeEl = document.getElementById("chext-dn-type");
+          var unityHostEl = document.getElementById("chext-unity-host");
+          var runStatusEl = document.getElementById("chext-run-status");
+          var runResultsEl = document.getElementById("chext-run-results");
+          var dnTypeLabel = dnTypeEl ? dnTypeEl.options[dnTypeEl.selectedIndex].text : "";
+          if (!confirm("Change extension for " + (_chextSelectedUser.display_name || _chextSelectedUser.userid) + "?\n\nNew type: " + dnTypeLabel + "\nOld ext: " + (_chextSelectedUser.primary_extension || "none") + "\n\nContinue?")) return;
+          runBtn.disabled = true;
+          if (runStatusEl) runStatusEl.textContent = "Running\u2026";
+          if (runResultsEl) runResultsEl.innerHTML = "";
+          try {
+            var fd = new FormData();
+            fd.append("target_user", _chextSelectedUser.userid);
+            fd.append("dn_type", dnTypeEl ? dnTypeEl.value : "general");
+            fd.append("unity_host", unityHostEl ? unityHostEl.value.trim() : "");
+            var resp = await fetch("/change-jabber-extension/run", { method: "POST", body: fd, credentials: "same-origin" });
+            var data = await resp.json();
+            if (data.steps && runResultsEl) {
+              var html = "<table style='width:100%;border-collapse:collapse;font-size:13px;'><thead><tr style='background:#1d4f91;color:#fff;'><th style='padding:6px 10px;text-align:left;'>Step</th><th style='padding:6px 10px;width:80px;'>Status</th><th style='padding:6px 10px;text-align:left;'>Details</th></tr></thead><tbody>";
+              data.steps.forEach(function(s, i) { var bg = i%2===0?"#f7fbff":"#fff"; var col = s.status==="Success"?"#0f6d35":s.status==="Skipped"?"#6b7280":"#b00020"; html += "<tr style='background:"+bg+";border-bottom:1px solid #e2eaf3;'><td style='padding:5px 10px;'>"+_chext_esc(s.step)+"</td><td style='padding:5px 10px;font-weight:700;color:"+col+";'>"+_chext_esc(s.status)+"</td><td style='padding:5px 10px;font-size:12px;'>"+_chext_esc(s.details||"")+"</td></tr>"; });
+              html += "</tbody></table>";
+              if (data.new_ext) html += "<p style='margin:8px 0 0;font-size:13px;font-weight:700;color:#0f6d35;'>\u2705 New extension: " + _chext_esc(data.new_ext) + "</p>";
+              runResultsEl.innerHTML = html;
+            }
+            var allOk = (data.steps || []).every(function(s) { return s.status==="Success"||s.status==="Skipped"; });
+            if (runStatusEl) { runStatusEl.textContent = allOk ? "\u2705 Done." : "\u26A0 Completed with errors."; runStatusEl.style.color = allOk ? "#0f6d35" : "#b00020"; }
+            if (allOk) { window._chextLoadPendingForwards(); var ab = document.getElementById("chext-action-block"); if (ab) ab.style.display="none"; _chextSelectedUser = null; }
+          } catch(err) { if (runStatusEl) runStatusEl.textContent = "Run failed: " + (err.message || err); }
+          finally { runBtn.disabled = false; }
+        });
+        if (cancelSelBtn) cancelSelBtn.addEventListener("click", function() {
+          _chextSelectedUser = null;
+          var ab = document.getElementById("chext-action-block"); if (ab) ab.style.display = "none";
+          var rs = document.getElementById("chext-run-status"); if (rs) rs.textContent = "";
+          var rr = document.getElementById("chext-run-results"); if (rr) rr.innerHTML = "";
+        });
+        if (refreshBtn) refreshBtn.addEventListener("click", window._chextLoadPendingForwards);
+        if (lastEl) lastEl.addEventListener("keydown", function(e) { if (e.key === "Enter") { e.preventDefault(); window.runChextSearch(); } });
+        window._chextLoadPendingForwards();
+      });
     })();
     </script>
     </section>
