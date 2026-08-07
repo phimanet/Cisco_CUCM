@@ -50475,6 +50475,7 @@ def change_extension_page(request: Request):
     .hero-link-card:hover {{ transform:translateY(-2px); border-color:rgba(0,94,184,0.3); }}
     .hero-link-card strong {{ display:block; color:var(--amn-navy); font-size:12px; }}
     .hero-link-card span {{ display:none; }}
+    .portal-shell {{ display:grid; grid-template-columns:244px minmax(0,1fr); gap:8px; align-items:start; margin-top:4px; }}
     .portal-sidebar {{ position:sticky; top:50px; background:linear-gradient(180deg,rgba(0,47,108,0.97),rgba(7,75,138,0.96)); border:1px solid rgba(255,255,255,0.12); border-radius:12px; padding:8px; box-shadow:0 18px 36px rgba(0,47,108,0.18); }}
     .portal-sidebar h4 {{ margin:4px 6px 8px 6px; color:#fff; font-size:13px; }}
     .portal-nav {{ display:flex; flex-direction:column; gap:4px; }}
