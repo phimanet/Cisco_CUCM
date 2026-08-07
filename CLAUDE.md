@@ -32,7 +32,7 @@ _Identified 2026-08-06 by full codebase efficiency audit. Do NOT implement witho
 - **Why**: Current implementation does 1× `listUser` + N× `getUser` + N×M× `getPhone` — up to 40+ AXL calls for a 10-user result with 3 devices each. A single SQL join can replace all of this.
 - **SQL**: `SELECT u.userid, u.firstname, u.lastname, u.mailid, u.telephonenumber, u.displayname, d.name AS device_name, n.dnorpattern AS extension FROM enduser u LEFT JOIN enduserdevicemap edm ON edm.fkenduser = u.pkid LEFT JOIN device d ON d.pkid = edm.fkdevice LEFT JOIN devicenumplanmap dm ON dm.fkdevice = d.pkid AND dm.numplanindex = 1 LEFT JOIN numplan n ON n.pkid = dm.fknumplan WHERE u.lastname LIKE '%Smith%'`
 - **Impact**: Affects ALL panels that search by name — Person Lookup, Jabber Build, Name Change, Offboard, Jabber Check, SMS, Genesys, and more (~12 routes). Requires full regression test after change.
-- **Status**: Done — requires controlled LAB-only test first (deployed for LAB validation)
+- **Status**: Done — requires controlled LAB-only test first (deployed and validated LAB + PROD 2026-08-06)
 
 ### CI-3 — Optimize `_greenlight_collect_people_from_email` per-email AXL calls [MEDIUM RISK]
 - **File**: `main.py` line ~13977
