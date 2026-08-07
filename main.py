@@ -50383,11 +50383,11 @@ def _change_ext_remove_phone(session: requests.Session, cucm_host: str, device_n
     raise RuntimeError(f"removePhone {device_name} failed HTTP {resp.status_code}: {resp.text[:400]}")
 
 
-def _change_ext_create_forwarding_pattern(session: requests.Session, cucm_host: str, old_ext: str, new_ext: str, route_partition: str) -> None:
-  """Create a 30-day forwarding translation pattern from old to new extension."""
+def _change_ext_create_forwarding_pattern(session: requests.Session, cucm_host: str, old_ext: str, new_ext: str, route_partition: str, display_name: str = "") -> None:
+  """Create a forwarding translation pattern from old to new extension using full template."""
   import datetime as _dt
-  expires = (_dt.date.today() + _dt.timedelta(days=30)).strftime("%Y-%m-%d")
-  desc = xml_escape(f"EXT CHG {old_ext}->{new_ext} expires {expires}")
+  date_str = _dt.date.today().strftime("%m%d%Y")
+  desc = xml_escape(f"NumberChange - {date_str} - {display_name}" if display_name else f"NumberChange - {date_str} - {old_ext}")
   soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
   <soapenv:Header/>
@@ -50398,10 +50398,27 @@ def _change_ext_create_forwarding_pattern(session: requests.Session, cucm_host: 
         <routePartitionName>{xml_escape(route_partition)}</routePartitionName>
         <description>{desc}</description>
         <usage>Translation</usage>
-        <calledPartyTransformationMask>{xml_escape(new_ext)}</calledPartyTransformationMask>
         <blockEnable>false</blockEnable>
+        <calledPartyNumberType>Cisco CallManager</calledPartyNumberType>
+        <calledPartyNumberingPlan>Cisco CallManager</calledPartyNumberingPlan>
+        <calledPartyTransformationMask>{xml_escape(new_ext)}</calledPartyTransformationMask>
+        <callingLinePresentationBit>Default</callingLinePresentationBit>
+        <callingNamePresentationBit>Default</callingNamePresentationBit>
+        <callingPartyNumberType>Cisco CallManager</callingPartyNumberType>
+        <callingPartyNumberingPlan>Cisco CallManager</callingPartyNumberingPlan>
+        <callingSearchSpaceName>Route_Internal_CSS</callingSearchSpaceName>
+        <connectedLinePresentationBit>Default</connectedLinePresentationBit>
+        <connectedNamePresentationBit>Default</connectedNamePresentationBit>
+        <dontWaitForIDTOnSubsequentHops>false</dontWaitForIDTOnSubsequentHops>
+        <isEmergencyServiceNumber>false</isEmergencyServiceNumber>
+        <patternPrecedence>Default</patternPrecedence>
         <patternUrgency>false</patternUrgency>
         <provideOutsideDialtone>false</provideOutsideDialtone>
+        <releaseClause>No Error</releaseClause>
+        <routeClass>Default</routeClass>
+        <routeNextHopByCgpn>false</routeNextHopByCgpn>
+        <useCallingPartyPhoneMask>Off</useCallingPartyPhoneMask>
+        <useOriginatorCss>false</useOriginatorCss>
       </transPattern>
     </axl:addTransPattern>
   </soapenv:Body>
@@ -51024,7 +51041,7 @@ def change_jabber_extension_run_route(
     expires = (_dt.date.today() + _dt.timedelta(days=30)).isoformat()
     if old_ext and new_ext and old_ext != new_ext:
       try:
-        _change_ext_create_forwarding_pattern(session, resolved_host, old_ext, new_ext, "ENT_DEVICE_PT")
+        _change_ext_create_forwarding_pattern(session, resolved_host, old_ext, new_ext, "ENT_DEVICE_PT", display_name)
         settings = _load_settings()
         pending = settings.get("pending_ext_dn_releases", [])
         pending.append({
@@ -51161,6 +51178,49 @@ def change_jabber_extension_cancel_forward_route(
     # Remove from pending list
     settings["pending_ext_dn_releases"] = [e for e in pending if e.get("old_ext") != clean_old]
     _save_settings(settings)
+
+    # Rebuild old number as available DN (addLine, active=false, ENT_DEVICE_PT)
+    try:
+      soap_add_dn = f"""<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:addLine>
+      <line>
+        <pattern>{xml_escape(clean_old)}</pattern>
+        <routePartitionName>ENT_DEVICE_PT</routePartitionName>
+        <description>CNAM:AMNHelathcare {xml_escape(clean_old)} Automation Use Only</description>
+        <usage>Device</usage>
+        <aarKeepCallHistory>true</aarKeepCallHistory>
+        <aarVoiceMailEnabled>false</aarVoiceMailEnabled>
+        <callForwardAll><forwardToVoiceMail>false</forwardToVoiceMail><callingSearchSpaceName>Cfwd_LD_CSS</callingSearchSpaceName></callForwardAll>
+        <callForwardBusy><forwardToVoiceMail>true</forwardToVoiceMail></callForwardBusy>
+        <callForwardBusyInt><forwardToVoiceMail>true</forwardToVoiceMail></callForwardBusyInt>
+        <callForwardNoAnswer><forwardToVoiceMail>true</forwardToVoiceMail></callForwardNoAnswer>
+        <callForwardNoAnswerInt><forwardToVoiceMail>true</forwardToVoiceMail></callForwardNoAnswerInt>
+        <callForwardNoCoverage><forwardToVoiceMail>true</forwardToVoiceMail></callForwardNoCoverage>
+        <callForwardNoCoverageInt><forwardToVoiceMail>true</forwardToVoiceMail></callForwardNoCoverageInt>
+        <callForwardOnFailure><forwardToVoiceMail>true</forwardToVoiceMail></callForwardOnFailure>
+        <callForwardNotRegistered><forwardToVoiceMail>true</forwardToVoiceMail></callForwardNotRegistered>
+        <callForwardNotRegisteredInt><forwardToVoiceMail>true</forwardToVoiceMail></callForwardNotRegisteredInt>
+        <autoAnswer>Auto Answer Off</autoAnswer>
+        <presenceGroupName>Standard Presence group</presenceGroupName>
+        <shareLineAppearanceCssName>COR_Intl_CSS</shareLineAppearanceCssName>
+        <voiceMailProfileName>VM_Profile_10Digits</voiceMailProfileName>
+        <patternPrecedence>Default</patternPrecedence>
+        <allowCtiControlFlag>true</allowCtiControlFlag>
+        <rejectAnonymousCall>false</rejectAnonymousCall>
+        <patternUrgency>false</patternUrgency>
+        <active>false</active>
+      </line>
+    </axl:addLine>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+      resp_dn = session.post(f"https://{resolved_host}:8443/axl/", data=soap_add_dn.encode("utf-8"), headers={"Content-Type": "text/xml"}, timeout=60)
+      if resp_dn.status_code != 200:
+        return JSONResponse({"ok": False, "error": f"Trans pattern removed but addLine failed HTTP {resp_dn.status_code}: {resp_dn.text[:300]}"})
+    except Exception as dn_exc:
+      return JSONResponse({"ok": False, "error": f"Trans pattern removed but DN rebuild failed: {dn_exc}"})
 
     # Send cancellation email
     if user_email:
