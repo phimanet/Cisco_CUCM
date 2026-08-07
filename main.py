@@ -50593,7 +50593,7 @@ def change_extension_page(request: Request):
     var firstEl = document.getElementById("chext-first");
     var lastName = lastEl ? lastEl.value.trim() : "";
     var dbg = document.getElementById("chext-debug");
-    if (dbg) dbg.textContent = "DBG: called, lastName=" + lastName + ", host={escape(auth_cucm_host)}, user={escape(session_username)}";
+    if (dbg) dbg.textContent = "DBG-CLICK: lastName=[" + lastName + "] statusEl=" + (statusEl ? "found" : "NULL") + " resultsEl=" + (resultsEl ? "found" : "NULL");
     if (!lastName) {{ if (statusEl) statusEl.textContent = "Enter a last name."; return; }}
     if (statusEl) statusEl.textContent = "Searching\u2026";
     clearSel();
@@ -50629,7 +50629,8 @@ def change_extension_page(request: Request):
   var lastInput = document.getElementById("chext-last");
   if (lastInput) lastInput.addEventListener("keydown", function(e) {{ if (e.key === "Enter") {{ e.preventDefault(); window._chextDoSearch(); }} }});
   var dbgEl = document.getElementById("chext-debug");
-  if (dbgEl) dbgEl.textContent = "DBG: IIFE complete, _chextDoSearch=" + (typeof window._chextDoSearch);
+  if (dbgEl) dbgEl.style.cssText = "font-size:13px;color:#b00020;font-weight:700;margin:4px 0;";
+  if (dbgEl) dbgEl.textContent = "DBG-LOAD: IIFE ran, _chextSearch=" + (typeof window._chextDoSearch) + ", statusEl=" + (statusEl ? "found" : "NULL");
 
   function loadActionForm(user) {{
     var name = user.display_name || ((user.first_name || "") + " " + (user.last_name || "")).trim() || user.userid;
