@@ -48240,9 +48240,9 @@ def project_greenlight_person_lookup_route(
         status_code=400,
       )
 
-    # Any email-based lookup runs as an async batch job (AD/LDAP + CUCM per
-    # email is too slow for the synchronous request/Nginx timeout window).
-    if emails:
+    # Both email lookups and name-only lookups run as async background jobs
+    # to avoid Nginx timeouts from slow external SMS provider API calls.
+    if emails or clean_last:
       queue_job_id = str(uuid4())
       created_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
       queue_entry = {
