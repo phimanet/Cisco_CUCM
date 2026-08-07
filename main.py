@@ -50429,6 +50429,10 @@ def change_extension_page(request: Request):
   strike_prefix = str((dn_mapping.get("strike") or ("", ""))[0] or "").strip()
   now_epoch = time.time()
   has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
+  if not has_cached_cucm_pass:
+    _chext_sid = request.cookies.get(SESSION_COOKIE_NAME, "")
+    if _chext_sid:
+      has_cached_cucm_pass = bool((AUTH_SESSION_SECRETS.get(_chext_sid, {}).get("cucm_pass", "") or "").strip())
   credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
   credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
   html = f"""<!DOCTYPE html>
