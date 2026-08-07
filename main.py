@@ -50608,11 +50608,6 @@ def change_extension_page(request: Request):
       if (statusEl) statusEl.textContent = "Found " + data.results.length + " user(s). Select one to change their extension.";
       var html = "<table><thead><tr><th>Name</th><th>User ID</th><th>Extension</th><th>Jabber Devices</th><th></th></tr></thead><tbody>";
       data.results.forEach(function (r, i) {{
-      var data = await resp.json();
-      if (!data.ok || !data.results || !data.results.length) {{ if (statusEl) statusEl.textContent = "No users found."; return; }}
-      if (statusEl) statusEl.textContent = "Found " + data.results.length + " user(s). Select one to change their extension.";
-      var html = "<table><thead><tr><th>Name</th><th>User ID</th><th>Extension</th><th>Jabber Devices</th><th></th></tr></thead><tbody>";
-      data.results.forEach(function (r, i) {{
         var name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
         var devs = (r.devices || []).filter(function (d) {{ return /^(CSF|TCT|BOT|TAB)/i.test(d.name || ""); }});
         html += "<tr><td style='font-weight:600;'>" + esc(name) + "</td><td style='font-size:12px;'>" + esc(r.userid) + "</td><td><strong>" + esc(r.primary_extension || "\u2014") + "</strong></td><td style='font-size:11px;color:#555;'>" + esc(devs.map(function (d) {{ return d.name; }}).join(", ") || "\u2014") + "</td><td><button type='button' data-idx='" + i + "' class='btn btn-primary' style='padding:4px 10px;font-size:12px;'>Select \u2192</button></td></tr>";
