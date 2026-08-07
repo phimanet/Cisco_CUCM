@@ -39,8 +39,6 @@ _Identified 2026-08-06 by full codebase efficiency audit. Do NOT implement witho
 - **Why**: For each email in a bulk Greenlight CSV, it calls `_greenlight_list_users_by_userid` + `search_persons_by_name` multiple times per email (2-4 calls per email for candidate userid variants). With 50 emails in a CSV, this is 100-200 serial AXL calls even with thread parallelism.
 - **Action**: Replace with `SELECT userid, firstname, lastname, mailid, telephonenumber, displayname FROM enduser WHERE mailid = 'email@...'` — one SQL call per email instead of 2-4 AXL calls. Already runs in ThreadPoolExecutor so the parallelism benefit is preserved.
 - **Status**: Not started
-
-
 - [x] [P1][Done] Person Lookup by name — search CUCM end users by last name + optional first name; returns extension, email, and all associated devices with type labels (CSF/TCT/BOT). First item on the menu, inline table results.
 
 
