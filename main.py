@@ -615,6 +615,7 @@ DEFAULT_SETTINGS = {
   "sep_dn_delete_recipient": "Laura.Alvarez@amnhealthcare.com",
   "sep_dn_delete_recipient_2": "",
   "sep_dn_delete_from": "noreply@amnhealthcare.com",
+  "pending_ext_dn_releases": [],
   # DN Availability report scheduler (editable via Page 2 panel)
   "dn_report_enabled": "true",
   "dn_report_recipient": "",
@@ -27835,12 +27836,16 @@ __ADMIN_CARD__
     <p style="margin:0 0 12px 0;font-size:13px;color:#4e6a84;">Search for a user by last name to change their Jabber extension. Old number gets a 30-day forwarding pattern and the user is emailed their new number.</p>
 
     <div style="max-width:860px;">
-      <!-- Search row — identical pattern to Start Here -->
-      <div style="display:flex;gap:8px;margin-bottom:10px;">
-        <input id="chext-last" type="text" placeholder="Last name" style="flex:1;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;font-size:13px;">
-        <input id="chext-first" type="text" placeholder="First name (optional)" style="flex:1;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;font-size:13px;">
-        <button id="chext-search-btn" type="button" style="background:#1d4f91;color:#fff;border:none;border-radius:6px;padding:7px 18px;font-weight:700;cursor:pointer;font-size:13px;">Search</button>
-      </div>
+      <form id="chext-search-form" onsubmit="return false;" autocomplete="off">
+        <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+        <input type="hidden" name="cucm_pass" value="">
+        <div style="display:flex;gap:8px;margin-bottom:10px;">
+          <input id="chext-last" name="last_name" type="text" placeholder="Last name" style="flex:1;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;font-size:13px;">
+          <input id="chext-first" name="first_name" type="text" placeholder="First name (optional)" style="flex:1;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;font-size:13px;">
+          <button id="chext-search-btn" type="submit" style="background:#1d4f91;color:#fff;border:none;border-radius:6px;padding:7px 18px;font-weight:700;cursor:pointer;font-size:13px;">Search</button>
+        </div>
+      </form>
       <div id="chext-status" style="min-height:16px;margin-bottom:6px;font-size:13px;font-weight:600;color:#1d4f91;"></div>
       <div id="chext-search-results" style="overflow-x:auto;margin-bottom:12px;"></div>
 
@@ -27881,18 +27886,20 @@ __ADMIN_CARD__
 
     <script>
     (function() {
-      const searchBtn = document.getElementById("chext-search-btn");
-      const lastEl = document.getElementById("chext-last");
-      const firstEl = document.getElementById("chext-first");
-      const statusEl = document.getElementById("chext-status");
-      const resultsEl = document.getElementById("chext-search-results");
-      const actionBlock = document.getElementById("chext-action-block");
-      const selectedInfo = document.getElementById("chext-selected-info");
-      const smsWarning = document.getElementById("chext-sms-warning");
-      const dnTypeEl = document.getElementById("chext-dn-type");
-      const unityHostEl = document.getElementById("chext-unity-host");
-      const runBtn = document.getElementById("chext-run-btn");
-      const cancelSelBtn = document.getElementById("chext-cancel-sel-btn");
+      var chextForm = document.getElementById("chext-search-form");
+      var searchBtn = document.getElementById("chext-search-btn");
+      var lastEl = document.getElementById("chext-last");
+      var firstEl = document.getElementById("chext-first");
+      var statusEl = document.getElementById("chext-status");
+      var resultsEl = document.getElementById("chext-search-results");
+      var actionBlock = document.getElementById("chext-action-block");
+      var selectedInfo = document.getElementById("chext-selected-info");
+      var smsWarning = document.getElementById("chext-sms-warning");
+      var dnTypeEl = document.getElementById("chext-dn-type");
+      var unityHostEl = document.getElementById("chext-unity-host");
+      var runBtn = document.getElementById("chext-run-btn");
+      var cancelSelBtn = document.getElementById("chext-cancel-sel-btn");
+      if (!chextForm || !statusEl || !resultsEl || !runBtn || !cancelSelBtn) return;
       const runStatusEl = document.getElementById("chext-run-status");
       const runResultsEl = document.getElementById("chext-run-results");
       const pendingListEl = document.getElementById("chext-pending-list");
@@ -27909,16 +27916,15 @@ __ADMIN_CARD__
         smsWarning.style.display = "none";
       }
 
-      searchBtn.addEventListener("click", async function() {
+      chextForm.addEventListener("submit", async function(event) {
+        event.preventDefault();
         const lastName = lastEl.value.trim();
         if (!lastName) { statusEl.textContent = "Enter a last name."; return; }
         statusEl.textContent = "Searching...";
         clearSelection();
         resultsEl.innerHTML = "";
         try {
-          const fd = new FormData();
-          fd.append("last_name", lastName);
-          fd.append("first_name", firstEl.value.trim());
+          const fd = new FormData(chextForm);
           const resp = await fetch("/lookup/person", { method: "POST", body: fd, credentials: "same-origin" });
           const data = await resp.json();
           if (!data.ok || !data.results || !data.results.length) { statusEl.textContent = "No users found."; return; }
