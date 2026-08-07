@@ -50427,6 +50427,10 @@ def change_extension_page(request: Request):
   recruiter_prefix = str((dn_mapping.get("recruiter") or ("", ""))[0] or "").strip()
   general_prefix = str((dn_mapping.get("general") or ("", ""))[0] or "").strip()
   strike_prefix = str((dn_mapping.get("strike") or ("", ""))[0] or "").strip()
+  now_epoch = time.time()
+  has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
+  credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
+  credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
   html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -50447,14 +50451,30 @@ def change_extension_page(request: Request):
     .topbar-status > * {{ display:inline-flex; align-items:center; min-height:32px; padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,0.35); box-sizing:border-box; font-size:11px; font-weight:700; }}
     .topbar-auth-pill {{ background:rgba(255,255,255,0.12); color:#fff; }}
     .topbar-status .env-banner {{ background:rgba(255,255,255,0.12); color:#fff; }}
-    .env-lab {{ background:rgba(255,165,0,0.28) !important; }}
+    .session-timer {{ display:none; align-items:center; gap:6px; padding:6px 10px; border-radius:10px; font-size:12px; font-weight:700; border:1px solid rgba(255,255,255,0.35); color:#fff; background:rgba(255,255,255,0.08); }}
+    .session-timer .timer-label {{ opacity:0.9; }}
+    .session-timer .timer-value {{ font-weight:900; letter-spacing:0.3px; }}
+    .env-banner.env-banner-prod {{ background:rgba(11,98,180,0.45); }}
+    .env-banner.env-banner-lab {{ color:#ffd39a; background:rgba(153,74,0,0.45); border-color:rgba(255,211,154,0.45); }}
     .topbar-actions {{ display:flex; align-items:center; gap:10px; }}
     .topbar-btn {{ display:inline-block; padding:7px 14px; border-radius:10px; font-size:12px; font-weight:700; text-decoration:none; border:1px solid rgba(255,255,255,0.65); transition:opacity .15s; }}
     .topbar-btn-login {{ color:#fff; background:rgba(255,255,255,0.1); }}
     .topbar-btn-logout {{ color:#fff; background:linear-gradient(180deg,#cb3b2f,#9f2018); border-color:#f0a79c; }}
     .topbar-btn:hover {{ opacity:.88; }}
     .content {{ max-width:1400px; margin:6px auto 10px auto; padding:0 10px 10px 10px; }}
-    .portal-shell {{ display:grid; grid-template-columns:244px minmax(0,1fr); gap:8px; align-items:start; margin-top:4px; }}
+    .page-hero {{ position:relative; overflow:hidden; padding:12px 14px; margin-bottom:10px; border-radius:12px; background:linear-gradient(135deg,rgba(255,255,255,0.96),rgba(239,247,255,0.95)),linear-gradient(180deg,#ffffff,#eef6ff); border:1px solid rgba(0,47,108,0.1); box-shadow:var(--amn-shadow); }}
+    .page-title-row {{ display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; margin-top:6px; }}
+    .page-title {{ margin:0; color:var(--amn-navy); font-size:22px; line-height:1.1; }}
+    .page-subtitle {{ margin:4px 0 0 0; color:var(--amn-text-soft); font-size:12px; }}
+    .page-meta-card {{ min-width:180px; padding:8px 10px; border-radius:10px; background:linear-gradient(180deg,rgba(0,47,108,0.96),rgba(0,94,184,0.92)); color:#fff; box-shadow:0 14px 28px rgba(0,47,108,0.22); }}
+    .page-meta-label {{ display:block; font-size:10px; font-weight:800; letter-spacing:0.5px; opacity:0.76; text-transform:uppercase; }}
+    .page-meta-value {{ display:block; margin-top:2px; font-size:14px; font-weight:700; }}
+    .page-meta-note {{ margin:4px 0 0 0; font-size:11px; line-height:1.3; color:rgba(255,255,255,0.86); }}
+    .hero-link-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; margin-top:8px; }}
+    .hero-link-card {{ display:block; padding:7px 10px; border-radius:10px; background:rgba(255,255,255,0.9); border:1px solid rgba(0,47,108,0.1); color:inherit; text-decoration:none; box-shadow:0 10px 20px rgba(0,47,108,0.06); transition:transform 0.18s ease; }}
+    .hero-link-card:hover {{ transform:translateY(-2px); border-color:rgba(0,94,184,0.3); }}
+    .hero-link-card strong {{ display:block; color:var(--amn-navy); font-size:12px; }}
+    .hero-link-card span {{ display:none; }}
     .portal-sidebar {{ position:sticky; top:50px; background:linear-gradient(180deg,rgba(0,47,108,0.97),rgba(7,75,138,0.96)); border:1px solid rgba(255,255,255,0.12); border-radius:12px; padding:8px; box-shadow:0 18px 36px rgba(0,47,108,0.18); }}
     .portal-sidebar h4 {{ margin:4px 6px 8px 6px; color:#fff; font-size:13px; }}
     .portal-nav {{ display:flex; flex-direction:column; gap:4px; }}
@@ -50502,14 +50522,54 @@ def change_extension_page(request: Request):
   <div class="topbar-status">
     <span class="topbar-auth-pill">Authenticated Operator: {escape(session_username)}</span>
     <span class="env-banner {env_css_class}">{escape(env_text)}</span>
+    <div id="session-timer-banner" class="session-timer" aria-live="polite">
+      <span class="timer-label">Auto logout in:</span>
+      <span id="session-timer-remaining" class="timer-value"></span>
+    </div>
   </div>
   <div class="topbar-actions">
-    <a class="topbar-btn topbar-btn-login" href="/menu">&larr; Back to Menu</a>
+    <a class="topbar-btn topbar-btn-login" href="/menu">Back to Menu</a>
     <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
   </div>
 </header>
 
+<script>
+(function () {{
+  var hasCachedPass = {"true" if has_cached_cucm_pass else "false"};
+  var expiresAtMs = {credential_expires_at_ms};
+  var banner = document.getElementById("session-timer-banner");
+  var remaining = document.getElementById("session-timer-remaining");
+  if (!hasCachedPass || !banner || !remaining || !expiresAtMs) {{ return; }}
+  function fmt(t) {{ var s=Math.max(0,Math.floor(t)); return String(Math.floor(s/3600)).padStart(2,"0")+":"+String(Math.floor((s%3600)/60)).padStart(2,"0")+":"+String(s%60).padStart(2,"0"); }}
+  banner.style.display = "inline-flex";
+  var tick = function() {{ var ms=expiresAtMs-Date.now(); if(ms<=0){{ remaining.textContent="Expired"; window.location.href="/logout"; return; }} remaining.textContent=fmt(ms/1000); }};
+  tick(); setInterval(tick, 1000);
+}})();
+</script>
+
 <div class="content">
+  <section class="page-hero">
+    <div class="page-title-row">
+      <div>
+        <h2 class="page-title">Cisco Voice Server Automation</h2>
+        <p class="page-subtitle">CUCM and Unity operations with fast navigation and inline outputs.</p>
+      </div>
+      <div class="page-meta-card">
+        <span class="page-meta-label">Portal Version</span>
+        <span class="page-meta-value">v1.0 Current</span>
+        <p class="page-meta-note">v1.01 queued for VeraSMART automation enhancement.</p>
+      </div>
+    </div>
+    <div class="hero-link-grid">
+      <a class="hero-link-card" href="/"><strong>Landing Page</strong></a>
+      <a class="hero-link-card" href="/dashboard"><strong>Voice Dashboard</strong></a>
+      <a class="hero-link-card" href="/greenlight"><strong>Project Greenlight</strong></a>
+      <a class="hero-link-card" href="/sip-call-search"><strong>SIP Call Search</strong></a>
+      <a class="hero-link-card" href="/menu2"><strong>Administrative Items</strong></a>
+      <a class="hero-link-card" href="/audit-trail"><strong>Action History</strong></a>
+      <a class="hero-link-card" href="/genesys-admin"><strong>Genesys Admin Page</strong></a>
+    </div>
+  </section>
   <div class="portal-shell">
     <aside class="portal-sidebar">
       <h4>Operations Menu</h4>
