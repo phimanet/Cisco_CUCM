@@ -50342,12 +50342,13 @@ def _change_ext_unity_update_dtmf(unity_server: str, unity_user: str, unity_pass
   urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
   session = requests.Session()
   session.verify = False
+  session.trust_env = False
   session.auth = HTTPBasicAuth(unity_user, unity_pass)
   base = f"https://{unity_server}"
 
   # Find the user's ObjectId by alias
   search_url = f"{base}/vmrest/users?query=(Alias is {requests.utils.quote(target_alias.strip())})"
-  resp = session.get(search_url, headers={"Accept": "application/json"}, timeout=30)
+  resp = session.get(search_url, headers={"Accept": "application/json"}, timeout=30, verify=False)
   if resp.status_code != 200:
     return {"ok": False, "error": f"Unity user search failed HTTP {resp.status_code}"}
   data = resp.json() if resp.text else {}
@@ -50364,7 +50365,7 @@ def _change_ext_unity_update_dtmf(unity_server: str, unity_user: str, unity_pass
   # Update DtmfAccessId
   put_url = f"{base}/vmrest/users/{object_id}"
   payload = {"DtmfAccessId": new_extension.strip()}
-  put_resp = session.put(put_url, json=payload, headers={"Accept": "application/json", "Content-Type": "application/json"}, timeout=30)
+  put_resp = session.put(put_url, json=payload, headers={"Accept": "application/json", "Content-Type": "application/json"}, timeout=30, verify=False)
   if put_resp.status_code not in (200, 204):
     return {"ok": False, "error": f"Unity DtmfAccessId update failed HTTP {put_resp.status_code}: {put_resp.text[:300]}"}
   return {"ok": True, "object_id": object_id}
