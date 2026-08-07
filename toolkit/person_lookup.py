@@ -286,10 +286,10 @@ def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_nam
     def _q(value: str) -> str:
         return value.strip().replace("'", "''")
 
-    where_parts = [f"u.lastname LIKE '%{_q(last_name)}%'"]
+    where_parts = [f"LOWER(u.lastname) LIKE '%{_q(last_name.lower())}%'"]
     clean_first = (first_name or "").strip()
     if clean_first:
-        where_parts.append(f"u.firstname LIKE '%{_q(clean_first)}%'")
+        where_parts.append(f"LOWER(u.firstname) LIKE '%{_q(clean_first.lower())}%'")
 
     sql = (
         "SELECT u.userid AS userid, u.firstname AS firstname, u.lastname AS lastname, "
