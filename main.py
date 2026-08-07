@@ -50672,7 +50672,7 @@ def change_extension_page(request: Request):
 """
   return HTMLResponse(
     content=html,
-    headers={{"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache", "Expires": "0"}},
+    headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache", "Expires": "0"},
   )
 
 
