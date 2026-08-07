@@ -26326,7 +26326,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="precheck">Check for Existing Jabber Configuration</button>
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
           <button type="button" class="portal-nav-btn" data-panel="namechange">Employee Name Change-Update Jabber/VM</button>
-          <button type="button" class="portal-nav-btn" data-panel="changeextension">Change Extension Number for Jabber</button>
+          <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/change-extension'">Change Extension Number for Jabber</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
           <button type="button" class="portal-nav-btn" data-panel="mobiledelete">Remove Jabber Mobile only</button>
           <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM</button>
@@ -27832,9 +27832,9 @@ __ADMIN_CARD__
     </div>
     </section>
 
-    <section class="tool-panel" data-panel="changeextension">
-    <h3>Change Extension Number for Jabber</h3>
-    <p style="margin:0 0 12px 0;font-size:13px;color:#4e6a84;">Search for a user by last name to change their Jabber extension. Old number gets a 30-day forwarding pattern and the user is emailed their new number.</p>
+    <section class="tool-panel" data-panel="changeextension-removed-placeholder" style="display:none;"></section>
+
+    <section class="tool-panel" data-panel="chext-legacy" style="display:none;">\n    <p style="margin:0 0 12px 0;font-size:13px;color:#4e6a84;">Search for a user by last name to change their Jabber extension. Old number gets a 30-day forwarding pattern and the user is emailed their new number.</p>
 
     <div style="max-width:860px;">
       <div style="display:flex;gap:8px;margin-bottom:10px;">
@@ -50413,6 +50413,267 @@ def _change_ext_store_pending_cleanup(cucm_host: str, old_ext: str, route_partit
   pending.append({"old_ext": old_ext, "route_partition": route_partition, "new_ext": new_ext, "expires": expires, "cucm_host": cucm_host})
   settings["pending_ext_dn_releases"] = pending
   _save_settings(settings)
+
+
+@app.get("/change-extension", response_class=HTMLResponse)
+def change_extension_page(request: Request):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", ""))
+  if not session_username:
+    return HTMLResponse(content="<h3>401 Unauthorized</h3><p>Please log in first.</p>", status_code=401)
+  auth_cucm_host = str(session.get("cucm_host", "") or "")
+  env_text, env_css_class = _get_environment_label(auth_cucm_host)
+  dn_mapping = _get_dn_mapping()
+  recruiter_prefix = str((dn_mapping.get("recruiter") or ("", ""))[0] or "").strip()
+  general_prefix = str((dn_mapping.get("general") or ("", ""))[0] or "").strip()
+  strike_prefix = str((dn_mapping.get("strike") or ("", ""))[0] or "").strip()
+  html = f"""<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Change Extension - Voice Operations Portal</title>
+  <style>
+    body {{ font-family: "Segoe UI", Tahoma, Arial, sans-serif; margin: 0; background: #f7fbff; color: #12304a; }}
+    .topbar {{ background: linear-gradient(180deg, #002f6c 0%, #005eb8 100%); padding: 10px 24px; display: flex; align-items: center; gap: 16px; }}
+    .topbar a {{ color: #a8d0ff; text-decoration: none; font-size: 13px; }}
+    .topbar a:hover {{ color: #fff; }}
+    .topbar .title {{ color: #fff; font-size: 18px; font-weight: 700; flex: 1; }}
+    .env-pill {{ padding: 3px 12px; border-radius: 12px; font-size: 12px; font-weight: 700; }}
+    .env-lab {{ background: #237741; color: #fff; }}
+    .env-prod {{ background: #b00020; color: #fff; }}
+    .content {{ max-width: 960px; margin: 28px auto; padding: 0 20px; }}
+    .warning-banner {{ background: #fff3cd; border: 1px solid #f0ad4e; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #856404; font-weight: 600; }}
+    h2 {{ color: #002f6c; margin: 0 0 6px; }}
+    .subtitle {{ color: #4e6a84; font-size: 13px; margin: 0 0 20px; }}
+    .card {{ background: #fff; border: 1px solid #c8dbee; border-radius: 10px; padding: 20px; margin-bottom: 18px; }}
+    .search-row {{ display: flex; gap: 8px; margin-bottom: 10px; }}
+    .search-row input {{ flex: 1; padding: 8px 12px; border: 1px solid #c8dbee; border-radius: 6px; font-size: 13px; }}
+    .btn {{ border: none; border-radius: 6px; padding: 8px 20px; font-weight: 700; cursor: pointer; font-size: 13px; }}
+    .btn-primary {{ background: #1d4f91; color: #fff; }}
+    .btn-danger {{ background: #b00020; color: #fff; }}
+    .btn-secondary {{ background: #6b7280; color: #fff; }}
+    #chext-status {{ min-height: 18px; font-size: 13px; font-weight: 600; color: #1d4f91; margin-bottom: 8px; }}
+    #chext-results {{ overflow-x: auto; margin-bottom: 16px; }}
+    #chext-action {{ display: none; background: #f7fbff; border: 1px solid #c8dbee; border-radius: 8px; padding: 16px; margin-bottom: 16px; }}
+    .action-row {{ display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-top: 10px; }}
+    .field-group {{ display: flex; flex-direction: column; gap: 4px; }}
+    .field-group label {{ font-weight: 600; font-size: 12px; }}
+    .field-group select, .field-group input {{ padding: 7px 10px; border: 1px solid #c8dbee; border-radius: 6px; font-size: 13px; min-width: 180px; }}
+    #chext-run-status {{ min-height: 18px; font-size: 13px; font-weight: 600; color: #1d4f91; }}
+    #chext-run-results {{ margin-top: 8px; overflow-x: auto; }}
+    table {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
+    th {{ background: #1d4f91; color: #fff; padding: 6px 10px; text-align: left; }}
+    tr:nth-child(even) {{ background: #f7fbff; }}
+    td {{ padding: 6px 10px; border-bottom: 1px solid #e2eaf3; }}
+    .sms-warn {{ display: none; background: #fff3cd; border: 1px solid #f0ad4e; border-radius: 6px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; font-weight: 600; color: #856404; }}
+    .pending-header {{ display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }}
+    .pending-header strong {{ font-size: 13px; color: #1d4f91; }}
+  </style>
+</head>
+<body>
+<div class="topbar">
+  <span class="title">Voice Operations Portal &mdash; Change Extension</span>
+  <a href="/menu">&larr; Back to Menu</a>
+  <span class="env-pill {env_css_class}">{env_text}</span>
+</div>
+<div class="content">
+  <div class="warning-banner">&#9888; This is a destructive workflow. Running it will DELETE existing Jabber devices and rebuild them with a new number. Proceed only if you are certain.</div>
+  <h2>Change Extension Number for Jabber</h2>
+  <p class="subtitle">Search by last name, select a user, choose the new number type and Unity host, then run. The old number gets a 30-day forwarding pattern and the user is emailed their new number.</p>
+
+  <div class="card">
+    <form id="chext-search-form">
+      <input type="hidden" name="cucm_host" value="{escape(auth_cucm_host)}">
+      <input type="hidden" name="cucm_user" value="{escape(session_username)}">
+      <input type="hidden" name="cucm_pass" value="">
+      <div class="search-row">
+        <input id="chext-last" name="last_name" type="text" placeholder="Last name *" required>
+        <input id="chext-first" name="first_name" type="text" placeholder="First name (optional)">
+        <button type="submit" class="btn btn-primary">Search</button>
+      </div>
+    </form>
+    <div id="chext-status">Enter a last name and click Search.</div>
+    <div id="chext-results"></div>
+
+    <div id="chext-action">
+      <div id="chext-selected-info" style="font-size:13px;margin-bottom:10px;"></div>
+      <div id="chext-sms-warn" class="sms-warn"></div>
+      <div class="action-row">
+        <div class="field-group">
+          <label>New Number Type</label>
+          <select id="chext-dn-type">
+            <option value="general">General Employee ({general_prefix})</option>
+            <option value="recruiter">Recruiter ({recruiter_prefix})</option>
+            <option value="strike">Strike Employee ({strike_prefix})</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <label>Unity Host</label>
+          <input id="chext-unity-host" type="text" placeholder="e.g. lascutyp01.ahs.int" style="min-width:240px;">
+        </div>
+        <button id="chext-run-btn" type="button" class="btn btn-danger">Run Change Extension</button>
+        <button id="chext-cancel-btn" type="button" class="btn btn-secondary">Clear</button>
+      </div>
+    </div>
+    <div id="chext-run-status"></div>
+    <div id="chext-run-results"></div>
+  </div>
+
+  <div class="card">
+    <div class="pending-header">
+      <strong>Active Forwarding Patterns (Pending Auto-Delete)</strong>
+      <button id="chext-refresh-btn" type="button" class="btn btn-primary" style="padding:3px 12px;font-size:12px;">Refresh</button>
+    </div>
+    <p style="margin:0 0 8px;font-size:12px;color:#6b7280;">Old extensions forwarding to new. Auto-deleted after 30 days; user is emailed on deletion.</p>
+    <div id="chext-pending"></div>
+  </div>
+</div>
+
+<script>
+(function () {{
+  var form = document.getElementById("chext-search-form");
+  var statusEl = document.getElementById("chext-status");
+  var resultsEl = document.getElementById("chext-results");
+  var actionEl = document.getElementById("chext-action");
+  var selectedInfo = document.getElementById("chext-selected-info");
+  var smsWarn = document.getElementById("chext-sms-warn");
+  var dnTypeEl = document.getElementById("chext-dn-type");
+  var unityHostEl = document.getElementById("chext-unity-host");
+  var runBtn = document.getElementById("chext-run-btn");
+  var cancelBtn = document.getElementById("chext-cancel-btn");
+  var runStatusEl = document.getElementById("chext-run-status");
+  var runResultsEl = document.getElementById("chext-run-results");
+  var pendingEl = document.getElementById("chext-pending");
+  var refreshBtn = document.getElementById("chext-refresh-btn");
+  if (!form || !statusEl || !resultsEl) return;
+
+  var selectedUser = null;
+  function esc(s) {{ var d = document.createElement("div"); d.textContent = String(s || ""); return d.innerHTML; }}
+
+  function clearSel() {{
+    selectedUser = null;
+    actionEl.style.display = "none";
+    runStatusEl.textContent = "";
+    runResultsEl.innerHTML = "";
+    smsWarn.style.display = "none";
+  }}
+
+  form.addEventListener("submit", async function (e) {{
+    e.preventDefault();
+    var lastName = form.last_name.value.trim();
+    if (!lastName) {{ statusEl.textContent = "Enter a last name."; return; }}
+    statusEl.textContent = "Searching\u2026";
+    clearSel();
+    resultsEl.innerHTML = "";
+    try {{
+      var resp = await fetch("/lookup/person", {{ method: "POST", body: new FormData(form), credentials: "same-origin" }});
+      var data = await resp.json();
+      if (!data.ok || !data.results || !data.results.length) {{ statusEl.textContent = "No users found."; return; }}
+      statusEl.textContent = "Found " + data.results.length + " user(s). Select one to change their extension.";
+      var html = "<table><thead><tr><th>Name</th><th>User ID</th><th>Extension</th><th>Jabber Devices</th><th></th></tr></thead><tbody>";
+      data.results.forEach(function (r, i) {{
+        var name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+        var devs = (r.devices || []).filter(function (d) {{ return /^(CSF|TCT|BOT|TAB)/i.test(d.name || ""); }});
+        html += "<tr><td>" + esc(name) + "</td><td style='font-size:12px;'>" + esc(r.userid) + "</td><td><strong>" + esc(r.primary_extension || "\u2014") + "</strong></td><td style='font-size:11px;color:#555;'>" + esc(devs.map(function (d) {{ return d.name; }}).join(", ") || "\u2014") + "</td><td><button type='button' data-idx='" + i + "' class='btn btn-primary' style='padding:4px 10px;font-size:12px;'>Select \u2192</button></td></tr>";
+      }});
+      html += "</tbody></table>";
+      resultsEl.innerHTML = html;
+      resultsEl.querySelectorAll("button[data-idx]").forEach(function (btn) {{
+        btn.addEventListener("click", function () {{
+          selectedUser = data.results[parseInt(btn.getAttribute("data-idx"), 10)];
+          loadActionForm(selectedUser);
+        }});
+      }});
+    }} catch (err) {{ statusEl.textContent = "Search failed: " + (err.message || err); }}
+  }});
+
+  function loadActionForm(user) {{
+    var name = user.display_name || ((user.first_name || "") + " " + (user.last_name || "")).trim() || user.userid;
+    var devs = (user.devices || []).filter(function (d) {{ return /^(CSF|TCT|BOT|TAB)/i.test(d.name || ""); }});
+    selectedInfo.innerHTML = "<strong>" + esc(name) + "</strong> (<code>" + esc(user.userid) + "</code>)<br>Extension: <strong>" + esc(user.primary_extension || "\u2014") + "</strong> &nbsp;|&nbsp; Jabber: <strong>" + esc(devs.map(function (d) {{ return d.name; }}).join(", ") || "none") + "</strong>" + (user.email ? " &nbsp;|&nbsp; " + esc(user.email) : "");
+    if (!!(user.telephone || user.primary_extension)) {{ smsWarn.style.display = "block"; smsWarn.textContent = "\u26A0 After running, verify SMS hosting on old extension with Aerialink / Twilio if applicable."; }}
+    if (!unityHostEl.value) {{
+      var f = new FormData(); f.append("target_user", user.userid);
+      fetch("/change-jabber-extension/preview", {{ method: "POST", body: f, credentials: "same-origin" }}).then(function (r) {{ return r.json(); }}).then(function (d) {{ if (d.unity_host) unityHostEl.value = d.unity_host; }}).catch(function () {{}});
+    }}
+    actionEl.style.display = "block";
+    runStatusEl.textContent = "";
+    runResultsEl.innerHTML = "";
+  }}
+
+  cancelBtn.addEventListener("click", clearSel);
+
+  runBtn.addEventListener("click", async function () {{
+    if (!selectedUser) return;
+    var label = dnTypeEl.options[dnTypeEl.selectedIndex].text;
+    if (!confirm("Change extension for " + (selectedUser.display_name || selectedUser.userid) + "?\n\nNew type: " + label + "\nOld ext: " + (selectedUser.primary_extension || "none") + "\n\nThis will DELETE all Jabber devices and rebuild with a new number.\n\nContinue?")) return;
+    runBtn.disabled = true;
+    runStatusEl.textContent = "Running\u2026";
+    runResultsEl.innerHTML = "";
+    try {{
+      var fd = new FormData();
+      fd.append("target_user", selectedUser.userid);
+      fd.append("dn_type", dnTypeEl.value);
+      fd.append("unity_host", unityHostEl.value.trim());
+      var resp = await fetch("/change-jabber-extension/run", {{ method: "POST", body: fd, credentials: "same-origin" }});
+      var data = await resp.json();
+      if (data.steps) {{
+        var html = "<table><thead><tr><th>Step</th><th style='width:80px;'>Status</th><th>Details</th></tr></thead><tbody>";
+        data.steps.forEach(function (s, i) {{
+          var col = s.status === "Success" ? "#0f6d35" : s.status === "Skipped" ? "#6b7280" : "#b00020";
+          html += "<tr><td>" + esc(s.step) + "</td><td style='font-weight:700;color:" + col + ";'>" + esc(s.status) + "</td><td style='font-size:12px;'>" + esc(s.details || "") + "</td></tr>";
+        }});
+        html += "</tbody></table>";
+        if (data.new_ext) html += "<p style='margin:8px 0 0;font-weight:700;color:#0f6d35;'>\u2705 New extension: " + esc(data.new_ext) + "</p>";
+        runResultsEl.innerHTML = html;
+      }}
+      var allOk = (data.steps || []).every(function (s) {{ return s.status === "Success" || s.status === "Skipped"; }});
+      runStatusEl.textContent = allOk ? "\u2705 Done." : "\u26A0 Completed with errors.";
+      runStatusEl.style.color = allOk ? "#0f6d35" : "#b00020";
+      if (allOk) {{ loadPending(); clearSel(); }}
+    }} catch (err) {{ runStatusEl.textContent = "Run failed: " + (err.message || err); }}
+    finally {{ runBtn.disabled = false; }}
+  }});
+
+  async function loadPending() {{
+    try {{
+      var resp = await fetch("/change-jabber-extension/pending-forwards", {{ credentials: "same-origin" }});
+      var data = await resp.json();
+      if (!data.ok || !data.entries || !data.entries.length) {{ pendingEl.innerHTML = "<p style='font-size:13px;color:#6b7280;margin:0;'>No active forwarding patterns.</p>"; return; }}
+      var html = "<table><thead><tr><th>User</th><th>Old Ext</th><th>New Ext</th><th>Auto-Delete</th><th>Status</th><th>Action</th></tr></thead><tbody>";
+      data.entries.forEach(function (e, i) {{
+        var expired = e.expired;
+        html += "<tr><td>" + esc(e.display_name || e.userid || "") + "</td><td style='font-weight:700;'>" + esc(e.old_ext || "") + "</td><td>" + esc(e.new_ext || "") + "</td><td style='" + (expired ? "color:#b00020;font-weight:700;" : "") + "'>" + esc(e.expires || "") + "</td><td style='font-weight:700;color:" + (expired ? "#b00020" : "#0f6d35") + ";'>" + (expired ? "Expired" : "Active") + "</td><td><button type='button' data-old='" + esc(e.old_ext || "") + "' class='btn btn-danger' style='padding:3px 9px;font-size:11px;'>Cancel</button></td></tr>";
+      }});
+      html += "</tbody></table>";
+      pendingEl.innerHTML = html;
+      pendingEl.querySelectorAll("button[data-old]").forEach(function (btn) {{
+        btn.addEventListener("click", async function () {{
+          var oldExt = btn.getAttribute("data-old");
+          if (!confirm("Cancel forwarding from " + oldExt + " now?")) return;
+          btn.disabled = true;
+          try {{
+            var fd = new FormData(); fd.append("old_ext", oldExt);
+            var resp = await fetch("/change-jabber-extension/cancel-forward", {{ method: "POST", body: fd, credentials: "same-origin" }});
+            var d = await resp.json();
+            if (d.ok) loadPending(); else {{ alert("Cancel failed: " + (d.error || "unknown")); btn.disabled = false; }}
+          }} catch (err) {{ alert(err.message || err); btn.disabled = false; }}
+        }});
+      }});
+    }} catch (e) {{ pendingEl.innerHTML = "<p style='font-size:13px;color:#b00020;'>Failed to load pending forwards.</p>"; }}
+  }}
+
+  refreshBtn.addEventListener("click", loadPending);
+  loadPending();
+}})();
+</script>
+</body>
+</html>
+"""
+  return HTMLResponse(
+    content=html,
+    headers={{"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache", "Expires": "0"}},
+  )
 
 
 @app.post("/change-jabber-extension/preview")
