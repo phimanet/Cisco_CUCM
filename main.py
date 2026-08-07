@@ -50433,55 +50433,86 @@ def change_extension_page(request: Request):
   <meta charset="utf-8">
   <title>Change Extension - Voice Operations Portal</title>
   <style>
-    body {{ font-family: "Segoe UI", Tahoma, Arial, sans-serif; margin: 0; background: #f7fbff; color: #12304a; }}
-    .topbar {{ background: linear-gradient(180deg, #002f6c 0%, #005eb8 100%); padding: 10px 24px; display: flex; align-items: center; gap: 16px; }}
-    .topbar a {{ color: #a8d0ff; text-decoration: none; font-size: 13px; }}
-    .topbar a:hover {{ color: #fff; }}
-    .topbar .title {{ color: #fff; font-size: 18px; font-weight: 700; flex: 1; }}
-    .env-pill {{ padding: 3px 12px; border-radius: 12px; font-size: 12px; font-weight: 700; }}
-    .env-lab {{ background: #237741; color: #fff; }}
-    .env-prod {{ background: #b00020; color: #fff; }}
-    .content {{ max-width: 960px; margin: 28px auto; padding: 0 20px; }}
-    .warning-banner {{ background: #fff3cd; border: 1px solid #f0ad4e; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px; color: #856404; font-weight: 600; }}
-    h2 {{ color: #002f6c; margin: 0 0 6px; }}
-    .subtitle {{ color: #4e6a84; font-size: 13px; margin: 0 0 20px; }}
-    .card {{ background: #fff; border: 1px solid #c8dbee; border-radius: 10px; padding: 20px; margin-bottom: 18px; }}
+    :root {{
+      --amn-blue: #005eb8;
+      --amn-navy: #002f6c;
+      --amn-sky: #eaf4ff;
+      --amn-ice: #f7fbff;
+      --amn-text: #12304a;
+      --amn-text-soft: #4e6a84;
+      --amn-border: #c8dbee;
+      --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
+    }}
+    body {{ margin: 0; font-family: "Segoe UI", Tahoma, Arial, sans-serif; background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%); color: var(--amn-text); }}
+    .topbar {{
+      display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 10px;
+      padding: 8px 14px;
+      background: linear-gradient(120deg, rgba(0,47,108,0.98), rgba(0,94,184,0.94)), linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
+      color: #fff; box-shadow: 0 12px 28px rgba(0,47,108,0.22); border-bottom: 1px solid rgba(255,255,255,0.16);
+    }}
+    .topbar-brand {{ display: flex; align-items: center; gap: 10px; white-space: nowrap; }}
+    .brand-fallback {{ font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; font-size: 11px; opacity: 0.86; }}
+    .topbar-right {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
+    .topbar-nav {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
+    .topbar-auth-pill {{ background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.35); border-radius: 10px; padding: 5px 10px; font-size: 11px; font-weight: 700; white-space: nowrap; }}
+    .env-banner {{ display: inline-block; padding: 6px 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.35); font-size: 11px; font-weight: 700; background: rgba(255,255,255,0.12); color: #fff; }}
+    .topbar-btn {{ display: inline-block; padding: 7px 12px; border-radius: 10px; font-size: 12px; font-weight: 700; text-decoration: none; border: 1px solid rgba(255,255,255,0.65); transition: transform 0.18s ease; }}
+    .topbar-btn-login {{ color: #fff; background: rgba(255,255,255,0.1); }}
+    .topbar-btn-logout {{ color: #fff; background: linear-gradient(180deg,#cb3b2f,#9f2018); border-color: #f0a79c; }}
+    .topbar-btn:hover {{ transform: translateY(-1px); }}
+    .content {{ max-width: 980px; margin: 0 auto; padding: 18px 16px; }}
+    .warning-banner {{ background: #fff3cd; border: 1px solid #f0ad4e; border-radius: 10px; padding: 12px 16px; margin-bottom: 18px; font-size: 13px; color: #856404; font-weight: 600; }}
+    .card {{ background: rgba(255,255,255,0.96); border: 1px solid var(--amn-border); border-radius: 14px; box-shadow: var(--amn-shadow); padding: 20px; margin-bottom: 18px; }}
+    h2 {{ margin: 0 0 4px; color: var(--amn-navy); font-size: 20px; }}
+    .subtitle {{ color: var(--amn-text-soft); font-size: 13px; margin: 0 0 18px; }}
     .search-row {{ display: flex; gap: 8px; margin-bottom: 10px; }}
-    .search-row input {{ flex: 1; padding: 8px 12px; border: 1px solid #c8dbee; border-radius: 6px; font-size: 13px; }}
-    .btn {{ border: none; border-radius: 6px; padding: 8px 20px; font-weight: 700; cursor: pointer; font-size: 13px; }}
-    .btn-primary {{ background: #1d4f91; color: #fff; }}
+    .search-row input {{ flex: 1; padding: 8px 12px; border: 1px solid var(--amn-border); border-radius: 8px; font-size: 13px; color: var(--amn-text); background: #fff; }}
+    .search-row input:focus {{ outline: none; border-color: var(--amn-blue); box-shadow: 0 0 0 3px rgba(0,94,184,0.12); }}
+    .btn {{ border: none; border-radius: 8px; padding: 8px 20px; font-weight: 700; cursor: pointer; font-size: 13px; transition: opacity 0.15s; }}
+    .btn:hover {{ opacity: 0.88; }}
+    .btn-primary {{ background: var(--amn-blue); color: #fff; }}
     .btn-danger {{ background: #b00020; color: #fff; }}
     .btn-secondary {{ background: #6b7280; color: #fff; }}
-    #chext-status {{ min-height: 18px; font-size: 13px; font-weight: 600; color: #1d4f91; margin-bottom: 8px; }}
-    #chext-results {{ overflow-x: auto; margin-bottom: 16px; }}
-    #chext-action {{ display: none; background: #f7fbff; border: 1px solid #c8dbee; border-radius: 8px; padding: 16px; margin-bottom: 16px; }}
+    #chext-status {{ min-height: 18px; font-size: 13px; font-weight: 600; color: var(--amn-blue); margin: 6px 0; }}
+    #chext-results {{ overflow-x: auto; margin-bottom: 14px; }}
+    #chext-action {{ display: none; background: var(--amn-sky); border: 1px solid var(--amn-border); border-radius: 10px; padding: 16px; margin-bottom: 14px; }}
     .action-row {{ display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-top: 10px; }}
     .field-group {{ display: flex; flex-direction: column; gap: 4px; }}
-    .field-group label {{ font-weight: 600; font-size: 12px; }}
-    .field-group select, .field-group input {{ padding: 7px 10px; border: 1px solid #c8dbee; border-radius: 6px; font-size: 13px; min-width: 180px; }}
-    #chext-run-status {{ min-height: 18px; font-size: 13px; font-weight: 600; color: #1d4f91; }}
+    .field-group label {{ font-weight: 600; font-size: 12px; color: var(--amn-text-soft); }}
+    .field-group select, .field-group input {{ padding: 7px 10px; border: 1px solid var(--amn-border); border-radius: 8px; font-size: 13px; min-width: 190px; }}
+    #chext-run-status {{ min-height: 18px; font-size: 13px; font-weight: 600; color: var(--amn-blue); margin-top: 8px; }}
     #chext-run-results {{ margin-top: 8px; overflow-x: auto; }}
     table {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
-    th {{ background: #1d4f91; color: #fff; padding: 6px 10px; text-align: left; }}
-    tr:nth-child(even) {{ background: #f7fbff; }}
-    td {{ padding: 6px 10px; border-bottom: 1px solid #e2eaf3; }}
-    .sms-warn {{ display: none; background: #fff3cd; border: 1px solid #f0ad4e; border-radius: 6px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; font-weight: 600; color: #856404; }}
-    .pending-header {{ display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }}
-    .pending-header strong {{ font-size: 13px; color: #1d4f91; }}
+    th {{ background: var(--amn-navy); color: #fff; padding: 7px 10px; text-align: left; }}
+    tr:nth-child(even) {{ background: var(--amn-sky); }}
+    td {{ padding: 7px 10px; border-bottom: 1px solid var(--amn-border); }}
+    .sms-warn {{ display: none; background: #fff3cd; border: 1px solid #f0ad4e; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; font-weight: 600; color: #856404; }}
+    .pending-header {{ display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }}
+    .pending-header strong {{ font-size: 13px; color: var(--amn-navy); font-weight: 700; }}
   </style>
 </head>
 <body>
-<div class="topbar">
-  <span class="title">Voice Operations Portal &mdash; Change Extension</span>
-  <a href="/menu">&larr; Back to Menu</a>
-  <span class="env-pill {env_css_class}">{env_text}</span>
-</div>
+<header class="topbar">
+  <div class="topbar-brand">
+    <span class="brand-fallback">AMN Healthcare</span>
+    <strong>Voice Operations Portal &mdash; Change Extension</strong>
+  </div>
+  <div class="topbar-right">
+    <div class="topbar-nav">
+      <span class="topbar-auth-pill">Authenticated Operator: {escape(session_username)}</span>
+      <span class="env-banner {env_css_class}">{escape(env_text)}</span>
+      <a class="topbar-btn topbar-btn-login" href="/menu">&larr; Back to Menu</a>
+      <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
+    </div>
+  </div>
+</header>
 <div class="content">
-  <div class="warning-banner">&#9888; This is a destructive workflow. Running it will DELETE existing Jabber devices and rebuild them with a new number. Proceed only if you are certain.</div>
-  <h2>Change Extension Number for Jabber</h2>
-  <p class="subtitle">Search by last name, select a user, choose the new number type and Unity host, then run. The old number gets a 30-day forwarding pattern and the user is emailed their new number.</p>
+  <div class="warning-banner">&#9888;&nbsp; <strong>Destructive workflow.</strong> Running this will DELETE all existing Jabber devices and rebuild them with a new number. Proceed only if you are certain.</div>
 
   <div class="card">
+    <h2>Change Extension Number for Jabber</h2>
+    <p class="subtitle">Search by last name, select a user, choose the new number type and Unity host, then run. The old number gets a 30-day forwarding pattern and the user is emailed their new number.</p>
+
     <form id="chext-search-form">
       <input type="hidden" name="cucm_host" value="{escape(auth_cucm_host)}">
       <input type="hidden" name="cucm_user" value="{escape(session_username)}">
@@ -50509,7 +50540,7 @@ def change_extension_page(request: Request):
         </div>
         <div class="field-group">
           <label>Unity Host</label>
-          <input id="chext-unity-host" type="text" placeholder="e.g. lascutyp01.ahs.int" style="min-width:240px;">
+          <input id="chext-unity-host" type="text" placeholder="e.g. lascutyp01.ahs.int" style="min-width:250px;">
         </div>
         <button id="chext-run-btn" type="button" class="btn btn-danger">Run Change Extension</button>
         <button id="chext-cancel-btn" type="button" class="btn btn-secondary">Clear</button>
@@ -50522,9 +50553,9 @@ def change_extension_page(request: Request):
   <div class="card">
     <div class="pending-header">
       <strong>Active Forwarding Patterns (Pending Auto-Delete)</strong>
-      <button id="chext-refresh-btn" type="button" class="btn btn-primary" style="padding:3px 12px;font-size:12px;">Refresh</button>
+      <button id="chext-refresh-btn" type="button" class="btn btn-primary" style="padding:4px 12px;font-size:12px;">Refresh</button>
     </div>
-    <p style="margin:0 0 8px;font-size:12px;color:#6b7280;">Old extensions forwarding to new. Auto-deleted after 30 days; user is emailed on deletion.</p>
+    <p style="margin:0 0 8px;font-size:12px;color:var(--amn-text-soft);">Old extensions forwarding to new. Auto-deleted after 30 days; user is emailed on deletion.</p>
     <div id="chext-pending"></div>
   </div>
 </div>
@@ -50574,7 +50605,7 @@ def change_extension_page(request: Request):
       data.results.forEach(function (r, i) {{
         var name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
         var devs = (r.devices || []).filter(function (d) {{ return /^(CSF|TCT|BOT|TAB)/i.test(d.name || ""); }});
-        html += "<tr><td>" + esc(name) + "</td><td style='font-size:12px;'>" + esc(r.userid) + "</td><td><strong>" + esc(r.primary_extension || "\u2014") + "</strong></td><td style='font-size:11px;color:#555;'>" + esc(devs.map(function (d) {{ return d.name; }}).join(", ") || "\u2014") + "</td><td><button type='button' data-idx='" + i + "' class='btn btn-primary' style='padding:4px 10px;font-size:12px;'>Select \u2192</button></td></tr>";
+        html += "<tr><td style='font-weight:600;'>" + esc(name) + "</td><td style='font-size:12px;'>" + esc(r.userid) + "</td><td><strong>" + esc(r.primary_extension || "\u2014") + "</strong></td><td style='font-size:11px;color:#555;'>" + esc(devs.map(function (d) {{ return d.name; }}).join(", ") || "\u2014") + "</td><td><button type='button' data-idx='" + i + "' class='btn btn-primary' style='padding:4px 10px;font-size:12px;'>Select \u2192</button></td></tr>";
       }});
       html += "</tbody></table>";
       resultsEl.innerHTML = html;
@@ -50674,6 +50705,8 @@ def change_extension_page(request: Request):
     content=html,
     headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0", "Pragma": "no-cache", "Expires": "0"},
   )
+
+
 
 
 @app.post("/change-jabber-extension/preview")
