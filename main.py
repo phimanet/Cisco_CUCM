@@ -27836,7 +27836,7 @@ __ADMIN_CARD__
     <p style="margin:0 0 12px 0;font-size:13px;color:#4e6a84;">Search for a user by last name to change their Jabber extension. Old number gets a 30-day forwarding pattern and the user is emailed their new number.</p>
 
     <div style="max-width:860px;">
-      <form id="chext-search-form" onsubmit="return false;" autocomplete="off">
+      <form id="chext-search-form" autocomplete="off">
         <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
         <input type="hidden" name="cucm_user" value="__AUTH_USER__">
         <input type="hidden" name="cucm_pass" value="">
@@ -27887,7 +27887,6 @@ __ADMIN_CARD__
     <script>
     (function() {
       var chextForm = document.getElementById("chext-search-form");
-      var searchBtn = document.getElementById("chext-search-btn");
       var lastEl = document.getElementById("chext-last");
       var firstEl = document.getElementById("chext-first");
       var statusEl = document.getElementById("chext-status");
@@ -27899,11 +27898,12 @@ __ADMIN_CARD__
       var unityHostEl = document.getElementById("chext-unity-host");
       var runBtn = document.getElementById("chext-run-btn");
       var cancelSelBtn = document.getElementById("chext-cancel-sel-btn");
+      var runStatusEl = document.getElementById("chext-run-status");
+      var runResultsEl = document.getElementById("chext-run-results");
+      var pendingListEl = document.getElementById("chext-pending-list");
+      var refreshPendingBtn = document.getElementById("chext-refresh-pending-btn");
+      var searchBtn = document.getElementById("chext-search-btn");
       if (!chextForm || !statusEl || !resultsEl || !runBtn || !cancelSelBtn) return;
-      const runStatusEl = document.getElementById("chext-run-status");
-      const runResultsEl = document.getElementById("chext-run-results");
-      const pendingListEl = document.getElementById("chext-pending-list");
-      const refreshPendingBtn = document.getElementById("chext-refresh-pending-btn");
 
       let selectedUser = null;
       function esc(s) { const d = document.createElement("div"); d.textContent = String(s || ""); return d.innerHTML; }
