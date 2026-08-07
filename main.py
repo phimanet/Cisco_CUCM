@@ -14002,50 +14002,105 @@ def _greenlight_collect_people_from_email(cucm_host: str, cucm_user: str, cucm_p
       row["ad_extension"] = str(ad_identity.get("extension") or "").strip()
     return row
 
-  userid_candidates = _greenlight_userid_candidates(email_lower)
-  if ad_userid:
-    # Prefer the real AD sAMAccountName over guessed local-part variants.
-    userid_candidates = [ad_userid] + [
-      uid for uid in userid_candidates if uid.strip().lower() != ad_userid.lower()
-    ]
-  for userid in userid_candidates:
-    try:
-      userid_rows = _greenlight_list_users_by_userid(cucm_host, cucm_user, cucm_pass, userid)
-    except Exception:
-      continue
+  # PRIMARY: single SQL query by mailid — replaces userid guessing + N AXL listUser calls
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+  email_sql = email_lower.replace("'", "''")
+  sql = (
+    "SELECT u.userid AS userid, u.firstname AS firstname, u.lastname AS lastname, "
+    "u.displayname AS displayname, u.title AS title, u.mailid AS mailid, "
+    "u.telephonenumber AS telephonenumber, "
+    "d.name AS device_name, n.dnorpattern AS extension, "
+    "dm.numplanindex AS line_index "
+    "FROM enduser u "
+    "LEFT OUTER JOIN enduserdevicemap edm ON edm.fkenduser = u.pkid "
+    "LEFT OUTER JOIN device d ON d.pkid = edm.fkdevice "
+    "LEFT OUTER JOIN devicenumplanmap dm ON dm.fkdevice = d.pkid "
+    "LEFT OUTER JOIN numplan n ON n.pkid = dm.fknumplan "
+    f"WHERE LOWER(u.mailid) = '{email_sql}' "
+    "ORDER BY u.userid, d.name, dm.numplanindex"
+  )
+  soap_sql = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:executeSQLQuery>
+      <sql>{xml_escape(sql)}</sql>
+    </axl:executeSQLQuery>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+  try:
+    resp = session.post(
+      f"https://{cucm_host}:8443/axl/",
+      data=soap_sql.encode("utf-8"),
+      headers={"Content-Type": "text/xml"},
+      timeout=60,
+    )
+    if resp.status_code == 200:
+      root_sql = ET.fromstring(resp.text)
+      sql_users: dict = {}
+      sql_order: list = []
+      for elem in root_sql.iter():
+        if _xml_local_name(elem.tag) != "row":
+          continue
+        r: dict = {}
+        for child in list(elem):
+          r[_xml_local_name(child.tag)] = (child.text or "").strip()
+        uid = r.get("userid", "").strip()
+        if not uid:
+          continue
+        if uid not in sql_users:
+          sql_users[uid] = {
+            "userid": uid,
+            "first_name": r.get("firstname", ""),
+            "last_name": r.get("lastname", ""),
+            "display_name": r.get("displayname", ""),
+            "title": r.get("title", ""),
+            "email": r.get("mailid", "") or email_lower,
+            "telephone": r.get("telephonenumber", ""),
+            "primary_extension": "",
+            "translated_number": "",
+            "_devices_map": {},
+          }
+          sql_order.append(uid)
+        device_name = r.get("device_name", "").strip()
+        extension = r.get("extension", "").strip()
+        if device_name:
+          dmap = sql_users[uid]["_devices_map"]
+          if device_name not in dmap:
+            _pfx = device_name.upper()[:3]
+            _dtype = ("CSF (Jabber Laptop)" if _pfx == "CSF" else "TCT (Jabber iPhone)" if _pfx == "TCT" else "BOT (Jabber Android)" if _pfx == "BOT" else "TAB (Jabber Tablet)" if _pfx == "TAB" else "Phone")
+            dmap[device_name] = {"name": device_name, "type": _dtype, "extensions": [], "status": ""}
+          if extension and extension not in dmap[device_name]["extensions"]:
+            dmap[device_name]["extensions"].append(extension)
+      for uid in sql_order:
+        u = sql_users[uid]
+        devices_list = list(u.pop("_devices_map").values())
+        primary_ext = next((ext for d in devices_list for ext in d["extensions"]), "")
+        u["primary_extension"] = primary_ext
+        u["devices"] = devices_list
+        uid_key = uid.lower()
+        matches[uid_key] = _annotate_ad(u)
+  except Exception:
+    pass
 
-    for match in userid_rows:
-      row_uid = str(match.get("userid") or "").strip().lower()
-      row_first = str(match.get("first_name") or "").strip()
-      row_last = str(match.get("last_name") or "").strip()
-      if not row_uid or not row_last:
-        continue
+  # FALLBACK: name-based search when email SQL matched nothing
+  if not matches:
+    candidates = _greenlight_email_name_candidates(email_lower)
+    for cand_last, cand_first in candidates:
       try:
-        people_for_name = search_persons_by_name(cucm_host, cucm_user, cucm_pass, row_last, row_first)
+        matched_rows = search_persons_by_name(cucm_host, cucm_user, cucm_pass, cand_last, cand_first)
       except Exception:
         continue
-
-      for row in people_for_name:
-        person_uid = str(row.get("userid") or "").strip().lower()
-        person_email = str(row.get("email") or "").strip().lower()
-        if person_uid == row_uid or (person_email and person_email == email_lower):
-          if person_uid:
-            matches[person_uid] = _annotate_ad(row)
-
-  candidates = _greenlight_email_name_candidates(email_lower)
-  for cand_last, cand_first in candidates:
-    try:
-      matched_rows = search_persons_by_name(cucm_host, cucm_user, cucm_pass, cand_last, cand_first)
-    except Exception:
-      continue
-
-    for row in matched_rows:
-      row_email = str(row.get("email") or "").strip().lower()
-      if row_email != email_lower:
-        continue
-      uid_key = str(row.get("userid") or "").strip().lower()
-      if uid_key:
-        matches[uid_key] = _annotate_ad(row)
+      for row in matched_rows:
+        row_email = str(row.get("email") or "").strip().lower()
+        if row_email != email_lower:
+          continue
+        uid_key = str(row.get("userid") or "").strip().lower()
+        if uid_key:
+          matches[uid_key] = _annotate_ad(row)
 
   # If AD found the person but CUCM has no matching End User, emit an AD-only
   # synthetic row so the extract still reflects the ipPhone extension.
