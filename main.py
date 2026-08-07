@@ -1064,25 +1064,21 @@ def _opentext_numbers_lookup(number_query: str = "", limit: int = 200) -> dict:
   }
 
 
-def _servicenow_credentials_configured(api_user: str = "", api_password: str = "") -> bool:
-  resolved_user = (api_user or "").strip() or SERVICENOW_API_USER
-  resolved_pass = (api_password or "").strip() or SERVICENOW_API_PASSWORD
-  return bool(SERVICENOW_BASE_URL and resolved_user and resolved_pass)
+def _servicenow_credentials_configured() -> bool:
+  return bool(SERVICENOW_BASE_URL and SERVICENOW_API_USER and SERVICENOW_API_PASSWORD)
 
 
-def _servicenow_session(api_user: str = "", api_password: str = "") -> requests.Session:
-  resolved_user = (api_user or "").strip() or SERVICENOW_API_USER
-  resolved_pass = (api_password or "").strip() or SERVICENOW_API_PASSWORD
+def _servicenow_session() -> requests.Session:
   session = requests.Session()
   session.verify = SERVICENOW_VERIFY_SSL
   session.trust_env = False
-  session.auth = HTTPBasicAuth(resolved_user, resolved_pass)
+  session.auth = HTTPBasicAuth(SERVICENOW_API_USER, SERVICENOW_API_PASSWORD)
   return session
 
 
-def _servicenow_api_get(path: str, params: dict | None = None, api_user: str = "", api_password: str = "") -> dict:
-  if not _servicenow_credentials_configured(api_user=api_user, api_password=api_password):
-    return {"ok": False, "error": "ServiceNow credentials are not configured. Provide username/password or set SERVICENOW_API_USER and SERVICENOW_API_PASSWORD.", "status_code": 0}
+def _servicenow_api_get(path: str, params: dict | None = None) -> dict:
+  if not _servicenow_credentials_configured():
+    return {"ok": False, "error": "ServiceNow credentials are not configured in environment variables.", "status_code": 0}
 
   clean_path = str(path or "").strip()
   if not clean_path.startswith("/"):
@@ -1090,7 +1086,7 @@ def _servicenow_api_get(path: str, params: dict | None = None, api_user: str = "
 
   url = f"{SERVICENOW_BASE_URL}{clean_path}"
   try:
-    response = _servicenow_session(api_user=api_user, api_password=api_password).get(
+    response = _servicenow_session().get(
       url,
       headers={"Accept": "application/json"},
       params=params or {},
@@ -1154,7 +1150,7 @@ def _servicenow_normalize_identity(raw_identity: str, fallback_username: str = "
   return {"input": seed, "candidates": candidates}
 
 
-def _servicenow_lookup_user(identity: str, fallback_username: str = "", api_user: str = "", api_password: str = "") -> dict:
+def _servicenow_lookup_user(identity: str, fallback_username: str = "") -> dict:
   normalized = _servicenow_normalize_identity(identity, fallback_username=fallback_username)
   candidates = list(normalized.get("candidates", []))
   if not candidates:
@@ -1169,8 +1165,6 @@ def _servicenow_lookup_user(identity: str, fallback_username: str = "", api_user
         "sysparm_limit": 1,
         "sysparm_fields": "sys_id,user_name,email,name",
       },
-      api_user=api_user,
-      api_password=api_password,
     )
     if not lookup.get("ok"):
       continue
@@ -1200,12 +1194,10 @@ def _servicenow_lookup_user(identity: str, fallback_username: str = "", api_user
   }
 
 
-def _servicenow_read_test(api_user: str = "", api_password: str = "") -> dict:
+def _servicenow_read_test() -> dict:
   probe = _servicenow_api_get(
     "/api/now/table/sys_user",
     params={"sysparm_limit": 1, "sysparm_fields": "sys_id,user_name,email,name"},
-    api_user=api_user,
-    api_password=api_password,
   )
   if not probe.get("ok"):
     return {"ok": False, "error": probe.get("error", "ServiceNow read test failed.")}
@@ -1229,20 +1221,8 @@ def _servicenow_read_test(api_user: str = "", api_password: str = "") -> dict:
   }
 
 
-def _servicenow_get_assigned_tasks(
-    assigned_identity: str,
-    fallback_username: str = "",
-    table: str = "",
-    limit: int = 50,
-    api_user: str = "",
-    api_password: str = "",
-) -> dict:
-  user_info = _servicenow_lookup_user(
-    assigned_identity,
-    fallback_username=fallback_username,
-    api_user=api_user,
-    api_password=api_password,
-  )
+def _servicenow_get_assigned_tasks(assigned_identity: str, fallback_username: str = "", table: str = "", limit: int = 50) -> dict:
+  user_info = _servicenow_lookup_user(assigned_identity, fallback_username=fallback_username)
   if not user_info.get("ok"):
     return {"ok": False, "error": user_info.get("error", "Unable to resolve ServiceNow user."), "user_lookup": user_info}
 
@@ -1265,8 +1245,6 @@ def _servicenow_get_assigned_tasks(
       "sysparm_fields": fields,
       "sysparm_order_by_desc": "sys_updated_on",
     },
-    api_user=api_user,
-    api_password=api_password,
   )
   if not task_resp.get("ok"):
     return {
@@ -34770,14 +34748,6 @@ def servicenow_work_page(request: Request):
                 <input id="snow-identity" type="text" value="{escape(default_identity)}" placeholder="phimane.tiaokhiao@amnhealthcare.com">
               </div>
               <div class="field">
-                <label>ServiceNow API Username (optional)</label>
-                <input id="snow-user" type="text" value="" placeholder="Use env default if blank">
-              </div>
-              <div class="field">
-                <label>ServiceNow API Password (optional)</label>
-                <input id="snow-pass" type="password" value="" placeholder="Use env default if blank">
-              </div>
-              <div class="field">
                 <label>Table</label>
                 <input id="snow-table" type="text" value="sc_task" placeholder="sc_task">
               </div>
@@ -34847,9 +34817,7 @@ def servicenow_work_page(request: Request):
             statusEl.textContent = "Running ServiceNow read test...";
             try {{
               var identity = (byId("snow-identity") && byId("snow-identity").value || "").trim();
-              var snowUser = (byId("snow-user") && byId("snow-user").value || "").trim();
-              var snowPass = (byId("snow-pass") && byId("snow-pass").value || "").trim();
-              var data = await postForm("/servicenow/read-test", {{ assigned_to: identity, snow_user: snowUser, snow_pass: snowPass }});
+              var data = await postForm("/servicenow/read-test", {{ assigned_to: identity }});
               var sample = data.sample || {{}};
               var sampleText = [sample.name || "", sample.user_name || "", sample.email || ""].filter(Boolean).join(" | ");
               statusEl.textContent = "Read test success. " + (sampleText ? ("Sample user: " + sampleText) : "API reachable.");
@@ -34868,11 +34836,9 @@ def servicenow_work_page(request: Request):
             resultsEl.innerHTML = "";
             try {{
               var identity = (byId("snow-identity") && byId("snow-identity").value || "").trim();
-              var snowUser = (byId("snow-user") && byId("snow-user").value || "").trim();
-              var snowPass = (byId("snow-pass") && byId("snow-pass").value || "").trim();
               var table = (byId("snow-table") && byId("snow-table").value || "").trim();
               var limit = (byId("snow-limit") && byId("snow-limit").value || "50").trim();
-              var data = await postForm("/servicenow/tasks/mine", {{ assigned_to: identity, table: table, limit: limit, snow_user: snowUser, snow_pass: snowPass }});
+              var data = await postForm("/servicenow/tasks/mine", {{ assigned_to: identity, table: table, limit: limit }});
               statusEl.textContent = "Loaded " + String(data.count || 0) + " item(s).";
               var assignee = (data.user_lookup && data.user_lookup.user && (data.user_lookup.user.email || data.user_lookup.user.user_name || data.user_lookup.user.name)) || identity;
               renderRows(data.rows || [], data.table || table, assignee);
@@ -34895,15 +34861,13 @@ def servicenow_work_page(request: Request):
 def servicenow_read_test_route(
     request: Request,
     assigned_to: str = Form(""),
-  snow_user: str = Form(""),
-  snow_pass: str = Form(""),
 ):
   session = _get_auth_session(request) or {}
   session_username = str(session.get("username", "") or "").strip()
   if not session_username:
     return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
 
-  read_result = _servicenow_read_test(api_user=(snow_user or "").strip(), api_password=(snow_pass or "").strip())
+  read_result = _servicenow_read_test()
   if not read_result.get("ok"):
     return JSONResponse({"ok": False, "error": read_result.get("error", "ServiceNow read test failed.")}, status_code=500)
 
@@ -34924,8 +34888,6 @@ def servicenow_tasks_mine_route(
     assigned_to: str = Form(""),
     table: str = Form("sc_task"),
     limit: int = Form(50),
-  snow_user: str = Form(""),
-  snow_pass: str = Form(""),
 ):
   session = _get_auth_session(request) or {}
   session_username = str(session.get("username", "") or "").strip()
@@ -34937,8 +34899,6 @@ def servicenow_tasks_mine_route(
     fallback_username=session_username,
     table=(table or "sc_task").strip(),
     limit=int(limit or 50),
-    api_user=(snow_user or "").strip(),
-    api_password=(snow_pass or "").strip(),
   )
   if not lookup.get("ok"):
     return JSONResponse(
