@@ -27830,11 +27830,6 @@ __ADMIN_CARD__
     </div>
     </section>
 
-        <textarea id="called-name-preview" readonly></textarea>
-      </section>
-    </div>
-    </section>
-
     <section class="tool-panel" data-panel="changeextension">
     <h3>Change Extension Number for Jabber</h3>
     <p style="margin:0 0 12px 0;font-size:13px;color:#4e6a84;">Search for a user by last name to change their Jabber extension. Old number gets a 30-day forwarding pattern and the user is emailed their new number.</p>
