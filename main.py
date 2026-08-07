@@ -27837,7 +27837,238 @@ __ADMIN_CARD__
 
     <section class="tool-panel" data-panel="changeextension">
     <h3>Change Extension Number for Jabber</h3>
-    <p style="margin:0 0 12px 0;font-size:13px;color:#4e6a84;">Deletes old Jabber devices, rebuilds on new extension, creates 30-day forwarding pattern on old number, updates Unity voicemail alias and AD phone fields. <strong>Does not delete the voicemail box.</strong></p>
+    <p style="margin:0 0 12px 0;font-size:13px;color:#4e6a84;">Search for a user, select them, choose the new number type, then run. Old number gets a 30-day forwarding pattern and the user is notified by email.</p>
+
+    <div style="max-width:760px;">
+      <!-- Phase 1: Search -->
+      <div style="display:flex;gap:8px;margin-bottom:8px;">
+        <input id="chext-last" type="text" placeholder="Last name" style="flex:1;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;">
+        <input id="chext-first" type="text" placeholder="First name (optional)" style="flex:1;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;">
+        <button id="chext-search-btn" type="button" style="background:#1d4f91;color:#fff;border:none;border-radius:6px;padding:7px 18px;font-weight:700;cursor:pointer;">Search</button>
+      </div>
+      <div id="chext-search-results" style="display:none;margin-bottom:12px;overflow-x:auto;"></div>
+
+      <!-- Phase 2: Config (shown after user selected) -->
+      <div id="chext-preview-block" style="display:none;">
+        <div style="background:#eef5ff;border:1px solid #c8dbee;border-radius:8px;padding:12px 16px;margin-bottom:10px;">
+          <strong id="chext-user-label" style="font-size:14px;"></strong>
+          <div id="chext-current-info" style="font-size:13px;color:#2c3e50;margin-top:4px;"></div>
+        </div>
+
+        <div id="chext-sms-warning" style="display:none;background:#fff3cd;border:1px solid #f0ad4e;border-radius:8px;padding:10px 16px;margin-bottom:10px;font-size:13px;font-weight:600;color:#856404;">
+          ⚠ SMS service detected on old extension — manual re-hosting required on new extension.
+          <div id="chext-sms-detail" style="font-weight:400;margin-top:4px;"></div>
+        </div>
+
+        <div style="display:flex;gap:12px;margin-bottom:10px;align-items:flex-end;">
+          <div style="flex:1;">
+            <label style="font-weight:600;display:block;margin-bottom:4px;font-size:13px;">New Number Type</label>
+            <select id="chext-dn-type" style="width:100%;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;font-size:13px;">
+              <option value="general">General Employee</option>
+              <option value="recruiter">Recruiter</option>
+              <option value="strike">Strike Employee</option>
+            </select>
+          </div>
+          <div style="flex:1;">
+            <label style="font-weight:600;display:block;margin-bottom:4px;font-size:13px;">Unity Host</label>
+            <input id="chext-unity-host" type="text" placeholder="e.g. lascutyp01.ahs.int" style="width:100%;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;font-size:13px;" value="">
+          </div>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button id="chext-run-btn" type="button" style="background:#b00020;color:#fff;border:none;border-radius:6px;padding:8px 22px;font-weight:700;cursor:pointer;">Run Change Extension</button>
+          <button id="chext-cancel-btn" type="button" style="background:#6b7280;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;">Cancel</button>
+        </div>
+      </div>
+
+      <div id="chext-status" style="min-height:18px;margin-top:10px;font-size:13px;font-weight:600;color:#1d4f91;"></div>
+      <div id="chext-results" style="margin-top:8px;overflow-x:auto;"></div>
+    </div>
+
+    <!-- Pending Forwards List -->
+    <hr style="margin:24px 0 16px;border:none;border-top:1px solid #c8dbee;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px;">
+      <h4 style="margin:0;font-size:14px;color:#1d4f91;">Active Forwarding Patterns (Pending Auto-Delete)</h4>
+      <button id="chext-refresh-pending-btn" type="button" style="background:#355978;color:#fff;border:none;border-radius:5px;padding:4px 12px;font-size:12px;cursor:pointer;">Refresh</button>
+    </div>
+    <p style="margin:0 0 8px 0;font-size:12px;color:#4e6a84;">Old extensions that are temporarily forwarding to new extensions. Each entry is auto-deleted and released after 30 days.</p>
+    <div id="chext-pending-list" style="overflow-x:auto;"></div>
+
+    <script>
+    (function() {
+      const searchBtn = document.getElementById("chext-search-btn");
+      const lastEl = document.getElementById("chext-last");
+      const firstEl = document.getElementById("chext-first");
+      const resultsEl = document.getElementById("chext-search-results");
+      const previewBlock = document.getElementById("chext-preview-block");
+      const userLabel = document.getElementById("chext-user-label");
+      const currentInfo = document.getElementById("chext-current-info");
+      const smsWarning = document.getElementById("chext-sms-warning");
+      const smsDetail = document.getElementById("chext-sms-detail");
+      const dnTypeEl = document.getElementById("chext-dn-type");
+      const unityHostEl = document.getElementById("chext-unity-host");
+      const runBtn = document.getElementById("chext-run-btn");
+      const cancelBtn = document.getElementById("chext-cancel-btn");
+      const statusEl = document.getElementById("chext-status");
+      const outputEl = document.getElementById("chext-results");
+      const pendingListEl = document.getElementById("chext-pending-list");
+      const refreshPendingBtn = document.getElementById("chext-refresh-pending-btn");
+
+      let selectedUser = null;
+
+      function esc(s) { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; }
+
+      function resetPreview() {
+        selectedUser = null;
+        previewBlock.style.display = "none";
+        resultsEl.style.display = "none";
+        resultsEl.innerHTML = "";
+        outputEl.innerHTML = "";
+        statusEl.textContent = "";
+      }
+
+      searchBtn.addEventListener("click", async function() {
+        const lastName = lastEl.value.trim();
+        if (!lastName) { statusEl.textContent = "Enter a last name."; return; }
+        statusEl.textContent = "Searching...";
+        resetPreview();
+        try {
+          const fd = new FormData();
+          fd.append("last_name", lastName);
+          fd.append("first_name", firstEl.value.trim());
+          const resp = await fetch("/lookup/person", { method: "POST", body: fd, credentials: "same-origin" });
+          const data = await resp.json();
+          if (!data.ok || !data.results || data.results.length === 0) { statusEl.textContent = "No users found."; return; }
+          statusEl.textContent = "";
+          let html = "<table style='width:100%;border-collapse:collapse;font-size:13px;'><thead><tr style='background:#1d4f91;color:#fff;'><th style='padding:5px 10px;text-align:left;'>Name</th><th style='padding:5px 10px;'>User ID</th><th style='padding:5px 10px;'>Extension</th><th style='padding:5px 10px;'>Devices</th><th style='padding:5px 10px;'></th></tr></thead><tbody>";
+          data.results.forEach(function(r, i) {
+            const bg = i % 2 === 0 ? "#f7fbff" : "#fff";
+            const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+            const devNames = (r.devices || []).map(function(d) { return d.name; }).join(", ") || "\u2014";
+            html += "<tr style='background:" + bg + ";border-bottom:1px solid #e2eaf3;'><td style='padding:5px 10px;'>" + esc(name) + "</td><td style='padding:5px 10px;'>" + esc(r.userid) + "</td><td style='padding:5px 10px;'>" + esc(r.primary_extension || "\u2014") + "</td><td style='padding:5px 10px;font-size:11px;'>" + esc(devNames) + "</td><td style='padding:5px 10px;'><button type='button' data-idx='" + i + "' style='background:#1d4f91;color:#fff;border:none;border-radius:5px;padding:3px 10px;cursor:pointer;font-size:12px;'>Select</button></td></tr>";
+          });
+          html += "</tbody></table>";
+          resultsEl.innerHTML = html;
+          resultsEl.style.display = "block";
+          resultsEl.querySelectorAll("button[data-idx]").forEach(function(btn) {
+            btn.addEventListener("click", function() {
+              selectedUser = data.results[parseInt(btn.getAttribute("data-idx"), 10)];
+              showPreview(selectedUser);
+            });
+          });
+        } catch(err) { statusEl.textContent = "Search failed: " + (err.message || err); }
+      });
+
+      async function showPreview(user) {
+        resultsEl.style.display = "none";
+        statusEl.textContent = "Loading SMS check...";
+        try {
+          const fd = new FormData();
+          fd.append("target_user", user.userid);
+          const resp = await fetch("/change-jabber-extension/preview", { method: "POST", body: fd, credentials: "same-origin" });
+          const data = await resp.json();
+          if (!data.ok) { statusEl.textContent = "Preview failed: " + (data.error || "unknown"); return; }
+          const name = data.display_name || user.userid;
+          userLabel.textContent = name + " (" + user.userid + ")";
+          currentInfo.innerHTML = "Current extension: <strong>" + esc(data.current_extension || "\u2014") + "</strong> &nbsp;|&nbsp; Devices: <strong>" + esc((data.device_names || []).join(", ") || "none") + "</strong>" + (data.user_email ? " &nbsp;|&nbsp; Email: <strong>" + esc(data.user_email) + "</strong>" : "");
+          if (data.sms_action_required) {
+            smsWarning.style.display = "block";
+            smsDetail.innerHTML = [data.sms_aerialink ? "Aerialink: " + esc(data.sms_aerialink) : "", data.sms_twilio_amieweb ? "Twilio AMIEWeb: " + esc(data.sms_twilio_amieweb) : ""].filter(Boolean).join("<br>");
+          } else { smsWarning.style.display = "none"; }
+          if (data.unity_host) unityHostEl.value = data.unity_host;
+          previewBlock.style.display = "block";
+          statusEl.textContent = "";
+        } catch(err) { statusEl.textContent = "Preview error: " + (err.message || err); }
+      }
+
+      cancelBtn.addEventListener("click", function() { resetPreview(); });
+
+      runBtn.addEventListener("click", async function() {
+        if (!selectedUser) return;
+        const dnType = dnTypeEl.value;
+        const dnTypeLabel = dnTypeEl.options[dnTypeEl.selectedIndex].text;
+        if (!confirm("Run Change Extension for " + selectedUser.userid + "?\n\nNew number type: " + dnTypeLabel + "\n\nThis will delete existing Jabber devices, rebuild on a new extension, create a 30-day forwarding pattern on the old number, and email the user.\n\nContinue?")) return;
+        runBtn.disabled = true;
+        statusEl.textContent = "Running...";
+        outputEl.innerHTML = "";
+        try {
+          const fd = new FormData();
+          fd.append("target_user", selectedUser.userid);
+          fd.append("dn_type", dnType);
+          fd.append("unity_host", unityHostEl.value.trim());
+          const resp = await fetch("/change-jabber-extension/run", { method: "POST", body: fd, credentials: "same-origin" });
+          const data = await resp.json();
+          if (data.steps) {
+            let html = "<table style='width:100%;border-collapse:collapse;font-size:13px;'><thead><tr style='background:#1d4f91;color:#fff;'><th style='padding:6px 10px;text-align:left;'>Step</th><th style='padding:6px 10px;'>Status</th><th style='padding:6px 10px;text-align:left;'>Details</th></tr></thead><tbody>";
+            data.steps.forEach(function(s, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#fff";
+              const color = s.status === "Success" ? "#0f6d35" : (s.status === "Skipped" ? "#6b7280" : "#b00020");
+              html += "<tr style='background:" + bg + ";border-bottom:1px solid #e2eaf3;'><td style='padding:6px 10px;'>" + esc(s.step) + "</td><td style='padding:6px 10px;font-weight:700;color:" + color + ";'>" + esc(s.status) + "</td><td style='padding:6px 10px;'>" + esc(s.details || "") + "</td></tr>";
+            });
+            html += "</tbody></table>";
+            if (data.new_ext) html += "<p style='margin:8px 0 0 0;font-size:13px;font-weight:600;color:#0f6d35;'>\u2705 New extension assigned: " + esc(data.new_ext) + "</p>";
+            outputEl.innerHTML = html;
+          }
+          const allOk = (data.steps || []).every(function(s) { return s.status === "Success" || s.status === "Skipped"; });
+          statusEl.textContent = allOk ? "\u2705 Change Extension completed." : "\u26A0 Completed with some errors — review steps above.";
+          statusEl.style.color = allOk ? "#0f6d35" : "#b00020";
+          if (allOk) loadPendingForwards();
+        } catch(err) {
+          statusEl.textContent = "Run failed: " + (err.message || err);
+        } finally { runBtn.disabled = false; }
+      });
+
+      async function loadPendingForwards() {
+        try {
+          const resp = await fetch("/change-jabber-extension/pending-forwards", { credentials: "same-origin" });
+          const data = await resp.json();
+          if (!data.ok || !data.entries || data.entries.length === 0) {
+            pendingListEl.innerHTML = "<p style='font-size:13px;color:#6b7280;'>No active forwarding patterns.</p>";
+            return;
+          }
+          let html = "<table style='width:100%;border-collapse:collapse;font-size:13px;'><thead><tr style='background:#355978;color:#fff;'><th style='padding:5px 10px;text-align:left;'>User</th><th style='padding:5px 10px;'>Old Ext</th><th style='padding:5px 10px;'>New Ext</th><th style='padding:5px 10px;'>Changed</th><th style='padding:5px 10px;'>Auto-Delete</th><th style='padding:5px 10px;'>Status</th><th style='padding:5px 10px;'>Action</th></tr></thead><tbody>";
+          data.entries.forEach(function(e, i) {
+            const bg = i % 2 === 0 ? "#f7fbff" : "#fff";
+            const expired = e.expired;
+            const statusText = expired ? "Expired" : "Active";
+            const statusColor = expired ? "#b00020" : "#0f6d35";
+            html += "<tr style='background:" + bg + ";border-bottom:1px solid #e2eaf3;'>";
+            html += "<td style='padding:5px 10px;font-size:12px;'>" + esc(e.display_name || e.userid || "") + "</td>";
+            html += "<td style='padding:5px 10px;font-weight:700;'>" + esc(e.old_ext || "") + "</td>";
+            html += "<td style='padding:5px 10px;'>" + esc(e.new_ext || "") + "</td>";
+            html += "<td style='padding:5px 10px;font-size:12px;'>" + esc(e.change_date || "") + "</td>";
+            html += "<td style='padding:5px 10px;font-size:12px;'>" + esc(e.expires || "") + "</td>";
+            html += "<td style='padding:5px 10px;font-weight:700;color:" + statusColor + ";'>" + statusText + "</td>";
+            html += "<td style='padding:5px 10px;'><button type='button' data-old='" + esc(e.old_ext || "") + "' style='background:#b00020;color:#fff;border:none;border-radius:4px;padding:3px 9px;font-size:11px;cursor:pointer;'>Cancel Forward</button></td>";
+            html += "</tr>";
+          });
+          html += "</tbody></table>";
+          pendingListEl.innerHTML = html;
+          pendingListEl.querySelectorAll("button[data-old]").forEach(function(btn) {
+            btn.addEventListener("click", async function() {
+              const oldExt = btn.getAttribute("data-old");
+              if (!confirm("Cancel forwarding from " + oldExt + " immediately?\n\nThe old number will be released and the user will be notified by email.")) return;
+              btn.disabled = true;
+              try {
+                const fd = new FormData();
+                fd.append("old_ext", oldExt);
+                const resp = await fetch("/change-jabber-extension/cancel-forward", { method: "POST", body: fd, credentials: "same-origin" });
+                const data = await resp.json();
+                if (data.ok) { loadPendingForwards(); }
+                else { alert("Cancel failed: " + (data.error || "unknown error")); btn.disabled = false; }
+              } catch(err) { alert("Error: " + (err.message || err)); btn.disabled = false; }
+            });
+          });
+        } catch(err) {
+          pendingListEl.innerHTML = "<p style='font-size:13px;color:#b00020;'>Failed to load pending forwards.</p>";
+        }
+      }
+
+      refreshPendingBtn.addEventListener("click", loadPendingForwards);
+      loadPendingForwards();
+    })();
+    </script>
+    </section>
 
     <div style="max-width:760px;">
       <!-- Phase 1: Search -->
@@ -50434,15 +50665,15 @@ def _change_ext_create_forwarding_pattern(session: requests.Session, cucm_host: 
     raise RuntimeError(f"addTransPattern failed HTTP {resp.status_code}: {resp.text[:400]}")
 
 
-def _change_ext_store_pending_cleanup(cucm_host: str, pattern: str, route_partition: str, new_ext: str) -> None:
+def _change_ext_store_pending_cleanup(cucm_host: str, old_ext: str, route_partition: str, new_ext: str) -> None:
   """Store pending DN release (after 30-day forward expires) in app settings."""
   import datetime as _dt
   expires = (_dt.date.today() + _dt.timedelta(days=30)).isoformat()
-  settings = _load_app_settings()
+  settings = _load_settings()
   pending = settings.get("pending_ext_dn_releases", [])
-  pending.append({"pattern": pattern, "route_partition": route_partition, "new_ext": new_ext, "expires": expires, "cucm_host": cucm_host})
+  pending.append({"old_ext": old_ext, "route_partition": route_partition, "new_ext": new_ext, "expires": expires, "cucm_host": cucm_host})
   settings["pending_ext_dn_releases"] = pending
-  _save_app_settings(settings)
+  _save_settings(settings)
 
 
 @app.post("/change-jabber-extension/preview")
@@ -50564,7 +50795,7 @@ def change_jabber_extension_validate_dn_route(
 def change_jabber_extension_run_route(
     request: Request,
     target_user: str = Form(""),
-    new_extension: str = Form(""),
+    dn_type: str = Form("general"),
     unity_host: str = Form(""),
     cucm_host: str = Form(""),
     cucm_user: str = Form(""),
@@ -50572,15 +50803,241 @@ def change_jabber_extension_run_route(
 ):
   resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
   clean_uid = (target_user or "").strip()
-  clean_new_ext = (new_extension or "").strip()
+  clean_dn_type = (dn_type or "general").strip().lower()
   clean_unity = (unity_host or "").strip()
   steps = []
 
   def _step(name: str, status: str, details: str):
     steps.append({"step": name, "status": status, "details": details})
 
-  if not clean_uid or not clean_new_ext:
-    return JSONResponse({"ok": False, "error": "target_user and new_extension required"}, status_code=400)
+  if not clean_uid:
+    return JSONResponse({"ok": False, "error": "target_user required"}, status_code=400)
+
+  try:
+    session = requests.Session()
+    session.verify = False
+    session.trust_env = False
+    session.auth = HTTPBasicAuth(resolved_user, resolved_pass)
+
+    # Step 1: Validate and capture current state
+    people = search_persons_by_name(resolved_host, resolved_user, resolved_pass, clean_uid.split(".")[-1] if "." in clean_uid else clean_uid)
+    user = next((p for p in people if str(p.get("userid", "")).strip().lower() == clean_uid.lower()), None)
+    if not user:
+      _step("Validate User", "Failed", f"{clean_uid} not found in CUCM")
+      return JSONResponse({"ok": False, "steps": steps})
+    old_ext = (user.get("primary_extension") or "").strip()
+    user_email = (user.get("email") or "").strip()
+    display_name = (user.get("display_name") or f"{user.get('first_name','')} {user.get('last_name','')}").strip()
+    _step("Validate User", "Success", f"Found {clean_uid} ({display_name}), current extension {old_ext or 'none'}")
+
+    # Step 2: Identify Jabber devices
+    jabber_prefixes = ("CSF", "TCT", "BOT", "TAB")
+    devices = user.get("devices") or []
+    jabber_devices = [d for d in devices if str(d.get("name", "")).upper().startswith(jabber_prefixes)]
+    device_names = [d.get("name", "") for d in jabber_devices]
+    _step("Identify Jabber Devices", "Success" if jabber_devices else "Skipped", ", ".join(device_names) if device_names else "No Jabber devices found")
+
+    # Step 3: Delete old Jabber devices
+    deleted = []
+    for dev_name in device_names:
+      try:
+        _change_ext_remove_phone(session, resolved_host, dev_name)
+        deleted.append(dev_name)
+      except Exception as e:
+        _step(f"Delete {dev_name}", "Failed", str(e))
+    if device_names:
+      _step("Delete Old Jabber Devices", "Success" if len(deleted) == len(device_names) else "Partial", f"Deleted: {', '.join(deleted)}")
+
+    # Step 4: Build new Jabber devices with new extension (auto-assigned by dn_type)
+    built = []
+    failed_build = []
+    for dev_name in device_names:
+      try:
+        csv_data, fname = build_user_csf_phone_from_template(
+          cucm_host=resolved_host, cucm_user=resolved_user, cucm_pass=resolved_pass,
+          target_user=clean_uid, dn_type=clean_dn_type,
+        )
+        built.append(dev_name[:3].upper())
+      except Exception as e:
+        failed_build.append(f"{dev_name[:3]}: {e}")
+    if device_names:
+      status_build = "Success" if not failed_build else ("Failed" if len(failed_build) == len(device_names) else "Partial")
+      _step("Build New Jabber Devices", status_build, f"Built: {', '.join(built)}" + (f"; Errors: {'; '.join(failed_build)}" if failed_build else ""))
+
+    # Get the new extension assigned after build
+    new_ext = ""
+    try:
+      updated_people = search_persons_by_name(resolved_host, resolved_user, resolved_pass, clean_uid.split(".")[-1] if "." in clean_uid else clean_uid)
+      updated_user = next((p for p in updated_people if str(p.get("userid", "")).strip().lower() == clean_uid.lower()), None)
+      if updated_user:
+        new_ext = (updated_user.get("primary_extension") or "").strip()
+    except Exception:
+      pass
+    if new_ext:
+      _step("Resolve New Extension", "Success", f"New extension: {new_ext}")
+    else:
+      _step("Resolve New Extension", "Skipped", "Could not determine new extension; forwarding and email skipped")
+
+    # Step 5: Create 30-day forwarding pattern on old extension
+    import datetime as _dt
+    change_date = _dt.date.today().isoformat()
+    expires = (_dt.date.today() + _dt.timedelta(days=30)).isoformat()
+    if old_ext and new_ext and old_ext != new_ext:
+      try:
+        _change_ext_create_forwarding_pattern(session, resolved_host, old_ext, new_ext, "ENT_DEVICE_PT")
+        settings = _load_settings()
+        pending = settings.get("pending_ext_dn_releases", [])
+        pending.append({
+          "old_ext": old_ext, "new_ext": new_ext, "route_partition": "ENT_DEVICE_PT",
+          "cucm_host": resolved_host, "change_date": change_date, "expires": expires,
+          "user_email": user_email, "display_name": display_name, "userid": clean_uid,
+        })
+        settings["pending_ext_dn_releases"] = pending
+        _save_settings(settings)
+        _step("Create Forwarding Pattern", "Success", f"{old_ext}\u2192{new_ext}, expires {expires}")
+      except Exception as e:
+        _step("Create Forwarding Pattern", "Failed", str(e))
+    else:
+      _step("Create Forwarding Pattern", "Skipped", "No old/new extension or same value")
+
+    # Step 6: Update Unity mailbox DtmfAccessId
+    if clean_unity and new_ext:
+      try:
+        unity_result = _change_ext_unity_update_dtmf(clean_unity, resolved_user, resolved_pass, clean_uid, new_ext)
+        if unity_result.get("ok"):
+          _step("Update Unity Mailbox", "Success", f"DtmfAccessId updated to {new_ext} on {clean_unity}")
+        else:
+          _step("Update Unity Mailbox", "Failed", unity_result.get("error", "Unknown error"))
+      except Exception as e:
+        _step("Update Unity Mailbox", "Failed", str(e))
+    else:
+      _step("Update Unity Mailbox", "Skipped", "Unity host not provided or new extension unknown")
+
+    # Step 7: Update AD phone fields
+    if new_ext:
+      try:
+        update_ad_phone_fields_only(target_user=clean_uid, phone_number=new_ext, ad_username=resolved_user, ad_password=resolved_pass)
+        _step("Update AD Phone Fields", "Success", f"ipPhone and telephoneNumber set to {new_ext}")
+      except Exception as e:
+        _step("Update AD Phone Fields", "Failed", str(e))
+    else:
+      _step("Update AD Phone Fields", "Skipped", "New extension unknown")
+
+    # Step 8: Send notification email to user
+    if user_email and new_ext:
+      try:
+        subject = f"Your Jabber Extension Has Changed to {new_ext}"
+        body = (
+          f"Hi {display_name or clean_uid},\n\n"
+          f"Your Jabber extension has been changed:\n"
+          f"  New extension: {new_ext}\n"
+          f"  Old extension: {old_ext}\n\n"
+        )
+        if old_ext and old_ext != new_ext:
+          body += (
+            f"For 30 days (until {expires}), calls to your old number {old_ext} will be automatically forwarded to your new number {new_ext}.\n\n"
+            f"After {expires}, the temporary forwarding will be removed and {old_ext} will be reassigned to another user.\n\n"
+            f"If you want the forwarding removed early, contact your IT administrator.\n\n"
+          )
+        body += "This is an automated notification from the Cisco Voice Server portal.\n"
+        _send_smtp_email(to_addresses=[user_email], subject=subject, body=body, sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com")
+        _step("Send Notification Email", "Success", f"Sent to {user_email}")
+      except Exception as e:
+        _step("Send Notification Email", "Failed", str(e))
+    else:
+      _step("Send Notification Email", "Skipped", "No user email or new extension unknown")
+
+    _append_audit_event(
+      action="change_jabber_extension",
+      cucm_host=resolved_host, operator=resolved_user,
+      target=f"user={clean_uid};old_ext={old_ext};new_ext={new_ext};dn_type={clean_dn_type}",
+      output_filename="inline_json_ok", inline_mode=True,
+    )
+
+    return JSONResponse({"ok": True, "steps": steps, "new_ext": new_ext, "old_ext": old_ext})
+  except Exception as exc:
+    _step("Unexpected Error", "Failed", str(exc))
+    return JSONResponse({"ok": False, "steps": steps, "error": str(exc)}, status_code=500)
+
+
+@app.get("/change-jabber-extension/pending-forwards")
+def change_jabber_extension_pending_forwards_route(request: Request):
+  _check_session(request)
+  settings = _load_settings()
+  pending = settings.get("pending_ext_dn_releases", [])
+  import datetime as _dt
+  today = _dt.date.today().isoformat()
+  for entry in pending:
+    entry["expired"] = (entry.get("expires", "9999-99-99") <= today)
+  return JSONResponse({"ok": True, "count": len(pending), "entries": pending})
+
+
+@app.post("/change-jabber-extension/cancel-forward")
+def change_jabber_extension_cancel_forward_route(
+    request: Request,
+    old_ext: str = Form(""),
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  clean_old = (old_ext or "").strip()
+  if not clean_old:
+    return JSONResponse({"ok": False, "error": "old_ext required"}, status_code=400)
+  try:
+    session = requests.Session()
+    session.verify = False
+    session.trust_env = False
+    session.auth = HTTPBasicAuth(resolved_user, resolved_pass)
+
+    settings = _load_settings()
+    pending = settings.get("pending_ext_dn_releases", [])
+    entry = next((e for e in pending if e.get("old_ext") == clean_old), None)
+    if not entry:
+      return JSONResponse({"ok": False, "error": f"No active forwarding found for {clean_old}"}, status_code=404)
+
+    new_ext = entry.get("new_ext", "")
+    route_partition = entry.get("route_partition", "ENT_DEVICE_PT")
+    user_email = entry.get("user_email", "")
+    display_name = entry.get("display_name", "")
+
+    # Remove translation pattern
+    soap_remove = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/><soapenv:Body>
+    <axl:removeTransPattern sequence=\"1\">
+      <pattern>{xml_escape(clean_old)}</pattern>
+      <routePartitionName>{xml_escape(route_partition)}</routePartitionName>
+    </axl:removeTransPattern>
+  </soapenv:Body></soapenv:Envelope>"""
+    resp = session.post(f"https://{resolved_host}:8443/axl/", data=soap_remove.encode("utf-8"), headers={"Content-Type": "text/xml"}, timeout=60)
+    if resp.status_code != 200:
+      return JSONResponse({"ok": False, "error": f"removeTransPattern failed HTTP {resp.status_code}: {resp.text[:300]}"})
+
+    # Remove from pending list
+    settings["pending_ext_dn_releases"] = [e for e in pending if e.get("old_ext") != clean_old]
+    _save_settings(settings)
+
+    # Send cancellation email
+    if user_email:
+      try:
+        subject = f"Extension Forwarding Cancelled — {clean_old} No Longer Forwards"
+        body = (
+          f"Hi {display_name or 'User'},\n\n"
+          f"The temporary call forwarding from your old extension {clean_old} to your new extension {new_ext} has been cancelled early.\n\n"
+          f"Your new extension {new_ext} remains active. The old number {clean_old} has been returned to the available pool.\n\n"
+          f"This is an automated notification from the Cisco Voice Server portal.\n"
+        )
+        _send_smtp_email(to_addresses=[user_email], subject=subject, body=body, sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com")
+      except Exception:
+        pass
+
+    _append_audit_event(action="change_extension_cancel_forward", cucm_host=resolved_host, operator=resolved_user,
+      target=f"old_ext={clean_old};new_ext={new_ext}", output_filename="inline_json_ok", inline_mode=True)
+
+    return JSONResponse({"ok": True, "message": f"Forwarding from {clean_old} cancelled."})
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
   try:
     session = requests.Session()
