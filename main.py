@@ -27836,16 +27836,11 @@ __ADMIN_CARD__
     <p style="margin:0 0 12px 0;font-size:13px;color:#4e6a84;">Search for a user by last name to change their Jabber extension. Old number gets a 30-day forwarding pattern and the user is emailed their new number.</p>
 
     <div style="max-width:860px;">
-      <form id="chext-search-form" autocomplete="off">
-        <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
-        <input type="hidden" name="cucm_user" value="__AUTH_USER__">
-        <input type="hidden" name="cucm_pass" value="">
-        <div style="display:flex;gap:8px;margin-bottom:10px;">
-          <input id="chext-last" name="last_name" type="text" placeholder="Last name" style="flex:1;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;font-size:13px;">
-          <input id="chext-first" name="first_name" type="text" placeholder="First name (optional)" style="flex:1;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;font-size:13px;">
-          <button id="chext-search-btn" type="submit" style="background:#1d4f91;color:#fff;border:none;border-radius:6px;padding:7px 18px;font-weight:700;cursor:pointer;font-size:13px;">Search</button>
-        </div>
-      </form>
+      <div style="display:flex;gap:8px;margin-bottom:10px;">
+        <input id="chext-last" type="text" placeholder="Last name" style="flex:1;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;font-size:13px;">
+        <input id="chext-first" type="text" placeholder="First name (optional)" style="flex:1;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;font-size:13px;">
+        <button id="chext-search-btn" type="button" onclick="if(window.runChextSearch){window.runChextSearch();}else{var s=document.getElementById('chext-status');if(s)s.textContent='Search not loaded.';}" style="background:#1d4f91;color:#fff;border:none;border-radius:6px;padding:7px 18px;font-weight:700;cursor:pointer;font-size:13px;">Search</button>
+      </div>
       <div id="chext-status" style="min-height:16px;margin-bottom:6px;font-size:13px;font-weight:600;color:#1d4f91;"></div>
       <div id="chext-search-results" style="overflow-x:auto;margin-bottom:12px;"></div>
 
@@ -27886,7 +27881,6 @@ __ADMIN_CARD__
 
     <script>
     (function() {
-      var chextForm = document.getElementById("chext-search-form");
       var lastEl = document.getElementById("chext-last");
       var firstEl = document.getElementById("chext-first");
       var statusEl = document.getElementById("chext-status");
@@ -27902,8 +27896,7 @@ __ADMIN_CARD__
       var runResultsEl = document.getElementById("chext-run-results");
       var pendingListEl = document.getElementById("chext-pending-list");
       var refreshPendingBtn = document.getElementById("chext-refresh-pending-btn");
-      var searchBtn = document.getElementById("chext-search-btn");
-      if (!chextForm || !statusEl || !resultsEl || !runBtn || !cancelSelBtn) return;
+      if (!statusEl || !resultsEl || !runBtn || !cancelSelBtn) return;
 
       let selectedUser = null;
       function esc(s) { const d = document.createElement("div"); d.textContent = String(s || ""); return d.innerHTML; }
@@ -27916,17 +27909,18 @@ __ADMIN_CARD__
         smsWarning.style.display = "none";
       }
 
-      chextForm.addEventListener("submit", async function(event) {
-        event.preventDefault();
-        const lastName = lastEl.value.trim();
-        if (!lastName) { statusEl.textContent = "Enter a last name."; return; }
-        statusEl.textContent = "Searching...";
+      window.runChextSearch = async function() {
+        var lastName = lastEl ? lastEl.value.trim() : "";
+        if (!lastName) { if(statusEl) statusEl.textContent = "Enter a last name."; return; }
+        if(statusEl) statusEl.textContent = "Searching...";
         clearSelection();
-        resultsEl.innerHTML = "";
+        if(resultsEl) resultsEl.innerHTML = "";
         try {
-          const fd = new FormData(chextForm);
-          const resp = await fetch("/lookup/person", { method: "POST", body: fd, credentials: "same-origin" });
-          const data = await resp.json();
+          var fd = new FormData();
+          fd.append("last_name", lastName);
+          fd.append("first_name", firstEl ? firstEl.value.trim() : "");
+          var resp = await fetch("/lookup/person", { method: "POST", body: fd, credentials: "same-origin" });
+          var data = await resp.json();
           if (!data.ok || !data.results || !data.results.length) { statusEl.textContent = "No users found."; return; }
           statusEl.textContent = "Found " + data.results.length + " user(s). Select one to change their extension.";
           let html = "<table style='width:100%;border-collapse:collapse;font-size:13px;'><thead><tr style='background:#1d4f91;color:#fff;'><th style='padding:5px 10px;text-align:left;'>Name</th><th style='padding:5px 10px;'>User ID</th><th style='padding:5px 10px;'>Extension</th><th style='padding:5px 10px;'>Jabber Devices</th><th style='padding:5px 10px;'></th></tr></thead><tbody>";
@@ -27951,8 +27945,9 @@ __ADMIN_CARD__
               loadActionForm(selectedUser);
             });
           });
-        } catch(err) { statusEl.textContent = "Search failed: " + (err.message || err); }
-      });
+        } catch(err) { if(statusEl) statusEl.textContent = "Search failed: " + (err.message || err); }
+      };
+      if (lastEl) { lastEl.addEventListener("keydown", function(e) { if (e.key === "Enter") { e.preventDefault(); window.runChextSearch(); } }); }
 
       function loadActionForm(user) {
         const name = user.display_name || ((user.first_name || "") + " " + (user.last_name || "")).trim() || user.userid;
