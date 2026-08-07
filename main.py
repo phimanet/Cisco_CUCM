@@ -50735,7 +50735,10 @@ def change_jabber_extension_run_route(
 
 @app.get("/change-jabber-extension/pending-forwards")
 def change_jabber_extension_pending_forwards_route(request: Request):
-  _check_session(request)
+  try:
+    _get_auth_session(request)
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Not authenticated"}, status_code=401)
   settings = _load_settings()
   pending = settings.get("pending_ext_dn_releases", [])
   import datetime as _dt
