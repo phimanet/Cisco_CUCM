@@ -51059,21 +51059,6 @@ def change_jabber_extension_run_route(
         else:
           _step("Delete Old DN", "Failed", f"removeLine HTTP {resp_rm.status_code}: {resp_rm.text[:200]}")
           raise RuntimeError(f"removeLine failed: {resp_rm.status_code}")
-        # Delete old DN first so the translation pattern can use the same number+partition
-        soap_rm_dn = f'''<?xml version="1.0" encoding="utf-8"?>
-<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
-  <soapenv:Header/><soapenv:Body>
-    <axl:removeLine sequence="1">
-      <pattern>{xml_escape(old_ext)}</pattern>
-      <routePartitionName>ENT_DEVICE_PT</routePartitionName>
-    </axl:removeLine>
-  </soapenv:Body></soapenv:Envelope>'''
-        resp_rm = session.post(f"https://{resolved_host}:8443/axl/", data=soap_rm_dn.encode("utf-8"), headers={"Content-Type": "text/xml"}, timeout=60)
-        if resp_rm.status_code == 200:
-          _step("Delete Old DN", "Success", f"Removed DN {old_ext} from ENT_DEVICE_PT")
-        else:
-          _step("Delete Old DN", "Failed", f"removeLine HTTP {resp_rm.status_code}: {resp_rm.text[:200]}")
-          raise RuntimeError(f"removeLine failed, cannot create forwarding pattern")
         _change_ext_create_forwarding_pattern(session, resolved_host, old_ext, new_ext, "ENT_DEVICE_PT", display_name)
         settings = _load_settings()
         pending = settings.get("pending_ext_dn_releases", [])
