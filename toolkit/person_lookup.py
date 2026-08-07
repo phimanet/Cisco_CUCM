@@ -254,6 +254,18 @@ def _lookup_translated_number(session, cucm_host, first_name, last_name, extensi
     return sorted(set(matches))[0]
 
 
+def _soap_execute_sql(sql: str) -> str:
+    return f"""<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="{SOAPENV_NS}" xmlns:axl="{AXL_NS}">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:executeSQLQuery>
+      <sql>{xml_escape(sql)}</sql>
+    </axl:executeSQLQuery>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+
 def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_name=""):
     """
     Search CUCM end users by last name (required) and optional first name.
@@ -270,107 +282,100 @@ def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_nam
     session.verify = False
     session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
-    userids = []
-    seen = set()
+    # Escape single quotes for SQL safety
+    def _q(value: str) -> str:
+        return value.strip().replace("'", "''")
 
-    # 1. List users matching the name, probing case variants to avoid case-sensitive misses.
-    first_name_variants = _case_variants(first_name)
-    for last_variant in _case_variants(last_name):
-        for first_variant in first_name_variants:
-            list_xml = _soap_list_users(last_variant, first_variant)
-            list_resp = _axl_post(session, cucm_host, list_xml)
-            list_root = ET.fromstring(list_resp)
+    where_parts = [f"u.lastname LIKE '%{_q(last_name)}%'"]
+    clean_first = (first_name or "").strip()
+    if clean_first:
+        where_parts.append(f"u.firstname LIKE '%{_q(clean_first)}%'")
 
-            for elem in list_root.iter():
-                if _strip_ns(elem.tag) != "user":
-                    continue
-                uid_elem = _find_child(elem, "userid")
-                uid = (uid_elem.text or "").strip() if uid_elem is not None else ""
-                if not uid:
-                    continue
+    sql = (
+        "SELECT u.userid AS userid, u.firstname AS firstname, u.lastname AS lastname, "
+        "u.displayname AS displayname, u.title AS title, u.mailid AS mailid, "
+        "u.telephonenumber AS telephonenumber, "
+        "d.name AS device_name, n.dnorpattern AS extension, "
+        "dm.numplanindex AS line_index "
+        "FROM enduser u "
+        "LEFT OUTER JOIN enduserdevicemap edm ON edm.fkenduser = u.pkid "
+        "LEFT OUTER JOIN device d ON d.pkid = edm.fkdevice "
+        "LEFT OUTER JOIN devicenumplanmap dm ON dm.fkdevice = d.pkid "
+        "LEFT OUTER JOIN numplan n ON n.pkid = dm.fknumplan "
+        f"WHERE {' AND '.join(where_parts)} "
+        "ORDER BY u.lastname, u.firstname, u.userid, d.name, dm.numplanindex"
+    )
 
-                uid_key = uid.casefold()
-                if uid_key in seen:
-                    continue
-
-                seen.add(uid_key)
-                userids.append(uid)
-                if len(userids) >= MAX_RESULTS:
-                    break
-
-            if len(userids) >= MAX_RESULTS:
-                break
-        if len(userids) >= MAX_RESULTS:
-            break
-
-    if not userids:
+    try:
+        resp = _axl_post(session, cucm_host, _soap_execute_sql(sql))
+        root = ET.fromstring(resp)
+    except Exception:
         return []
 
+    # Aggregate one SQL row per (user, device, line) into user dicts
+    users: dict = {}
+    user_order: list = []
+
+    for elem in root.iter():
+        if _strip_ns(elem.tag) != "row":
+            continue
+        r: dict = {}
+        for child in list(elem):
+            r[_strip_ns(child.tag)] = (child.text or "").strip()
+
+        uid = r.get("userid", "").strip()
+        if not uid:
+            continue
+
+        if uid not in users:
+            users[uid] = {
+                "userid": uid,
+                "first_name": r.get("firstname", ""),
+                "last_name": r.get("lastname", ""),
+                "display_name": r.get("displayname", ""),
+                "title": r.get("title", ""),
+                "email": r.get("mailid", ""),
+                "telephone": r.get("telephonenumber", ""),
+                "primary_extension": "",
+                "translated_number": "",
+                "_devices_map": {},
+            }
+            user_order.append(uid)
+
+        device_name = r.get("device_name", "").strip()
+        extension = r.get("extension", "").strip()
+
+        if device_name:
+            dmap = users[uid]["_devices_map"]
+            if device_name not in dmap:
+                dmap[device_name] = {
+                    "name": device_name,
+                    "type": _device_type(device_name),
+                    "extensions": [],
+                    "status": "",
+                }
+            if extension and extension not in dmap[device_name]["extensions"]:
+                dmap[device_name]["extensions"].append(extension)
+
     results = []
-    for uid in userids:
-        try:
-            user_xml = _axl_post(session, cucm_host, _soap_get_user(uid))
-            user_root = ET.fromstring(user_xml)
-        except Exception:
-            continue
+    for uid in user_order[:MAX_RESULTS]:
+        u = users[uid]
+        devices_list = list(u.pop("_devices_map").values())
 
-        user_node = None
-        for elem in user_root.iter():
-            if _strip_ns(elem.tag) == "user":
-                user_node = elem
-                break
-        if user_node is None:
-            continue
-
-        # Collect associated device names
-        associated = []
-        assoc_parent = _find_child(user_node, "associatedDevices")
-        if assoc_parent is not None:
-            for child in list(assoc_parent):
-                if _strip_ns(child.tag) == "device" and child.text and child.text.strip():
-                    associated.append(child.text.strip())
-
-        # Look up each device for its lines
-        devices = []
         primary_ext = ""
-        extension_candidates = []
-        for dev_name in associated:
-            try:
-                phone_xml = _axl_post(session, cucm_host, _soap_get_phone(dev_name))
-                lines = _parse_phone_lines(phone_xml)
-                status = _parse_phone_status(phone_xml)
-            except Exception:
-                lines = []
-                status = ""
-            devices.append({
-                "name": dev_name,
-                "type": _device_type(dev_name),
-                "extensions": lines,
-                "status": status,
-            })
-            if not primary_ext and lines:
-                primary_ext = lines[0]
-            extension_candidates.extend(lines)
+        all_exts: list = []
+        for d in devices_list:
+            all_exts.extend(d["extensions"])
+            if not primary_ext and d["extensions"]:
+                primary_ext = d["extensions"][0]
 
-        translated_number = _lookup_translated_number(
-            session,
-            cucm_host,
-            _find_first_text(user_node, [["firstName"]]),
-            _find_first_text(user_node, [["lastName"]]),
-            ([primary_ext] if primary_ext else []) + extension_candidates,
+        u["primary_extension"] = primary_ext
+        u["devices"] = devices_list
+        u["translated_number"] = _lookup_translated_number(
+            session, cucm_host,
+            u["first_name"], u["last_name"],
+            ([primary_ext] if primary_ext else []) + all_exts,
         )
-
-        results.append({
-            "userid": _find_first_text(user_node, [["userid"]]) or uid,
-            "first_name": _find_first_text(user_node, [["firstName"]]),
-            "last_name": _find_first_text(user_node, [["lastName"]]),
-            "display_name": _find_first_text(user_node, [["displayName"]]),
-            "title": _find_first_text(user_node, [["title"]]),
-            "email": _find_first_text(user_node, [["mailid"]]),
-            "telephone": _find_first_text(user_node, [["telephoneNumber"], ["telephone"]]),
-            "primary_extension": primary_ext,
-            "translated_number": translated_number,
-            "devices": devices,
-        })
+        results.append(u)
 
     return results
