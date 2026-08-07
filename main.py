@@ -51038,12 +51038,42 @@ def change_jabber_extension_run_route(
     else:
       _step("Resolve New Extension", "Skipped", "Could not determine new extension; forwarding and email skipped")
 
-    # Step 5: Create 30-day forwarding pattern on old extension
+    # Step 5: Delete old DN then create forwarding translation pattern
     import datetime as _dt
     change_date = _dt.date.today().isoformat()
     expires = (_dt.date.today() + _dt.timedelta(days=30)).isoformat()
     if old_ext and new_ext and old_ext != new_ext:
       try:
+        # Must remove the old DN before the translation pattern can be created
+        soap_remove_dn = f"""<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/><soapenv:Body>
+    <axl:removeLine sequence="1">
+      <pattern>{xml_escape(old_ext)}</pattern>
+      <routePartitionName>ENT_DEVICE_PT</routePartitionName>
+    </axl:removeLine>
+  </soapenv:Body></soapenv:Envelope>"""
+        resp_rm = session.post(f"https://{resolved_host}:8443/axl/", data=soap_remove_dn.encode("utf-8"), headers={"Content-Type": "text/xml"}, timeout=60)
+        if resp_rm.status_code == 200:
+          _step("Delete Old DN", "Success", f"Removed DN {old_ext} from ENT_DEVICE_PT")
+        else:
+          _step("Delete Old DN", "Failed", f"removeLine HTTP {resp_rm.status_code}: {resp_rm.text[:200]}")
+          raise RuntimeError(f"removeLine failed: {resp_rm.status_code}")
+        # Delete old DN first so the translation pattern can use the same number+partition
+        soap_rm_dn = f'''<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/><soapenv:Body>
+    <axl:removeLine sequence="1">
+      <pattern>{xml_escape(old_ext)}</pattern>
+      <routePartitionName>ENT_DEVICE_PT</routePartitionName>
+    </axl:removeLine>
+  </soapenv:Body></soapenv:Envelope>'''
+        resp_rm = session.post(f"https://{resolved_host}:8443/axl/", data=soap_rm_dn.encode("utf-8"), headers={"Content-Type": "text/xml"}, timeout=60)
+        if resp_rm.status_code == 200:
+          _step("Delete Old DN", "Success", f"Removed DN {old_ext} from ENT_DEVICE_PT")
+        else:
+          _step("Delete Old DN", "Failed", f"removeLine HTTP {resp_rm.status_code}: {resp_rm.text[:200]}")
+          raise RuntimeError(f"removeLine failed, cannot create forwarding pattern")
         _change_ext_create_forwarding_pattern(session, resolved_host, old_ext, new_ext, "ENT_DEVICE_PT", display_name)
         settings = _load_settings()
         pending = settings.get("pending_ext_dn_releases", [])
@@ -51102,10 +51132,10 @@ def change_jabber_extension_run_route(
         body += "This is an automated notification from the Cisco Voice Server portal.\n"
         # redirect to operator for known test users; send directly for real users
         if user_email.lower() in _CHANGE_EXT_TEST_EMAILS:
-          _send_smtp_email(to_addresses=[_CHANGE_EXT_EMAIL_REDIRECT_TO], subject=f"[TEST USER - intended for {user_email}] {subject}", body=body, sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com")
+          _send_smtp_email(SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com", [_CHANGE_EXT_EMAIL_REDIRECT_TO], f"[TEST USER - intended for {user_email}] {subject}", body)
           _step("Send Notification Email", "Success", f"Test user redirect → {_CHANGE_EXT_EMAIL_REDIRECT_TO} (would go to {user_email})")
         else:
-          _send_smtp_email(to_addresses=[user_email], subject=subject, body=body, sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com")
+          _send_smtp_email(SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com", [user_email], subject, body)
           _step("Send Notification Email", "Success", f"Sent to {user_email}")
       except Exception as e:
         _step("Send Notification Email", "Failed", str(e))
@@ -51239,9 +51269,10 @@ def change_jabber_extension_cancel_forward_route(
           f"Your new extension {new_ext} remains active. The old number {clean_old} has been returned to the available pool.\n\n"
           f"This is an automated notification from the Cisco Voice Server portal.\n"
         )
-        _send_smtp_email(to_addresses=[user_email] if user_email.lower() not in _CHANGE_EXT_TEST_EMAILS else [_CHANGE_EXT_EMAIL_REDIRECT_TO],
-          subject=subject if user_email.lower() not in _CHANGE_EXT_TEST_EMAILS else f"[TEST USER - intended for {user_email}] {subject}",
-          body=body, sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com")
+        _send_smtp_email(SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com",
+          [user_email] if user_email.lower() not in _CHANGE_EXT_TEST_EMAILS else [_CHANGE_EXT_EMAIL_REDIRECT_TO],
+          subject if user_email.lower() not in _CHANGE_EXT_TEST_EMAILS else f"[TEST USER - intended for {user_email}] {subject}",
+          body)
       except Exception:
         pass
 
