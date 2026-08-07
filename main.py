@@ -50455,9 +50455,9 @@ def change_extension_page(request: Request):
     .topbar-status > * {{ display:inline-flex; align-items:center; min-height:32px; padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,0.35); box-sizing:border-box; font-size:11px; font-weight:700; }}
     .topbar-auth-pill {{ background:rgba(255,255,255,0.12); color:#fff; }}
     .topbar-status .env-banner {{ background:rgba(255,255,255,0.12); color:#fff; }}
-    .session-timer {{ display:none; align-items:center; gap:6px; padding:6px 10px; border-radius:10px; font-size:12px; font-weight:700; border:1px solid rgba(255,255,255,0.35); color:#fff; background:rgba(255,255,255,0.08); }}
-    .session-timer .timer-label {{ opacity:0.9; }}
-    .session-timer .timer-value {{ font-weight:900; letter-spacing:0.3px; }}
+    .session-timer {{ display:none; align-items:center; gap:6px; padding:9px 12px; border-radius:12px; border:1px solid #f0b44a; background:linear-gradient(180deg,#fff4df,#ffe4b8); color:#6a3c00; box-shadow:0 10px 18px rgba(198,138,18,0.2); font-size:12px; font-weight:700; }}
+    .session-timer .timer-label {{ font-weight:700; }}
+    .session-timer .timer-value {{ font-family:Consolas,monospace; font-weight:700; }}
     .env-banner.env-banner-prod {{ background:rgba(11,98,180,0.45); }}
     .env-banner.env-banner-lab {{ color:#ffd39a; background:rgba(153,74,0,0.45); border-color:rgba(255,211,154,0.45); }}
     .topbar-actions {{ display:flex; align-items:center; gap:10px; }}
@@ -50482,11 +50482,12 @@ def change_extension_page(request: Request):
     .portal-shell {{ display:grid; grid-template-columns:244px minmax(0,1fr); gap:8px; align-items:start; margin-top:4px; }}
     .portal-sidebar {{ position:sticky; top:50px; background:linear-gradient(180deg,rgba(0,47,108,0.97),rgba(7,75,138,0.96)); border:1px solid rgba(255,255,255,0.12); border-radius:12px; padding:8px; box-shadow:0 18px 36px rgba(0,47,108,0.18); }}
     .portal-sidebar h4 {{ margin:4px 6px 8px 6px; color:#fff; font-size:13px; }}
-    .portal-nav {{ display:flex; flex-direction:column; gap:4px; }}
-    .portal-nav-btn {{ width:100%; text-align:left; background:linear-gradient(90deg,#ffffff,#ecf6ff); color:var(--amn-navy); border:1px solid rgba(255,255,255,0.92); border-radius:8px; padding:7px 8px; font-size:12px; line-height:1.25; font-weight:700; cursor:pointer; }}
-    .portal-nav-btn.active {{ background:linear-gradient(90deg,#d8ebff,#c9e3ff); border-color:rgba(120,166,219,0.95); }}
+    .portal-nav {{ display:flex; flex-direction:column; gap:6px; }}
+    .portal-nav-btn {{ width:100%; text-align:left; background:rgba(255,255,255,0.09); color:rgba(255,255,255,0.94); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:7px 8px; font-size:12px; line-height:1.25; font-weight:600; cursor:pointer; transition:background 0.18s ease; }}
+    .portal-nav-btn:hover {{ background:rgba(255,255,255,0.16); border-color:rgba(255,255,255,0.24); }}
+    .portal-nav-btn.active {{ background:linear-gradient(90deg,#ffffff,#ecf6ff); color:var(--amn-navy); border-color:rgba(255,255,255,0.92); box-shadow:0 12px 24px rgba(0,0,0,0.12); }}
     .portal-nav-btn-danger {{ background:rgba(203,59,47,0.16); color:#ffd9d5; border-color:rgba(255,167,158,0.26); }}
-    .portal-nav-btn-danger.active {{ background:linear-gradient(180deg,#d64e41,#a4221b); color:#fff; }}
+    .portal-nav-btn-danger.active {{ background:linear-gradient(180deg,#d64e41,#a4221b); color:#fff; border-color:rgba(255,255,255,0.2); }}
     .portal-main {{ min-width:0; }}
     .panel {{ background:#fff; border:1px solid var(--amn-border); border-radius:12px; padding:16px; box-shadow:var(--amn-shadow); }}
     .warning-banner {{ background:#fff3cd; border:1px solid #f0ad4e; border-radius:10px; padding:10px 14px; margin-bottom:14px; font-size:13px; color:#856404; font-weight:600; }}
