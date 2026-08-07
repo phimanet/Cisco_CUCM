@@ -50712,8 +50712,9 @@ def change_jabber_extension_run_route(
             f"If you want the forwarding removed early, contact your IT administrator.\n\n"
           )
         body += "This is an automated notification from the Cisco Voice Server portal.\n"
-        _send_smtp_email(to_addresses=[user_email, "phimane.tiaokhiao@amnhealthcare.com"], subject=subject, body=body, sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com")
-        _step("Send Notification Email", "Success", f"Sent to {user_email} + phimane.tiaokhiao@amnhealthcare.com (LAB test CC)")
+        # LAB test: redirect all notification emails to operator instead of actual user
+        _send_smtp_email(to_addresses=["phimane.tiaokhiao@amnhealthcare.com"], subject=f"[LAB TEST - intended for {user_email}] {subject}", body=body, sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com")
+        _step("Send Notification Email", "Success", f"LAB TEST: redirected to phimane.tiaokhiao@amnhealthcare.com (would go to {user_email} in prod)")
       except Exception as e:
         _step("Send Notification Email", "Failed", str(e))
     else:
