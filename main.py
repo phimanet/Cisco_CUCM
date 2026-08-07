@@ -27880,6 +27880,7 @@ __ADMIN_CARD__
     <div id="chext-pending-list" style="overflow-x:auto;"></div>
 
     <script>
+    try {
     (function() {
       function _chext_esc(s) { var d = document.createElement("div"); d.textContent = String(s || ""); return d.innerHTML; }
       var _chextSelectedUser = null;
@@ -28035,6 +28036,10 @@ __ADMIN_CARD__
         window._chextLoadPendingForwards();
       });
     })();
+    } catch(e) {
+      var _s = document.getElementById("chext-status");
+      if (_s) _s.textContent = "Script init error: " + (e && e.message ? e.message : String(e));
+    }
     </script>
     </section>
 
