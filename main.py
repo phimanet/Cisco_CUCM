@@ -28235,8 +28235,6 @@ __ADMIN_CARD__
                 const uid = r.userid || "";
                 const devList = (r.devices || []).map(function (d) {
                   const exts = (d.extensions || []).join(", ") || "\u2014";
-                const pfx = (d.name || "").substring(0, 3).toUpperCase();
-                const shortType = pfx === "CSF" ? "Laptop" : pfx === "TCT" ? "iPhone" : pfx === "BOT" ? "Android" : pfx === "TAB" ? "Tablet" : exts;
                   const pfx = (d.name || "").substring(0, 3).toUpperCase();
                   const shortType = pfx === "CSF" ? "Laptop" : pfx === "TCT" ? "iPhone" : pfx === "BOT" ? "Android" : pfx === "TAB" ? "Tablet" : exts;
                   return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>" + shortType + "</span>";
@@ -38849,8 +38847,6 @@ def menu_admin_page(request: Request):
                 const teamsColor = teamsIsUser ? "#0f6d35" : (teamsState === "Unknown" ? "#7a1020" : "#6b7280");
                 const devList = (r.devices || []).map(function (d) {
                   const exts = (d.extensions || []).join(", ") || "\u2014";
-                const pfx = (d.name || "").substring(0, 3).toUpperCase();
-                const shortType = pfx === "CSF" ? "Laptop" : pfx === "TCT" ? "iPhone" : pfx === "BOT" ? "Android" : pfx === "TAB" ? "Tablet" : exts;
                   const pfx = (d.name || "").substring(0, 3).toUpperCase();
                   const shortType = pfx === "CSF" ? "Laptop" : pfx === "TCT" ? "iPhone" : pfx === "BOT" ? "Android" : pfx === "TAB" ? "Tablet" : exts;
                   const reg = (d.registration_status || "").trim();
@@ -39148,8 +39144,6 @@ def menu_admin_page(request: Request):
                 const uid = r.userid || "";
                 const devList = (r.devices || []).map(function (d) {
                   const exts = (d.extensions || []).join(", ") || "\u2014";
-                const pfx = (d.name || "").substring(0, 3).toUpperCase();
-                const shortType = pfx === "CSF" ? "Laptop" : pfx === "TCT" ? "iPhone" : pfx === "BOT" ? "Android" : pfx === "TAB" ? "Tablet" : exts;
                   const pfx = (d.name || "").substring(0, 3).toUpperCase();
                   const shortType = pfx === "CSF" ? "Laptop" : pfx === "TCT" ? "iPhone" : pfx === "BOT" ? "Android" : pfx === "TAB" ? "Tablet" : exts;
                   return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>" + shortType + "</span>";
