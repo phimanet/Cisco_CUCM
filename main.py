@@ -7931,6 +7931,13 @@ def _get_environment_label(cucm_host: str):
   return "Production Voice Servers", "env-banner-prod"
 
 
+def _get_unity_host_for_cucm(cucm_host: str) -> str:
+  """Return the matching Unity Connection host for a given CUCM host."""
+  if _is_lab_host(cucm_host):
+    return "lascutypl01.ahs.int"
+  return "lascutyp01.ahs.int"
+
+
 def _is_lab_runtime_host():
   host_candidates = {
     (os.getenv("HOSTNAME", "") or "").strip().lower(),
@@ -50605,7 +50612,7 @@ def change_extension_page(request: Request):
 
       <div class="panel">
         <h2>Change Extension Number for Jabber</h2>
-        <p class="subtitle">Search by last name, select a user, choose the new number type and Unity host, then run. The old number gets a 30-day forwarding pattern and the user is emailed their new number.</p>
+        <p class="subtitle">Search by last name, select a user, choose the new number type, then run. The old number gets a 30-day forwarding pattern and the user is emailed their new number.</p>
 
         <form id="chext-search-form" method="post" action="javascript:void(0)">
           <input type="hidden" name="cucm_host" value="{escape(auth_cucm_host)}">
@@ -50631,10 +50638,6 @@ def change_extension_page(request: Request):
                 <option value="recruiter">Recruiter ({recruiter_prefix})</option>
                 <option value="strike">Strike Employee ({strike_prefix})</option>
               </select>
-            </div>
-            <div class="field-group">
-              <label>Unity Host</label>
-              <input id="chext-unity-host" type="text" placeholder="e.g. lascutyp01.ahs.int" style="min-width:250px;">
             </div>
             <button id="chext-run-btn" type="button" class="btn btn-danger">Run Change Extension</button>
             <button id="chext-cancel-btn" type="button" class="btn btn-secondary">Clear</button>
@@ -50665,7 +50668,6 @@ def change_extension_page(request: Request):
   var selectedInfo = document.getElementById("chext-selected-info");
   var smsWarn = document.getElementById("chext-sms-warn");
   var dnTypeEl = document.getElementById("chext-dn-type");
-  var unityHostEl = document.getElementById("chext-unity-host");
   var runBtn = document.getElementById("chext-run-btn");
   var cancelBtn = document.getElementById("chext-cancel-btn");
   var runStatusEl = document.getElementById("chext-run-status");
@@ -50700,15 +50702,17 @@ def change_extension_page(request: Request):
       fd.append("cucm_pass", "");
       fd.append("last_name", lastName);
       fd.append("first_name", firstEl ? firstEl.value.trim() : "");
+      fd.append("include_aerialink_lookup", "1");
       var resp = await fetch("/lookup/person", {{ method: "POST", body: fd, credentials: "same-origin" }});
       var data = await resp.json();
       if (!data.ok || !data.results || !data.results.length) {{ if (statusEl) statusEl.textContent = "No users found."; return; }}
       if (statusEl) statusEl.textContent = "Found " + data.results.length + " user(s). Select one to change their extension.";
-      var html = "<table><thead><tr><th>Name</th><th>User ID</th><th>Extension</th><th>Jabber Devices</th><th></th></tr></thead><tbody>";
+      var html = "<table><thead><tr><th>Name</th><th>User ID</th><th>Extension</th><th>SMS Hosted</th><th>Jabber Devices</th><th></th></tr></thead><tbody>";
       data.results.forEach(function (r, i) {{
         var name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
         var devs = (r.devices || []).filter(function (d) {{ return /^(CSF|TCT|BOT|TAB)/i.test(d.name || ""); }});
-        html += "<tr><td style='font-weight:600;'>" + esc(name) + "</td><td style='font-size:12px;'>" + esc(r.userid) + "</td><td><strong>" + esc(r.primary_extension || "\u2014") + "</strong></td><td style='font-size:11px;color:#555;'>" + esc(devs.map(function (d) {{ return d.name; }}).join(", ") || "\u2014") + "</td><td><button type='button' data-idx='" + i + "' class='btn btn-primary' style='padding:4px 10px;font-size:12px;'>Select \u2192</button></td></tr>";
+        var smsStatus = (r.aerialink_lookup && r.aerialink_lookup.provisioned) ? "<span style='color:#b00020;font-weight:700;'>\u26A0 SMS Active</span>" : "<span style='color:#6b7280;'>None</span>";
+        html += "<tr><td style='font-weight:600;'>" + esc(name) + "</td><td style='font-size:12px;'>" + esc(r.userid) + "</td><td><strong>" + esc(r.primary_extension || "\u2014") + "</strong></td><td>" + smsStatus + "</td><td style='font-size:11px;color:#555;'>" + esc(devs.map(function (d) {{ return d.name; }}).join(", ") || "\u2014") + "</td><td><button type='button' data-idx='" + i + "' class='btn btn-primary' style='padding:4px 10px;font-size:12px;'>Select \u2192</button></td></tr>";
       }});
       html += "</tbody></table>";
       if (resultsEl) resultsEl.innerHTML = html;
@@ -50730,10 +50734,6 @@ def change_extension_page(request: Request):
     var devs = (user.devices || []).filter(function (d) {{ return /^(CSF|TCT|BOT|TAB)/i.test(d.name || ""); }});
     selectedInfo.innerHTML = "<strong>" + esc(name) + "</strong> (<code>" + esc(user.userid) + "</code>)<br>Extension: <strong>" + esc(user.primary_extension || "\u2014") + "</strong> &nbsp;|&nbsp; Jabber: <strong>" + esc(devs.map(function (d) {{ return d.name; }}).join(", ") || "none") + "</strong>" + (user.email ? " &nbsp;|&nbsp; " + esc(user.email) : "");
     if (!!(user.telephone || user.primary_extension)) {{ smsWarn.style.display = "block"; smsWarn.textContent = "\u26A0 After running, verify SMS hosting on old extension with Aerialink / Twilio if applicable."; }}
-    if (!unityHostEl.value) {{
-      var f = new FormData(); f.append("target_user", user.userid);
-      fetch("/change-jabber-extension/preview", {{ method: "POST", body: f, credentials: "same-origin" }}).then(function (r) {{ return r.json(); }}).then(function (d) {{ if (d.unity_host) unityHostEl.value = d.unity_host; }}).catch(function () {{}});
-    }}
     actionEl.style.display = "block";
     runStatusEl.textContent = "";
     runResultsEl.innerHTML = "";
@@ -50752,7 +50752,6 @@ def change_extension_page(request: Request):
       var fd = new FormData();
       fd.append("target_user", selectedUser.userid);
       fd.append("dn_type", dnTypeEl.value);
-      fd.append("unity_host", unityHostEl.value.trim());
       var resp = await fetch("/change-jabber-extension/run", {{ method: "POST", body: fd, credentials: "same-origin" }});
       var data = await resp.json();
       if (data.steps) {{
@@ -50944,7 +50943,8 @@ def change_jabber_extension_run_route(
   resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
   clean_uid = (target_user or "").strip()
   clean_dn_type = (dn_type or "general").strip().lower()
-  clean_unity = (unity_host or "").strip()
+  # auto-derive Unity host from CUCM host (no field needed from UI)
+  clean_unity = _get_unity_host_for_cucm(resolved_host)
   steps = []
 
   def _step(name: str, status: str, details: str):
