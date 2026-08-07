@@ -50434,131 +50434,162 @@ def change_extension_page(request: Request):
   <title>Change Extension - Voice Operations Portal</title>
   <style>
     :root {{
-      --amn-blue: #005eb8;
-      --amn-navy: #002f6c;
-      --amn-sky: #eaf4ff;
-      --amn-ice: #f7fbff;
-      --amn-text: #12304a;
-      --amn-text-soft: #4e6a84;
-      --amn-border: #c8dbee;
-      --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
+      --amn-blue: #005eb8; --amn-navy: #002f6c; --amn-sky: #eaf4ff;
+      --amn-text: #12304a; --amn-text-soft: #4e6a84; --amn-border: #c8dbee;
+      --amn-shadow: 0 14px 30px rgba(0,47,108,0.11);
     }}
-    body {{ margin: 0; font-family: "Segoe UI", Tahoma, Arial, sans-serif; background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%); color: var(--amn-text); }}
-    .topbar {{
-      display: flex; flex-wrap: nowrap; align-items: center; justify-content: space-between; gap: 10px;
-      padding: 8px 14px;
-      background: linear-gradient(120deg, rgba(0,47,108,0.98), rgba(0,94,184,0.94)), linear-gradient(90deg, var(--amn-navy), var(--amn-blue));
-      color: #fff; box-shadow: 0 12px 28px rgba(0,47,108,0.22); border-bottom: 1px solid rgba(255,255,255,0.16);
-    }}
-    .topbar-brand {{ display: flex; align-items: center; gap: 10px; white-space: nowrap; }}
-    .brand-fallback {{ font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; font-size: 11px; opacity: 0.86; }}
-    .topbar-right {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
-    .topbar-nav {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }}
-    .topbar-auth-pill {{ background: rgba(255,255,255,0.12); border: 1px solid rgba(255,255,255,0.35); border-radius: 10px; padding: 5px 10px; font-size: 11px; font-weight: 700; white-space: nowrap; }}
-    .env-banner {{ display: inline-block; padding: 6px 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.35); font-size: 11px; font-weight: 700; background: rgba(255,255,255,0.12); color: #fff; }}
-    .topbar-btn {{ display: inline-block; padding: 7px 12px; border-radius: 10px; font-size: 12px; font-weight: 700; text-decoration: none; border: 1px solid rgba(255,255,255,0.65); transition: transform 0.18s ease; }}
-    .topbar-btn-login {{ color: #fff; background: rgba(255,255,255,0.1); }}
-    .topbar-btn-logout {{ color: #fff; background: linear-gradient(180deg,#cb3b2f,#9f2018); border-color: #f0a79c; }}
-    .topbar-btn:hover {{ transform: translateY(-1px); }}
-    .content {{ max-width: 980px; margin: 0 auto; padding: 18px 16px; }}
-    .warning-banner {{ background: #fff3cd; border: 1px solid #f0ad4e; border-radius: 10px; padding: 12px 16px; margin-bottom: 18px; font-size: 13px; color: #856404; font-weight: 600; }}
-    .card {{ background: rgba(255,255,255,0.96); border: 1px solid var(--amn-border); border-radius: 14px; box-shadow: var(--amn-shadow); padding: 20px; margin-bottom: 18px; }}
-    h2 {{ margin: 0 0 4px; color: var(--amn-navy); font-size: 20px; }}
-    .subtitle {{ color: var(--amn-text-soft); font-size: 13px; margin: 0 0 18px; }}
-    .search-row {{ display: flex; gap: 8px; margin-bottom: 10px; }}
-    .search-row input {{ flex: 1; padding: 8px 12px; border: 1px solid var(--amn-border); border-radius: 8px; font-size: 13px; color: var(--amn-text); background: #fff; }}
-    .search-row input:focus {{ outline: none; border-color: var(--amn-blue); box-shadow: 0 0 0 3px rgba(0,94,184,0.12); }}
-    .btn {{ border: none; border-radius: 8px; padding: 8px 20px; font-weight: 700; cursor: pointer; font-size: 13px; transition: opacity 0.15s; }}
-    .btn:hover {{ opacity: 0.88; }}
-    .btn-primary {{ background: var(--amn-blue); color: #fff; }}
-    .btn-danger {{ background: #b00020; color: #fff; }}
-    .btn-secondary {{ background: #6b7280; color: #fff; }}
-    #chext-status {{ min-height: 18px; font-size: 13px; font-weight: 600; color: var(--amn-blue); margin: 6px 0; }}
-    #chext-results {{ overflow-x: auto; margin-bottom: 14px; }}
-    #chext-action {{ display: none; background: var(--amn-sky); border: 1px solid var(--amn-border); border-radius: 10px; padding: 16px; margin-bottom: 14px; }}
-    .action-row {{ display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; margin-top: 10px; }}
-    .field-group {{ display: flex; flex-direction: column; gap: 4px; }}
-    .field-group label {{ font-weight: 600; font-size: 12px; color: var(--amn-text-soft); }}
-    .field-group select, .field-group input {{ padding: 7px 10px; border: 1px solid var(--amn-border); border-radius: 8px; font-size: 13px; min-width: 190px; }}
-    #chext-run-status {{ min-height: 18px; font-size: 13px; font-weight: 600; color: var(--amn-blue); margin-top: 8px; }}
-    #chext-run-results {{ margin-top: 8px; overflow-x: auto; }}
-    table {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
-    th {{ background: var(--amn-navy); color: #fff; padding: 7px 10px; text-align: left; }}
-    tr:nth-child(even) {{ background: var(--amn-sky); }}
-    td {{ padding: 7px 10px; border-bottom: 1px solid var(--amn-border); }}
-    .sms-warn {{ display: none; background: #fff3cd; border: 1px solid #f0ad4e; border-radius: 8px; padding: 8px 12px; margin-bottom: 10px; font-size: 12px; font-weight: 600; color: #856404; }}
-    .pending-header {{ display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }}
-    .pending-header strong {{ font-size: 13px; color: var(--amn-navy); font-weight: 700; }}
+    body {{ margin:0; font-family:"Segoe UI",Tahoma,Arial,sans-serif; background:linear-gradient(180deg,#f7fbff 0%,#edf5fc 100%); color:var(--amn-text); }}
+    .topbar {{ display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 16px; background:linear-gradient(120deg,rgba(0,47,108,0.98),rgba(0,94,184,0.94)),linear-gradient(90deg,var(--amn-navy),var(--amn-blue)); color:#fff; box-shadow:0 12px 28px rgba(0,47,108,0.22); border-bottom:1px solid rgba(255,255,255,0.16); }}
+    .topbar-brand {{ display:flex; align-items:center; gap:12px; }}
+    .topbar-brand .brand-fallback {{ font-weight:700; letter-spacing:0.6px; text-transform:uppercase; font-size:11px; opacity:0.86; }}
+    .topbar-brand strong {{ font-size:16px; }}
+    .topbar-status {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; justify-content:center; }}
+    .topbar-status > * {{ display:inline-flex; align-items:center; min-height:32px; padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,0.35); box-sizing:border-box; font-size:11px; font-weight:700; }}
+    .topbar-auth-pill {{ background:rgba(255,255,255,0.12); color:#fff; }}
+    .topbar-status .env-banner {{ background:rgba(255,255,255,0.12); color:#fff; }}
+    .env-lab {{ background:rgba(255,165,0,0.28) !important; }}
+    .topbar-actions {{ display:flex; align-items:center; gap:10px; }}
+    .topbar-btn {{ display:inline-block; padding:7px 14px; border-radius:10px; font-size:12px; font-weight:700; text-decoration:none; border:1px solid rgba(255,255,255,0.65); transition:opacity .15s; }}
+    .topbar-btn-login {{ color:#fff; background:rgba(255,255,255,0.1); }}
+    .topbar-btn-logout {{ color:#fff; background:linear-gradient(180deg,#cb3b2f,#9f2018); border-color:#f0a79c; }}
+    .topbar-btn:hover {{ opacity:.88; }}
+    .content {{ max-width:1400px; margin:6px auto 10px auto; padding:0 10px 10px 10px; }}
+    .portal-shell {{ display:grid; grid-template-columns:244px minmax(0,1fr); gap:8px; align-items:start; margin-top:4px; }}
+    .portal-sidebar {{ position:sticky; top:50px; background:linear-gradient(180deg,rgba(0,47,108,0.97),rgba(7,75,138,0.96)); border:1px solid rgba(255,255,255,0.12); border-radius:12px; padding:8px; box-shadow:0 18px 36px rgba(0,47,108,0.18); }}
+    .portal-sidebar h4 {{ margin:4px 6px 8px 6px; color:#fff; font-size:13px; }}
+    .portal-nav {{ display:flex; flex-direction:column; gap:4px; }}
+    .portal-nav-btn {{ width:100%; text-align:left; background:linear-gradient(90deg,#ffffff,#ecf6ff); color:var(--amn-navy); border:1px solid rgba(255,255,255,0.92); border-radius:8px; padding:7px 8px; font-size:12px; line-height:1.25; font-weight:700; cursor:pointer; }}
+    .portal-nav-btn.active {{ background:linear-gradient(90deg,#d8ebff,#c9e3ff); border-color:rgba(120,166,219,0.95); }}
+    .portal-nav-btn-danger {{ background:rgba(203,59,47,0.16); color:#ffd9d5; border-color:rgba(255,167,158,0.26); }}
+    .portal-nav-btn-danger.active {{ background:linear-gradient(180deg,#d64e41,#a4221b); color:#fff; }}
+    .portal-main {{ min-width:0; }}
+    .panel {{ background:#fff; border:1px solid var(--amn-border); border-radius:12px; padding:16px; box-shadow:var(--amn-shadow); }}
+    .warning-banner {{ background:#fff3cd; border:1px solid #f0ad4e; border-radius:10px; padding:10px 14px; margin-bottom:14px; font-size:13px; color:#856404; font-weight:600; }}
+    h2 {{ margin:0 0 4px; color:var(--amn-navy); font-size:18px; }}
+    .subtitle {{ color:var(--amn-text-soft); font-size:13px; margin:0 0 14px; }}
+    .search-row {{ display:flex; gap:8px; margin-bottom:10px; }}
+    .search-row input {{ flex:1; padding:7px 10px; border:1px solid var(--amn-border); border-radius:8px; font-size:13px; }}
+    .search-row input:focus {{ outline:none; border-color:var(--amn-blue); box-shadow:0 0 0 3px rgba(0,94,184,0.12); }}
+    .btn {{ border:none; border-radius:8px; padding:7px 18px; font-weight:700; cursor:pointer; font-size:13px; transition:opacity .15s; }}
+    .btn:hover {{ opacity:.88; }}
+    .btn-primary {{ background:var(--amn-blue); color:#fff; }}
+    .btn-danger {{ background:#b00020; color:#fff; }}
+    .btn-secondary {{ background:#6b7280; color:#fff; }}
+    #chext-status {{ min-height:18px; font-size:13px; font-weight:600; color:var(--amn-blue); margin:6px 0; }}
+    #chext-results {{ overflow-x:auto; margin-bottom:14px; }}
+    #chext-action {{ display:none; background:var(--amn-sky); border:1px solid var(--amn-border); border-radius:10px; padding:14px; margin-bottom:14px; }}
+    .action-row {{ display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end; margin-top:10px; }}
+    .field-group {{ display:flex; flex-direction:column; gap:4px; }}
+    .field-group label {{ font-weight:600; font-size:12px; color:var(--amn-text-soft); }}
+    .field-group select, .field-group input {{ padding:7px 10px; border:1px solid var(--amn-border); border-radius:8px; font-size:13px; min-width:190px; }}
+    #chext-run-status {{ min-height:18px; font-size:13px; font-weight:600; color:var(--amn-blue); margin-top:8px; }}
+    #chext-run-results {{ margin-top:8px; overflow-x:auto; }}
+    table {{ border-collapse:collapse; width:100%; font-size:13px; }}
+    th {{ background:var(--amn-navy); color:#fff; padding:7px 10px; text-align:left; }}
+    tr:nth-child(even) {{ background:var(--amn-sky); }}
+    td {{ padding:7px 10px; border-bottom:1px solid var(--amn-border); }}
+    .sms-warn {{ display:none; background:#fff3cd; border:1px solid #f0ad4e; border-radius:8px; padding:8px 12px; margin-bottom:10px; font-size:12px; font-weight:600; color:#856404; }}
+    .pending-header {{ display:flex; align-items:center; gap:12px; margin-bottom:8px; }}
+    .pending-header strong {{ font-size:13px; color:var(--amn-navy); font-weight:700; }}
   </style>
 </head>
 <body>
 <header class="topbar">
   <div class="topbar-brand">
-    <span class="brand-fallback">AMN Healthcare</span>
+    <span class="brand-fallback">AMN HEALTHCARE</span>
     <strong>Voice Operations Portal</strong>
   </div>
-  <div class="topbar-right">
-    <div class="topbar-nav">
-      <span class="topbar-auth-pill">Authenticated Operator: {escape(session_username)}</span>
-      <span class="env-banner {env_css_class}">{escape(env_text)}</span>
-      <a class="topbar-btn topbar-btn-login" href="/menu">&larr; Back to Menu</a>
-      <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
-    </div>
+  <div class="topbar-status">
+    <span class="topbar-auth-pill">Authenticated Operator: {escape(session_username)}</span>
+    <span class="env-banner {env_css_class}">{escape(env_text)}</span>
+  </div>
+  <div class="topbar-actions">
+    <a class="topbar-btn topbar-btn-login" href="/menu">&larr; Back to Menu</a>
+    <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
   </div>
 </header>
+
 <div class="content">
-  <div class="warning-banner">&#9888;&nbsp; <strong>Destructive workflow.</strong> Running this will DELETE all existing Jabber devices and rebuild them with a new number. Proceed only if you are certain.</div>
-
-  <div class="card">
-    <h2>Change Extension Number for Jabber</h2>
-    <p class="subtitle">Search by last name, select a user, choose the new number type and Unity host, then run. The old number gets a 30-day forwarding pattern and the user is emailed their new number.</p>
-
-    <form id="chext-search-form" method="post" action="javascript:void(0)">
-      <input type="hidden" name="cucm_host" value="{escape(auth_cucm_host)}">
-      <input type="hidden" name="cucm_user" value="{escape(session_username)}">
-      <input type="hidden" name="cucm_pass" value="">
-      <div class="search-row">
-        <input id="chext-last" name="last_name" type="text" placeholder="Last name *">
-        <input id="chext-first" name="first_name" type="text" placeholder="First name (optional)">
-        <button type="button" class="btn btn-primary" onclick="window._chextDoSearch()">Search</button>
+  <div class="portal-shell">
+    <aside class="portal-sidebar">
+      <h4>Operations Menu</h4>
+      <div class="portal-nav">
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=personlookup'">Start Here!<br>Employee Lookup By Name</button>
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=jabber-forwarding-tool'">Cisco Jabber Forwarding Tool</button>
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=extensionlookup'">Extension Reverse Lookup</button>
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=precheck'">Check for Existing Jabber Configuration</button>
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=build'">Build User - Build Cisco Jabber Laptop</button>
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=namechange'">Employee Name Change-Update Jabber/VM</button>
+        <button type="button" class="portal-nav-btn portal-nav-btn-danger active">Change Extension Number for Jabber</button>
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=pin'">Reset Voicemail PIN</button>
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=mobiledelete'">Remove Jabber Mobile only</button>
+        <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM</button>
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=ad'">Update AD Telephone/ipPhone Field Only</button>
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=tct'">Add in Jabber iPhone</button>
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=bot'">Add in Jabber Android</button>
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=jabbernotify'">Send Jabber Number/Training Notification</button>
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=mobilejabbernotify'">Re-send Jabber Mobile Email Instructions</button>
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=rebuild'">Re-Build Jabber CSF (from Offboard Audit)</button>
+        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=block-inbound-callerid'">Block Inbound Calls by Caller ID Number</button>
       </div>
-    </form>
-    <div id="chext-status">Enter a last name and click Search.</div>
-    <div id="chext-results"></div>
+    </aside>
 
-    <div id="chext-action">
-      <div id="chext-selected-info" style="font-size:13px;margin-bottom:10px;"></div>
-      <div id="chext-sms-warn" class="sms-warn"></div>
-      <div class="action-row">
-        <div class="field-group">
-          <label>New Number Type</label>
-          <select id="chext-dn-type">
-            <option value="general">General Employee ({general_prefix})</option>
-            <option value="recruiter">Recruiter ({recruiter_prefix})</option>
-            <option value="strike">Strike Employee ({strike_prefix})</option>
-          </select>
+    <section class="portal-main">
+      <div class="warning-banner">&#9888;&nbsp; <strong>Destructive workflow.</strong> Running this will DELETE all existing Jabber devices and rebuild them with a new number. Proceed only if you are certain.</div>
+
+      <div class="panel">
+        <h2>Change Extension Number for Jabber</h2>
+        <p class="subtitle">Search by last name, select a user, choose the new number type and Unity host, then run. The old number gets a 30-day forwarding pattern and the user is emailed their new number.</p>
+
+        <form id="chext-search-form" method="post" action="javascript:void(0)">
+          <input type="hidden" name="cucm_host" value="{escape(auth_cucm_host)}">
+          <input type="hidden" name="cucm_user" value="{escape(session_username)}">
+          <input type="hidden" name="cucm_pass" value="">
+          <div class="search-row">
+            <input id="chext-last" name="last_name" type="text" placeholder="Last name *">
+            <input id="chext-first" name="first_name" type="text" placeholder="First name (optional)">
+            <button type="button" class="btn btn-primary" onclick="window._chextDoSearch()">Search</button>
+          </div>
+        </form>
+        <div id="chext-status">Enter a last name and click Search.</div>
+        <div id="chext-results"></div>
+
+        <div id="chext-action">
+          <div id="chext-selected-info" style="font-size:13px;margin-bottom:10px;"></div>
+          <div id="chext-sms-warn" class="sms-warn"></div>
+          <div class="action-row">
+            <div class="field-group">
+              <label>New Number Type</label>
+              <select id="chext-dn-type">
+                <option value="general">General Employee ({general_prefix})</option>
+                <option value="recruiter">Recruiter ({recruiter_prefix})</option>
+                <option value="strike">Strike Employee ({strike_prefix})</option>
+              </select>
+            </div>
+            <div class="field-group">
+              <label>Unity Host</label>
+              <input id="chext-unity-host" type="text" placeholder="e.g. lascutyp01.ahs.int" style="min-width:250px;">
+            </div>
+            <button id="chext-run-btn" type="button" class="btn btn-danger">Run Change Extension</button>
+            <button id="chext-cancel-btn" type="button" class="btn btn-secondary">Clear</button>
+          </div>
         </div>
-        <div class="field-group">
-          <label>Unity Host</label>
-          <input id="chext-unity-host" type="text" placeholder="e.g. lascutyp01.ahs.int" style="min-width:250px;">
-        </div>
-        <button id="chext-run-btn" type="button" class="btn btn-danger">Run Change Extension</button>
-        <button id="chext-cancel-btn" type="button" class="btn btn-secondary">Clear</button>
+        <div id="chext-run-status"></div>
+        <div id="chext-run-results"></div>
       </div>
-    </div>
-    <div id="chext-run-status"></div>
-    <div id="chext-run-results"></div>
-  </div>
 
-  <div class="card">
-    <div class="pending-header">
-      <strong>Active Forwarding Patterns (Pending Auto-Delete)</strong>
-      <button id="chext-refresh-btn" type="button" class="btn btn-primary" style="padding:4px 12px;font-size:12px;">Refresh</button>
-    </div>
-    <p style="margin:0 0 8px;font-size:12px;color:var(--amn-text-soft);">Old extensions forwarding to new. Auto-deleted after 30 days; user is emailed on deletion.</p>
-    <div id="chext-pending"></div>
+      <div class="panel" style="margin-top:8px;">
+        <div class="pending-header">
+          <strong>Active Forwarding Patterns (Pending Auto-Delete)</strong>
+          <button id="chext-refresh-btn" type="button" class="btn btn-primary" style="padding:4px 12px;font-size:12px;">Refresh</button>
+        </div>
+        <p style="margin:0 0 8px;font-size:12px;color:var(--amn-text-soft);">Old extensions forwarding to new. Auto-deleted after 30 days; user is emailed on deletion.</p>
+        <div id="chext-pending"></div>
+      </div>
+    </section>
   </div>
 </div>
+
 
 <script>
 (function () {{
