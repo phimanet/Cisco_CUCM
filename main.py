@@ -26324,6 +26324,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="precheck">Check for Existing Jabber Configuration</button>
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
           <button type="button" class="portal-nav-btn" data-panel="namechange">Employee Name Change-Update Jabber/VM</button>
+          <button type="button" class="portal-nav-btn" data-panel="changeextension">Change Extension Number for Jabber</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
           <button type="button" class="portal-nav-btn" data-panel="mobiledelete">Remove Jabber Mobile only</button>
           <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM</button>
@@ -27827,6 +27828,242 @@ __ADMIN_CARD__
         <textarea id="called-name-preview" readonly></textarea>
       </section>
     </div>
+    </section>
+
+        <textarea id="called-name-preview" readonly></textarea>
+      </section>
+    </div>
+    </section>
+
+    <section class="tool-panel" data-panel="changeextension">
+    <h3>Change Extension Number for Jabber</h3>
+    <p style="margin:0 0 12px 0;font-size:13px;color:#4e6a84;">Deletes old Jabber devices, rebuilds on new extension, creates 30-day forwarding pattern on old number, updates Unity voicemail alias and AD phone fields. <strong>Does not delete the voicemail box.</strong></p>
+
+    <div style="max-width:760px;">
+      <!-- Phase 1: Search -->
+      <div id="chext-search-block">
+        <label style="font-weight:600;display:block;margin-bottom:4px;">Last Name</label>
+        <div style="display:flex;gap:8px;margin-bottom:8px;">
+          <input id="chext-last" type="text" placeholder="Last name" style="flex:1;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;">
+          <input id="chext-first" type="text" placeholder="First name (optional)" style="flex:1;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;">
+          <button id="chext-search-btn" type="button" style="background:#1d4f91;color:#fff;border:none;border-radius:6px;padding:7px 18px;font-weight:700;cursor:pointer;">Search</button>
+        </div>
+        <div id="chext-search-results" style="display:none;margin-bottom:12px;"></div>
+      </div>
+
+      <!-- Phase 2: Preview (shown after user selected) -->
+      <div id="chext-preview-block" style="display:none;">
+        <div style="background:#eef5ff;border:1px solid #c8dbee;border-radius:8px;padding:12px 16px;margin-bottom:12px;">
+          <strong id="chext-user-label" style="font-size:14px;"></strong>
+          <div id="chext-current-info" style="font-size:13px;color:#2c3e50;margin-top:4px;"></div>
+        </div>
+
+        <div id="chext-sms-warning" style="display:none;background:#fff3cd;border:1px solid #f0ad4e;border-radius:8px;padding:10px 16px;margin-bottom:12px;font-size:13px;font-weight:600;color:#856404;">
+          ⚠ SMS service detected on old extension — manual re-hosting required on new extension.
+          <div id="chext-sms-detail" style="font-weight:400;margin-top:4px;"></div>
+        </div>
+
+        <label style="font-weight:600;display:block;margin-bottom:4px;">New Extension</label>
+        <div style="display:flex;gap:8px;margin-bottom:4px;">
+          <input id="chext-new-ext" type="text" placeholder="Enter new 10-digit extension" maxlength="15" style="flex:1;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;">
+          <button id="chext-validate-btn" type="button" style="background:#355978;color:#fff;border:none;border-radius:6px;padding:7px 14px;font-weight:700;cursor:pointer;">Validate DN</button>
+        </div>
+        <div id="chext-dn-status" style="font-size:12px;min-height:18px;margin-bottom:10px;"></div>
+
+        <label style="font-weight:600;display:block;margin-bottom:4px;">Unity Host</label>
+        <input id="chext-unity-host" type="text" placeholder="e.g. lascutyp01.ahs.int" style="width:100%;padding:7px 10px;border:1px solid #c8dbee;border-radius:6px;margin-bottom:8px;" value="">
+
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button id="chext-run-btn" type="button" disabled style="background:#b00020;color:#fff;border:none;border-radius:6px;padding:8px 22px;font-weight:700;cursor:not-allowed;opacity:0.5;">Run Change Extension</button>
+          <button id="chext-cancel-btn" type="button" style="background:#6b7280;color:#fff;border:none;border-radius:6px;padding:8px 16px;cursor:pointer;">Cancel</button>
+        </div>
+      </div>
+
+      <!-- Phase 3: Results -->
+      <div id="chext-status" style="min-height:18px;margin-top:10px;font-size:13px;font-weight:600;color:#1d4f91;"></div>
+      <div id="chext-results" style="margin-top:8px;overflow-x:auto;"></div>
+    </div>
+
+    <script>
+    (function() {
+      const searchBtn = document.getElementById("chext-search-btn");
+      const lastEl = document.getElementById("chext-last");
+      const firstEl = document.getElementById("chext-first");
+      const resultsEl = document.getElementById("chext-search-results");
+      const previewBlock = document.getElementById("chext-preview-block");
+      const userLabel = document.getElementById("chext-user-label");
+      const currentInfo = document.getElementById("chext-current-info");
+      const smsWarning = document.getElementById("chext-sms-warning");
+      const smsDetail = document.getElementById("chext-sms-detail");
+      const newExtEl = document.getElementById("chext-new-ext");
+      const validateBtn = document.getElementById("chext-validate-btn");
+      const dnStatus = document.getElementById("chext-dn-status");
+      const unityHostEl = document.getElementById("chext-unity-host");
+      const runBtn = document.getElementById("chext-run-btn");
+      const cancelBtn = document.getElementById("chext-cancel-btn");
+      const statusEl = document.getElementById("chext-status");
+      const outputEl = document.getElementById("chext-results");
+
+      let selectedUser = null;
+      let dnValidated = false;
+
+      function resetPreview() {
+        selectedUser = null;
+        dnValidated = false;
+        previewBlock.style.display = "none";
+        resultsEl.style.display = "none";
+        resultsEl.innerHTML = "";
+        outputEl.innerHTML = "";
+        statusEl.textContent = "";
+        dnStatus.textContent = "";
+        runBtn.disabled = true;
+        runBtn.style.opacity = "0.5";
+        runBtn.style.cursor = "not-allowed";
+      }
+
+      searchBtn.addEventListener("click", async function() {
+        const lastName = lastEl.value.trim();
+        if (!lastName) { statusEl.textContent = "Enter a last name."; return; }
+        statusEl.textContent = "Searching...";
+        resetPreview();
+        try {
+          const fd = new FormData();
+          fd.append("last_name", lastName);
+          fd.append("first_name", firstEl.value.trim());
+          const resp = await fetch("/lookup/person", { method: "POST", body: fd, credentials: "same-origin" });
+          const data = await resp.json();
+          if (!data.ok || !data.results || data.results.length === 0) {
+            statusEl.textContent = "No users found."; return;
+          }
+          statusEl.textContent = "";
+          let html = "<table style='width:100%;border-collapse:collapse;font-size:13px;'><thead><tr style='background:#1d4f91;color:#fff;'><th style='padding:6px 10px;text-align:left;'>Name</th><th style='padding:6px 10px;'>User ID</th><th style='padding:6px 10px;'>Extension</th><th style='padding:6px 10px;'>Devices</th><th style='padding:6px 10px;'>Select</th></tr></thead><tbody>";
+          data.results.forEach(function(r, i) {
+            const bg = i % 2 === 0 ? "#f7fbff" : "#fff";
+            const name = r.display_name || ((r.first_name || "") + " " + (r.last_name || "")).trim() || r.userid;
+            const ext = r.primary_extension || "\u2014";
+            const devNames = (r.devices || []).map(function(d) { return d.name; }).join(", ") || "\u2014";
+            html += "<tr style='background:" + bg + ";border-bottom:1px solid #e2eaf3;'>";
+            html += "<td style='padding:6px 10px;'>" + name + "</td>";
+            html += "<td style='padding:6px 10px;'>" + r.userid + "</td>";
+            html += "<td style='padding:6px 10px;'>" + ext + "</td>";
+            html += "<td style='padding:6px 10px;font-size:12px;'>" + devNames + "</td>";
+            html += "<td style='padding:6px 10px;'><button type='button' data-idx='" + i + "' style='background:#1d4f91;color:#fff;border:none;border-radius:5px;padding:3px 10px;cursor:pointer;font-size:12px;'>Select</button></td>";
+            html += "</tr>";
+          });
+          html += "</tbody></table>";
+          resultsEl.innerHTML = html;
+          resultsEl.style.display = "block";
+
+          resultsEl.querySelectorAll("button[data-idx]").forEach(function(btn) {
+            btn.addEventListener("click", function() {
+              const idx = parseInt(btn.getAttribute("data-idx") || "0", 10);
+              selectedUser = data.results[idx];
+              showPreview(selectedUser);
+            });
+          });
+        } catch(err) {
+          statusEl.textContent = "Search failed: " + (err.message || err);
+        }
+      });
+
+      async function showPreview(user) {
+        resultsEl.style.display = "none";
+        statusEl.textContent = "Loading preview...";
+        try {
+          const fd = new FormData();
+          fd.append("target_user", user.userid);
+          const resp = await fetch("/change-jabber-extension/preview", { method: "POST", body: fd, credentials: "same-origin" });
+          const data = await resp.json();
+          if (!data.ok) { statusEl.textContent = "Preview failed: " + (data.error || "unknown"); return; }
+
+          const name = data.display_name || user.userid;
+          userLabel.textContent = name + " (" + user.userid + ")";
+          currentInfo.innerHTML = "Current extension: <strong>" + (data.current_extension || "\u2014") + "</strong> &nbsp;|&nbsp; Devices: <strong>" + (data.device_names || []).join(", ") + "</strong>";
+
+          if (data.sms_action_required) {
+            smsWarning.style.display = "block";
+            let smsHtml = "";
+            if (data.sms_aerialink) smsHtml += "Aerialink: " + data.sms_aerialink + "<br>";
+            if (data.sms_twilio_amieweb) smsHtml += "Twilio AMIEWeb: " + data.sms_twilio_amieweb + "<br>";
+            if (data.sms_twilio_salesforce) smsHtml += "Twilio Salesforce: " + data.sms_twilio_salesforce;
+            smsDetail.innerHTML = smsHtml;
+          } else {
+            smsWarning.style.display = "none";
+          }
+
+          if (data.unity_host) unityHostEl.value = data.unity_host;
+          previewBlock.style.display = "block";
+          statusEl.textContent = "";
+        } catch(err) {
+          statusEl.textContent = "Preview error: " + (err.message || err);
+        }
+      }
+
+      validateBtn.addEventListener("click", async function() {
+        const newExt = newExtEl.value.trim();
+        if (!newExt || !selectedUser) { dnStatus.textContent = "Enter a new extension first."; return; }
+        dnStatus.textContent = "Checking...";
+        dnValidated = false;
+        runBtn.disabled = true; runBtn.style.opacity = "0.5"; runBtn.style.cursor = "not-allowed";
+        try {
+          const fd = new FormData();
+          fd.append("extension", newExt);
+          fd.append("current_extension", selectedUser.primary_extension || "");
+          const resp = await fetch("/change-jabber-extension/validate-dn", { method: "POST", body: fd, credentials: "same-origin" });
+          const data = await resp.json();
+          if (data.ok && data.available) {
+            dnStatus.textContent = "\u2705 " + newExt + " is available and unassigned.";
+            dnStatus.style.color = "#0f6d35";
+            dnValidated = true;
+            runBtn.disabled = false; runBtn.style.opacity = "1"; runBtn.style.cursor = "pointer";
+          } else {
+            dnStatus.textContent = "\u274C " + (data.reason || "Extension not available.");
+            dnStatus.style.color = "#b00020";
+          }
+        } catch(err) {
+          dnStatus.textContent = "Validation error: " + (err.message || err);
+        }
+      });
+
+      cancelBtn.addEventListener("click", function() { resetPreview(); statusEl.textContent = ""; });
+
+      runBtn.addEventListener("click", async function() {
+        if (!selectedUser || !dnValidated) return;
+        const newExt = newExtEl.value.trim();
+        const unityHost = unityHostEl.value.trim();
+        if (!newExt) { statusEl.textContent = "New extension required."; return; }
+        if (!confirm("Run Change Extension for " + selectedUser.userid + "?\n\nOld: " + (selectedUser.primary_extension || "?") + "\nNew: " + newExt + "\n\nThis will delete existing Jabber devices and rebuild on the new extension. Unity and AD will be updated. A 30-day forwarding pattern will be created on the old number.\n\nContinue?")) return;
+        runBtn.disabled = true; runBtn.style.opacity = "0.5";
+        statusEl.textContent = "Running...";
+        outputEl.innerHTML = "";
+        try {
+          const fd = new FormData();
+          fd.append("target_user", selectedUser.userid);
+          fd.append("new_extension", newExt);
+          fd.append("unity_host", unityHost);
+          const resp = await fetch("/change-jabber-extension/run", { method: "POST", body: fd, credentials: "same-origin" });
+          const data = await resp.json();
+          if (data.steps) {
+            let html = "<table style='width:100%;border-collapse:collapse;font-size:13px;'><thead><tr style='background:#1d4f91;color:#fff;'><th style='padding:6px 10px;text-align:left;'>Step</th><th style='padding:6px 10px;'>Status</th><th style='padding:6px 10px;text-align:left;'>Details</th></tr></thead><tbody>";
+            data.steps.forEach(function(s, i) {
+              const bg = i % 2 === 0 ? "#f7fbff" : "#fff";
+              const color = s.status === "Success" ? "#0f6d35" : (s.status === "Skipped" ? "#6b7280" : "#b00020");
+              html += "<tr style='background:" + bg + ";border-bottom:1px solid #e2eaf3;'><td style='padding:6px 10px;'>" + s.step + "</td><td style='padding:6px 10px;font-weight:700;color:" + color + ";'>" + s.status + "</td><td style='padding:6px 10px;'>" + (s.details || "") + "</td></tr>";
+            });
+            html += "</tbody></table>";
+            outputEl.innerHTML = html;
+          }
+          const allOk = (data.steps || []).every(function(s) { return s.status === "Success" || s.status === "Skipped"; });
+          statusEl.textContent = allOk ? "\u2705 Change Extension completed." : "\u26A0 Completed with errors — review steps above.";
+          statusEl.style.color = allOk ? "#0f6d35" : "#b00020";
+        } catch(err) {
+          statusEl.textContent = "Run failed: " + (err.message || err);
+        } finally {
+          runBtn.disabled = false; runBtn.style.opacity = "1";
+        }
+      });
+    })();
+    </script>
     </section>
 
     <section class="tool-panel" data-panel="pin">
@@ -50117,6 +50354,341 @@ def blocked_cleanup_history_route(request: Request):
     if len(history) >= 20:
       break
   return JSONResponse({"ok": True, "rows": history})
+
+
+def _change_ext_unity_update_dtmf(unity_server: str, unity_user: str, unity_pass: str, target_alias: str, new_extension: str) -> dict:
+  """Update a Unity mailbox DtmfAccessId (extension) without deleting the mailbox."""
+  import urllib3
+  urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+  session = requests.Session()
+  session.verify = False
+  session.auth = HTTPBasicAuth(unity_user, unity_pass)
+  base = f"https://{unity_server}"
+
+  # Find the user's ObjectId by alias
+  search_url = f"{base}/vmrest/users?query=(Alias is {requests.utils.quote(target_alias.strip())})"
+  resp = session.get(search_url, headers={"Accept": "application/json"}, timeout=30)
+  if resp.status_code != 200:
+    return {"ok": False, "error": f"Unity user search failed HTTP {resp.status_code}"}
+  data = resp.json() if resp.text else {}
+  users_raw = data.get("User", data.get("Users", []))
+  if isinstance(users_raw, dict):
+    users_raw = [users_raw]
+  users_raw = [u for u in (users_raw or []) if str(u.get("Alias", "")).strip().lower() == target_alias.strip().lower()]
+  if not users_raw:
+    return {"ok": False, "error": f"Unity mailbox '{target_alias}' not found"}
+  object_id = str(users_raw[0].get("ObjectId", "")).strip()
+  if not object_id:
+    return {"ok": False, "error": "Unity ObjectId missing"}
+
+  # Update DtmfAccessId
+  put_url = f"{base}/vmrest/users/{object_id}"
+  payload = {"DtmfAccessId": new_extension.strip()}
+  put_resp = session.put(put_url, json=payload, headers={"Accept": "application/json", "Content-Type": "application/json"}, timeout=30)
+  if put_resp.status_code not in (200, 204):
+    return {"ok": False, "error": f"Unity DtmfAccessId update failed HTTP {put_resp.status_code}: {put_resp.text[:300]}"}
+  return {"ok": True, "object_id": object_id}
+
+
+def _change_ext_remove_phone(session: requests.Session, cucm_host: str, device_name: str) -> None:
+  """Remove a single phone device via AXL removePhone."""
+  soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:removePhone sequence=\"1\">
+      <name>{xml_escape(device_name)}</name>
+    </axl:removePhone>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+  resp = session.post(f"https://{cucm_host}:8443/axl/", data=soap.encode("utf-8"), headers={"Content-Type": "text/xml"}, timeout=60)
+  if resp.status_code != 200:
+    raise RuntimeError(f"removePhone {device_name} failed HTTP {resp.status_code}: {resp.text[:400]}")
+
+
+def _change_ext_create_forwarding_pattern(session: requests.Session, cucm_host: str, old_ext: str, new_ext: str, route_partition: str) -> None:
+  """Create a 30-day forwarding translation pattern from old to new extension."""
+  import datetime as _dt
+  expires = (_dt.date.today() + _dt.timedelta(days=30)).strftime("%Y-%m-%d")
+  desc = xml_escape(f"EXT CHG {old_ext}->{new_ext} expires {expires}")
+  soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:addTransPattern sequence=\"1\">
+      <transPattern>
+        <pattern>{xml_escape(old_ext)}</pattern>
+        <routePartitionName>{xml_escape(route_partition)}</routePartitionName>
+        <description>{desc}</description>
+        <usage>Translation</usage>
+        <calledPartyTransformationMask>{xml_escape(new_ext)}</calledPartyTransformationMask>
+        <blockEnable>false</blockEnable>
+        <patternUrgency>false</patternUrgency>
+        <provideOutsideDialtone>false</provideOutsideDialtone>
+      </transPattern>
+    </axl:addTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+  resp = session.post(f"https://{cucm_host}:8443/axl/", data=soap.encode("utf-8"), headers={"Content-Type": "text/xml"}, timeout=60)
+  if resp.status_code != 200:
+    raise RuntimeError(f"addTransPattern failed HTTP {resp.status_code}: {resp.text[:400]}")
+
+
+def _change_ext_store_pending_cleanup(cucm_host: str, pattern: str, route_partition: str, new_ext: str) -> None:
+  """Store pending DN release (after 30-day forward expires) in app settings."""
+  import datetime as _dt
+  expires = (_dt.date.today() + _dt.timedelta(days=30)).isoformat()
+  settings = _load_app_settings()
+  pending = settings.get("pending_ext_dn_releases", [])
+  pending.append({"pattern": pattern, "route_partition": route_partition, "new_ext": new_ext, "expires": expires, "cucm_host": cucm_host})
+  settings["pending_ext_dn_releases"] = pending
+  _save_app_settings(settings)
+
+
+@app.post("/change-jabber-extension/preview")
+def change_jabber_extension_preview_route(
+    request: Request,
+    target_user: str = Form(""),
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  clean_uid = (target_user or "").strip()
+  if not clean_uid:
+    return JSONResponse({"ok": False, "error": "target_user required"}, status_code=400)
+
+  try:
+    people = search_persons_by_name(resolved_host, resolved_user, resolved_pass, clean_uid.split(".")[-1] if "." in clean_uid else clean_uid)
+    user = next((p for p in people if str(p.get("userid", "")).strip().lower() == clean_uid.lower()), None)
+    if not user:
+      people2 = search_persons_by_name(resolved_host, resolved_user, resolved_pass, clean_uid)
+      user = next((p for p in people2 if str(p.get("userid", "")).strip().lower() == clean_uid.lower()), None)
+    if not user:
+      return JSONResponse({"ok": False, "error": f"User {clean_uid} not found in CUCM"}, status_code=404)
+
+    devices = user.get("devices") or []
+    jabber_prefixes = ("CSF", "TCT", "BOT", "TAB")
+    jabber_devices = [d for d in devices if str(d.get("name", "")).upper().startswith(jabber_prefixes)]
+    current_ext = (user.get("primary_extension") or "").strip()
+
+    # SMS check on old extension
+    sms_aerialink = sms_twilio_amieweb = sms_twilio_salesforce = ""
+    sms_action_required = False
+    if current_ext:
+      try:
+        alink = _lookup_aerialink_account_code_by_phone(current_ext)
+        if alink.get("provisioned"):
+          sms_aerialink = f"Provisioned (code: {alink.get('account_code', '')})"
+          sms_action_required = True
+        else:
+          sms_aerialink = "Not found"
+      except Exception:
+        sms_aerialink = "Lookup unavailable"
+      try:
+        twilio = _lookup_twilio_number_by_phone(current_ext, account="default")
+        if twilio.get("found"):
+          sms_twilio_amieweb = f"Hosted (SID: {twilio.get('sid', '')})"
+          sms_action_required = True
+        else:
+          sms_twilio_amieweb = "Not hosted"
+      except Exception:
+        sms_twilio_amieweb = "Lookup unavailable"
+
+    # Detect which Unity host to use based on CUCM host
+    unity_host = UNITY_ENV_SETTINGS.get("PRODUCTION" if (resolved_host or "").strip().lower() == PROD_CUCM_IP else "LAB", {}).get("server", "")
+
+    return JSONResponse({
+      "ok": True,
+      "userid": clean_uid,
+      "display_name": (user.get("display_name") or f"{user.get('first_name','')} {user.get('last_name','')}").strip(),
+      "current_extension": current_ext,
+      "device_names": [d.get("name", "") for d in jabber_devices],
+      "sms_aerialink": sms_aerialink,
+      "sms_twilio_amieweb": sms_twilio_amieweb,
+      "sms_twilio_salesforce": sms_twilio_salesforce,
+      "sms_action_required": sms_action_required,
+      "unity_host": unity_host,
+    })
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@app.post("/change-jabber-extension/validate-dn")
+def change_jabber_extension_validate_dn_route(
+    request: Request,
+    extension: str = Form(""),
+    current_extension: str = Form(""),
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  clean_ext = (extension or "").strip()
+  if not clean_ext:
+    return JSONResponse({"ok": False, "available": False, "reason": "Extension is required."})
+  if clean_ext == (current_extension or "").strip():
+    return JSONResponse({"ok": False, "available": False, "reason": "New extension is the same as the current extension."})
+  try:
+    ext_sql = clean_ext.replace("'", "''")
+    sql = (
+      f"SELECT n.dnorpattern, m.fkdevice FROM numplan n "
+      f"LEFT OUTER JOIN devicenumplanmap m ON m.fknumplan = n.pkid "
+      f"LEFT JOIN routepartition r ON n.fkroutepartition = r.pkid "
+      f"WHERE n.dnorpattern = '{ext_sql}' AND r.name = 'ENT_DEVICE_PT'"
+    )
+    session = requests.Session()
+    session.verify = False
+    session.trust_env = False
+    session.auth = HTTPBasicAuth(resolved_user, resolved_pass)
+    soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Header/><soapenv:Body><axl:executeSQLQuery><sql>{xml_escape(sql)}</sql></axl:executeSQLQuery></soapenv:Body>
+</soapenv:Envelope>"""
+    resp = session.post(f"https://{resolved_host}:8443/axl/", data=soap.encode("utf-8"), headers={"Content-Type": "text/xml"}, timeout=30)
+    if resp.status_code != 200:
+      return JSONResponse({"ok": False, "available": False, "reason": f"CUCM query failed HTTP {resp.status_code}"})
+    root = ET.fromstring(resp.text)
+    rows = [elem for elem in root.iter() if elem.tag.split("}")[-1] == "row"]
+    if not rows:
+      return JSONResponse({"ok": False, "available": False, "reason": f"{clean_ext} does not exist in ENT_DEVICE_PT. Use 'Add Directory Number' to create it first."})
+    assigned = any((child.text or "").strip() for elem in rows for child in list(elem) if child.tag.split("}")[-1] == "fkdevice")
+    if assigned:
+      return JSONResponse({"ok": False, "available": False, "reason": f"{clean_ext} is already assigned to a device."})
+    return JSONResponse({"ok": True, "available": True})
+  except Exception as exc:
+    return JSONResponse({"ok": False, "available": False, "reason": str(exc)})
+
+
+@app.post("/change-jabber-extension/run")
+def change_jabber_extension_run_route(
+    request: Request,
+    target_user: str = Form(""),
+    new_extension: str = Form(""),
+    unity_host: str = Form(""),
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  clean_uid = (target_user or "").strip()
+  clean_new_ext = (new_extension or "").strip()
+  clean_unity = (unity_host or "").strip()
+  steps = []
+
+  def _step(name: str, status: str, details: str):
+    steps.append({"step": name, "status": status, "details": details})
+
+  if not clean_uid or not clean_new_ext:
+    return JSONResponse({"ok": False, "error": "target_user and new_extension required"}, status_code=400)
+
+  try:
+    session = requests.Session()
+    session.verify = False
+    session.trust_env = False
+    session.auth = HTTPBasicAuth(resolved_user, resolved_pass)
+
+    # Step 1: Validate
+    people = search_persons_by_name(resolved_host, resolved_user, resolved_pass, clean_uid.split(".")[-1] if "." in clean_uid else clean_uid)
+    user = next((p for p in people if str(p.get("userid", "")).strip().lower() == clean_uid.lower()), None)
+    if not user:
+      _step("Validate User", "Failed", f"{clean_uid} not found in CUCM")
+      return JSONResponse({"ok": False, "steps": steps})
+    old_ext = (user.get("primary_extension") or "").strip()
+    _step("Validate User", "Success", f"Found {clean_uid}, current extension {old_ext or 'none'}")
+
+    # Step 2: Identify Jabber devices
+    jabber_prefixes = ("CSF", "TCT", "BOT", "TAB")
+    devices = user.get("devices") or []
+    jabber_devices = [d for d in devices if str(d.get("name", "")).upper().startswith(jabber_prefixes)]
+    device_names = [d.get("name", "") for d in jabber_devices]
+    _step("Identify Jabber Devices", "Success" if jabber_devices else "Skipped", ", ".join(device_names) if device_names else "No Jabber devices found")
+
+    # Step 3: Delete old Jabber devices
+    deleted = []
+    for dev_name in device_names:
+      try:
+        _change_ext_remove_phone(session, resolved_host, dev_name)
+        deleted.append(dev_name)
+      except Exception as e:
+        _step(f"Delete {dev_name}", "Failed", str(e))
+    if device_names:
+      _step("Delete Old Jabber Devices", "Success" if len(deleted) == len(device_names) else "Partial", f"Deleted: {', '.join(deleted)}")
+
+    # Step 4: Build new Jabber devices with new extension
+    built = []
+    failed_build = []
+    for dev_name in device_names:
+      prefix = dev_name[:3].upper()
+      dn_type = "recruiter" if prefix == "CSF" else "general"
+      try:
+        csv_data, fname = build_user_csf_phone_from_template(
+          cucm_host=resolved_host,
+          cucm_user=resolved_user,
+          cucm_pass=resolved_pass,
+          target_user=clean_uid,
+          dn_type=dn_type,
+          preferred_dn=clean_new_ext,
+        )
+        built.append(prefix)
+      except Exception as e:
+        failed_build.append(f"{prefix}: {e}")
+    if device_names:
+      status_build = "Success" if not failed_build else ("Failed" if len(failed_build) == len(device_names) else "Partial")
+      detail_build = f"Built: {', '.join(built)}" + (f"; Errors: {'; '.join(failed_build)}" if failed_build else "")
+      _step("Build New Jabber Devices", status_build, detail_build)
+
+    # Step 5: Create 30-day forwarding pattern on old extension
+    if old_ext and old_ext != clean_new_ext:
+      try:
+        _change_ext_create_forwarding_pattern(session, resolved_host, old_ext, clean_new_ext, "ENT_DEVICE_PT")
+        _change_ext_store_pending_cleanup(resolved_host, old_ext, "ENT_DEVICE_PT", clean_new_ext)
+        import datetime as _dt
+        expires = (_dt.date.today() + _dt.timedelta(days=30)).strftime("%Y-%m-%d")
+        _step("Create Forwarding Pattern", "Success", f"{old_ext}→{clean_new_ext} in ENT_DEVICE_PT, expires {expires}")
+      except Exception as e:
+        _step("Create Forwarding Pattern", "Failed", str(e))
+    else:
+      _step("Create Forwarding Pattern", "Skipped", "No old extension or same as new")
+
+    # Step 6: Update Unity mailbox DtmfAccessId
+    if clean_unity and old_ext:
+      try:
+        unity_result = _change_ext_unity_update_dtmf(clean_unity, resolved_user, resolved_pass, clean_uid, clean_new_ext)
+        if unity_result.get("ok"):
+          _step("Update Unity Mailbox", "Success", f"DtmfAccessId updated to {clean_new_ext} on {clean_unity}")
+        else:
+          _step("Update Unity Mailbox", "Failed", unity_result.get("error", "Unknown error"))
+      except Exception as e:
+        _step("Update Unity Mailbox", "Failed", str(e))
+    else:
+      _step("Update Unity Mailbox", "Skipped", "Unity host not provided or no old extension")
+
+    # Step 7: Update AD phone fields
+    try:
+      csv_data, fname = update_ad_phone_fields_only(
+        target_user=clean_uid,
+        phone_number=clean_new_ext,
+        ad_username=resolved_user,
+        ad_password=resolved_pass,
+      )
+      _step("Update AD Phone Fields", "Success", f"ipPhone and telephoneNumber set to {clean_new_ext}")
+    except Exception as e:
+      _step("Update AD Phone Fields", "Failed", str(e))
+
+    _append_audit_event(
+      action="change_jabber_extension",
+      cucm_host=resolved_host,
+      operator=resolved_user,
+      target=f"user={clean_uid};old_ext={old_ext};new_ext={clean_new_ext}",
+      output_filename="inline_json_ok",
+      inline_mode=True,
+    )
+
+    return JSONResponse({"ok": True, "steps": steps})
+  except Exception as exc:
+    _step("Unexpected Error", "Failed", str(exc))
+    return JSONResponse({"ok": False, "steps": steps, "error": str(exc)}, status_code=500)
 
 
 @app.post("/called-name-change")
