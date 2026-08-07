@@ -50651,7 +50651,7 @@ def change_extension_page(request: Request):
   runBtn.addEventListener("click", async function () {{
     if (!selectedUser) return;
     var label = dnTypeEl.options[dnTypeEl.selectedIndex].text;
-    if (!confirm("Change extension for " + (selectedUser.display_name || selectedUser.userid) + "?\n\nNew type: " + label + "\nOld ext: " + (selectedUser.primary_extension || "none") + "\n\nThis will DELETE all Jabber devices and rebuild with a new number.\n\nContinue?")) return;
+    if (!confirm("Change extension for " + (selectedUser.display_name || selectedUser.userid) + "?\\n\\nNew type: " + label + "\\nOld ext: " + (selectedUser.primary_extension || "none") + "\\n\\nThis will DELETE all Jabber devices and rebuild with a new number.\\n\\nContinue?")) return;
     runBtn.disabled = true;
     runStatusEl.textContent = "Running\u2026";
     runResultsEl.innerHTML = "";
