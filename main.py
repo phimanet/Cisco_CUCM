@@ -25444,6 +25444,7 @@ def menu_page(request: Request):
   dn_type_general_label = escape(f"General Employee ({general_prefix})")
   dn_type_strike_label = escape(f"Strike Employee ({strike_prefix})")
   html = """
+<!DOCTYPE html>
 <html>
   <head>
     <title>Cisco Voice Server Automation Site - Restricted Access</title>
@@ -27880,7 +27881,6 @@ __ADMIN_CARD__
     <div id="chext-pending-list" style="overflow-x:auto;"></div>
 
     <script>
-    try {
     (function() {
       function _chext_esc(s) { var d = document.createElement("div"); d.textContent = String(s || ""); return d.innerHTML; }
       var _chextSelectedUser = null;
@@ -28036,10 +28036,6 @@ __ADMIN_CARD__
         window._chextLoadPendingForwards();
       });
     })();
-    } catch(e) {
-      var _s = document.getElementById("chext-status");
-      if (_s) _s.textContent = "Script init error: " + (e && e.message ? e.message : String(e));
-    }
     </script>
     </section>
 
