@@ -27882,11 +27882,13 @@ __ADMIN_CARD__
 
     <script>
     (function() {
+      console.log("CHEXT-IIFE: script block starting");
       function _chext_esc(s) { var d = document.createElement("div"); d.textContent = String(s || ""); return d.innerHTML; }
       var _chextSelectedUser = null;
 
       // Defined unconditionally so onclick can always call it
       window.runChextSearch = async function() {
+        console.log("CHEXT: runChextSearch called");
         var lastEl = document.getElementById("chext-last");
         var firstEl = document.getElementById("chext-first");
         var statusEl = document.getElementById("chext-status");
@@ -27931,6 +27933,7 @@ __ADMIN_CARD__
         } catch(err) { statusEl.textContent = "Search failed: " + (err.message || err); }
       };
 
+      console.log("CHEXT-IIFE: runChextSearch registered, type=", typeof window.runChextSearch);
       window._chextLoadActionForm = function(user) {
         var actionBlock = document.getElementById("chext-action-block");
         var selectedInfo = document.getElementById("chext-selected-info");
