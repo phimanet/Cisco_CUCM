@@ -50495,7 +50495,7 @@ def change_extension_page(request: Request):
 <header class="topbar">
   <div class="topbar-brand">
     <span class="brand-fallback">AMN Healthcare</span>
-    <strong>Voice Operations Portal &mdash; Change Extension</strong>
+    <strong>Voice Operations Portal</strong>
   </div>
   <div class="topbar-right">
     <div class="topbar-nav">
@@ -50524,7 +50524,6 @@ def change_extension_page(request: Request):
       </div>
     </form>
     <div id="chext-status">Enter a last name and click Search.</div>
-    <div id="chext-debug" style="font-size:11px;color:#888;margin:4px 0;"></div>
     <div id="chext-results"></div>
 
     <div id="chext-action">
@@ -50592,8 +50591,7 @@ def change_extension_page(request: Request):
     var lastEl = document.getElementById("chext-last");
     var firstEl = document.getElementById("chext-first");
     var lastName = lastEl ? lastEl.value.trim() : "";
-    var dbg = document.getElementById("chext-debug");
-    if (dbg) dbg.textContent = "DBG-CLICK: lastName=[" + lastName + "] statusEl=" + (statusEl ? "found" : "NULL") + " resultsEl=" + (resultsEl ? "found" : "NULL");
+
     if (!lastName) {{ if (statusEl) statusEl.textContent = "Enter a last name."; return; }}
     if (statusEl) statusEl.textContent = "Searching\u2026";
     clearSel();
@@ -50623,14 +50621,12 @@ def change_extension_page(request: Request):
           loadActionForm(selectedUser);
         }});
       }});
-    }} catch (err) {{ if (statusEl) statusEl.textContent = "Search failed: " + (err.message || err); if (dbg) dbg.textContent = "DBG catch: " + (err.message || err); }}
+    }} catch (err) {{ if (statusEl) statusEl.textContent = "Search failed: " + (err.message || err); }}
   }};
 
   var lastInput = document.getElementById("chext-last");
   if (lastInput) lastInput.addEventListener("keydown", function(e) {{ if (e.key === "Enter") {{ e.preventDefault(); window._chextDoSearch(); }} }});
-  var dbgEl = document.getElementById("chext-debug");
-  if (dbgEl) dbgEl.style.cssText = "font-size:13px;color:#b00020;font-weight:700;margin:4px 0;";
-  if (dbgEl) dbgEl.textContent = "DBG-LOAD: IIFE ran, _chextSearch=" + (typeof window._chextDoSearch) + ", statusEl=" + (statusEl ? "found" : "NULL");
+
 
   function loadActionForm(user) {{
     var name = user.display_name || ((user.first_name || "") + " " + (user.last_name || "")).trim() || user.userid;
