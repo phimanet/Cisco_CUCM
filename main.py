@@ -50524,6 +50524,7 @@ def change_extension_page(request: Request):
       </div>
     </form>
     <div id="chext-status">Enter a last name and click Search.</div>
+    <div id="chext-debug" style="font-size:11px;color:#888;margin:4px 0;"></div>
     <div id="chext-results"></div>
 
     <div id="chext-action">
@@ -50591,6 +50592,8 @@ def change_extension_page(request: Request):
     var lastEl = document.getElementById("chext-last");
     var firstEl = document.getElementById("chext-first");
     var lastName = lastEl ? lastEl.value.trim() : "";
+    var dbg = document.getElementById("chext-debug");
+    if (dbg) dbg.textContent = "DBG: called, lastName=" + lastName + ", host={escape(auth_cucm_host)}, user={escape(session_username)}";
     if (!lastName) {{ if (statusEl) statusEl.textContent = "Enter a last name."; return; }}
     if (statusEl) statusEl.textContent = "Searching\u2026";
     clearSel();
@@ -50620,11 +50623,13 @@ def change_extension_page(request: Request):
           loadActionForm(selectedUser);
         }});
       }});
-    }} catch (err) {{ if (statusEl) statusEl.textContent = "Search failed: " + (err.message || err); }}
+    }} catch (err) {{ if (statusEl) statusEl.textContent = "Search failed: " + (err.message || err); if (dbg) dbg.textContent = "DBG catch: " + (err.message || err); }}
   }};
 
   var lastInput = document.getElementById("chext-last");
   if (lastInput) lastInput.addEventListener("keydown", function(e) {{ if (e.key === "Enter") {{ e.preventDefault(); window._chextDoSearch(); }} }});
+  var dbgEl = document.getElementById("chext-debug");
+  if (dbgEl) dbgEl.textContent = "DBG: IIFE complete, _chextDoSearch=" + (typeof window._chextDoSearch);
 
   function loadActionForm(user) {{
     var name = user.display_name || ((user.first_name || "") + " " + (user.last_name || "")).trim() || user.userid;
