@@ -205,49 +205,55 @@ def _get_phone_details(session, cucm_host, phone_name):
     return {"name": phone_name, "lines": line_entries}
 
 
-def _get_unity_user_by_alias(session, unity_server, alias):
-    query = f"(Alias is {alias})"
-    url = _make_unity_url(unity_server, "/vmrest/users")
-    response = session.get(url, headers=_unity_headers(), params={"query": query}, timeout=120, verify=False)
-
+def _unity_query_users(session, unity_server, raw_query):
+    """GET /vmrest/users with query built into the URL to avoid percent-encoding parentheses."""
+    base_url = _make_unity_url(unity_server, "/vmrest/users")
+    # Build URL manually so parentheses stay literal (some Unity versions reject %28/%29)
+    full_url = f"{base_url}?query={raw_query}"
+    response = session.get(full_url, headers=_unity_headers(), timeout=120, verify=False)
     if response.status_code != 200:
-        raise RuntimeError(f"Unity user lookup failed: {_parse_unity_error_text(response)}")
-
+        raise RuntimeError(f"Unity query failed HTTP {response.status_code}: {response.text[:600]}")
     if not response.text:
-        return None
-
+        return [], ""
     try:
         data = response.json()
     except ValueError:
-        return None
-
+        return [], response.text[:200]
     users = data.get("User")
     if isinstance(users, dict):
         users = [users]
     if not isinstance(users, list):
-        return None
+        return [], ""
+    return users, ""
 
-    for user in users:
-        if str(user.get("Alias", "")).lower() == alias.lower():
-            return user
 
+def _get_unity_user_by_alias(session, unity_server, alias):
+    """Try exact-match alias query; fall back to startswith to handle percent-encoding quirks."""
+    for raw_query in [f"(Alias+is+{alias})", f"(Alias+startswith+{alias})"]:
+        try:
+            users, _ = _unity_query_users(session, unity_server, raw_query)
+        except RuntimeError:
+            continue
+        for user in users:
+            if str(user.get("Alias", "")).lower() == alias.lower():
+                return user
     return None
 
 
 def _get_unity_user_by_extension(session, unity_server, extension):
-    """Lookup Unity mailbox by DtmfAccessId (extension) — used as fallback when alias lookup misses."""
-    query = f"(DtmfAccessId is {extension})"
-    url = _make_unity_url(unity_server, "/vmrest/users")
-    response = session.get(url, headers=_unity_headers(), params={"query": query}, timeout=120, verify=False)
-    if response.status_code != 200:
-        return None
-    if not response.text:
-        return None
-    try:
-        data = response.json()
-    except ValueError:
-        return None
-    users = data.get("User")
+    """Lookup Unity mailbox by extension — tries DtmfAccessId then Extension field names."""
+    clean_ext = (extension or "").strip()
+    if not clean_ext:
+        return None, "no extension"
+    for field in ("DtmfAccessId", "Extension"):
+        raw_query = f"({field}+is+{clean_ext})"
+        try:
+            users, raw = _unity_query_users(session, unity_server, raw_query)
+        except RuntimeError as exc:
+            return None, str(exc)
+        if users:
+            return users[0], f"found via {field}"
+    return None, f"not found by DtmfAccessId or Extension for {clean_ext}"
     if isinstance(users, dict):
         users = [users]
     if not isinstance(users, list) or not users:
@@ -515,21 +521,22 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
                 writer.writerow(["Update Jabber Device", "Failed", f"{device_name}: {exc}"])
 
         try:
-            mailbox = _get_unity_user_by_alias(unity_session, unity_server, user.get("userid", clean_target_user))
+            ucid = user.get("userid", clean_target_user)
+            mailbox = _get_unity_user_by_alias(unity_session, unity_server, ucid)
             if not mailbox and user_extensions:
-                # Alias lookup can miss if Unity alias differs from CUCM userid; fall back to extension.
+                # Alias strategies missed; try by extension (DtmfAccessId / Extension field).
                 for ext in sorted(user_extensions):
-                    mailbox = _get_unity_user_by_extension(unity_session, unity_server, ext)
+                    mailbox, reason = _get_unity_user_by_extension(unity_session, unity_server, ext)
                     if mailbox:
                         writer.writerow([
-                            "Unity Mailbox Lookup",
-                            "Info",
-                            f"Alias lookup missed; found mailbox via extension {ext} (alias={mailbox.get('Alias', '?')})",
+                            "Unity Mailbox Lookup", "Info",
+                            f"Alias lookup missed; found via extension {ext} ({reason}), alias={mailbox.get('Alias', '?')}",
                         ])
                         break
             if not mailbox:
                 writer.writerow(["Update Unity Mailbox", "Failed",
-                                 f"Mailbox not found by alias '{user.get('userid', clean_target_user)}' or extensions {sorted(user_extensions)}"])
+                                 f"Mailbox not found by alias '{ucid}' or extensions {sorted(user_extensions)}. "
+                                 f"Unity server: {unity_server}"])
             else:
                 object_id = str(mailbox.get("ObjectId") or "").strip()
                 if not object_id:
