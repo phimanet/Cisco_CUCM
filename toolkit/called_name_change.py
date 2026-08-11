@@ -309,46 +309,46 @@ def _build_device_description(device_name, display_name):
     return f"{prefix} - {display_name}"
 
 
-def _search_trans_patterns_by_description_fragment(session, cucm_host, description_fragment):
-    """listTransPattern wildcard search by description fragment."""
+def _find_trans_patterns_by_mask(session, cucm_host, extensions):
+    """SQL lookup: all translation patterns whose calledpartytransformationmask is one of the user's extensions."""
+    clean_exts = [e.strip() for e in (extensions or []) if (e or "").strip().isdigit()]
+    if not clean_exts:
+        return []
+    ext_csv = ", ".join(f"'{e}'" for e in clean_exts)
+    sql = (
+        "SELECT n.dnorpattern AS pattern, r.name AS routepartitionname, "
+        "t.description AS description, t.calledpartytransformationmask AS mask "
+        "FROM transpattern t "
+        "INNER JOIN numplan n ON t.fknumplan = n.pkid "
+        "LEFT JOIN routepartition r ON t.fkroutepartition = r.pkid "
+        f"WHERE t.calledpartytransformationmask IN ({ext_csv})"
+    )
     soap = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
   <soapenv:Body>
-    <axl:listTransPattern sequence=\"1\">
-      <searchCriteria>
-        <description>%{escape(description_fragment.strip())}%</description>
-      </searchCriteria>
-      <returnedTags>
-        <pattern/>
-        <routePartitionName/>
-        <description/>
-        <calledPartyTransformationMask/>
-      </returnedTags>
-    </axl:listTransPattern>
+    <axl:executeSQLQuery>
+      <sql>{escape(sql)}</sql>
+    </axl:executeSQLQuery>
   </soapenv:Body>
 </soapenv:Envelope>"""
     response = _axl_post(session, cucm_host, soap)
     if response.status_code != 200:
-        raise RuntimeError(f"listTransPattern failed HTTP {response.status_code}: {response.text[:800]}")
+        raise RuntimeError(f"executeSQLQuery (transpattern by mask) failed HTTP {response.status_code}: {response.text[:800]}")
     results = []
     root = ET.fromstring(response.text)
     for elem in root.iter():
-        if _strip_ns(elem.tag) != "transPattern":
+        if _strip_ns(elem.tag) != "row":
             continue
-        p, part, desc, mask = "", "", "", ""
+        row = {}
         for child in list(elem):
-            tag = _strip_ns(child.tag)
-            text = (child.text or "").strip()
-            if tag == "pattern":
-                p = text
-            elif tag == "routePartitionName":
-                part = text
-            elif tag == "description":
-                desc = text
-            elif tag in ("calledPartyTransformationMask", "calledPartyTransformMask"):
-                mask = text
-        if p:
-            results.append({"pattern": p, "route_partition": part, "description": desc, "called_party_transform_mask": mask})
+            row[_strip_ns(child.tag)] = (child.text or "").strip()
+        if row.get("pattern"):
+            results.append({
+                "pattern": row.get("pattern", ""),
+                "route_partition": row.get("routepartitionname", ""),
+                "description": row.get("description", ""),
+                "called_party_transform_mask": row.get("mask", ""),
+            })
     return results
 
 
@@ -365,7 +365,7 @@ def _build_update_trans_pattern_description_soap(pattern, route_partition, new_d
 </soapenv:Envelope>"""
 
 
-def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target_user, previous_name=""):
+def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target_user):
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"called_name_change_{(target_user or '').strip() or 'unknown'}_{ts}.csv"
 
@@ -514,59 +514,35 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
         except Exception as exc:
             writer.writerow(["Update Unity Mailbox", "Failed", str(exc)])
 
-        # --- Translation Pattern Description Update ---
-        clean_previous_name = (previous_name or "").strip()
-        if not clean_previous_name:
+        # --- Translation Pattern Description Update (by mask = user extension) ---
+        if not user_extensions:
             writer.writerow([
                 "Update Translation Patterns",
                 "Skipped",
-                "No previous name provided; enter the old name in the 'Previous Name' field to update translation pattern descriptions.",
-            ])
-        elif not user_extensions:
-            writer.writerow([
-                "Update Translation Patterns",
-                "Skipped",
-                "No user extensions found (no Jabber devices); cannot verify mask match for safety.",
+                "No user extensions found (no Jabber devices).",
             ])
         else:
             try:
-                candidates = _search_trans_patterns_by_description_fragment(session, cucm_host, clean_previous_name)
-                # Only update TPs whose mask routes to one of this user's known extensions
-                matched_tps = [
-                    c for c in candidates
-                    if c.get("called_party_transform_mask", "") in user_extensions
-                ]
+                matched_tps = _find_trans_patterns_by_mask(session, cucm_host, user_extensions)
                 if not matched_tps:
                     writer.writerow([
                         "Update Translation Patterns",
                         "Skipped",
-                        (
-                            f"No translation patterns found with description containing '{clean_previous_name}' "
-                            f"and Called Party Transform Mask in {sorted(user_extensions)}."
-                        ),
+                        f"No translation patterns found with Called Party Transform Mask in {sorted(user_extensions)}.",
                     ])
                 else:
-                    import re as _re
                     for tp in matched_tps:
                         tp_pattern = tp["pattern"]
                         tp_partition = tp["route_partition"]
                         old_desc = tp["description"]
-                        # Case-insensitive replace of previous_name with new display_name
-                        new_desc = _re.sub(_re.escape(clean_previous_name), display_name, old_desc, flags=_re.IGNORECASE)
-                        if new_desc == old_desc:
-                            writer.writerow([
-                                "Update Translation Patterns",
-                                "Skipped",
-                                f"{tp_pattern}/{tp_partition}: description unchanged ('{old_desc}' → no change).",
-                            ])
-                            continue
+                        new_desc = display_name
                         tp_soap = _build_update_trans_pattern_description_soap(tp_pattern, tp_partition, new_desc)
                         tp_response = _axl_post(session, cucm_host, tp_soap)
                         if tp_response.status_code == 200:
                             writer.writerow([
                                 "Update Translation Patterns",
                                 "Success",
-                                f"{tp_pattern}/{tp_partition}: description '{old_desc}' → '{new_desc}'",
+                                f"{tp_pattern}/{tp_partition}: description '{old_desc}' → '{new_desc}' (mask={tp['called_party_transform_mask']})",
                             ])
                         else:
                             writer.writerow([
