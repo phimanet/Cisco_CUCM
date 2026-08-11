@@ -37438,6 +37438,37 @@ def menu_admin_page(request: Request):
         <div id="admin-person-lookup-results" style="overflow-x:auto;"></div>
       </section>
 
+      <section class="panel tool-panel" data-panel="namechange">
+        <h3>Employee Name Change-Update Jabber/VM</h3>
+        <p>
+          Reads Display Name from CUCM End User, updates all Jabber phone descriptions,
+          line alerting/caller ID fields, Unity voicemail Display Name and SMTP, and
+          automatically updates any translation patterns whose Called Party Transform Mask
+          matches the employee's Jabber extension.
+        </p>
+        <div class="secondary-layout">
+          <form id="admin-called-name-form" action="/called-name-change" method="post">
+            <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+            <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+            <input type="hidden" name="cucm_pass" value="">
+            User ID for name change update:<br>
+            <input id="admin-called-name-target" name="target_user" placeholder="john.doe" required><br><br>
+            <div class="action-row">
+              <button type="submit">Run Employee Name Change-Update Jabber/VM</button>
+              <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+            </div>
+          </form>
+          <section class="secondary-output" aria-live="polite">
+            <h4>Output Preview</h4>
+            <p id="admin-called-name-status" class="secondary-status">Run Employee Name Change-Update Jabber/VM to view output here.</p>
+            <p>
+              <a id="admin-called-name-download" href="#" style="color:#7ec8ff; font-weight:bold; display:none;">Download CSV Output</a>
+            </p>
+            <textarea id="admin-called-name-preview" readonly></textarea>
+          </section>
+        </div>
+      </section>
+
       <section class="panel tool-panel" data-panel="strike">
         <h3>Strike Mode - Add in both Jabber iPhone and Android (Option 5)</h3>
         <form id="admin-strike-form" action="/add/secondary-strike-devices" method="post">
@@ -38845,7 +38876,8 @@ def menu_admin_page(request: Request):
                 const notifyBtn = `<button type="button" style="${btnStyle}background:#1f7a3d;" data-notify-user="${uid}" data-notify-tel="${(r.telephone || "")}">Send New Jabber Email</button>`;
                 const mobileResendBtn = `<button type="button" style="${btnStyle}background:#0f766e;" data-mobile-resend-uid="${uid}">Re-send Mobile Email</button>`;
                 const offboardBtn = `<button type="button" style="${btnStyle}background:#b00020;" data-offboard-user="${uid}">Separate Employee-Delete Jabber/VM</button>`;
-                const actionBtn = strikeBtn + tctBtn + botBtn + notifyBtn + mobileResendBtn + offboardBtn;
+                const namechangeBtn = `<button type="button" style="${btnStyle}background:#8a5a00;" data-admin-namechange-user="${uid}">Name Update</button>`;
+                const actionBtn = strikeBtn + tctBtn + botBtn + notifyBtn + mobileResendBtn + namechangeBtn + offboardBtn;
 
                 html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
                 html += '<td style="padding:7px 10px;">' + name + '</td>';
@@ -38940,6 +38972,22 @@ def menu_admin_page(request: Request):
                 });
               });
 
+              resultsEl.querySelectorAll("button[data-admin-namechange-user]").forEach(function (btn) {
+                btn.addEventListener("click", function () {
+                  const uid = btn.getAttribute("data-admin-namechange-user") || "";
+                  const targetInput = document.getElementById("admin-called-name-target");
+                  if (targetInput) {
+                    targetInput.value = uid;
+                  }
+                  const allPanels = Array.from(document.querySelectorAll(".tool-panel"));
+                  const allNavBtns = Array.from(document.querySelectorAll(".portal-nav-btn"));
+                  allPanels.forEach((p) => p.classList.toggle("active", p.dataset.panel === "namechange"));
+                  allNavBtns.forEach((b) => b.classList.toggle("active", b.dataset.panel === "namechange"));
+                  const nc = allPanels.find((p) => p.dataset.panel === "namechange");
+                  if (nc) nc.scrollIntoView({ behavior: "smooth", block: "start" });
+                });
+              });
+
               resultsEl.querySelectorAll("button[data-notify-user]").forEach(function (btn) {
                 btn.addEventListener("click", async function () {
                   const uid = btn.getAttribute("data-notify-user") || "";
@@ -39026,6 +39074,36 @@ def menu_admin_page(request: Request):
                 return;
               }
               statusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
+            }
+          });
+        })();
+      </script>
+
+      <script>
+        (function () {
+          const ncForm = document.getElementById("admin-called-name-form");
+          if (!ncForm) return;
+          const ncStatus = document.getElementById("admin-called-name-status");
+          const ncPreview = document.getElementById("admin-called-name-preview");
+          const ncDownload = document.getElementById("admin-called-name-download");
+
+          ncForm.addEventListener("submit", async function (e) {
+            e.preventDefault();
+            if (ncStatus) ncStatus.textContent = "Running Employee Name Change-Update Jabber/VM...";
+            if (ncPreview) ncPreview.value = "";
+            if (ncDownload) { ncDownload.style.display = "none"; ncDownload.removeAttribute("href"); }
+            try {
+              const fd = new FormData(ncForm);
+              const resp = await fetch("/called-name-change?inline=1", { method: "POST", body: fd });
+              if (!resp.ok) throw new Error(await resp.text() || "Request failed.");
+              const result = await resp.json();
+              if (ncPreview) ncPreview.value = result.output_text || "";
+              if (ncStatus) ncStatus.textContent = "Completed: " + (result.filename || "called_name_change_output.csv");
+              if (ncDownload && result.download_url) { ncDownload.href = result.download_url; ncDownload.style.display = "inline"; }
+              const t = ncForm.querySelector('input[name="target_user"]');
+              if (t) t.value = "";
+            } catch (err) {
+              if (ncStatus) ncStatus.textContent = "Failed: " + ((err && err.message) || "Unknown error.");
             }
           });
         })();
@@ -50664,7 +50742,7 @@ def change_extension_page(request: Request):
         <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=extensionlookup'">Extension Reverse Lookup</button>
         <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=precheck'">Check for Existing Jabber Configuration</button>
         <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=build'">Build User - Build Cisco Jabber Laptop</button>
-        <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=namechange'">Employee Name Change-Update Jabber/VM</button>
+        <button type="button" class="portal-nav-btn" data-panel="namechange">Employee Name Change-Update Jabber/VM</button>
         <button type="button" class="portal-nav-btn portal-nav-btn-danger active">Change Extension Number for Jabber</button>
         <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=pin'">Reset Voicemail PIN</button>
         <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=mobiledelete'">Remove Jabber Mobile only</button>
