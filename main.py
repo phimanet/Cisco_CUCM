@@ -51531,7 +51531,8 @@ def called_name_change_route(
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
     _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
-    unity_server = _get_unity_server_for_session(request)
+    # Follow CUCM host selection for Unity so PROD environment uses PROD Unity even on LAB runtime
+    unity_server = LAB_UNITY_HOST if _is_lab_host(cucm_host) else PROD_UNITY_HOST
     clean_target_user = (target_user or "").strip()
 
     data, filename = run_called_name_change(
