@@ -309,7 +309,63 @@ def _build_device_description(device_name, display_name):
     return f"{prefix} - {display_name}"
 
 
-def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target_user):
+def _search_trans_patterns_by_description_fragment(session, cucm_host, description_fragment):
+    """listTransPattern wildcard search by description fragment."""
+    soap = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Body>
+    <axl:listTransPattern sequence=\"1\">
+      <searchCriteria>
+        <description>%{escape(description_fragment.strip())}%</description>
+      </searchCriteria>
+      <returnedTags>
+        <pattern/>
+        <routePartitionName/>
+        <description/>
+        <calledPartyTransformationMask/>
+      </returnedTags>
+    </axl:listTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+    response = _axl_post(session, cucm_host, soap)
+    if response.status_code != 200:
+        raise RuntimeError(f"listTransPattern failed HTTP {response.status_code}: {response.text[:800]}")
+    results = []
+    root = ET.fromstring(response.text)
+    for elem in root.iter():
+        if _strip_ns(elem.tag) != "transPattern":
+            continue
+        p, part, desc, mask = "", "", "", ""
+        for child in list(elem):
+            tag = _strip_ns(child.tag)
+            text = (child.text or "").strip()
+            if tag == "pattern":
+                p = text
+            elif tag == "routePartitionName":
+                part = text
+            elif tag == "description":
+                desc = text
+            elif tag in ("calledPartyTransformationMask", "calledPartyTransformMask"):
+                mask = text
+        if p:
+            results.append({"pattern": p, "route_partition": part, "description": desc, "called_party_transform_mask": mask})
+    return results
+
+
+def _build_update_trans_pattern_description_soap(pattern, route_partition, new_description):
+    return f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
+  <soapenv:Body>
+    <axl:updateTransPattern>
+      <pattern>{escape(pattern)}</pattern>
+      <routePartitionName>{escape(route_partition)}</routePartitionName>
+      <description>{escape(new_description)}</description>
+    </axl:updateTransPattern>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+
+def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target_user, previous_name=""):
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"called_name_change_{(target_user or '').strip() or 'unknown'}_{ts}.csv"
 
@@ -354,6 +410,7 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
             writer.writerow(["Find Jabber Devices", "Success", f"Found {len(jabber_devices)} Jabber device(s)"])
 
         touched_lines = set()
+        user_extensions = set()  # collect all unique DNs for TP mask search
         for device_name in jabber_devices:
             try:
                 phone = _get_phone_details(session, cucm_host, device_name)
@@ -379,6 +436,8 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
                     line_key = f"{pattern}|{partition}"
                     if not pattern:
                         continue
+
+                    user_extensions.add(pattern)
 
                     # Update line alerting fields globally (deduplicate if already touched)
                     if line_key not in touched_lines:
@@ -440,7 +499,7 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
             else:
                 object_id = str(mailbox.get("ObjectId") or "").strip()
                 if not object_id:
-                    writer.writerow(["Update Unity Mailbox", "Failed", "Mailbox found but ObjectId missing"]) 
+                    writer.writerow(["Update Unity Mailbox", "Failed", "Mailbox found but ObjectId missing"])
                 else:
                     mailbox_detail = _get_unity_user_by_object_id(unity_session, unity_server, object_id)
                     existing_smtp = str(mailbox_detail.get("SmtpAddress") or "").strip()
@@ -454,6 +513,69 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
                     ])
         except Exception as exc:
             writer.writerow(["Update Unity Mailbox", "Failed", str(exc)])
+
+        # --- Translation Pattern Description Update ---
+        clean_previous_name = (previous_name or "").strip()
+        if not clean_previous_name:
+            writer.writerow([
+                "Update Translation Patterns",
+                "Skipped",
+                "No previous name provided; enter the old name in the 'Previous Name' field to update translation pattern descriptions.",
+            ])
+        elif not user_extensions:
+            writer.writerow([
+                "Update Translation Patterns",
+                "Skipped",
+                "No user extensions found (no Jabber devices); cannot verify mask match for safety.",
+            ])
+        else:
+            try:
+                candidates = _search_trans_patterns_by_description_fragment(session, cucm_host, clean_previous_name)
+                # Only update TPs whose mask routes to one of this user's known extensions
+                matched_tps = [
+                    c for c in candidates
+                    if c.get("called_party_transform_mask", "") in user_extensions
+                ]
+                if not matched_tps:
+                    writer.writerow([
+                        "Update Translation Patterns",
+                        "Skipped",
+                        (
+                            f"No translation patterns found with description containing '{clean_previous_name}' "
+                            f"and Called Party Transform Mask in {sorted(user_extensions)}."
+                        ),
+                    ])
+                else:
+                    import re as _re
+                    for tp in matched_tps:
+                        tp_pattern = tp["pattern"]
+                        tp_partition = tp["route_partition"]
+                        old_desc = tp["description"]
+                        # Case-insensitive replace of previous_name with new display_name
+                        new_desc = _re.sub(_re.escape(clean_previous_name), display_name, old_desc, flags=_re.IGNORECASE)
+                        if new_desc == old_desc:
+                            writer.writerow([
+                                "Update Translation Patterns",
+                                "Skipped",
+                                f"{tp_pattern}/{tp_partition}: description unchanged ('{old_desc}' → no change).",
+                            ])
+                            continue
+                        tp_soap = _build_update_trans_pattern_description_soap(tp_pattern, tp_partition, new_desc)
+                        tp_response = _axl_post(session, cucm_host, tp_soap)
+                        if tp_response.status_code == 200:
+                            writer.writerow([
+                                "Update Translation Patterns",
+                                "Success",
+                                f"{tp_pattern}/{tp_partition}: description '{old_desc}' → '{new_desc}'",
+                            ])
+                        else:
+                            writer.writerow([
+                                "Update Translation Patterns",
+                                "Failed",
+                                f"{tp_pattern}/{tp_partition}: HTTP {tp_response.status_code}: {tp_response.text[:600]}",
+                            ])
+            except Exception as tp_exc:
+                writer.writerow(["Update Translation Patterns", "Failed", str(tp_exc)])
 
     except Exception as exc:
         writer.writerow(["Called Name Change", "Failed", str(exc)])

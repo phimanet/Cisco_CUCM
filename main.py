@@ -27812,6 +27812,8 @@ __ADMIN_CARD__
     <p>
       This option reads Display Name from CUCM End User, updates all Jabber phone descriptions,
       updates line alerting/caller ID fields, and updates Unity voicemail Display Name and SMTP.
+      If the employee had a toll-free or DID translation pattern with their old name in the description,
+      enter the old name below to also update those pattern descriptions.
     </p>
 
     <div class="secondary-layout">
@@ -27822,6 +27824,9 @@ __ADMIN_CARD__
 
         User ID for name change update:<br>
         <input name="target_user" placeholder="john.doe" required><br><br>
+
+        Previous Name <span style="color:#888;font-size:12px;">(optional — old name as it appears in translation pattern descriptions, e.g. <em>John Smith</em>)</span>:<br>
+        <input name="previous_name" placeholder="John Smith" style="width:260px;"><br><br>
 
         <div class="action-row">
           <button type="submit">Run Employee Name Change-Update Jabber/VM</button>
@@ -51447,6 +51452,7 @@ def called_name_change_route(
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
     target_user: str = Form(...),
+    previous_name: str = Form(""),
     inline: bool = Query(False),
 ):
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
@@ -51460,6 +51466,7 @@ def called_name_change_route(
       cucm_pass=cucm_pass,
       unity_server=unity_server,
       target_user=clean_target_user,
+      previous_name=(previous_name or "").strip(),
     )
 
     _append_audit_event(
