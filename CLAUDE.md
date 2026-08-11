@@ -106,6 +106,14 @@ Priority keys:
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
 
+### 2026-08-11 (Name Change enhancement — complete, validated LAB+PROD)
+- Enhanced `toolkit/called_name_change.py` to also update translation pattern descriptions after updating phones/lines/Unity.
+- Translation pattern lookup uses `executeSQLQuery` on `numplan` table (`tkpatternusage IN (3, 15)`) filtered by `calledpartytransformationmask IN (user_extensions)`. No previous name required — found purely by mask.
+- Unity mailbox lookup hardened: URL built directly (literal parentheses, not `%28/%29`) to fix silent zero-result bug on Unity Connection 15. Fallback chain: `(Alias+is+)` → `(Alias+startswith+)` → `(DtmfAccessId+is+)` → `(Extension+is+)` per extension.
+- Unity server now derived from `cucm_host` (not runtime host) so PROD environment always hits PROD Unity even when running from LAB web server.
+- Page 2 admin: added `data-panel="namechange"` namechange panel with inline AJAX submit; sidebar button changed from redirect to in-page nav; "Name Update" action button added to admin person lookup results table.
+- All steps validated end-to-end on both LAB web server (PROD CUCM) and PROD web server. Commits `56c11d4`→`bf9b21b`.
+
 ### 2026-08-06 (Jabber Device Registration Status fixed)
 - Root cause 1: RIS SOAP body used bare XML child elements (`<StateInfo>`, `<CmSelectionCriteria>`, etc.) without the `ris:` namespace prefix. CUCM 15.x Axis2 rejects these with HTTP 500 `Unexpected subelement StateInfo`. Fixed all three RIS SOAP blocks in `main.py` to use `ris:` prefix on all child elements and `<ris:item>/<ris:Item>` for SelectItems.
 - Root cause 2: AXL SQL fallback queried `device.tkstatus` and joined `typestatus` table — both removed in CUCM 15.x, returning SQL error `-217`. Removed those columns from query; RIS is now the sole registration status source.
