@@ -310,18 +310,19 @@ def _build_device_description(device_name, display_name):
 
 
 def _find_trans_patterns_by_mask(session, cucm_host, extensions):
-    """SQL lookup: all translation patterns whose calledpartytransformationmask is one of the user's extensions."""
+    """SQL lookup: translation patterns (numplan) whose calledpartytransformationmask matches a user extension."""
     clean_exts = [e.strip() for e in (extensions or []) if (e or "").strip().isdigit()]
     if not clean_exts:
         return []
     ext_csv = ", ".join(f"'{e}'" for e in clean_exts)
+    # Translation patterns are stored in numplan; tkpatternusage 3 and 15 are both used across CUCM versions.
     sql = (
         "SELECT n.dnorpattern AS pattern, r.name AS routepartitionname, "
-        "t.description AS description, t.calledpartytransformationmask AS mask "
-        "FROM transpattern t "
-        "INNER JOIN numplan n ON t.fknumplan = n.pkid "
-        "LEFT JOIN routepartition r ON t.fkroutepartition = r.pkid "
-        f"WHERE t.calledpartytransformationmask IN ({ext_csv})"
+        "n.description AS description, n.calledpartytransformationmask AS mask "
+        "FROM numplan n "
+        "LEFT JOIN routepartition r ON n.fkroutepartition = r.pkid "
+        f"WHERE n.calledpartytransformationmask IN ({ext_csv}) "
+        "AND n.tkpatternusage IN (3, 15)"
     )
     soap = f"""<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
