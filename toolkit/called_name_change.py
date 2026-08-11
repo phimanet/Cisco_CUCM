@@ -234,6 +234,27 @@ def _get_unity_user_by_alias(session, unity_server, alias):
     return None
 
 
+def _get_unity_user_by_extension(session, unity_server, extension):
+    """Lookup Unity mailbox by DtmfAccessId (extension) — used as fallback when alias lookup misses."""
+    query = f"(DtmfAccessId is {extension})"
+    url = _make_unity_url(unity_server, "/vmrest/users")
+    response = session.get(url, headers=_unity_headers(), params={"query": query}, timeout=120, verify=False)
+    if response.status_code != 200:
+        return None
+    if not response.text:
+        return None
+    try:
+        data = response.json()
+    except ValueError:
+        return None
+    users = data.get("User")
+    if isinstance(users, dict):
+        users = [users]
+    if not isinstance(users, list) or not users:
+        return None
+    return users[0]
+
+
 def _get_unity_user_by_object_id(session, unity_server, object_id):
     url = _make_unity_url(unity_server, f"/vmrest/users/{object_id}")
     response = session.get(url, headers=_unity_headers(), timeout=120, verify=False)
@@ -495,8 +516,20 @@ def run_called_name_change(cucm_host, cucm_user, cucm_pass, unity_server, target
 
         try:
             mailbox = _get_unity_user_by_alias(unity_session, unity_server, user.get("userid", clean_target_user))
+            if not mailbox and user_extensions:
+                # Alias lookup can miss if Unity alias differs from CUCM userid; fall back to extension.
+                for ext in sorted(user_extensions):
+                    mailbox = _get_unity_user_by_extension(unity_session, unity_server, ext)
+                    if mailbox:
+                        writer.writerow([
+                            "Unity Mailbox Lookup",
+                            "Info",
+                            f"Alias lookup missed; found mailbox via extension {ext} (alias={mailbox.get('Alias', '?')})",
+                        ])
+                        break
             if not mailbox:
-                writer.writerow(["Update Unity Mailbox", "Failed", f"Mailbox not found for alias {clean_target_user}"])
+                writer.writerow(["Update Unity Mailbox", "Failed",
+                                 f"Mailbox not found by alias '{user.get('userid', clean_target_user)}' or extensions {sorted(user_extensions)}"])
             else:
                 object_id = str(mailbox.get("ObjectId") or "").strip()
                 if not object_id:
