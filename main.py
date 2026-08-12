@@ -41673,8 +41673,6 @@ def page3_twilio_items(request: Request):
   default_twilio_loa_recipient_name = (settings.get("twilio_loa_recipient_name", "") or "").strip()
   default_twilio_loa_recipient_email = (settings.get("twilio_loa_recipient_email", "") or "").strip()
   default_twilio_loa_recipient_phone = (settings.get("twilio_loa_recipient_phone", "") or "").strip()
-  requested_panel = str(request.query_params.get("panel", "") or "").strip()
-  active_number_lookup_selected = requested_panel == "twilio-active-number-lookup"
   sms_look_enabled = SMS_NUMBER_LOOKUP_ENABLED
   sms_experimental_enabled = _feature_enabled(
     SMS_EXPERIMENTAL_MENU_ENABLED,
@@ -41686,13 +41684,11 @@ def page3_twilio_items(request: Request):
   sms_look_panel_html = ""
   sms_experimental_menu_html = ""
   sms_experimental_panel_html = ""
-  sms_look_active_class = "" if active_number_lookup_selected else " active"
-  twilio_lookup_btn_active_class = " active" if (not sms_look_enabled and not active_number_lookup_selected) else ""
-  active_number_lookup_active_class = " active" if active_number_lookup_selected else ""
+  twilio_lookup_btn_active_class = " active" if not sms_look_enabled else ""
   if sms_look_enabled:
-    sms_look_menu_html = '<button type="button" class="portal-nav-btn__SMS_LOOK_ACTIVE_CLASS__" data-panel="sms-number-look">SMS Number Lookup</button>'
+    sms_look_menu_html = '<button type="button" class="portal-nav-btn active" data-panel="sms-number-look">SMS Number Lookup</button>'
     sms_look_panel_html = """
-      <section class="tool-panel__SMS_LOOK_ACTIVE_CLASS__" data-panel="sms-number-look">
+      <section class="tool-panel active" data-panel="sms-number-look">
           <div class="panel">
             <h3>SMS Number Lookup</h3>
             <p>Lookup by name or number. This checks all platforms: Twilio AMIEWeb, Twilio Salesforce Enterprise Org Prod, and Aerialink Classic.</p>
@@ -42266,7 +42262,7 @@ def page3_twilio_items(request: Request):
           __SMS_LOOK_MENU__
           __SMS_EXPERIMENTAL_MENU__
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
-          <button type="button" class="portal-nav-btn__ACTIVE_NUMBER_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-active-number-lookup">AMIEWeb-Twilio Active Number Lookup</button>
+          <a class="portal-nav-btn" href="/twilio/amieweb/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio Active Number Lookup</a>
           <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
@@ -42306,17 +42302,6 @@ def page3_twilio_items(request: Request):
             </form>
             <p id="twilio-number-lookup-status" style="color:#2c5c8a; min-height:18px;"></p>
             <div id="twilio-number-lookup-results" style="overflow-x:auto;"></div>
-          </div>
-        </section>
-
-        <section class="tool-panel__ACTIVE_NUMBER_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-active-number-lookup">
-          <div class="panel">
-            <h3>AMIEWeb-Twilio Active Number Lookup</h3>
-            <p>Lists active AMNOne-Notification-PROD numbers and matches them to CUCM employees using one batched CUCM query.</p>
-            <form id="twilio-active-number-lookup-form"><div class="search-filter-row"><button type="submit">Load Active AMIEWeb Numbers</button></div></form>
-            <p id="twilio-active-number-lookup-status" style="color:#2c5c8a; min-height:18px;">Load active AMIEWeb Twilio numbers and CUCM assignments.</p>
-            <div id="twilio-active-number-lookup-results" style="overflow-x:auto;"></div>
-            <details id="twilio-active-number-lookup-debug" style="margin-top:12px; display:none;"><summary style="cursor:pointer; color:#2c5c8a; font-weight:700;">Debug / Error Details</summary><pre id="twilio-active-number-lookup-debug-output" style="white-space:pre-wrap; overflow-wrap:anywhere; background:#f7fbff; border:1px solid #c8dbee; padding:10px; border-radius:6px;"></pre></details>
           </div>
         </section>
 
@@ -42494,231 +42479,6 @@ def page3_twilio_items(request: Request):
         </section>
       </section>
     </div>
-
-    <script>
-      (function () {
-        function bindPortalNavFallback() {
-          const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn[data-panel]"));
-          const panels = Array.from(document.querySelectorAll(".tool-panel"));
-          if (!navButtons.length || !panels.length) {
-            return;
-          }
-
-          function showPanel(panelKey) {
-            if (!panelKey) {
-              return;
-            }
-            panels.forEach((panel) => {
-              panel.classList.toggle("active", panel.dataset.panel === panelKey);
-            });
-            navButtons.forEach((btn) => {
-              btn.classList.toggle("active", btn.dataset.panel === panelKey);
-            });
-          }
-
-          navButtons.forEach((btn) => {
-            if (btn.dataset.navFallbackBound === "1") {
-              return;
-            }
-            btn.dataset.navFallbackBound = "1";
-            btn.addEventListener("click", () => {
-              showPanel((btn.dataset.panel || "").trim());
-            });
-          });
-
-          const initialPanel = (new URLSearchParams(window.location.search).get("panel") || "").trim();
-          if (initialPanel && panels.some((panel) => panel.dataset.panel === initialPanel)) {
-            showPanel(initialPanel);
-          }
-        }
-
-        if (document.readyState === "loading") {
-          document.addEventListener("DOMContentLoaded", bindPortalNavFallback);
-        } else {
-          bindPortalNavFallback();
-        }
-      })();
-    </script>
-
-    <script>
-      (function () {
-        function bindSmsNumberLookup() {
-          var nameForm = document.getElementById("sms-look-name-form");
-          var numberForm = document.getElementById("sms-look-number-form");
-          var nameStatusEl = document.getElementById("sms-look-name-status");
-          var numberStatusEl = document.getElementById("sms-look-number-status");
-          var resultsEl = document.getElementById("sms-look-results");
-          if (!nameForm || !numberForm || !nameStatusEl || !numberStatusEl || !resultsEl || nameForm.dataset.smsLookupBound === "1") {
-            return;
-          }
-          nameForm.dataset.smsLookupBound = "1";
-          numberForm.dataset.smsLookupBound = "1";
-
-          function esc(value) {
-            return String(value == null ? "" : value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-          }
-          function renderRows(rows) {
-            if (!rows || !rows.length) {
-              resultsEl.innerHTML = "";
-              return;
-            }
-            var html = "<table><thead><tr><th>Name</th><th>Extension</th><th>SMS Number</th><th>Configured In</th></tr></thead><tbody>";
-            rows.forEach(function (row) {
-              html += "<tr><td>" + esc(row.display_name || "-") + "</td><td style=\"font-family:Consolas,monospace;\">" + esc(row.extension || "-") + "</td><td style=\"font-family:Consolas,monospace;\">" + esc(row.sms_number || "-") + "</td><td>" + esc(row.configured_in || "Not Found") + "</td></tr>";
-            });
-            resultsEl.innerHTML = html + "</tbody></table>";
-          }
-          function runLookup(form, statusEl, loadingMessage, emptyMessage) {
-            statusEl.textContent = loadingMessage;
-            resultsEl.innerHTML = "";
-            fetch("/lookup/sms-number-look", { method: "POST", body: new FormData(form), credentials: "same-origin" }).then(function (response) {
-              return response.json().catch(function () {
-                return { ok: false, error: "Unexpected response (HTTP " + response.status + ")." };
-              }).then(function (payload) {
-                if (!response.ok || !payload.ok) {
-                  throw new Error((payload && payload.error) || (payload && payload.detail) || "Lookup failed.");
-                }
-                return payload;
-              });
-            }).then(function (payload) {
-              var rows = payload.results || [];
-              statusEl.textContent = rows.length ? "Found " + rows.length + " result(s)." : emptyMessage;
-              renderRows(rows);
-            }).catch(function (err) {
-              statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
-            });
-          }
-
-          nameForm.addEventListener("submit", function (event) {
-            event.preventDefault();
-            numberStatusEl.textContent = "";
-            runLookup(nameForm, nameStatusEl, "Searching by name across all SMS platforms...", "No SMS platform results found.");
-          });
-          numberForm.addEventListener("submit", function (event) {
-            event.preventDefault();
-            nameStatusEl.textContent = "";
-            runLookup(numberForm, numberStatusEl, "Looking up number across all SMS platforms...", "Number not found in SMS platforms.");
-          });
-        }
-
-        if (document.readyState === "loading") {
-          document.addEventListener("DOMContentLoaded", bindSmsNumberLookup);
-        } else {
-          bindSmsNumberLookup();
-        }
-      })();
-    </script>
-
-    <script>
-      (function () {
-        function bindActiveNumberLookup() {
-          var form = document.getElementById("twilio-active-number-lookup-form");
-          var statusEl = document.getElementById("twilio-active-number-lookup-status");
-          var resultsEl = document.getElementById("twilio-active-number-lookup-results");
-          var debugEl = document.getElementById("twilio-active-number-lookup-debug");
-          var debugOutputEl = document.getElementById("twilio-active-number-lookup-debug-output");
-          if (!form || !statusEl || !resultsEl || form.dataset.activeNumberLookupBound === "1") {
-            return;
-          }
-          form.dataset.activeNumberLookupBound = "1";
-
-          function esc(value) {
-            return String(value == null ? "" : value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-          }
-          function showDebug(detail) {
-            if (!debugEl || !debugOutputEl) {
-              return;
-            }
-            debugOutputEl.textContent = typeof detail === "string" ? detail : JSON.stringify(detail || {}, null, 2);
-            debugEl.style.display = "block";
-          }
-          function clearDebug() {
-            if (!debugEl || !debugOutputEl) {
-              return;
-            }
-            debugOutputEl.textContent = "";
-            debugEl.style.display = "none";
-          }
-          function requestJson(url, options) {
-            return fetch(url, options).then(function (response) {
-              return response.json().catch(function () {
-                return { ok: false, error: "Unexpected response (HTTP " + response.status + ")." };
-              }).then(function (payload) {
-                if (!response.ok || !payload.ok) {
-                  throw new Error((payload && payload.error) || "Request failed.");
-                }
-                return payload;
-              });
-            });
-          }
-          function bindUpdateButtons() {
-            Array.prototype.forEach.call(resultsEl.querySelectorAll(".twilio-active-name-update"), function (button) {
-              button.addEventListener("click", function () {
-                var number = button.getAttribute("data-number") || "";
-                var friendlyName = button.getAttribute("data-name") || "";
-                if (!window.confirm('Change Twilio Friendly Name for ' + number + ' to "' + friendlyName + '"?')) {
-                  return;
-                }
-                button.disabled = true;
-                statusEl.textContent = "Updating Friendly Name for " + number + "...";
-                requestJson("/twilio/amieweb/active-numbers/friendly-name", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                  body: "phone_sid=" + encodeURIComponent(button.getAttribute("data-phone-sid") || ""),
-                  credentials: "same-origin",
-                }).then(function (payload) {
-                  statusEl.textContent = payload.message || "Friendly Name updated.";
-                  loadRows();
-                }).catch(function (err) {
-                  statusEl.textContent = "Friendly Name update failed: " + ((err && err.message) || "Unknown error.");
-                  showDebug({ action: "friendly_name_update", error: (err && err.message) || "Unknown error" });
-                  button.disabled = false;
-                });
-              });
-            });
-          }
-          function loadRows() {
-            statusEl.textContent = "Loading active AMIEWeb numbers and CUCM assignments...";
-            resultsEl.innerHTML = "";
-            clearDebug();
-            requestJson("/twilio/amieweb/active-numbers", { method: "POST", credentials: "same-origin" }).then(function (payload) {
-              var summary = payload.summary || {};
-              var rows = payload.rows || [];
-              statusEl.textContent = "Loaded " + (summary.twilio_numbers || 0) + " AMIEWeb number(s): " + (summary.assigned || 0) + " matched to CUCM, " + (summary.unassigned || 0) + " unassigned.";
-              showDebug(payload.debug || {});
-              if (!rows.length) {
-                resultsEl.innerHTML = "<p>No active AMIEWeb numbers were returned.</p>";
-                return;
-              }
-              var html = "<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Phone SID</th><th>Capabilities</th><th>Assigned CUCM Employee</th><th>CUCM User ID</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>";
-              rows.forEach(function (row) {
-                var assignment = row.assignment || {};
-                var action = row.can_update
-                  ? '<button type="button" class="twilio-active-name-update" data-phone-sid="' + esc(row.phone_sid) + '" data-number="' + esc(row.twilio_number) + '" data-name="' + esc(row.desired_friendly_name) + '">Set to ' + esc(row.desired_friendly_name) + "</button>"
-                  : '<span style="color:#6a3c00;">No CUCM name</span>';
-                html += "<tr><td style=\"font-family:Consolas,monospace;\">" + esc(row.twilio_number || "-") + "</td><td>" + esc(row.friendly_name || "-") + "</td><td style=\"font-family:Consolas,monospace;\">" + esc(row.phone_sid || "-") + "</td><td>" + esc(row.capabilities || "-") + "</td><td>" + esc(assignment.name || "Unassigned") + "</td><td style=\"font-family:Consolas,monospace;\">" + esc(assignment.userid || "-") + "</td><td>" + esc(assignment.phone_details || "-") + "</td><td>" + esc(row.status || "-") + "</td><td>" + action + "</td></tr>";
-              });
-              resultsEl.innerHTML = html + "</tbody></table>";
-              bindUpdateButtons();
-            }).catch(function (err) {
-              statusEl.textContent = "Active-number lookup failed: " + ((err && err.message) || "Unknown error.");
-              showDebug({ action: "active_number_lookup", error: (err && err.message) || "Unknown error" });
-            });
-          }
-
-          form.addEventListener("submit", function (event) {
-            event.preventDefault();
-            loadRows();
-          });
-        }
-
-        if (document.readyState === "loading") {
-          document.addEventListener("DOMContentLoaded", bindActiveNumberLookup);
-        } else {
-          bindActiveNumberLookup();
-        }
-      })();
-    </script>
 
     <script>
       (function () {
@@ -42916,11 +42676,9 @@ def page3_twilio_items(request: Request):
           const numberStatusEl = document.getElementById("sms-look-number-status");
           const resultsEl = document.getElementById("sms-look-results");
 
-          if (!nameForm || !numberForm || !nameStatusEl || !numberStatusEl || !resultsEl || nameForm.dataset.smsLookupBound === "1") {
+          if (!nameForm || !numberForm || !nameStatusEl || !numberStatusEl || !resultsEl) {
             return;
           }
-          nameForm.dataset.smsLookupBound = "1";
-          numberForm.dataset.smsLookupBound = "1";
 
           function renderRows(rows) {
             if (!rows || !rows.length) {
@@ -43160,58 +42918,6 @@ def page3_twilio_items(request: Request):
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
             }
           });
-        })();
-
-        // AMIEWeb active-number lookup and server-authorized Friendly Name updates.
-        (function () {
-          const form = document.getElementById("twilio-active-number-lookup-form");
-          const statusEl = document.getElementById("twilio-active-number-lookup-status");
-          const resultsEl = document.getElementById("twilio-active-number-lookup-results");
-          const debugEl = document.getElementById("twilio-active-number-lookup-debug");
-          const debugOutputEl = document.getElementById("twilio-active-number-lookup-debug-output");
-          if (!form || !statusEl || !resultsEl || form.dataset.activeNumberLookupBound === "1") return;
-          form.dataset.activeNumberLookupBound = "1";
-          const esc = value => String(value == null ? "" : value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
-          const showDebug = detail => { if (debugEl && debugOutputEl) { debugOutputEl.textContent = typeof detail === "string" ? detail : JSON.stringify(detail || {}, null, 2); debugEl.style.display = "block"; } };
-          const clearDebug = () => { if (debugEl && debugOutputEl) { debugOutputEl.textContent = ""; debugEl.style.display = "none"; } };
-          const loadRows = async () => {
-            statusEl.textContent = "Loading active AMIEWeb numbers and CUCM assignments...";
-            resultsEl.innerHTML = "";
-            clearDebug();
-            try {
-              const response = await fetch("/twilio/amieweb/active-numbers", { method: "POST", credentials: "same-origin" });
-              const payload = await response.json();
-              if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || "Active-number lookup failed.");
-              const summary = payload.summary || {};
-              statusEl.textContent = `Loaded ${summary.twilio_numbers || 0} AMIEWeb number(s): ${summary.assigned || 0} matched to CUCM, ${summary.unassigned || 0} unassigned.`;
-              showDebug(payload.debug || {});
-              const rows = payload.rows || [];
-              if (!rows.length) { resultsEl.innerHTML = "<p>No active AMIEWeb numbers were returned.</p>"; return; }
-              let html = "<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Phone SID</th><th>Capabilities</th><th>Assigned CUCM Employee</th><th>CUCM User ID</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>";
-              rows.forEach(row => {
-                const assignment = row.assignment || {};
-                const action = row.can_update ? `<button type="button" class="twilio-active-name-update" data-phone-sid="${esc(row.phone_sid)}" data-number="${esc(row.twilio_number)}" data-name="${esc(row.desired_friendly_name)}">Set to ${esc(row.desired_friendly_name)}</button>` : "<span style=\"color:#6a3c00;\">No CUCM name</span>";
-                html += `<tr><td style="font-family:Consolas,monospace;">${esc(row.twilio_number || "-")}</td><td>${esc(row.friendly_name || "-")}</td><td style="font-family:Consolas,monospace;">${esc(row.phone_sid || "-")}</td><td>${esc(row.capabilities || "-")}</td><td>${esc(assignment.name || "Unassigned")}</td><td style="font-family:Consolas,monospace;">${esc(assignment.userid || "-")}</td><td>${esc(assignment.phone_details || "-")}</td><td>${esc(row.status || "-")}</td><td>${action}</td></tr>`;
-              });
-              resultsEl.innerHTML = html + "</tbody></table>";
-              resultsEl.querySelectorAll(".twilio-active-name-update").forEach(button => button.addEventListener("click", async () => {
-                const number = button.dataset.number || "";
-                const friendlyName = button.dataset.name || "";
-                if (!window.confirm(`Change Twilio Friendly Name for ${number} to "${friendlyName}"?`)) return;
-                button.disabled = true;
-                statusEl.textContent = `Updating Friendly Name for ${number}...`;
-                try {
-                  const body = new URLSearchParams({ phone_sid: button.dataset.phoneSid || "" });
-                  const response = await fetch("/twilio/amieweb/active-numbers/friendly-name", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: body.toString(), credentials: "same-origin" });
-                  const payload = await response.json();
-                  if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || "Friendly Name update failed.");
-                  statusEl.textContent = payload.message || "Friendly Name updated.";
-                  await loadRows();
-                } catch (err) { statusEl.textContent = "Friendly Name update failed: " + ((err && err.message) || "Unknown error."); showDebug({ action: "friendly_name_update", error: (err && err.message) || "Unknown error" }); button.disabled = false; }
-              }));
-            } catch (err) { statusEl.textContent = "Active-number lookup failed: " + ((err && err.message) || "Unknown error."); showDebug({ action: "active_number_lookup", error: (err && err.message) || "Unknown error" }); }
-          };
-          form.addEventListener("submit", event => { event.preventDefault(); loadRows(); });
         })();
 
         // Twilio SMS Hosting - AMIEWeb (SMS-only webhook updates)
@@ -43888,7 +43594,7 @@ def page3_twilio_items(request: Request):
     </main>
   </body>
 </html>
-""".replace("__SMS_LOOK_MENU__", sms_look_menu_html).replace("__SMS_LOOK_PANEL__", sms_look_panel_html).replace("__SMS_EXPERIMENTAL_MENU__", sms_experimental_menu_html).replace("__SMS_EXPERIMENTAL_PANEL__", sms_experimental_panel_html).replace("__SMS_LOOK_ACTIVE_CLASS__", sms_look_active_class).replace("__TWILIO_LOOKUP_ACTIVE_CLASS__", twilio_lookup_btn_active_class).replace("__ACTIVE_NUMBER_LOOKUP_ACTIVE_CLASS__", active_number_lookup_active_class).replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DEFAULT_TWILIO_SMS_URL__", escape(TWILIO_AMIEWEB_DEFAULT_SMS_URL)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_NAME__", escape(default_twilio_loa_recipient_name)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_EMAIL__", escape(default_twilio_loa_recipient_email)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_PHONE__", escape(default_twilio_loa_recipient_phone))
+""".replace("__SMS_LOOK_MENU__", sms_look_menu_html).replace("__SMS_LOOK_PANEL__", sms_look_panel_html).replace("__SMS_EXPERIMENTAL_MENU__", sms_experimental_menu_html).replace("__SMS_EXPERIMENTAL_PANEL__", sms_experimental_panel_html).replace("__TWILIO_LOOKUP_ACTIVE_CLASS__", twilio_lookup_btn_active_class).replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DEFAULT_TWILIO_SMS_URL__", escape(TWILIO_AMIEWEB_DEFAULT_SMS_URL)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_NAME__", escape(default_twilio_loa_recipient_name)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_EMAIL__", escape(default_twilio_loa_recipient_email)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_PHONE__", escape(default_twilio_loa_recipient_phone))
 
   return HTMLResponse(
     content=html,
@@ -49294,6 +49000,58 @@ def twilio_amieweb_active_number_friendly_name_route(request: Request, phone_sid
   except Exception as exc:
     logger.exception("AMIEWeb Friendly Name update failed")
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@app.get("/twilio/amieweb/active-numbers-page", response_class=HTMLResponse)
+def twilio_amieweb_active_numbers_page(request: Request):
+  try:
+    _require_twilio_active_number_admin(request)
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
+    rows, debug = _twilio_active_number_rows(cucm_host, cucm_user, cucm_pass)
+    assigned = sum(1 for row in rows if row["status"] == "Found")
+    table_rows = []
+    for row in rows:
+      assignment = row.get("assignment", {}) or {}
+      can_update = bool(row.get("can_update"))
+      action = "<span>Unassigned</span>"
+      if can_update:
+        action = (
+          '<form method="post" action="/twilio/amieweb/active-numbers/friendly-name">'
+          f'<input type="hidden" name="phone_sid" value="{escape(str(row.get("phone_sid", "")))}">'
+          f'<button type="submit">Set to {escape(str(row.get("desired_friendly_name", "")))}</button>'
+          "</form>"
+        )
+      table_rows.append(
+        "<tr>"
+        f"<td>{escape(str(row.get('twilio_number', '') or '-'))}</td>"
+        f"<td>{escape(str(row.get('friendly_name', '') or '-'))}</td>"
+        f"<td>{escape(str(row.get('phone_sid', '') or '-'))}</td>"
+        f"<td>{escape(str(row.get('capabilities', '') or '-'))}</td>"
+        f"<td>{escape(str(assignment.get('name', '') or 'Unassigned'))}</td>"
+        f"<td>{escape(str(assignment.get('userid', '') or '-'))}</td>"
+        f"<td>{escape(str(assignment.get('phone_details', '') or '-'))}</td>"
+        f"<td>{escape(str(row.get('status', '') or '-'))}</td>"
+        f"<td>{action}</td>"
+        "</tr>"
+      )
+    html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>AMIEWeb Active Number Lookup</title>
+<style>
+body {{ font-family:Segoe UI,Arial,sans-serif; margin:24px; background:#edf5fc; color:#12304a; }}
+.toolbar {{ display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:16px; }}
+.back, button {{ background:#005eb8; color:#fff; border:0; border-radius:6px; padding:8px 12px; font-weight:700; text-decoration:none; cursor:pointer; }}
+table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:#005eb8; color:#fff; text-align:left; padding:9px; }} td {{ padding:8px; border-bottom:1px solid #c8dbee; vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} form {{ margin:0; }}
+</style></head><body>
+<div class="toolbar"><div><h2 style="margin:0">AMIEWeb-Twilio Active Number Lookup</h2><p>AMNOne-Notification-PROD: {len(rows)} active number(s), {assigned} matched to CUCM.</p></div><a class="back" href="/page3">Back to SMS Item Menu</a></div>
+<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Phone SID</th><th>Capabilities</th><th>Assigned CUCM Employee</th><th>CUCM User ID</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>{''.join(table_rows)}</tbody></table>
+<details style="margin-top:16px"><summary>Debug Details</summary><pre>{escape(json.dumps(debug, indent=2))}</pre></details>
+</body></html>"""
+    return HTMLResponse(content=html)
+  except PermissionError as exc:
+    return HTMLResponse(content=f"<h3>Unauthorized</h3><p>{escape(str(exc))}</p>", status_code=401)
+  except Exception as exc:
+    logger.exception("AMIEWeb active-number page failed")
+    return HTMLResponse(content=f"<h3>Active Number Lookup Failed</h3><p>{escape(str(exc))}</p><p><a href=\"/page3\">Back to SMS Item Menu</a></p>", status_code=500)
 
 
 @app.post("/lookup/twilio-by-number-sfdc")
