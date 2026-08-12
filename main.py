@@ -42266,7 +42266,7 @@ def page3_twilio_items(request: Request):
           __SMS_LOOK_MENU__
           __SMS_EXPERIMENTAL_MENU__
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
-          <a class="portal-nav-btn__ACTIVE_NUMBER_LOOKUP_ACTIVE_CLASS__" href="/page3?panel=twilio-active-number-lookup" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio Active Number Lookup</a>
+          <form action="/page3" method="get" style="margin:0; padding:0; border:0; background:none; box-shadow:none; backdrop-filter:none;"><input type="hidden" name="panel" value="twilio-active-number-lookup"><button type="submit" class="portal-nav-btn__ACTIVE_NUMBER_LOOKUP_ACTIVE_CLASS__">AMIEWeb-Twilio Active Number Lookup</button></form>
           <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
