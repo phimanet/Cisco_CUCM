@@ -41673,6 +41673,8 @@ def page3_twilio_items(request: Request):
   default_twilio_loa_recipient_name = (settings.get("twilio_loa_recipient_name", "") or "").strip()
   default_twilio_loa_recipient_email = (settings.get("twilio_loa_recipient_email", "") or "").strip()
   default_twilio_loa_recipient_phone = (settings.get("twilio_loa_recipient_phone", "") or "").strip()
+  requested_panel = str(request.query_params.get("panel", "") or "").strip()
+  active_number_lookup_selected = requested_panel == "twilio-active-number-lookup"
   sms_look_enabled = SMS_NUMBER_LOOKUP_ENABLED
   sms_experimental_enabled = _feature_enabled(
     SMS_EXPERIMENTAL_MENU_ENABLED,
@@ -41684,11 +41686,13 @@ def page3_twilio_items(request: Request):
   sms_look_panel_html = ""
   sms_experimental_menu_html = ""
   sms_experimental_panel_html = ""
-  twilio_lookup_btn_active_class = " active" if not sms_look_enabled else ""
+  sms_look_active_class = "" if active_number_lookup_selected else " active"
+  twilio_lookup_btn_active_class = " active" if (not sms_look_enabled and not active_number_lookup_selected) else ""
+  active_number_lookup_active_class = " active" if active_number_lookup_selected else ""
   if sms_look_enabled:
-    sms_look_menu_html = '<button type="button" class="portal-nav-btn active" data-panel="sms-number-look">SMS Number Lookup</button>'
+    sms_look_menu_html = '<button type="button" class="portal-nav-btn__SMS_LOOK_ACTIVE_CLASS__" data-panel="sms-number-look">SMS Number Lookup</button>'
     sms_look_panel_html = """
-      <section class="tool-panel active" data-panel="sms-number-look">
+      <section class="tool-panel__SMS_LOOK_ACTIVE_CLASS__" data-panel="sms-number-look">
           <div class="panel">
             <h3>SMS Number Lookup</h3>
             <p>Lookup by name or number. This checks all platforms: Twilio AMIEWeb, Twilio Salesforce Enterprise Org Prod, and Aerialink Classic.</p>
@@ -42262,7 +42266,7 @@ def page3_twilio_items(request: Request):
           __SMS_LOOK_MENU__
           __SMS_EXPERIMENTAL_MENU__
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
-          <button type="button" class="portal-nav-btn" data-panel="twilio-active-number-lookup" onclick="(function(){var panel='twilio-active-number-lookup';document.querySelectorAll('.tool-panel').forEach(function(item){item.classList.toggle('active',item.getAttribute('data-panel')===panel);});document.querySelectorAll('.portal-nav-btn[data-panel]').forEach(function(item){item.classList.toggle('active',item.getAttribute('data-panel')===panel);});})();">AMIEWeb-Twilio Active Number Lookup</button>
+          <a class="portal-nav-btn__ACTIVE_NUMBER_LOOKUP_ACTIVE_CLASS__" href="/page3?panel=twilio-active-number-lookup" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio Active Number Lookup</a>
           <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
@@ -42305,7 +42309,7 @@ def page3_twilio_items(request: Request):
           </div>
         </section>
 
-        <section class="tool-panel" data-panel="twilio-active-number-lookup">
+        <section class="tool-panel__ACTIVE_NUMBER_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-active-number-lookup">
           <div class="panel">
             <h3>AMIEWeb-Twilio Active Number Lookup</h3>
             <p>Lists active AMNOne-Notification-PROD numbers and matches them to CUCM employees using one batched CUCM query.</p>
@@ -43656,7 +43660,7 @@ def page3_twilio_items(request: Request):
     </main>
   </body>
 </html>
-""".replace("__SMS_LOOK_MENU__", sms_look_menu_html).replace("__SMS_LOOK_PANEL__", sms_look_panel_html).replace("__SMS_EXPERIMENTAL_MENU__", sms_experimental_menu_html).replace("__SMS_EXPERIMENTAL_PANEL__", sms_experimental_panel_html).replace("__TWILIO_LOOKUP_ACTIVE_CLASS__", twilio_lookup_btn_active_class).replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DEFAULT_TWILIO_SMS_URL__", escape(TWILIO_AMIEWEB_DEFAULT_SMS_URL)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_NAME__", escape(default_twilio_loa_recipient_name)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_EMAIL__", escape(default_twilio_loa_recipient_email)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_PHONE__", escape(default_twilio_loa_recipient_phone))
+""".replace("__SMS_LOOK_MENU__", sms_look_menu_html).replace("__SMS_LOOK_PANEL__", sms_look_panel_html).replace("__SMS_EXPERIMENTAL_MENU__", sms_experimental_menu_html).replace("__SMS_EXPERIMENTAL_PANEL__", sms_experimental_panel_html).replace("__SMS_LOOK_ACTIVE_CLASS__", sms_look_active_class).replace("__TWILIO_LOOKUP_ACTIVE_CLASS__", twilio_lookup_btn_active_class).replace("__ACTIVE_NUMBER_LOOKUP_ACTIVE_CLASS__", active_number_lookup_active_class).replace("__AUTH_USER__", auth_user).replace("__AUTH_CUCM_HOST__", escape(auth_cucm_host)).replace("__ENV_TEXT__", escape(env_text)).replace("__ENV_CLASS__", env_css_class).replace("__HAS_CACHED_CUCM_PASS__", "true" if has_cached_cucm_pass else "false").replace("__CREDENTIAL_EXPIRES_AT_MS__", str(credential_expires_at_ms)).replace("__DEFAULT_TWILIO_SMS_URL__", escape(TWILIO_AMIEWEB_DEFAULT_SMS_URL)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_NAME__", escape(default_twilio_loa_recipient_name)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_EMAIL__", escape(default_twilio_loa_recipient_email)).replace("__DEFAULT_TWILIO_LOA_RECIPIENT_PHONE__", escape(default_twilio_loa_recipient_phone))
 
   return HTMLResponse(
     content=html,
