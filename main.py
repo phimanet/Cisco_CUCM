@@ -42266,7 +42266,7 @@ def page3_twilio_items(request: Request):
           __SMS_LOOK_MENU__
           __SMS_EXPERIMENTAL_MENU__
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
-          <form action="/page3" method="get" style="margin:0; padding:0; border:0; background:none; box-shadow:none; backdrop-filter:none;"><input type="hidden" name="panel" value="twilio-active-number-lookup"><button type="submit" class="portal-nav-btn__ACTIVE_NUMBER_LOOKUP_ACTIVE_CLASS__">AMIEWeb-Twilio Active Number Lookup</button></form>
+          <button type="button" class="portal-nav-btn__ACTIVE_NUMBER_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-active-number-lookup">AMIEWeb-Twilio Active Number Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
@@ -42494,6 +42494,51 @@ def page3_twilio_items(request: Request):
         </section>
       </section>
     </div>
+
+    <script>
+      (function () {
+        function bindPortalNavFallback() {
+          const navButtons = Array.from(document.querySelectorAll(".portal-nav-btn[data-panel]"));
+          const panels = Array.from(document.querySelectorAll(".tool-panel"));
+          if (!navButtons.length || !panels.length) {
+            return;
+          }
+
+          function showPanel(panelKey) {
+            if (!panelKey) {
+              return;
+            }
+            panels.forEach((panel) => {
+              panel.classList.toggle("active", panel.dataset.panel === panelKey);
+            });
+            navButtons.forEach((btn) => {
+              btn.classList.toggle("active", btn.dataset.panel === panelKey);
+            });
+          }
+
+          navButtons.forEach((btn) => {
+            if (btn.dataset.navFallbackBound === "1") {
+              return;
+            }
+            btn.dataset.navFallbackBound = "1";
+            btn.addEventListener("click", () => {
+              showPanel((btn.dataset.panel || "").trim());
+            });
+          });
+
+          const initialPanel = (new URLSearchParams(window.location.search).get("panel") || "").trim();
+          if (initialPanel && panels.some((panel) => panel.dataset.panel === initialPanel)) {
+            showPanel(initialPanel);
+          }
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", bindPortalNavFallback);
+        } else {
+          bindPortalNavFallback();
+        }
+      })();
+    </script>
 
     <script>
       (function () {
