@@ -42262,7 +42262,7 @@ def page3_twilio_items(request: Request):
           __SMS_LOOK_MENU__
           __SMS_EXPERIMENTAL_MENU__
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
-          <button type="button" class="portal-nav-btn" data-panel="twilio-active-number-lookup">AMIEWeb-Twilio Active Number Lookup</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-active-number-lookup" onclick="(function(){var panel='twilio-active-number-lookup';document.querySelectorAll('.tool-panel').forEach(function(item){item.classList.toggle('active',item.getAttribute('data-panel')===panel);});document.querySelectorAll('.portal-nav-btn[data-panel]').forEach(function(item){item.classList.toggle('active',item.getAttribute('data-panel')===panel);});})();">AMIEWeb-Twilio Active Number Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
