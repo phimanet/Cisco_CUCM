@@ -295,7 +295,6 @@ MOBILE_JABBER_EMAIL_BODY = (
   "5. If it balks at an invalid certificate, this is OK. Accept or press OK.\n"
   "6. You should now be logged in."
 )
-STRIKE_MASK_PATTERN_PREFIX = (os.getenv("STRIKE_MASK_PATTERN_PREFIX", "945") or "945").strip()
 STRIKE_MASK_ROUTE_PARTITION = "ENT_DEVICE_PT"
 STRIKE_MASK_AVAILABLE_TRANSFORM_MASK = "2481001"
 SMS_NUMBER_LOOKUP_ENABLED = (os.getenv("SMS_NUMBER_LOOKUP_ENABLED", "true") or "true").strip().lower() in {
@@ -14772,7 +14771,15 @@ def _find_jabber_extension(cucm_host: str, cucm_user: str, cucm_pass: str, targe
   return primary_ext, jabber_devices
 
 
-def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[dict]:
+def _get_strike_mask_prefix() -> str:
+  strike_prefix = str((_get_dn_mapping().get("strike") or ("", ""))[0] or "").strip()
+  if not strike_prefix.isdigit():
+    raise RuntimeError("Strike Prefix in DN Prefix Settings must contain digits only")
+  return strike_prefix
+
+
+def _find_available_strike_mask_patterns(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[dict]:
+  strike_prefix = _get_strike_mask_prefix()
   session = requests.Session()
   session.verify = False
   session.trust_env = False
@@ -14842,7 +14849,7 @@ def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str)
       and mask_clean == STRIKE_MASK_AVAILABLE_TRANSFORM_MASK
     )
 
-    if pattern and is_available:
+    if pattern and pattern.startswith(strike_prefix) and is_available:
       patterns.append({
         "pattern": pattern,
         "partition": partition,
@@ -14854,6 +14861,7 @@ def _find_available_945_patterns(cucm_host: str, cucm_user: str, cucm_pass: str)
 
 
 def _list_in_use_strike_mask_patterns(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[dict]:
+  strike_prefix = _get_strike_mask_prefix()
   session = requests.Session()
   session.verify = False
   session.trust_env = False
@@ -14922,7 +14930,7 @@ def _list_in_use_strike_mask_patterns(cucm_host: str, cucm_user: str, cucm_pass:
       and (mask or "").strip() == STRIKE_MASK_AVAILABLE_TRANSFORM_MASK
     )
 
-    if pattern and desc_lower.startswith("strike mask -") and not is_available:
+    if pattern and pattern.startswith(strike_prefix) and desc_lower.startswith("strike mask -") and not is_available:
       patterns.append(
         {
           "pattern": pattern,
@@ -15245,7 +15253,7 @@ def _apply_strike_mask_pattern(cucm_host: str, cucm_user: str, cucm_pass: str, t
   if not selected_jabber_devices:
     raise RuntimeError(f"No valid Jabber devices were selected for {clean_target}")
 
-  available_patterns = _find_available_945_patterns(cucm_host, cucm_user, cucm_pass)
+  available_patterns = _find_available_strike_mask_patterns(cucm_host, cucm_user, cucm_pass)
   if not available_patterns:
     raise RuntimeError("No available Strike Mask patterns were found")
 
@@ -37785,7 +37793,7 @@ def menu_admin_page(request: Request):
 
       <section class="panel tool-panel" data-panel="strikemask">
         <h3>Strike Mask - Masked Calling (Page 2)</h3>
-        <p>Apply or reverse Strike Mask for masked calling. Strike Mask uses a 945-series translation pattern to mask the caller's Jabber extension when making calls.</p>
+        <p>Apply or reverse Strike Mask for masked calling. Strike Mask uses the configured Strike Prefix from DN Prefix Settings to mask the caller's Jabber extension when making calls.</p>
         
         <h4 style="margin-top:18px;">Lookup Strike Mask Status</h4>
         <p>Search by last name to see if the user has active Strike Mask operations or available patterns to apply.</p>
@@ -47157,7 +47165,7 @@ def strike_mask_options_route(
 
     try:
       jabber_extension, jabber_devices = _find_jabber_extension(cucm_host, cucm_user, cucm_pass, clean_target)
-      available_patterns = _find_available_945_patterns(cucm_host, cucm_user, cucm_pass)
+      available_patterns = _find_available_strike_mask_patterns(cucm_host, cucm_user, cucm_pass)
     except RuntimeError:
       raise
     except Exception as exc:
