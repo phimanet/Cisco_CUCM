@@ -42542,6 +42542,75 @@ def page3_twilio_items(request: Request):
 
     <script>
       (function () {
+        function bindSmsNumberLookup() {
+          var nameForm = document.getElementById("sms-look-name-form");
+          var numberForm = document.getElementById("sms-look-number-form");
+          var nameStatusEl = document.getElementById("sms-look-name-status");
+          var numberStatusEl = document.getElementById("sms-look-number-status");
+          var resultsEl = document.getElementById("sms-look-results");
+          if (!nameForm || !numberForm || !nameStatusEl || !numberStatusEl || !resultsEl || nameForm.dataset.smsLookupBound === "1") {
+            return;
+          }
+          nameForm.dataset.smsLookupBound = "1";
+          numberForm.dataset.smsLookupBound = "1";
+
+          function esc(value) {
+            return String(value == null ? "" : value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+          }
+          function renderRows(rows) {
+            if (!rows || !rows.length) {
+              resultsEl.innerHTML = "";
+              return;
+            }
+            var html = "<table><thead><tr><th>Name</th><th>Extension</th><th>SMS Number</th><th>Configured In</th></tr></thead><tbody>";
+            rows.forEach(function (row) {
+              html += "<tr><td>" + esc(row.display_name || "-") + "</td><td style=\"font-family:Consolas,monospace;\">" + esc(row.extension || "-") + "</td><td style=\"font-family:Consolas,monospace;\">" + esc(row.sms_number || "-") + "</td><td>" + esc(row.configured_in || "Not Found") + "</td></tr>";
+            });
+            resultsEl.innerHTML = html + "</tbody></table>";
+          }
+          function runLookup(form, statusEl, loadingMessage, emptyMessage) {
+            statusEl.textContent = loadingMessage;
+            resultsEl.innerHTML = "";
+            fetch("/lookup/sms-number-look", { method: "POST", body: new FormData(form), credentials: "same-origin" }).then(function (response) {
+              return response.json().catch(function () {
+                return { ok: false, error: "Unexpected response (HTTP " + response.status + ")." };
+              }).then(function (payload) {
+                if (!response.ok || !payload.ok) {
+                  throw new Error((payload && payload.error) || (payload && payload.detail) || "Lookup failed.");
+                }
+                return payload;
+              });
+            }).then(function (payload) {
+              var rows = payload.results || [];
+              statusEl.textContent = rows.length ? "Found " + rows.length + " result(s)." : emptyMessage;
+              renderRows(rows);
+            }).catch(function (err) {
+              statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
+            });
+          }
+
+          nameForm.addEventListener("submit", function (event) {
+            event.preventDefault();
+            numberStatusEl.textContent = "";
+            runLookup(nameForm, nameStatusEl, "Searching by name across all SMS platforms...", "No SMS platform results found.");
+          });
+          numberForm.addEventListener("submit", function (event) {
+            event.preventDefault();
+            nameStatusEl.textContent = "";
+            runLookup(numberForm, numberStatusEl, "Looking up number across all SMS platforms...", "Number not found in SMS platforms.");
+          });
+        }
+
+        if (document.readyState === "loading") {
+          document.addEventListener("DOMContentLoaded", bindSmsNumberLookup);
+        } else {
+          bindSmsNumberLookup();
+        }
+      })();
+    </script>
+
+    <script>
+      (function () {
         function bindActiveNumberLookup() {
           var form = document.getElementById("twilio-active-number-lookup-form");
           var statusEl = document.getElementById("twilio-active-number-lookup-status");
@@ -42847,9 +42916,11 @@ def page3_twilio_items(request: Request):
           const numberStatusEl = document.getElementById("sms-look-number-status");
           const resultsEl = document.getElementById("sms-look-results");
 
-          if (!nameForm || !numberForm || !nameStatusEl || !numberStatusEl || !resultsEl) {
+          if (!nameForm || !numberForm || !nameStatusEl || !numberStatusEl || !resultsEl || nameForm.dataset.smsLookupBound === "1") {
             return;
           }
+          nameForm.dataset.smsLookupBound = "1";
+          numberForm.dataset.smsLookupBound = "1";
 
           function renderRows(rows) {
             if (!rows || !rows.length) {
