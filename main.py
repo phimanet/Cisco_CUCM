@@ -11578,6 +11578,79 @@ def _list_twilio_incoming_phone_numbers(lookup_sid: str, lookup_token: str, forc
     return {"ok": False, "status": f"Lookup error: {exc}", "numbers": []}
 
 
+def _twilio_phone_match_keys(phone_number: str) -> set[str]:
+  """Return normalized number keys shared by Twilio E.164 and CUCM fields."""
+  digits = "".join(ch for ch in str(phone_number or "") if ch.isdigit())
+  if not digits:
+    return set()
+  keys = {digits}
+  if len(digits) == 11 and digits.startswith("1"):
+    keys.add(digits[1:])
+  elif len(digits) == 10:
+    keys.add(f"1{digits}")
+  return keys
+
+
+def _load_cucm_people_for_twilio_matching(cucm_host: str, cucm_user: str, cucm_pass: str) -> tuple[dict[str, list[dict]], dict]:
+  """Load CUCM employee phone data once, then index it locally for Twilio matching."""
+  sql = (
+    "SELECT u.userid AS userid, u.firstname AS firstname, u.lastname AS lastname, "
+    "u.displayname AS displayname, u.telephonenumber AS telephonenumber, "
+    "n.dnorpattern AS extension "
+    "FROM enduser u "
+    "LEFT OUTER JOIN enduserdevicemap edm ON edm.fkenduser = u.pkid "
+    "LEFT OUTER JOIN device d ON d.pkid = edm.fkdevice "
+    "LEFT OUTER JOIN devicenumplanmap dm ON dm.fkdevice = d.pkid "
+    "LEFT OUTER JOIN numplan n ON n.pkid = dm.fknumplan "
+    "WHERE (u.telephonenumber IS NOT NULL AND u.telephonenumber <> '') "
+    "OR n.dnorpattern IS NOT NULL "
+    "ORDER BY u.lastname, u.firstname, u.userid"
+  )
+  soap = f'''<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:executeSQLQuery>
+      <sql>{xml_escape(sql)}</sql>
+    </axl:executeSQLQuery>
+  </soapenv:Body>
+</soapenv:Envelope>'''
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+  root = ET.fromstring(_axl_post_raw_text(session, cucm_host, soap, "Twilio CUCM employee query"))
+  people_by_user: dict[str, dict] = {}
+  for element in root.iter():
+    if element.tag.split("}")[-1] != "row":
+      continue
+    row = {child.tag.split("}")[-1]: (child.text or "").strip() for child in list(element)}
+    user_id = row.get("userid", "")
+    if not user_id:
+      continue
+    person = people_by_user.setdefault(user_id, {
+      "userid": user_id, "firstname": row.get("firstname", ""), "lastname": row.get("lastname", ""),
+      "displayname": row.get("displayname", ""), "telephone": row.get("telephonenumber", ""), "extensions": [],
+    })
+    extension = row.get("extension", "")
+    if extension and extension not in person["extensions"]:
+      person["extensions"].append(extension)
+  index: dict[str, list[dict]] = {}
+  for person in people_by_user.values():
+    for value in [person["telephone"], *person["extensions"]]:
+      for key in _twilio_phone_match_keys(value):
+        candidates = index.setdefault(key, [])
+        if person not in candidates:
+          candidates.append(person)
+  return index, {"cucm_people": len(people_by_user), "cucm_match_keys": len(index)}
+
+
+def _twilio_capabilities_text(number_item: dict) -> str:
+  capabilities = number_item.get("capabilities") if isinstance(number_item.get("capabilities"), dict) else {}
+  values = [name.upper() for name in ("voice", "sms", "mms", "fax") if str(capabilities.get(name, "")).strip().lower() in {"1", "true", "yes", "y"}]
+  return ", ".join(values) or "Not reported"
+
+
 def _normalize_twilio_hosted_status(value: str) -> str:
   return re.sub(r"[^a-z0-9]+", "", str(value or "").strip().lower())
 
@@ -42189,6 +42262,7 @@ def page3_twilio_items(request: Request):
           __SMS_LOOK_MENU__
           __SMS_EXPERIMENTAL_MENU__
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-active-number-lookup">AMIEWeb-Twilio Active Number Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
@@ -42228,6 +42302,17 @@ def page3_twilio_items(request: Request):
             </form>
             <p id="twilio-number-lookup-status" style="color:#2c5c8a; min-height:18px;"></p>
             <div id="twilio-number-lookup-results" style="overflow-x:auto;"></div>
+          </div>
+        </section>
+
+        <section class="tool-panel" data-panel="twilio-active-number-lookup">
+          <div class="panel">
+            <h3>AMIEWeb-Twilio Active Number Lookup</h3>
+            <p>Lists active AMNOne-Notification-PROD numbers and matches them to CUCM employees using one batched CUCM query.</p>
+            <form id="twilio-active-number-lookup-form"><div class="search-filter-row"><button type="submit">Load Active AMIEWeb Numbers</button></div></form>
+            <p id="twilio-active-number-lookup-status" style="color:#2c5c8a; min-height:18px;">Load active AMIEWeb Twilio numbers and CUCM assignments.</p>
+            <div id="twilio-active-number-lookup-results" style="overflow-x:auto;"></div>
+            <details id="twilio-active-number-lookup-debug" style="margin-top:12px; display:none;"><summary style="cursor:pointer; color:#2c5c8a; font-weight:700;">Debug / Error Details</summary><pre id="twilio-active-number-lookup-debug-output" style="white-space:pre-wrap; overflow-wrap:anywhere; background:#f7fbff; border:1px solid #c8dbee; padding:10px; border-radius:6px;"></pre></details>
           </div>
         </section>
 
@@ -42844,6 +42929,57 @@ def page3_twilio_items(request: Request):
               statusEl.textContent = "Lookup failed: " + ((err && err.message) || "Unknown error.");
             }
           });
+        })();
+
+        // AMIEWeb active-number lookup and server-authorized Friendly Name updates.
+        (function () {
+          const form = document.getElementById("twilio-active-number-lookup-form");
+          const statusEl = document.getElementById("twilio-active-number-lookup-status");
+          const resultsEl = document.getElementById("twilio-active-number-lookup-results");
+          const debugEl = document.getElementById("twilio-active-number-lookup-debug");
+          const debugOutputEl = document.getElementById("twilio-active-number-lookup-debug-output");
+          if (!form || !statusEl || !resultsEl) return;
+          const esc = value => String(value == null ? "" : value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+          const showDebug = detail => { if (debugEl && debugOutputEl) { debugOutputEl.textContent = typeof detail === "string" ? detail : JSON.stringify(detail || {}, null, 2); debugEl.style.display = "block"; } };
+          const clearDebug = () => { if (debugEl && debugOutputEl) { debugOutputEl.textContent = ""; debugEl.style.display = "none"; } };
+          const loadRows = async () => {
+            statusEl.textContent = "Loading active AMIEWeb numbers and CUCM assignments...";
+            resultsEl.innerHTML = "";
+            clearDebug();
+            try {
+              const response = await fetch("/twilio/amieweb/active-numbers", { method: "POST", credentials: "same-origin" });
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || "Active-number lookup failed.");
+              const summary = payload.summary || {};
+              statusEl.textContent = `Loaded ${summary.twilio_numbers || 0} AMIEWeb number(s): ${summary.assigned || 0} matched to CUCM, ${summary.unassigned || 0} unassigned.`;
+              showDebug(payload.debug || {});
+              const rows = payload.rows || [];
+              if (!rows.length) { resultsEl.innerHTML = "<p>No active AMIEWeb numbers were returned.</p>"; return; }
+              let html = "<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Phone SID</th><th>Capabilities</th><th>Assigned CUCM Employee</th><th>CUCM User ID</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>";
+              rows.forEach(row => {
+                const assignment = row.assignment || {};
+                const action = row.can_update ? `<button type="button" class="twilio-active-name-update" data-phone-sid="${esc(row.phone_sid)}" data-number="${esc(row.twilio_number)}" data-name="${esc(row.desired_friendly_name)}">Set to ${esc(row.desired_friendly_name)}</button>` : "<span style=\"color:#6a3c00;\">No CUCM name</span>";
+                html += `<tr><td style="font-family:Consolas,monospace;">${esc(row.twilio_number || "-")}</td><td>${esc(row.friendly_name || "-")}</td><td style="font-family:Consolas,monospace;">${esc(row.phone_sid || "-")}</td><td>${esc(row.capabilities || "-")}</td><td>${esc(assignment.name || "Unassigned")}</td><td style="font-family:Consolas,monospace;">${esc(assignment.userid || "-")}</td><td>${esc(assignment.phone_details || "-")}</td><td>${esc(row.status || "-")}</td><td>${action}</td></tr>`;
+              });
+              resultsEl.innerHTML = html + "</tbody></table>";
+              resultsEl.querySelectorAll(".twilio-active-name-update").forEach(button => button.addEventListener("click", async () => {
+                const number = button.dataset.number || "";
+                const friendlyName = button.dataset.name || "";
+                if (!window.confirm(`Change Twilio Friendly Name for ${number} to "${friendlyName}"?`)) return;
+                button.disabled = true;
+                statusEl.textContent = `Updating Friendly Name for ${number}...`;
+                try {
+                  const body = new URLSearchParams({ phone_sid: button.dataset.phoneSid || "" });
+                  const response = await fetch("/twilio/amieweb/active-numbers/friendly-name", { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body: body.toString(), credentials: "same-origin" });
+                  const payload = await response.json();
+                  if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || "Friendly Name update failed.");
+                  statusEl.textContent = payload.message || "Friendly Name updated.";
+                  await loadRows();
+                } catch (err) { statusEl.textContent = "Friendly Name update failed: " + ((err && err.message) || "Unknown error."); showDebug({ action: "friendly_name_update", error: (err && err.message) || "Unknown error" }); button.disabled = false; }
+              }));
+            } catch (err) { statusEl.textContent = "Active-number lookup failed: " + ((err && err.message) || "Unknown error."); showDebug({ action: "active_number_lookup", error: (err && err.message) || "Unknown error" }); }
+          };
+          form.addEventListener("submit", event => { event.preventDefault(); loadRows(); });
         })();
 
         // Twilio SMS Hosting - AMIEWeb (SMS-only webhook updates)
@@ -48834,6 +48970,98 @@ def lookup_twilio_by_number_route(phone_number: str = Form(...)):
           "error": str(exc),
           "result": None,
       }, status_code=500)
+
+
+def _require_twilio_active_number_admin(request: Request) -> dict:
+  session = _get_auth_session(request)
+  if not session:
+    raise PermissionError("Authentication required.")
+  if not _is_admin_user(str(session.get("username", "") or "")):
+    raise PermissionError("You are not authorized to update AMIEWeb Twilio numbers.")
+  return session
+
+
+def _twilio_active_number_rows(cucm_host: str, cucm_user: str, cucm_pass: str) -> tuple[list[dict], dict]:
+  lookup_sid = _resolve_twilio_lookup_account_sid()
+  lookup_token = _resolve_twilio_lookup_auth_token_for_sid(lookup_sid)
+  if not lookup_sid or not lookup_token:
+    raise RuntimeError("Twilio AMIEWeb account is not configured.")
+  if TWILIO_ACCOUNT_SID and lookup_sid == TWILIO_ACCOUNT_SID:
+    raise RuntimeError("Twilio AMIEWeb subaccount SID is required; parent account is not allowed for this lookup.")
+  listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token, force_refresh=True)
+  if not listed.get("ok"):
+    raise RuntimeError(str(listed.get("status", "Active-number lookup failed")))
+  cucm_index, debug = _load_cucm_people_for_twilio_matching(cucm_host, cucm_user, cucm_pass)
+  rows = []
+  assigned_count = 0
+  for number_item in listed.get("numbers", []) or []:
+    if not isinstance(number_item, dict):
+      continue
+    twilio_number = str(number_item.get("phone_number", "") or "").strip()
+    matches, seen_users = [], set()
+    for key in _twilio_phone_match_keys(twilio_number):
+      for person in cucm_index.get(key, []):
+        if person["userid"] not in seen_users:
+          matches.append(person)
+          seen_users.add(person["userid"])
+    person = matches[0] if matches else None
+    if person:
+      assigned_count += 1
+      desired_friendly_name = f"{person.get('firstname', '').strip()} {person.get('lastname', '').strip()}".strip()
+      phone_details = ", ".join(item for item in [person.get("telephone", ""), *person.get("extensions", [])] if item)
+      assignment = {"name": desired_friendly_name or person.get("displayname", "") or person["userid"], "userid": person["userid"], "phone_details": phone_details}
+    else:
+      desired_friendly_name = ""
+      assignment = {"name": "Unassigned", "userid": "", "phone_details": ""}
+    rows.append({"twilio_number": twilio_number, "friendly_name": str(number_item.get("friendly_name", "") or "").strip(), "phone_sid": str(number_item.get("sid", "") or "").strip(), "capabilities": _twilio_capabilities_text(number_item), "assignment": assignment, "desired_friendly_name": desired_friendly_name, "can_update": bool(desired_friendly_name and str(number_item.get("sid", "") or "").strip()), "status": "Found" if person else "Unassigned"})
+  rows.sort(key=lambda item: item["twilio_number"])
+  debug.update({"twilio_account": TWILIO_SUBACCOUNT_NAME, "twilio_numbers": len(rows), "assigned": assigned_count})
+  return rows, debug
+
+
+@app.post("/twilio/amieweb/active-numbers")
+def twilio_amieweb_active_numbers_route(request: Request):
+  try:
+    _require_twilio_active_number_admin(request)
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
+    rows, debug = _twilio_active_number_rows(cucm_host, cucm_user, cucm_pass)
+    return JSONResponse({"ok": True, "lookup_account_name": TWILIO_SUBACCOUNT_NAME, "summary": {"twilio_numbers": len(rows), "assigned": sum(1 for row in rows if row["status"] == "Found"), "unassigned": sum(1 for row in rows if row["status"] == "Unassigned")}, "rows": rows, "debug": debug})
+  except PermissionError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=401)
+  except Exception as exc:
+    logger.exception("AMIEWeb active-number lookup failed")
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@app.post("/twilio/amieweb/active-numbers/friendly-name")
+def twilio_amieweb_active_number_friendly_name_route(request: Request, phone_sid: str = Form("")):
+  try:
+    session = _require_twilio_active_number_admin(request)
+    clean_phone_sid = (phone_sid or "").strip()
+    if not clean_phone_sid:
+      return JSONResponse({"ok": False, "error": "Phone SID is required."}, status_code=400)
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
+    rows, _debug = _twilio_active_number_rows(cucm_host, cucm_user, cucm_pass)
+    row = next((item for item in rows if item["phone_sid"] == clean_phone_sid), None)
+    if not row:
+      return JSONResponse({"ok": False, "error": "Phone SID was not found in the AMIEWeb Twilio subaccount."}, status_code=404)
+    friendly_name = str(row.get("desired_friendly_name", "") or "").strip()
+    if not friendly_name:
+      return JSONResponse({"ok": False, "error": "Cannot set a blank Friendly Name. The number is not assigned to a CUCM employee with a first and last name."}, status_code=400)
+    lookup_sid = _resolve_twilio_lookup_account_sid()
+    lookup_token = _resolve_twilio_lookup_auth_token_for_sid(lookup_sid)
+    response = requests.post(f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers/{clean_phone_sid}.json", data={"FriendlyName": friendly_name}, auth=(lookup_sid, lookup_token), verify=False, timeout=20)
+    body = response.json() if response.text else {}
+    if response.status_code not in {200, 201}:
+      return JSONResponse({"ok": False, "error": str(body.get("message", "") or f"Twilio update failed HTTP {response.status_code}")}, status_code=502)
+    with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
+      TWILIO_INCOMING_PHONE_NUMBER_CACHE.pop(lookup_sid, None)
+    return JSONResponse({"ok": True, "message": f"Friendly Name updated to {friendly_name} for {row['twilio_number']}.", "phone_sid": clean_phone_sid, "friendly_name": friendly_name, "operator": str(session.get("username", "") or "").strip()})
+  except PermissionError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=401)
+  except Exception as exc:
+    logger.exception("AMIEWeb Friendly Name update failed")
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
 @app.post("/lookup/twilio-by-number-sfdc")
