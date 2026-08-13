@@ -42525,7 +42525,7 @@ def page3_twilio_items(request: Request):
         <div class="portal-nav">
           __SMS_LOOK_MENU__
           __SMS_EXPERIMENTAL_MENU__
-          <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">AMIEWEb-Twilio Number Lookup</button>
+          <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">AMIEWeb-Twilio Number Lookup</button>
           <a class="portal-nav-btn" href="/twilio/amieweb/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio Active Number Lookup</a>
           <a class="portal-nav-btn" href="/twilio/amieweb/messaging-webhook-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio - Messaging and Webhook</a>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">SalesForce-Twilio Number Lookup</button>
@@ -42544,7 +42544,7 @@ def page3_twilio_items(request: Request):
         __SMS_EXPERIMENTAL_PANEL__
         <section class="tool-panel" data-panel="twilio-lookup">
           <div class="panel">
-            <h3>AMIEWEb-Twilio Number Lookup</h3>
+            <h3>AMIEWeb-Twilio Number Lookup</h3>
             <p>Search employees by name, then lookup their Twilio number information.</p>
             <form id="twilio-lookup-search-form">
               <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
@@ -49290,7 +49290,7 @@ def twilio_amieweb_active_number_friendly_name_route(
 def _twilio_lookup_sidebar_html(active_key: str) -> str:
   entries = [
     ("sms", "SMS Number Lookup", "/page3"),
-    ("amieweb-lookup", "AMIEWEb-Twilio Number Lookup", "/page3?panel=twilio-lookup"),
+    ("amieweb-lookup", "AMIEWeb-Twilio Number Lookup", "/page3?panel=twilio-lookup"),
     ("amieweb-active", "AMIEWeb-Twilio Active Number Lookup", "/twilio/amieweb/active-numbers-page"),
     ("amieweb-messaging", "AMIEWeb-Twilio - Messaging and Webhook", "/twilio/amieweb/messaging-webhook-page"),
     ("salesforce-lookup", "SalesForce-Twilio Number Lookup", "/page3?panel=twilio-lookup-sfdc"),
