@@ -49014,6 +49014,26 @@ def twilio_amieweb_active_number_friendly_name_route(request: Request, phone_sid
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
+def _twilio_lookup_sidebar_html(active_key: str) -> str:
+  entries = [
+    ("sms", "SMS Number Lookup", "/page3"),
+    ("amieweb-lookup", "Twilio Number Lookup - AMIEWeb", "/page3?panel=twilio-lookup"),
+    ("amieweb-active", "AMIEWeb-Twilio Active Number Lookup", "/twilio/amieweb/active-numbers-page"),
+    ("salesforce-active", "SalesForce-Twilio Number Lookup", "/twilio/salesforce/active-numbers-page"),
+    ("sms-hosting", "Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)", "/page3?panel=twilio-sms-hosting"),
+    ("salesforce-lookup", "Twilio Number Lookup - Salesforce Enterprise Org Prod", "/page3?panel=twilio-lookup-sfdc"),
+    ("phimane", "Twilio Verification - Phimane", "/page3?panel=twilio-phimane"),
+    ("lauraa", "Twilio Verification - LauraA", "/page3?panel=twilio-lauraa"),
+    ("aerialink", "Aerialink SMS-AMIEClassic Lookup", "/page3?panel=aerialink-amieclassic"),
+    ("hosting-ready", "Twilio Hosting Status - Ready to Verify Ownership (Testing)", "/page3?panel=twilio-hosting-ready"),
+  ]
+  links = []
+  for key, label, href in entries:
+    active_class = " active" if key == active_key else ""
+    links.append(f'<a class="nav-link{active_class}" href="{href}">{escape(label)}</a>')
+  return "".join(links)
+
+
 @app.get("/twilio/amieweb/active-numbers-page", response_class=HTMLResponse)
 def twilio_amieweb_active_numbers_page(request: Request):
   try:
@@ -49059,6 +49079,7 @@ def twilio_amieweb_active_numbers_page(request: Request):
     ) if load_requested else '<p style="margin-top:18px">Select <strong>Load Active AMIEWeb Numbers</strong> to query AMNOne-Notification-PROD and match the returned numbers to CUCM employees.</p>'
     filter_text = f" Filter: {escape(number_query)}." if number_query else ""
     summary_text = f"AMNOne-Notification-PROD: {len(rows)} active number(s), {assigned} matched to CUCM.{filter_text}" if load_requested else "Numbers have not been loaded yet."
+    sidebar_html = _twilio_lookup_sidebar_html("amieweb-active")
     html = f"""<!doctype html>
   <html><head><meta charset="utf-8"><title>AMIEWeb Active Number Lookup</title>
   <style>
@@ -49077,7 +49098,7 @@ def twilio_amieweb_active_numbers_page(request: Request):
   </style></head><body>
   <header class="topbar">AMN Healthcare | Voice Operations Portal</header><main class="content">
   <section class="hero"><div class="hero-row"><div><h2>SMS Item Menu</h2><p>Manage Twilio numbers and inbound verification patterns for the organization.</p></div><a class="back" href="/page2">Back to Administrative Items</a></div></section>
-  <div class="shell"><aside class="sidebar"><h3>Twilio Menu</h3><a class="nav-link" href="/page3">SMS Number Lookup</a><a class="nav-link" href="/page3?panel=twilio-lookup">Twilio Number Lookup - AMIEWeb</a><a class="nav-link active" href="/twilio/amieweb/active-numbers-page">AMIEWeb-Twilio Active Number Lookup</a><a class="nav-link" href="/twilio/salesforce/active-numbers-page">SalesForce-Twilio Number Lookup</a></aside><section><section class="hero"><div class="hero-row"><div><h2>AMIEWeb-Twilio Active Number Lookup</h2><p>{summary_text}</p></div></div></section>
+  <div class="shell"><aside class="sidebar"><h3>Twilio Menu</h3>{sidebar_html}</aside><section><section class="hero"><div class="hero-row"><div><h2>AMIEWeb-Twilio Active Number Lookup</h2><p>{summary_text}</p></div></div></section>
   <section class="lookup-panel"><h3>Lookup by Number</h3><p>Enter a full or partial Twilio number. Digits only are used for matching.</p><form method="get" action="/twilio/amieweb/active-numbers-page" class="search-row"><input type="hidden" name="load" value="1"><input name="number_query" value="{escape(number_query)}" placeholder="Telephone - partial or full" inputmode="numeric"><button type="submit">Lookup by Number</button></form><div class="divider"><form method="get" action="/twilio/amieweb/active-numbers-page"><input type="hidden" name="load" value="1"><button type="submit">Load All Active AMIEWeb Numbers</button></form></div></section>
   <section class="results">{result_section}</section></section></div>
   </main></body></html>"""
@@ -49166,6 +49187,7 @@ def twilio_salesforce_active_numbers_page(request: Request):
     ) if load_requested else '<p style="margin-top:18px">Select <strong>Load Salesforce Twilio Numbers</strong> to query Enterprise Org Prod and match the returned numbers to CUCM employees.</p>'
     filter_text = f" Filter: {escape(number_query)}." if number_query else ""
     summary_text = f"Enterprise Org Prod: {len(rows)} active number(s), {assigned} matched to CUCM.{filter_text}" if load_requested else "Numbers have not been loaded yet."
+    sidebar_html = _twilio_lookup_sidebar_html("salesforce-active")
     html = f"""<!doctype html>
   <html><head><meta charset="utf-8"><title>SalesForce-Twilio Number Lookup</title>
   <style>
@@ -49184,7 +49206,7 @@ def twilio_salesforce_active_numbers_page(request: Request):
   </style></head><body>
   <header class="topbar">AMN Healthcare | Voice Operations Portal</header><main class="content">
   <section class="hero"><div class="hero-row"><div><h2>SMS Item Menu</h2><p>Manage Twilio numbers and inbound verification patterns for the organization.</p></div><a class="back" href="/page2">Back to Administrative Items</a></div></section>
-  <div class="shell"><aside class="sidebar"><h3>Twilio Menu</h3><a class="nav-link" href="/page3">SMS Number Lookup</a><a class="nav-link" href="/page3?panel=twilio-lookup">Twilio Number Lookup - AMIEWeb</a><a class="nav-link" href="/twilio/amieweb/active-numbers-page">AMIEWeb-Twilio Active Number Lookup</a><a class="nav-link active" href="/twilio/salesforce/active-numbers-page">SalesForce-Twilio Number Lookup</a></aside><section><section class="hero"><div class="hero-row"><div><h2>SalesForce-Twilio Number Lookup</h2><p>{summary_text}</p></div></div></section>
+  <div class="shell"><aside class="sidebar"><h3>Twilio Menu</h3>{sidebar_html}</aside><section><section class="hero"><div class="hero-row"><div><h2>SalesForce-Twilio Number Lookup</h2><p>{summary_text}</p></div></div></section>
   <section class="lookup-panel"><h3>Lookup by Number</h3><p>Enter a full or partial Twilio number. Digits only are used for matching.</p><form method="get" action="/twilio/salesforce/active-numbers-page" class="search-row"><input type="hidden" name="load" value="1"><input name="number_query" value="{escape(number_query)}" placeholder="Telephone - partial or full" inputmode="numeric"><button type="submit">Lookup by Number</button></form><div class="divider"><form method="get" action="/twilio/salesforce/active-numbers-page"><input type="hidden" name="load" value="1"><button type="submit">Load All Salesforce Twilio Numbers</button></form></div></section>
   <section class="results">{result_section}</section></section></div>
   </main></body></html>"""
