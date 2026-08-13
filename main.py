@@ -11692,11 +11692,11 @@ def _resolve_salesforce_twiml_app(applications: list[dict]) -> dict | None:
   for application in applications or []:
     if isinstance(application, dict) and str(application.get("sid", "") or "").strip() == TWILIO_SALESFORCE_TWIML_APP_SID:
       return application
+  if TWILIO_SALESFORCE_TWIML_APP_SID:
+    return {"sid": TWILIO_SALESFORCE_TWIML_APP_SID, "friendly_name": TWILIO_SALESFORCE_TWIML_APP_NAME}
   matched = _find_twilio_twi_ml_app(applications, TWILIO_SALESFORCE_TWIML_APP_NAME)
   if matched:
     return matched
-  if TWILIO_SALESFORCE_TWIML_APP_SID:
-    return {"sid": TWILIO_SALESFORCE_TWIML_APP_SID, "friendly_name": TWILIO_SALESFORCE_TWIML_APP_NAME}
   return None
 
 
