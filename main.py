@@ -49044,16 +49044,14 @@ def twilio_amieweb_active_numbers_page(request: Request):
         f"<td>{escape(str(row.get('twilio_number', '') or '-'))}</td>"
         f"<td>{escape(str(row.get('friendly_name', '') or '-'))}</td>"
         f"<td>{escape(str(row.get('phone_sid', '') or '-'))}</td>"
-        f"<td>{escape(str(row.get('capabilities', '') or '-'))}</td>"
         f"<td>{escape(str(assignment.get('name', '') or 'Unassigned'))}</td>"
-        f"<td>{escape(str(assignment.get('userid', '') or '-'))}</td>"
         f"<td>{escape(str(assignment.get('phone_details', '') or '-'))}</td>"
         f"<td>{escape(str(row.get('status', '') or '-'))}</td>"
         f"<td>{action}</td>"
         "</tr>"
       )
     result_section = (
-      '<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Phone SID</th><th>Capabilities</th><th>Assigned CUCM Employee</th><th>CUCM User ID</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>'
+      '<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Phone SID</th><th>Assigned CUCM Employee</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>'
       + "".join(table_rows)
       + '</tbody></table><details style="margin-top:16px"><summary>Debug Details</summary><pre>'
       + escape(json.dumps(debug, indent=2))
@@ -49154,15 +49152,13 @@ def twilio_salesforce_active_numbers_page(request: Request):
         f"<td>{escape(str(row.get('twilio_number', '') or '-'))}</td>"
         f"<td>{escape(str(row.get('friendly_name', '') or '-'))}</td>"
         f"<td>{escape(str(row.get('phone_sid', '') or '-'))}</td>"
-        f"<td>{escape(str(row.get('capabilities', '') or '-'))}</td>"
         f"<td>{escape(str(assignment.get('name', '') or 'Unassigned'))}</td>"
-        f"<td>{escape(str(assignment.get('userid', '') or '-'))}</td>"
         f"<td>{escape(str(assignment.get('phone_details', '') or '-'))}</td>"
         f"<td>{escape(str(row.get('status', '') or '-'))}</td>"
         f"<td>{action}</td></tr>"
       )
     result_section = (
-      '<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Phone SID</th><th>Capabilities</th><th>Assigned CUCM Employee</th><th>CUCM User ID</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>'
+      '<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Phone SID</th><th>Assigned CUCM Employee</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>'
       + "".join(table_rows)
       + '</tbody></table><details style="margin-top:16px"><summary>Debug Details</summary><pre>'
       + escape(json.dumps(debug, indent=2))
