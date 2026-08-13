@@ -11578,6 +11578,88 @@ def _list_twilio_incoming_phone_numbers(lookup_sid: str, lookup_token: str, forc
     return {"ok": False, "status": f"Lookup error: {exc}", "numbers": []}
 
 
+def _list_twilio_messaging_services(lookup_sid: str, lookup_token: str) -> dict:
+  """List Messaging Services and map each assigned phone SID to its service."""
+  if not lookup_sid or not lookup_token:
+    return {"ok": False, "status": "Twilio account not configured", "services": [], "assignments": {}}
+  try:
+    services = []
+    next_url = f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/Messaging/Services.json"
+    next_params = {"PageSize": 100}
+    while next_url:
+      response = requests.get(next_url, params=next_params, auth=(lookup_sid, lookup_token), verify=False, timeout=20)
+      if response.status_code != 200:
+        return {"ok": False, "status": f"Messaging Service lookup failed HTTP {response.status_code}", "services": [], "assignments": {}}
+      payload = response.json() if response.text else {}
+      services.extend(payload.get("services", []) or [])
+      next_uri = str(payload.get("next_page_uri", "") or "").strip()
+      next_url = f"https://api.twilio.com{next_uri}" if next_uri.startswith("/") else next_uri
+      next_params = None
+
+    normalized_services = []
+    assignments: dict[str, list[dict]] = {}
+    for service in services:
+      if not isinstance(service, dict):
+        continue
+      service_sid = str(service.get("sid", "") or "").strip()
+      if not service_sid:
+        continue
+      service_entry = {
+        "sid": service_sid,
+        "friendly_name": str(service.get("friendly_name", "") or "").strip() or service_sid,
+      }
+      normalized_services.append(service_entry)
+      next_phone_url = f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/Messaging/Services/{service_sid}/PhoneNumbers.json"
+      phone_params = {"PageSize": 100}
+      while next_phone_url:
+        response = requests.get(next_phone_url, params=phone_params, auth=(lookup_sid, lookup_token), verify=False, timeout=20)
+        if response.status_code != 200:
+          return {"ok": False, "status": f"Messaging Service phone lookup failed HTTP {response.status_code}", "services": normalized_services, "assignments": assignments}
+        payload = response.json() if response.text else {}
+        for phone in payload.get("phone_numbers", []) or []:
+          if not isinstance(phone, dict):
+            continue
+          phone_sid = str(phone.get("sid", "") or phone.get("phone_number_sid", "") or "").strip()
+          if phone_sid:
+            assignments.setdefault(phone_sid, []).append(service_entry)
+        next_uri = str(payload.get("next_page_uri", "") or "").strip()
+        next_phone_url = f"https://api.twilio.com{next_uri}" if next_uri.startswith("/") else next_uri
+        phone_params = None
+    return {"ok": True, "status": "OK", "services": normalized_services, "assignments": assignments}
+  except Exception as exc:
+    return {"ok": False, "status": f"Messaging Service lookup error: {exc}", "services": [], "assignments": {}}
+
+
+def _find_twilio_messaging_service(services: list[dict], name: str) -> dict | None:
+  target = " ".join(str(name or "").lower().split())
+  for service in services or []:
+    candidate = " ".join(str(service.get("friendly_name", "") or "").lower().split())
+    if candidate == target:
+      return service
+  return None
+
+
+def _twilio_remove_phone_from_service(lookup_sid: str, lookup_token: str, service_sid: str, phone_sid: str) -> None:
+  response = requests.delete(
+    f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/Messaging/Services/{service_sid}/PhoneNumbers/{phone_sid}.json",
+    auth=(lookup_sid, lookup_token), verify=False, timeout=20,
+  )
+  if response.status_code not in {200, 204, 404}:
+    raise RuntimeError(f"Messaging Service removal failed HTTP {response.status_code}: {(response.text or '')[:300]}")
+
+
+def _twilio_add_phone_to_service(lookup_sid: str, lookup_token: str, service_sid: str, phone_sid: str) -> None:
+  response = requests.post(
+    f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/Messaging/Services/{service_sid}/PhoneNumbers.json",
+    data={"PhoneNumberSid": phone_sid}, auth=(lookup_sid, lookup_token), verify=False, timeout=20,
+  )
+  if response.status_code not in {200, 201}:
+    body = response.json() if response.text else {}
+    message = str(body.get("message", "") or f"Messaging Service assignment failed HTTP {response.status_code}")
+    if "already" not in message.lower():
+      raise RuntimeError(message)
+
+
 def _twilio_amieweb_messaging_webhook_rows(number_query: str = "") -> tuple[list[dict], dict]:
   """List AMIEWeb numbers with the Twilio 'A Message Comes In' (SmsUrl) setting."""
   lookup_sid = _resolve_twilio_lookup_account_sid()
@@ -11591,6 +11673,9 @@ def _twilio_amieweb_messaging_webhook_rows(number_query: str = "") -> tuple[list
   listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token, force_refresh=True)
   if not listed.get("ok"):
     raise RuntimeError(str(listed.get("status", "Messaging webhook lookup failed")))
+  messaging_services = _list_twilio_messaging_services(lookup_sid, lookup_token)
+  if not messaging_services.get("ok"):
+    raise RuntimeError(str(messaging_services.get("status", "Messaging Service lookup failed")))
 
   expected_url = TWILIO_AMIEWEB_DEFAULT_SMS_URL.rstrip("/")
   rows = []
@@ -11603,14 +11688,19 @@ def _twilio_amieweb_messaging_webhook_rows(number_query: str = "") -> tuple[list
       continue
     sms_url = str(item.get("sms_url", "") or "").strip()
     is_correct = sms_url.rstrip("/") == expected_url
+    phone_sid = str(item.get("sid", "") or "").strip()
+    assigned_services = messaging_services.get("assignments", {}).get(phone_sid, []) or []
+    service_names = ", ".join(str(service.get("friendly_name", "") or "").strip() for service in assigned_services if service.get("friendly_name"))
     rows.append({
       "twilio_number": twilio_number,
       "friendly_name": str(item.get("friendly_name", "") or "").strip(),
-      "phone_sid": str(item.get("sid", "") or "").strip(),
+      "phone_sid": phone_sid,
       "sms_url": sms_url,
       "sms_method": str(item.get("sms_method", "") or "").strip(),
+      "messaging_service": service_names or "Not Set",
+      "messaging_service_sids": [str(service.get("sid", "") or "") for service in assigned_services if service.get("sid")],
       "status": "Correct" if is_correct else "Needs Correction",
-      "can_correct": bool(item.get("sid")) and not is_correct,
+      "can_correct": bool(phone_sid) and not is_correct,
     })
   rows.sort(key=lambda item: item["twilio_number"])
   return rows, {
@@ -11618,6 +11708,7 @@ def _twilio_amieweb_messaging_webhook_rows(number_query: str = "") -> tuple[list
     "number_query": partial_digits,
     "expected_sms_url": TWILIO_AMIEWEB_DEFAULT_SMS_URL,
     "twilio_numbers": len(rows),
+    "messaging_service_count": len(messaging_services.get("services", []) or []),
   }
 
 
@@ -49120,6 +49211,60 @@ def twilio_amieweb_messaging_webhook_correct_route(
     return HTMLResponse(content=f"<h3>Webhook update failed</h3><p>{escape(str(exc))}</p>", status_code=500)
 
 
+@app.post("/twilio/amieweb/messaging-service/assign")
+def twilio_amieweb_messaging_service_assign_route(
+  request: Request,
+  phone_sid: str = Form(""),
+  service_action: str = Form(""),
+  return_to: str = Form(""),
+):
+  try:
+    _require_twilio_active_number_admin(request)
+    clean_phone_sid = (phone_sid or "").strip()
+    clean_action = (service_action or "").strip().lower()
+    if not clean_phone_sid:
+      return HTMLResponse(content="<h3>Phone SID is required.</h3>", status_code=400)
+    if clean_action not in {"mixed", "default", "reset-mixed"}:
+      return HTMLResponse(content="<h3>Messaging Service action is required.</h3>", status_code=400)
+
+    lookup_sid = _resolve_twilio_lookup_account_sid()
+    lookup_token = _resolve_twilio_lookup_auth_token_for_sid(lookup_sid)
+    services_result = _list_twilio_messaging_services(lookup_sid, lookup_token)
+    if not services_result.get("ok"):
+      raise RuntimeError(str(services_result.get("status", "Messaging Service lookup failed")))
+    services = services_result.get("services", []) or []
+    mixed_service = _find_twilio_messaging_service(services, "Mixed A2P Messaging Service")
+    default_service = _find_twilio_messaging_service(services, "Default Messaging Service for Conversations")
+    target_service = mixed_service if clean_action in {"mixed", "reset-mixed"} else default_service
+    if not target_service:
+      expected_name = "Mixed A2P Messaging Service" if clean_action in {"mixed", "reset-mixed"} else "Default Messaging Service for Conversations"
+      raise RuntimeError(f"Required Messaging Service was not found in AMIEWeb: {expected_name}")
+    if clean_action == "reset-mixed" and not default_service:
+      raise RuntimeError("Required Messaging Service was not found in AMIEWeb: Default Messaging Service for Conversations")
+
+    for assigned_service in services_result.get("assignments", {}).get(clean_phone_sid, []) or []:
+      assigned_sid = str(assigned_service.get("sid", "") or "").strip()
+      if assigned_sid:
+        _twilio_remove_phone_from_service(lookup_sid, lookup_token, assigned_sid, clean_phone_sid)
+
+    if clean_action == "reset-mixed":
+      _twilio_add_phone_to_service(lookup_sid, lookup_token, str(default_service["sid"]), clean_phone_sid)
+      _twilio_remove_phone_from_service(lookup_sid, lookup_token, str(default_service["sid"]), clean_phone_sid)
+
+    _twilio_add_phone_to_service(lookup_sid, lookup_token, str(target_service["sid"]), clean_phone_sid)
+    with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
+      TWILIO_INCOMING_PHONE_NUMBER_CACHE.pop(lookup_sid, None)
+    safe_return_to = (return_to or "").strip()
+    if safe_return_to.startswith("/twilio/amieweb/messaging-webhook-page"):
+      return RedirectResponse(url=safe_return_to, status_code=303)
+    return RedirectResponse(url="/twilio/amieweb/messaging-webhook-page?load=1", status_code=303)
+  except PermissionError as exc:
+    return HTMLResponse(content=f"<h3>Unauthorized</h3><p>{escape(str(exc))}</p>", status_code=401)
+  except Exception as exc:
+    logger.exception("AMIEWeb Messaging Service assignment failed")
+    return HTMLResponse(content=f"<h3>Messaging Service update failed</h3><p>{escape(str(exc))}</p>", status_code=500)
+
+
 @app.get("/twilio/amieweb/messaging-webhook-page", response_class=HTMLResponse)
 def twilio_amieweb_messaging_webhook_page(request: Request):
   try:
@@ -49135,26 +49280,37 @@ def twilio_amieweb_messaging_webhook_page(request: Request):
       list_return_to += f"&number_query={quote(number_query)}"
     table_rows = []
     for row in rows:
-      action = '<span class="ok">Correct</span>'
+      webhook_action = '<span class="ok">Correct</span>'
       if row.get("can_correct"):
-        action = (
+        webhook_action = (
           '<form method="post" action="/twilio/amieweb/messaging-webhook/correct">'
           f'<input type="hidden" name="phone_sid" value="{escape(str(row.get("phone_sid", "")))}">'
           f'<input type="hidden" name="return_to" value="{escape(list_return_to)}">'
           '<button type="submit" class="row-action" onclick="return confirm(\'Set A Message Comes In to the approved AMIEWeb listener URL?\');">Correct URL</button>'
           "</form>"
         )
+      service_action = (
+        '<form method="post" action="/twilio/amieweb/messaging-service/assign" class="service-action">'
+        f'<input type="hidden" name="phone_sid" value="{escape(str(row.get("phone_sid", "")))}">'
+        f'<input type="hidden" name="return_to" value="{escape(list_return_to)}">'
+        '<select name="service_action" aria-label="Messaging Service action">'
+        '<option value="mixed">Set Mixed A2P</option>'
+        '<option value="default">Set Default Conversations</option>'
+        '<option value="reset-mixed">Default then Mixed A2P</option>'
+        '</select><button type="submit" class="row-action" onclick="return confirm(\'Apply the selected Messaging Service action to this number?\');">Apply</button></form>'
+      )
       table_rows.append(
         "<tr>"
         f"<td>{escape(str(row.get('twilio_number', '') or '-'))}</td>"
         f"<td>{escape(str(row.get('friendly_name', '') or '-'))}</td>"
+        f"<td>{escape(str(row.get('messaging_service', '') or 'Not Set'))}</td>"
         f"<td class=\"url\">{escape(str(row.get('sms_url', '') or '(not set)'))}</td>"
         f"<td>{escape(str(row.get('sms_method', '') or '-'))}</td>"
         f"<td>{escape(str(row.get('status', '') or '-'))}</td>"
-        f"<td>{action}</td></tr>"
+        f"<td>{webhook_action}</td><td>{service_action}</td></tr>"
       )
     result_section = (
-      '<table><thead><tr><th>Twilio Number</th><th>Friendly Name</th><th>A Message Comes In URL</th><th>Method</th><th>Status</th><th>Action</th></tr></thead><tbody>'
+      '<table><thead><tr><th>Twilio Number</th><th>Friendly Name</th><th>Current Messaging Service</th><th>A Message Comes In URL</th><th>Method</th><th>Webhook Status</th><th>Webhook Action</th><th>Messaging Service Action</th></tr></thead><tbody>'
       + "".join(table_rows)
       + '</tbody></table><details style="margin-top:16px"><summary>Debug Details</summary><pre>'
       + escape(json.dumps(debug, indent=2))
@@ -49172,7 +49328,7 @@ def twilio_amieweb_messaging_webhook_page(request: Request):
 .hero {{ background:linear-gradient(135deg,rgba(255,255,255,.96),rgba(239,247,255,.95)); border:1px solid rgba(0,47,108,.1); border-radius:12px; padding:12px 14px; margin-bottom:10px; }} .hero-row {{ display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }} h2 {{ margin:0; color:var(--navy); font-size:22px; line-height:1.1; }} p {{ margin:4px 0 0; color:#4e6a84; font-size:12px; line-height:1.35; }}
 .back, button {{ background:linear-gradient(135deg,#0f5db8,#0a3f7d); color:#fff; border:0; border-radius:6px; padding:8px 20px; font-weight:600; text-decoration:none; cursor:pointer; font-size:14px; }} .lookup-panel {{ background:rgba(255,255,255,.93); border:1px solid rgba(0,47,108,.12); border-radius:14px; padding:10px; margin-bottom:12px; box-shadow:0 14px 30px rgba(0,47,108,.11); }} h3 {{ margin:0; color:var(--navy); font-size:18px; }}
 .search-row {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; }} input {{ min-height:32px; width:250px; padding:5px 9px; border:1px solid var(--border); border-radius:10px; font-size:14px; }} .divider {{ border-top:1px solid var(--border); margin:14px 0; padding-top:14px; }} .results {{ overflow-x:auto; }}
-table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:var(--blue); color:#fff; text-align:left; padding:9px; white-space:nowrap; }} td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} .results form {{ margin:0; }} .results .row-action {{ padding:4px 7px; font-size:11px; line-height:1.15; }} .url {{ overflow-wrap:anywhere; min-width:290px; }} .ok {{ color:#145c2e; font-weight:700; }}
+table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:var(--blue); color:#fff; text-align:left; padding:9px; white-space:nowrap; }} td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} .results form {{ margin:0; }} .results .row-action {{ padding:4px 7px; font-size:11px; line-height:1.15; }} .service-action {{ display:flex; gap:4px; align-items:center; }} .service-action select {{ max-width:158px; min-height:26px; font-size:11px; border:1px solid var(--border); border-radius:5px; }} .url {{ overflow-wrap:anywhere; min-width:290px; }} .ok {{ color:#145c2e; font-weight:700; }}
 .sidebar {{ position:sticky; top:54px; padding:8px; border-radius:12px; background:linear-gradient(180deg,rgba(0,47,108,.97),rgba(7,75,138,.96)); box-shadow:0 18px 36px rgba(0,47,108,.18); }} .sidebar h3 {{ color:#fff; margin:4px 6px 8px; font-size:13px; letter-spacing:.3px; }} .nav-link {{ display:block; margin:6px 0; padding:7px 8px; border-radius:8px; color:rgba(255,255,255,.94); background:rgba(255,255,255,.09); border:1px solid rgba(255,255,255,.12); text-decoration:none; font-size:12px; font-weight:600; line-height:1.25; }} .nav-link.active {{ color:var(--navy); background:linear-gradient(90deg,#fff,#ecf6ff); border-color:rgba(255,255,255,.92); box-shadow:0 12px 24px rgba(0,0,0,.12); }}
 @media (max-width:700px) {{ .content {{ padding:10px; }} .shell {{ grid-template-columns:1fr; }} .sidebar {{ position:static; }} input {{ width:100%; }} .search-row button {{ width:100%; }} }}
 </style></head><body><header class="topbar">AMN Healthcare | Voice Operations Portal</header><main class="content">
