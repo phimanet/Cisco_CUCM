@@ -49006,9 +49006,14 @@ def twilio_amieweb_active_number_friendly_name_route(request: Request, phone_sid
 def twilio_amieweb_active_numbers_page(request: Request):
   try:
     _require_twilio_active_number_admin(request)
-    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
-    rows, debug = _twilio_active_number_rows(cucm_host, cucm_user, cucm_pass)
-    assigned = sum(1 for row in rows if row["status"] == "Found")
+    load_requested = str(request.query_params.get("load", "") or "").strip() == "1"
+    rows = []
+    debug = {}
+    assigned = 0
+    if load_requested:
+      cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
+      rows, debug = _twilio_active_number_rows(cucm_host, cucm_user, cucm_pass)
+      assigned = sum(1 for row in rows if row["status"] == "Found")
     table_rows = []
     for row in rows:
       assignment = row.get("assignment", {}) or {}
@@ -49034,6 +49039,14 @@ def twilio_amieweb_active_numbers_page(request: Request):
         f"<td>{action}</td>"
         "</tr>"
       )
+    result_section = (
+      '<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Phone SID</th><th>Capabilities</th><th>Assigned CUCM Employee</th><th>CUCM User ID</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>'
+      + "".join(table_rows)
+      + '</tbody></table><details style="margin-top:16px"><summary>Debug Details</summary><pre>'
+      + escape(json.dumps(debug, indent=2))
+      + '</pre></details>'
+    ) if load_requested else '<p style="margin-top:18px">Select <strong>Load Active AMIEWeb Numbers</strong> to query AMNOne-Notification-PROD and match the returned numbers to CUCM employees.</p>'
+    summary_text = f"AMNOne-Notification-PROD: {len(rows)} active number(s), {assigned} matched to CUCM." if load_requested else "Numbers have not been loaded yet."
     html = f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>AMIEWeb Active Number Lookup</title>
 <style>
@@ -49042,9 +49055,9 @@ body {{ font-family:Segoe UI,Arial,sans-serif; margin:24px; background:#edf5fc; 
 .back, button {{ background:#005eb8; color:#fff; border:0; border-radius:6px; padding:8px 12px; font-weight:700; text-decoration:none; cursor:pointer; }}
 table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:#005eb8; color:#fff; text-align:left; padding:9px; }} td {{ padding:8px; border-bottom:1px solid #c8dbee; vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} form {{ margin:0; }}
 </style></head><body>
-<div class="toolbar"><div><h2 style="margin:0">AMIEWeb-Twilio Active Number Lookup</h2><p>AMNOne-Notification-PROD: {len(rows)} active number(s), {assigned} matched to CUCM.</p></div><a class="back" href="/page3">Back to SMS Item Menu</a></div>
-<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Phone SID</th><th>Capabilities</th><th>Assigned CUCM Employee</th><th>CUCM User ID</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>{''.join(table_rows)}</tbody></table>
-<details style="margin-top:16px"><summary>Debug Details</summary><pre>{escape(json.dumps(debug, indent=2))}</pre></details>
+<div class="toolbar"><div><h2 style="margin:0">AMIEWeb-Twilio Active Number Lookup</h2><p>{summary_text}</p></div><a class="back" href="/page3">Back to SMS Item Menu</a></div>
+<form method="get" action="/twilio/amieweb/active-numbers-page" style="margin:0 0 16px"><input type="hidden" name="load" value="1"><button type="submit">Load Active AMIEWeb Numbers</button></form>
+{result_section}
 </body></html>"""
     return HTMLResponse(content=html)
   except PermissionError as exc:
