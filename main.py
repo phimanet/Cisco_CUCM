@@ -45249,6 +45249,7 @@ def strike_mask_translation_upload(
     
     session_obj = requests.Session()
     session_obj.verify = False
+    session_obj.trust_env = False
     session_obj.auth = HTTPBasicAuth(cucm_user, cucm_pass)
     
     output_rows = []
@@ -45271,6 +45272,7 @@ def strike_mask_translation_upload(
           f"https://{cucm_host}:8443/axl/",
           data=soap_xml.encode("utf-8"),
           headers={"Content-Type": "text/xml"},
+          verify=False,
           timeout=60,
         )
         
