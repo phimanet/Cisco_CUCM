@@ -49062,17 +49062,25 @@ def twilio_amieweb_active_numbers_page(request: Request):
     filter_text = f" Filter: {escape(number_query)}." if number_query else ""
     summary_text = f"AMNOne-Notification-PROD: {len(rows)} active number(s), {assigned} matched to CUCM.{filter_text}" if load_requested else "Numbers have not been loaded yet."
     html = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>AMIEWeb Active Number Lookup</title>
-<style>
-body {{ font-family:Segoe UI,Arial,sans-serif; margin:24px; background:#edf5fc; color:#12304a; }}
-.toolbar {{ display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:16px; }}
-.back, button {{ background:#005eb8; color:#fff; border:0; border-radius:6px; padding:8px 12px; font-weight:700; text-decoration:none; cursor:pointer; }}
-table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:#005eb8; color:#fff; text-align:left; padding:9px; }} td {{ padding:8px; border-bottom:1px solid #c8dbee; vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} form {{ margin:0; }}
-</style></head><body>
-<div class="toolbar"><div><h2 style="margin:0">AMIEWeb-Twilio Active Number Lookup</h2><p>{summary_text}</p></div><a class="back" href="/page3">Back to SMS Item Menu</a></div>
-<form method="get" action="/twilio/amieweb/active-numbers-page" style="margin:0 0 16px"><input type="hidden" name="load" value="1"><input name="number_query" value="{escape(number_query)}" placeholder="Optional partial Twilio number" inputmode="numeric"><button type="submit">Load Active AMIEWeb Numbers</button></form>
-{result_section}
-</body></html>"""
+  <html><head><meta charset="utf-8"><title>AMIEWeb Active Number Lookup</title>
+  <style>
+  :root {{ --blue:#005eb8; --navy:#002f6c; --ice:#edf5fc; --border:#c8dbee; --text:#12304a; }}
+  * {{ box-sizing:border-box; }} body {{ font-family:"Segoe UI",Tahoma,Arial,sans-serif; margin:0; background:var(--ice); color:var(--text); }}
+  .topbar {{ padding:12px 20px; background:linear-gradient(120deg,#002f6c,#005eb8); color:#fff; font-weight:700; }}
+  .content {{ max-width:1400px; margin:0 auto; padding:14px; }} .hero {{ background:#fff; border:1px solid var(--border); border-radius:8px; padding:14px; margin-bottom:12px; }}
+  .hero-row {{ display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }} h2 {{ margin:0; color:var(--navy); font-size:20px; }} p {{ margin:5px 0 0; color:#355978; font-size:13px; }}
+  .back, button {{ background:var(--blue); color:#fff; border:0; border-radius:6px; padding:9px 14px; font-weight:700; text-decoration:none; cursor:pointer; font-size:14px; }}
+  .lookup-panel {{ background:#fff; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px; }} h3 {{ margin:0; color:var(--navy); font-size:16px; }}
+  .search-row {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; }} input {{ min-height:36px; width:250px; padding:7px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px; }}
+  .divider {{ border-top:1px solid var(--border); margin:14px 0; padding-top:14px; }} .results {{ overflow-x:auto; }}
+  table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:var(--blue); color:#fff; text-align:left; padding:9px; white-space:nowrap; }} td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} .results form {{ margin:0; }}
+  @media (max-width:700px) {{ .content {{ padding:10px; }} input {{ width:100%; }} .search-row button {{ width:100%; }} }}
+  </style></head><body>
+  <header class="topbar">AMN Healthcare | Voice Operations Portal</header><main class="content">
+  <section class="hero"><div class="hero-row"><div><h2>AMIEWeb-Twilio Active Number Lookup</h2><p>{summary_text}</p></div><a class="back" href="/page3">Back to SMS Item Menu</a></div></section>
+  <section class="lookup-panel"><h3>Lookup by Number</h3><p>Enter a full or partial Twilio number. Digits only are used for matching.</p><form method="get" action="/twilio/amieweb/active-numbers-page" class="search-row"><input type="hidden" name="load" value="1"><input name="number_query" value="{escape(number_query)}" placeholder="Telephone - partial or full" inputmode="numeric"><button type="submit">Lookup by Number</button></form><div class="divider"><form method="get" action="/twilio/amieweb/active-numbers-page"><input type="hidden" name="load" value="1"><button type="submit">Load All Active AMIEWeb Numbers</button></form></div></section>
+  <section class="results">{result_section}</section>
+  </main></body></html>"""
     return HTMLResponse(content=html)
   except PermissionError as exc:
     return HTMLResponse(content=f"<h3>Unauthorized</h3><p>{escape(str(exc))}</p>", status_code=401)
@@ -49161,17 +49169,25 @@ def twilio_salesforce_active_numbers_page(request: Request):
     filter_text = f" Filter: {escape(number_query)}." if number_query else ""
     summary_text = f"Enterprise Org Prod: {len(rows)} active number(s), {assigned} matched to CUCM.{filter_text}" if load_requested else "Numbers have not been loaded yet."
     html = f"""<!doctype html>
-<html><head><meta charset="utf-8"><title>SalesForce-Twilio Number Lookup</title>
-<style>
-body {{ font-family:Segoe UI,Arial,sans-serif; margin:24px; background:#edf5fc; color:#12304a; }}
-.toolbar {{ display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:16px; }}
-.back, button {{ background:#005eb8; color:#fff; border:0; border-radius:6px; padding:8px 12px; font-weight:700; text-decoration:none; cursor:pointer; }}
-table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:#005eb8; color:#fff; text-align:left; padding:9px; }} td {{ padding:8px; border-bottom:1px solid #c8dbee; vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} form {{ margin:0; }}
-</style></head><body>
-<div class="toolbar"><div><h2 style="margin:0">SalesForce-Twilio Number Lookup</h2><p>{summary_text}</p></div><a class="back" href="/page3">Back to SMS Item Menu</a></div>
-<form method="get" action="/twilio/salesforce/active-numbers-page" style="margin:0 0 16px"><input type="hidden" name="load" value="1"><input name="number_query" value="{escape(number_query)}" placeholder="Optional partial Twilio number" inputmode="numeric"><button type="submit">Load Salesforce Twilio Numbers</button></form>
-{result_section}
-</body></html>"""
+  <html><head><meta charset="utf-8"><title>SalesForce-Twilio Number Lookup</title>
+  <style>
+  :root {{ --blue:#005eb8; --navy:#002f6c; --ice:#edf5fc; --border:#c8dbee; --text:#12304a; }}
+  * {{ box-sizing:border-box; }} body {{ font-family:"Segoe UI",Tahoma,Arial,sans-serif; margin:0; background:var(--ice); color:var(--text); }}
+  .topbar {{ padding:12px 20px; background:linear-gradient(120deg,#002f6c,#005eb8); color:#fff; font-weight:700; }}
+  .content {{ max-width:1400px; margin:0 auto; padding:14px; }} .hero {{ background:#fff; border:1px solid var(--border); border-radius:8px; padding:14px; margin-bottom:12px; }}
+  .hero-row {{ display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }} h2 {{ margin:0; color:var(--navy); font-size:20px; }} p {{ margin:5px 0 0; color:#355978; font-size:13px; }}
+  .back, button {{ background:var(--blue); color:#fff; border:0; border-radius:6px; padding:9px 14px; font-weight:700; text-decoration:none; cursor:pointer; font-size:14px; }}
+  .lookup-panel {{ background:#fff; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px; }} h3 {{ margin:0; color:var(--navy); font-size:16px; }}
+  .search-row {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; }} input {{ min-height:36px; width:250px; padding:7px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px; }}
+  .divider {{ border-top:1px solid var(--border); margin:14px 0; padding-top:14px; }} .results {{ overflow-x:auto; }}
+  table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:var(--blue); color:#fff; text-align:left; padding:9px; white-space:nowrap; }} td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} .results form {{ margin:0; }}
+  @media (max-width:700px) {{ .content {{ padding:10px; }} input {{ width:100%; }} .search-row button {{ width:100%; }} }}
+  </style></head><body>
+  <header class="topbar">AMN Healthcare | Voice Operations Portal</header><main class="content">
+  <section class="hero"><div class="hero-row"><div><h2>SalesForce-Twilio Number Lookup</h2><p>{summary_text}</p></div><a class="back" href="/page3">Back to SMS Item Menu</a></div></section>
+  <section class="lookup-panel"><h3>Lookup by Number</h3><p>Enter a full or partial Twilio number. Digits only are used for matching.</p><form method="get" action="/twilio/salesforce/active-numbers-page" class="search-row"><input type="hidden" name="load" value="1"><input name="number_query" value="{escape(number_query)}" placeholder="Telephone - partial or full" inputmode="numeric"><button type="submit">Lookup by Number</button></form><div class="divider"><form method="get" action="/twilio/salesforce/active-numbers-page"><input type="hidden" name="load" value="1"><button type="submit">Load All Salesforce Twilio Numbers</button></form></div></section>
+  <section class="results">{result_section}</section>
+  </main></body></html>"""
     return HTMLResponse(content=html)
   except PermissionError as exc:
     return HTMLResponse(content=f"<h3>Unauthorized</h3><p>{escape(str(exc))}</p>", status_code=401)
