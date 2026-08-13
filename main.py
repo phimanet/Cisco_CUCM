@@ -113,6 +113,9 @@ PERFMON_CALLMANAGER_CACHE_LOCK = threading.Lock()
 TWILIO_INCOMING_PHONE_NUMBER_CACHE = {}
 TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK = threading.Lock()
 TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS = 5 * 60
+TWILIO_MESSAGING_SERVICE_CACHE = {}
+TWILIO_MESSAGING_SERVICE_CACHE_LOCK = threading.Lock()
+TWILIO_MESSAGING_SERVICE_CACHE_TTL_SECONDS = 5 * 60
 INTEGRATION_FEASIBILITY_CACHE = {}
 INTEGRATION_FEASIBILITY_LOCK = threading.Lock()
 INTEGRATION_FEASIBILITY_TTL_SECONDS = 5 * 60
@@ -11544,13 +11547,18 @@ def _list_twilio_incoming_phone_numbers(lookup_sid: str, lookup_token: str, forc
     cache_key = lookup_sid
     now = time.time()
     cached_numbers = []
+    cache_hit = False
     with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
-      cache_entry = TWILIO_INCOMING_PHONE_NUMBER_CACHE.get(cache_key, {})
+      cache_entry = TWILIO_INCOMING_PHONE_NUMBER_CACHE.get(cache_key)
+      if isinstance(cache_entry, dict):
+        cache_hit = True
+      else:
+        cache_entry = {}
       cached_at = float(cache_entry.get("cached_at", 0) or 0)
       if (not force_refresh) and cached_at and (now - cached_at) < TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS:
         cached_numbers = list(cache_entry.get("numbers", []) or [])
 
-    if not cached_numbers:
+    if not cache_hit or force_refresh or not cached_at or (now - cached_at) >= TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS:
       cached_numbers = []
       next_url = f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers.json"
       next_params = {"PageSize": 100}
@@ -11590,11 +11598,23 @@ def _list_twilio_incoming_phone_numbers(lookup_sid: str, lookup_token: str, forc
     return {"ok": False, "status": f"Lookup error: {exc}", "numbers": []}
 
 
-def _list_twilio_messaging_services(lookup_sid: str, lookup_token: str) -> dict:
+def _list_twilio_messaging_services(lookup_sid: str, lookup_token: str, force_refresh: bool = False) -> dict:
   """List Messaging Services and map each assigned phone SID to its service."""
   if not lookup_sid or not lookup_token:
     return {"ok": False, "status": "Twilio account not configured", "services": [], "assignments": {}}
   try:
+    cache_key = lookup_sid
+    now = time.time()
+    with TWILIO_MESSAGING_SERVICE_CACHE_LOCK:
+      cache_entry = TWILIO_MESSAGING_SERVICE_CACHE.get(cache_key)
+      if (
+        not force_refresh
+        and isinstance(cache_entry, dict)
+        and float(cache_entry.get("cached_at", 0) or 0)
+        and now - float(cache_entry.get("cached_at", 0) or 0) < TWILIO_MESSAGING_SERVICE_CACHE_TTL_SECONDS
+      ):
+        return dict(cache_entry.get("result", {}) or {})
+
     services = []
     next_url = "https://messaging.twilio.com/v1/Services"
     next_params = {"PageSize": 100}
@@ -11635,7 +11655,10 @@ def _list_twilio_messaging_services(lookup_sid: str, lookup_token: str) -> dict:
             assignments.setdefault(phone_sid, []).append(service_entry)
         next_phone_url = str((payload.get("meta", {}) or {}).get("next_page_url", "") or "").strip()
         phone_params = None
-    return {"ok": True, "status": "OK", "services": normalized_services, "assignments": assignments}
+    result = {"ok": True, "status": "OK", "services": normalized_services, "assignments": assignments}
+    with TWILIO_MESSAGING_SERVICE_CACHE_LOCK:
+      TWILIO_MESSAGING_SERVICE_CACHE[cache_key] = {"cached_at": now, "result": result}
+    return result
   except Exception as exc:
     return {"ok": False, "status": f"Messaging Service lookup error: {exc}", "services": [], "assignments": {}}
 
@@ -11709,7 +11732,7 @@ def _twilio_salesforce_configuration_rows(number_query: str = "") -> tuple[list[
   if TWILIO_ACCOUNT_SID and lookup_sid == TWILIO_ACCOUNT_SID:
     raise RuntimeError("Twilio Salesforce subaccount SID is required; parent account is not allowed for this lookup.")
 
-  listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token, force_refresh=True)
+  listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token)
   if not listed.get("ok"):
     raise RuntimeError(str(listed.get("status", "Salesforce number lookup failed")))
   services = _list_twilio_messaging_services(lookup_sid, lookup_token)
@@ -11777,6 +11800,8 @@ def _twilio_remove_phone_from_service(lookup_sid: str, lookup_token: str, servic
   )
   if response.status_code not in {200, 204, 404}:
     raise RuntimeError(f"Messaging Service removal failed HTTP {response.status_code}: {(response.text or '')[:300]}")
+  with TWILIO_MESSAGING_SERVICE_CACHE_LOCK:
+    TWILIO_MESSAGING_SERVICE_CACHE.pop(lookup_sid, None)
 
 
 def _twilio_add_phone_to_service(lookup_sid: str, lookup_token: str, service_sid: str, phone_sid: str) -> None:
@@ -11789,6 +11814,8 @@ def _twilio_add_phone_to_service(lookup_sid: str, lookup_token: str, service_sid
     message = str(body.get("message", "") or f"Messaging Service assignment failed HTTP {response.status_code}")
     if "already" not in message.lower():
       raise RuntimeError(message)
+  with TWILIO_MESSAGING_SERVICE_CACHE_LOCK:
+    TWILIO_MESSAGING_SERVICE_CACHE.pop(lookup_sid, None)
 
 
 def _twilio_amieweb_messaging_webhook_rows(number_query: str = "") -> tuple[list[dict], dict]:
@@ -11801,7 +11828,7 @@ def _twilio_amieweb_messaging_webhook_rows(number_query: str = "") -> tuple[list
     raise RuntimeError("Twilio AMIEWeb subaccount SID is required; parent account is not allowed for this lookup.")
 
   partial_digits = "".join(ch for ch in str(number_query or "") if ch.isdigit())
-  listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token, force_refresh=True)
+  listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token)
   if not listed.get("ok"):
     raise RuntimeError(str(listed.get("status", "Messaging webhook lookup failed")))
   messaging_services = _list_twilio_messaging_services(lookup_sid, lookup_token)
@@ -49202,7 +49229,7 @@ def _twilio_active_number_rows(
     raise RuntimeError(f"Twilio {account_name} account is not configured.")
   if TWILIO_ACCOUNT_SID and lookup_sid == TWILIO_ACCOUNT_SID:
     raise RuntimeError(f"Twilio {account_name} subaccount SID is required; parent account is not allowed for this lookup.")
-  listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token, force_refresh=True)
+  listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token)
   if not listed.get("ok"):
     raise RuntimeError(str(listed.get("status", "Active-number lookup failed")))
   cucm_index, debug = _load_cucm_people_for_twilio_matching(cucm_host, cucm_user, cucm_pass)
