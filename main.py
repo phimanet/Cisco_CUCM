@@ -195,8 +195,8 @@ TWILIO_SALESFORCE_MESSAGING_SERVICE_NAME = (
   or "1-1 Communication Msg Service"
 ).strip()
 TWILIO_SALESFORCE_TWIML_APP_NAME = (
-  os.getenv("TWILIO_SALESFORCE_TWIML_APP_NAME", "AssociateNumberWithFunctionURL")
-  or "AssociateNumberWithFunctionURL"
+  os.getenv("TWILIO_SALESFORCE_TWIML_APP_NAME", "AssociateNumberWithFuncitonURL")
+  or "AssociateNumberWithFuncitonURL"
 ).strip()
 TWILIO_SALESFORCE_TWIML_APP_SID = (
   os.getenv("TWILIO_SALESFORCE_TWIML_APP_SID", "APe224cb06b566df112639cdb4539f70b2")
