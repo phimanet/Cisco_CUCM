@@ -42525,16 +42525,16 @@ def page3_twilio_items(request: Request):
         <div class="portal-nav">
           __SMS_LOOK_MENU__
           __SMS_EXPERIMENTAL_MENU__
-          <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
+          <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">AMIEWEb-Twilio Number Lookup</button>
           <a class="portal-nav-btn" href="/twilio/amieweb/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio Active Number Lookup</a>
           <a class="portal-nav-btn" href="/twilio/amieweb/messaging-webhook-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio - Messaging and Webhook</a>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <a class="portal-nav-btn" href="/twilio/salesforce/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">SalesForce-Twilio Number Lookup</a>
           <a class="portal-nav-btn" href="/twilio/salesforce/configuration-page" style="display:block; box-sizing:border-box; text-decoration:none;">SalesForce-Twilio Configuration Lookup</a>
-          <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
-          <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
           <button type="button" class="portal-nav-btn" data-panel="aerialink-amieclassic">Aerialink SMS-AMIEClassic Lookup</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-hosting-ready">Twilio Hosting Status - Ready to Verify Ownership (Testing)</button>
         </div>
       </aside>
@@ -42544,7 +42544,7 @@ def page3_twilio_items(request: Request):
         __SMS_EXPERIMENTAL_PANEL__
         <section class="tool-panel" data-panel="twilio-lookup">
           <div class="panel">
-            <h3>Twilio Number Lookup - AMIEWeb</h3>
+            <h3>AMIEWEb-Twilio Number Lookup</h3>
             <p>Search employees by name, then lookup their Twilio number information.</p>
             <form id="twilio-lookup-search-form">
               <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
@@ -49290,16 +49290,16 @@ def twilio_amieweb_active_number_friendly_name_route(
 def _twilio_lookup_sidebar_html(active_key: str) -> str:
   entries = [
     ("sms", "SMS Number Lookup", "/page3"),
-    ("amieweb-lookup", "Twilio Number Lookup - AMIEWeb", "/page3?panel=twilio-lookup"),
+    ("amieweb-lookup", "AMIEWEb-Twilio Number Lookup", "/page3?panel=twilio-lookup"),
     ("amieweb-active", "AMIEWeb-Twilio Active Number Lookup", "/twilio/amieweb/active-numbers-page"),
     ("amieweb-messaging", "AMIEWeb-Twilio - Messaging and Webhook", "/twilio/amieweb/messaging-webhook-page"),
+    ("salesforce-lookup", "Twilio Number Lookup - Salesforce Enterprise Org Prod", "/page3?panel=twilio-lookup-sfdc"),
     ("salesforce-configuration", "SalesForce-Twilio Configuration Lookup", "/twilio/salesforce/configuration-page"),
     ("salesforce-active", "SalesForce-Twilio Active Number Lookup", "/twilio/salesforce/active-numbers-page"),
-    ("sms-hosting", "Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)", "/page3?panel=twilio-sms-hosting"),
-    ("salesforce-lookup", "Twilio Number Lookup - Salesforce Enterprise Org Prod", "/page3?panel=twilio-lookup-sfdc"),
     ("phimane", "Twilio Verification - Phimane", "/page3?panel=twilio-phimane"),
     ("lauraa", "Twilio Verification - LauraA", "/page3?panel=twilio-lauraa"),
     ("aerialink", "Aerialink SMS-AMIEClassic Lookup", "/page3?panel=aerialink-amieclassic"),
+    ("sms-hosting", "Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)", "/page3?panel=twilio-sms-hosting"),
     ("hosting-ready", "Twilio Hosting Status - Ready to Verify Ownership (Testing)", "/page3?panel=twilio-hosting-ready"),
   ]
   links = []
