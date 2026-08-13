@@ -198,6 +198,10 @@ TWILIO_SALESFORCE_TWIML_APP_NAME = (
   os.getenv("TWILIO_SALESFORCE_TWIML_APP_NAME", "AssociateNumberWithFunctionURL")
   or "AssociateNumberWithFunctionURL"
 ).strip()
+TWILIO_SALESFORCE_TWIML_APP_SID = (
+  os.getenv("TWILIO_SALESFORCE_TWIML_APP_SID", "APe224cb06b566df112639cdb4539f70b2")
+  or "APe224cb06b566df112639cdb4539f70b2"
+).strip()
 TWILIO_AMIEWEB_DEFAULT_SMS_URL = (
   os.getenv("TWILIO_AMIEWEB_DEFAULT_SMS_URL", "https://api.amnhealthcare.io/listener/notification/v1/twilio/listener")
   or "https://api.amnhealthcare.io/listener/notification/v1/twilio/listener"
@@ -11667,6 +11671,35 @@ def _list_twilio_twi_ml_apps(lookup_sid: str, lookup_token: str) -> dict:
     return {"ok": False, "status": f"TwiML App lookup error: {exc}", "applications": applications}
 
 
+def _twilio_twi_ml_app_name(application: dict) -> str:
+  return str(
+    application.get("friendly_name", "")
+    or application.get("friendlyName", "")
+    or application.get("name", "")
+    or ""
+  ).strip()
+
+
+def _find_twilio_twi_ml_app(applications: list[dict], name: str) -> dict | None:
+  target = " ".join(str(name or "").lower().split())
+  for application in applications or []:
+    if isinstance(application, dict) and " ".join(_twilio_twi_ml_app_name(application).lower().split()) == target:
+      return application
+  return None
+
+
+def _resolve_salesforce_twiml_app(applications: list[dict]) -> dict | None:
+  for application in applications or []:
+    if isinstance(application, dict) and str(application.get("sid", "") or "").strip() == TWILIO_SALESFORCE_TWIML_APP_SID:
+      return application
+  matched = _find_twilio_twi_ml_app(applications, TWILIO_SALESFORCE_TWIML_APP_NAME)
+  if matched:
+    return matched
+  if TWILIO_SALESFORCE_TWIML_APP_SID:
+    return {"sid": TWILIO_SALESFORCE_TWIML_APP_SID, "friendly_name": TWILIO_SALESFORCE_TWIML_APP_NAME}
+  return None
+
+
 def _twilio_salesforce_configuration_rows(number_query: str = "") -> tuple[list[dict], dict]:
   """Read Salesforce numbers and their Messaging Service/TwiML App configuration."""
   lookup_sid = _resolve_twilio_salesforce_account_sid()
@@ -11689,18 +11722,11 @@ def _twilio_salesforce_configuration_rows(number_query: str = "") -> tuple[list[
   expected_service = _find_twilio_messaging_service(services.get("services", []) or [], TWILIO_SALESFORCE_MESSAGING_SERVICE_NAME)
   if not expected_service:
     raise RuntimeError(f"Required Salesforce Messaging Service was not found: {TWILIO_SALESFORCE_MESSAGING_SERVICE_NAME}")
-  expected_app = next(
-    (item for item in applications.get("applications", []) or []
-     if " ".join(str(item.get("friendly_name", "") or "").lower().split())
-     == " ".join(TWILIO_SALESFORCE_TWIML_APP_NAME.lower().split())),
-    None,
-  )
-  if not expected_app:
-    raise RuntimeError(f"Required Salesforce TwiML App was not found: {TWILIO_SALESFORCE_TWIML_APP_NAME}")
+  expected_app = _resolve_salesforce_twiml_app(applications.get("applications", []) or [])
 
   service_assignments = services.get("assignments", {}) or {}
   app_names = {
-    str(item.get("sid", "") or "").strip(): str(item.get("friendly_name", "") or "").strip()
+    str(item.get("sid", "") or "").strip(): _twilio_twi_ml_app_name(item)
     for item in applications.get("applications", []) or []
     if str(item.get("sid", "") or "").strip()
   }
@@ -11716,9 +11742,9 @@ def _twilio_salesforce_configuration_rows(number_query: str = "") -> tuple[list[
     assigned_services = service_assignments.get(phone_sid, []) or []
     current_services = ", ".join(str(service.get("friendly_name", "") or "").strip() for service in assigned_services if service.get("friendly_name")) or "Not Set"
     current_app_sid = str(item.get("voice_application_sid", "") or "").strip()
-    current_app_name = app_names.get(current_app_sid, "Not Set")
+    current_app_name = app_names.get(current_app_sid, TWILIO_SALESFORCE_TWIML_APP_NAME if current_app_sid == TWILIO_SALESFORCE_TWIML_APP_SID else "Not Set")
     service_correct = any(str(service.get("sid", "") or "").strip() == str(expected_service.get("sid", "") or "").strip() for service in assigned_services)
-    app_correct = current_app_sid == str(expected_app.get("sid", "") or "").strip()
+    app_correct = bool(expected_app and current_app_sid == str(expected_app.get("sid", "") or "").strip())
     rows.append({
       "twilio_number": twilio_number,
       "friendly_name": str(item.get("friendly_name", "") or "").strip(),
@@ -11727,7 +11753,7 @@ def _twilio_salesforce_configuration_rows(number_query: str = "") -> tuple[list[
       "current_app": current_app_name,
       "current_app_sid": current_app_sid,
       "status": "Correct" if service_correct and app_correct else "Needs Correction",
-      "can_correct": bool(phone_sid and expected_service.get("sid") and expected_app.get("sid")) and not (service_correct and app_correct),
+      "can_correct": bool(phone_sid and expected_service.get("sid") and expected_app and expected_app.get("sid")) and not (service_correct and app_correct),
     })
   rows.sort(key=lambda item: item["twilio_number"])
   return rows, {
@@ -11735,9 +11761,11 @@ def _twilio_salesforce_configuration_rows(number_query: str = "") -> tuple[list[
     "number_query": partial_digits,
     "expected_messaging_service": TWILIO_SALESFORCE_MESSAGING_SERVICE_NAME,
     "expected_twiml_app": TWILIO_SALESFORCE_TWIML_APP_NAME,
+    "expected_twiml_app_sid": TWILIO_SALESFORCE_TWIML_APP_SID,
     "twilio_numbers": len(rows),
     "messaging_service_count": len(services.get("services", []) or []),
     "twiml_app_count": len(applications.get("applications", []) or []),
+    "available_twiml_apps": [_twilio_twi_ml_app_name(item) for item in applications.get("applications", []) or [] if isinstance(item, dict)],
   }
 
 
@@ -49668,14 +49696,10 @@ def twilio_salesforce_configuration_correct_route(
     services = _list_twilio_messaging_services(lookup_sid, lookup_token)
     target_service = _find_twilio_messaging_service(services.get("services", []) or [], TWILIO_SALESFORCE_MESSAGING_SERVICE_NAME)
     applications = _list_twilio_twi_ml_apps(lookup_sid, lookup_token)
-    target_app = next(
-      (item for item in applications.get("applications", []) or []
-       if " ".join(str(item.get("friendly_name", "") or "").lower().split())
-       == " ".join(TWILIO_SALESFORCE_TWIML_APP_NAME.lower().split())),
-      None,
-    )
+    target_app = _resolve_salesforce_twiml_app(applications.get("applications", []) or [])
     if not target_service or not target_app:
-      raise RuntimeError("Required Salesforce Messaging Service or TwiML App was not found.")
+      missing = "Messaging Service" if not target_service else "TwiML App"
+      raise RuntimeError(f"Required Salesforce {missing} was not found: {TWILIO_SALESFORCE_MESSAGING_SERVICE_NAME if not target_service else TWILIO_SALESFORCE_TWIML_APP_NAME}")
 
     for assigned_service in services.get("assignments", {}).get(clean_phone_sid, []) or []:
       assigned_sid = str(assigned_service.get("sid", "") or "").strip()
