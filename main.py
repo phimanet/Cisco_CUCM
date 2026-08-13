@@ -2133,7 +2133,15 @@ def _genesys_blocked_key_set(listing: dict) -> set:
   return keys
 
 
-def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id: str, user_name: str, user_email: str = "") -> dict:
+def _genesys_build_webrtc_phone_for_user(
+  region: str,
+  access_token: str,
+  user_id: str,
+  user_name: str,
+  user_email: str = "",
+  phone_inventory_payload: dict | None = None,
+  phone_inventory_error: str = "",
+) -> dict:
   clean_region, _, api_base = _genesys_region_to_urls(region)
   fallback_template = _load_genesys_webrtc_template()
 
@@ -2352,13 +2360,27 @@ def _genesys_build_webrtc_phone_for_user(region: str, access_token: str, user_id
 
   # Guard: if Phone Management already has a WebRTC phone for this user/name,
   # do not create another one. Prefer associate existing station when possible.
-  phone_management_name, matched_phone, _phone_inventory_payload, _phone_inventory_err = _genesys_lookup_phone_management_name(
-    api_base,
-    access_token,
-    resolved_user_id,
-    resolved_user_name,
-    clean_user_email,
-  )
+  if phone_inventory_payload is not None:
+    if phone_inventory_error:
+      return {
+        "ok": False,
+        "error": f"Phone Management inventory lookup failed: {phone_inventory_error}",
+        "region": clean_region,
+      }
+    phone_management_name, matched_phone = _genesys_extract_phone_management_name(
+      phone_inventory_payload,
+      resolved_user_id,
+      resolved_user_name,
+      clean_user_email,
+    )
+  else:
+    phone_management_name, matched_phone, _phone_inventory_payload, _phone_inventory_err = _genesys_lookup_phone_management_name(
+      api_base,
+      access_token,
+      resolved_user_id,
+      resolved_user_name,
+      clean_user_email,
+    )
   if phone_management_name:
     existing_station_id = ""
     if isinstance(matched_phone, dict):
@@ -2887,7 +2909,7 @@ def _genesys_extract_phone_management_name(phone_payload: dict, user_id: str, us
   return "", {}
 
 
-def _genesys_lookup_phone_management_name(api_base: str, access_token: str, user_id: str, user_name: str, user_email: str) -> tuple[str, dict, dict, str]:
+def _genesys_list_phone_management_inventory(api_base: str, access_token: str) -> tuple[dict, str]:
   # Phone inventory can be large; allow a configurable cap to avoid missing users.
   merged_entities = []
   max_pages = max(1, min(GENESYS_PHONE_LOOKUP_MAX_PAGES, 200))
@@ -2899,7 +2921,7 @@ def _genesys_lookup_phone_management_name(api_base: str, access_token: str, user
       params={"pageSize": 100, "pageNumber": page_number},
     )
     if not ok_phones:
-      return "", {}, {}, err_phones
+      return {}, err_phones
 
     entities = phones_payload.get("entities", []) if isinstance(phones_payload, dict) else []
     if isinstance(entities, list):
@@ -2909,7 +2931,13 @@ def _genesys_lookup_phone_management_name(api_base: str, access_token: str, user
     if not page_count or page_number >= page_count:
       break
 
-  payload = {"entities": merged_entities}
+  return {"entities": merged_entities}, ""
+
+
+def _genesys_lookup_phone_management_name(api_base: str, access_token: str, user_id: str, user_name: str, user_email: str) -> tuple[str, dict, dict, str]:
+  payload, inventory_error = _genesys_list_phone_management_inventory(api_base, access_token)
+  if inventory_error:
+    return "", {}, {}, inventory_error
   phone_name, matched_phone = _genesys_extract_phone_management_name(payload, user_id, user_name, user_email)
   return phone_name, matched_phone, payload, ""
 
@@ -23999,6 +24027,10 @@ def genesys_build_webrtc_batch_route(request: Request, users_json: str = Form(""
 
   region = token_result.get("region", clean_region)
   access_token = token_result.get("access_token", "")
+  phone_inventory_payload, phone_inventory_error = _genesys_list_phone_management_inventory(
+    _genesys_region_to_urls(region)[2],
+    access_token,
+  )
   configured_workers = max(1, min(int(GENESYS_UPDATE_BATCH_MAX_WORKERS or 3), 10))
   max_workers = max(1, min(configured_workers, len(users)))
 
@@ -24010,6 +24042,8 @@ def genesys_build_webrtc_batch_route(request: Request, users_json: str = Form(""
         user["user_id"],
         user["user_name"],
         user.get("user_email", ""),
+        phone_inventory_payload,
+        phone_inventory_error,
       )
       if build_result.get("ok"):
         return index, {
