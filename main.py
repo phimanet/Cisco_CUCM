@@ -48984,7 +48984,11 @@ def twilio_amieweb_active_numbers_route(request: Request):
 
 
 @app.post("/twilio/amieweb/active-numbers/friendly-name")
-def twilio_amieweb_active_number_friendly_name_route(request: Request, phone_sid: str = Form("")):
+def twilio_amieweb_active_number_friendly_name_route(
+  request: Request,
+  phone_sid: str = Form(""),
+  return_to: str = Form(""),
+):
   try:
     session = _require_twilio_active_number_admin(request)
     clean_phone_sid = (phone_sid or "").strip()
@@ -49006,6 +49010,9 @@ def twilio_amieweb_active_number_friendly_name_route(request: Request, phone_sid
       return JSONResponse({"ok": False, "error": str(body.get("message", "") or f"Twilio update failed HTTP {response.status_code}")}, status_code=502)
     with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
       TWILIO_INCOMING_PHONE_NUMBER_CACHE.pop(lookup_sid, None)
+    safe_return_to = (return_to or "").strip()
+    if safe_return_to.startswith("/twilio/amieweb/active-numbers-page"):
+      return RedirectResponse(url=safe_return_to, status_code=303)
     return JSONResponse({"ok": True, "message": f"Friendly Name updated to {friendly_name} for {row['twilio_number']}.", "phone_sid": clean_phone_sid, "friendly_name": friendly_name, "operator": str(session.get("username", "") or "").strip()})
   except PermissionError as exc:
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=401)
@@ -49047,6 +49054,9 @@ def twilio_amieweb_active_numbers_page(request: Request):
       cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
       rows, debug = _twilio_active_number_rows(cucm_host, cucm_user, cucm_pass, number_query=number_query)
       assigned = sum(1 for row in rows if row["status"] == "Found")
+    list_return_to = "/twilio/amieweb/active-numbers-page?load=1"
+    if number_query:
+      list_return_to += f"&number_query={quote(number_query)}"
     table_rows = []
     for row in rows:
       assignment = row.get("assignment", {}) or {}
@@ -49056,6 +49066,7 @@ def twilio_amieweb_active_numbers_page(request: Request):
         action = (
           '<form method="post" action="/twilio/amieweb/active-numbers/friendly-name">'
           f'<input type="hidden" name="phone_sid" value="{escape(str(row.get("phone_sid", "")))}">'
+          f'<input type="hidden" name="return_to" value="{escape(list_return_to)}">'
           f'<button type="submit" class="row-action">Set to {escape(str(row.get("desired_friendly_name", "")))}</button>'
           "</form>"
         )
@@ -49110,7 +49121,11 @@ def twilio_amieweb_active_numbers_page(request: Request):
 
 
 @app.post("/twilio/salesforce/active-numbers/friendly-name")
-def twilio_salesforce_active_number_friendly_name_route(request: Request, phone_sid: str = Form("")):
+def twilio_salesforce_active_number_friendly_name_route(
+  request: Request,
+  phone_sid: str = Form(""),
+  return_to: str = Form(""),
+):
   try:
     _require_twilio_active_number_admin(request)
     clean_phone_sid = (phone_sid or "").strip()
@@ -49135,6 +49150,9 @@ def twilio_salesforce_active_number_friendly_name_route(request: Request, phone_
       return JSONResponse({"ok": False, "error": str(body.get("message", "") or f"Twilio update failed HTTP {response.status_code}")}, status_code=502)
     with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
       TWILIO_INCOMING_PHONE_NUMBER_CACHE.pop(lookup_sid, None)
+    safe_return_to = (return_to or "").strip()
+    if safe_return_to.startswith("/twilio/salesforce/active-numbers-page"):
+      return RedirectResponse(url=safe_return_to, status_code=303)
     return JSONResponse({"ok": True, "message": f"Friendly Name updated to {friendly_name} for {row['twilio_number']}.", "phone_sid": clean_phone_sid, "friendly_name": friendly_name})
   except PermissionError as exc:
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=401)
@@ -49156,6 +49174,9 @@ def twilio_salesforce_active_numbers_page(request: Request):
       cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
       rows, debug = _twilio_active_number_rows(cucm_host, cucm_user, cucm_pass, account="salesforce", number_query=number_query)
       assigned = sum(1 for row in rows if row["status"] == "Found")
+    list_return_to = "/twilio/salesforce/active-numbers-page?load=1"
+    if number_query:
+      list_return_to += f"&number_query={quote(number_query)}"
     table_rows = []
     for row in rows:
       assignment = row.get("assignment", {}) or {}
@@ -49164,6 +49185,7 @@ def twilio_salesforce_active_numbers_page(request: Request):
         action = (
           '<form method="post" action="/twilio/salesforce/active-numbers/friendly-name">'
           f'<input type="hidden" name="phone_sid" value="{escape(str(row.get("phone_sid", "")))}">'
+          f'<input type="hidden" name="return_to" value="{escape(list_return_to)}">'
           f'<button type="submit" class="row-action">Set to {escape(str(row.get("desired_friendly_name", "")))}</button>'
           "</form>"
         )
