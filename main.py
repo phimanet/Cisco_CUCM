@@ -42535,7 +42535,7 @@ def page3_twilio_items(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
           <button type="button" class="portal-nav-btn" data-panel="aerialink-amieclassic">Aerialink SMS-AMIEClassic Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">AMIEWeb-Twilio SMS Hosting - (Developer Preview - NOT ACTIVE YET)</button>
-          <button type="button" class="portal-nav-btn" data-panel="twilio-hosting-ready">Twilio Hosting Status - Ready to Verify Ownership (Testing)</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-hosting-ready">AMIEWeb-Twilio Hosting Status - Ready to Verify Ownership (Testing)</button>
         </div>
       </aside>
 
@@ -42631,7 +42631,7 @@ def page3_twilio_items(request: Request):
 
         <section class="tool-panel" data-panel="twilio-hosting-ready">
           <div class="panel">
-            <h3>Twilio Hosting Status - Ready to Verify Ownership (Testing)</h3>
+            <h3>AMIEWeb-Twilio Hosting Status - Ready to Verify Ownership (Testing)</h3>
             <p>AMIEWeb-only lookup for Hosted Numbers under Port &amp; Host. Returns numbers that are in <strong>Ready to Verify Ownership</strong> status.</p>
             <form id="twilio-hosting-ready-form">
               <div class="search-filter-row">
@@ -49300,7 +49300,7 @@ def _twilio_lookup_sidebar_html(active_key: str) -> str:
     ("lauraa", "Twilio Verification - LauraA", "/page3?panel=twilio-lauraa"),
     ("aerialink", "Aerialink SMS-AMIEClassic Lookup", "/page3?panel=aerialink-amieclassic"),
     ("sms-hosting", "AMIEWeb-Twilio SMS Hosting - (Developer Preview - NOT ACTIVE YET)", "/page3?panel=twilio-sms-hosting"),
-    ("hosting-ready", "Twilio Hosting Status - Ready to Verify Ownership (Testing)", "/page3?panel=twilio-hosting-ready"),
+    ("hosting-ready", "AMIEWeb-Twilio Hosting Status - Ready to Verify Ownership (Testing)", "/page3?panel=twilio-hosting-ready"),
   ]
   links = []
   for key, label, href in entries:
