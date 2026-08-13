@@ -49056,14 +49056,13 @@ def twilio_amieweb_active_numbers_page(request: Request):
         action = (
           '<form method="post" action="/twilio/amieweb/active-numbers/friendly-name">'
           f'<input type="hidden" name="phone_sid" value="{escape(str(row.get("phone_sid", "")))}">'
-          f'<button type="submit">Set to {escape(str(row.get("desired_friendly_name", "")))}</button>'
+          f'<button type="submit" class="row-action">Set to {escape(str(row.get("desired_friendly_name", "")))}</button>'
           "</form>"
         )
       table_rows.append(
         "<tr>"
         f"<td>{escape(str(row.get('twilio_number', '') or '-'))}</td>"
         f"<td>{escape(str(row.get('friendly_name', '') or '-'))}</td>"
-        f"<td>{escape(str(row.get('phone_sid', '') or '-'))}</td>"
         f"<td>{escape(str(assignment.get('name', '') or 'Unassigned'))}</td>"
         f"<td>{escape(str(assignment.get('phone_details', '') or '-'))}</td>"
         f"<td>{escape(str(row.get('status', '') or '-'))}</td>"
@@ -49071,7 +49070,7 @@ def twilio_amieweb_active_numbers_page(request: Request):
         "</tr>"
       )
     result_section = (
-      '<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Phone SID</th><th>Assigned CUCM Employee</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>'
+      '<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Assigned CUCM Employee</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>'
       + "".join(table_rows)
       + '</tbody></table><details style="margin-top:16px"><summary>Debug Details</summary><pre>'
       + escape(json.dumps(debug, indent=2))
@@ -49092,7 +49091,7 @@ def twilio_amieweb_active_numbers_page(request: Request):
   .lookup-panel {{ background:#fff; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px; }} h3 {{ margin:0; color:var(--navy); font-size:16px; }}
   .search-row {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; }} input {{ min-height:36px; width:250px; padding:7px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px; }}
   .divider {{ border-top:1px solid var(--border); margin:14px 0; padding-top:14px; }} .results {{ overflow-x:auto; }}
-  table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:var(--blue); color:#fff; text-align:left; padding:9px; white-space:nowrap; }} td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} .results form {{ margin:0; }}
+  table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:var(--blue); color:#fff; text-align:left; padding:9px; white-space:nowrap; }} td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} .results form {{ margin:0; }} .results .row-action {{ padding:4px 7px; font-size:11px; line-height:1.15; max-width:150px; white-space:normal; }}
   .sidebar {{ position:sticky; top:12px; padding:10px; border-radius:8px; background:linear-gradient(180deg,#002f6c,#07529a); box-shadow:0 12px 24px rgba(0,47,108,.18); }} .sidebar h3 {{ color:#fff; margin:2px 4px 10px; font-size:14px; }} .nav-link {{ display:block; margin:6px 0; padding:9px; border-radius:7px; color:#fff; background:rgba(255,255,255,.11); border:1px solid rgba(255,255,255,.14); text-decoration:none; font-size:13px; font-weight:700; line-height:1.25; }} .nav-link.active {{ color:var(--navy); background:#fff; border-color:#fff; }}
   @media (max-width:700px) {{ .content {{ padding:10px; }} .shell {{ grid-template-columns:1fr; }} .sidebar {{ position:static; }} input {{ width:100%; }} .search-row button {{ width:100%; }} }}
   </style></head><body>
@@ -49165,21 +49164,20 @@ def twilio_salesforce_active_numbers_page(request: Request):
         action = (
           '<form method="post" action="/twilio/salesforce/active-numbers/friendly-name">'
           f'<input type="hidden" name="phone_sid" value="{escape(str(row.get("phone_sid", "")))}">'
-          f'<button type="submit">Set to {escape(str(row.get("desired_friendly_name", "")))}</button>'
+          f'<button type="submit" class="row-action">Set to {escape(str(row.get("desired_friendly_name", "")))}</button>'
           "</form>"
         )
       table_rows.append(
         "<tr>"
         f"<td>{escape(str(row.get('twilio_number', '') or '-'))}</td>"
         f"<td>{escape(str(row.get('friendly_name', '') or '-'))}</td>"
-        f"<td>{escape(str(row.get('phone_sid', '') or '-'))}</td>"
         f"<td>{escape(str(assignment.get('name', '') or 'Unassigned'))}</td>"
         f"<td>{escape(str(assignment.get('phone_details', '') or '-'))}</td>"
         f"<td>{escape(str(row.get('status', '') or '-'))}</td>"
         f"<td>{action}</td></tr>"
       )
     result_section = (
-      '<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Phone SID</th><th>Assigned CUCM Employee</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>'
+      '<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Assigned CUCM Employee</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>'
       + "".join(table_rows)
       + '</tbody></table><details style="margin-top:16px"><summary>Debug Details</summary><pre>'
       + escape(json.dumps(debug, indent=2))
@@ -49200,7 +49198,7 @@ def twilio_salesforce_active_numbers_page(request: Request):
   .lookup-panel {{ background:#fff; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px; }} h3 {{ margin:0; color:var(--navy); font-size:16px; }}
   .search-row {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; }} input {{ min-height:36px; width:250px; padding:7px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px; }}
   .divider {{ border-top:1px solid var(--border); margin:14px 0; padding-top:14px; }} .results {{ overflow-x:auto; }}
-  table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:var(--blue); color:#fff; text-align:left; padding:9px; white-space:nowrap; }} td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} .results form {{ margin:0; }}
+  table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:var(--blue); color:#fff; text-align:left; padding:9px; white-space:nowrap; }} td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} .results form {{ margin:0; }} .results .row-action {{ padding:4px 7px; font-size:11px; line-height:1.15; max-width:150px; white-space:normal; }}
   .sidebar {{ position:sticky; top:12px; padding:10px; border-radius:8px; background:linear-gradient(180deg,#002f6c,#07529a); box-shadow:0 12px 24px rgba(0,47,108,.18); }} .sidebar h3 {{ color:#fff; margin:2px 4px 10px; font-size:14px; }} .nav-link {{ display:block; margin:6px 0; padding:9px; border-radius:7px; color:#fff; background:rgba(255,255,255,.11); border:1px solid rgba(255,255,255,.14); text-decoration:none; font-size:13px; font-weight:700; line-height:1.25; }} .nav-link.active {{ color:var(--navy); background:#fff; border-color:#fff; }}
   @media (max-width:700px) {{ .content {{ padding:10px; }} .shell {{ grid-template-columns:1fr; }} .sidebar {{ position:static; }} input {{ width:100%; }} .search-row button {{ width:100%; }} }}
   </style></head><body>
