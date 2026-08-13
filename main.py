@@ -42263,6 +42263,7 @@ def page3_twilio_items(request: Request):
           __SMS_EXPERIMENTAL_MENU__
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
           <a class="portal-nav-btn" href="/twilio/amieweb/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio Active Number Lookup</a>
+          <a class="portal-nav-btn" href="/twilio/salesforce/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">SalesForce-Twilio Number Lookup</a>
           <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
@@ -48919,13 +48920,15 @@ def _require_twilio_active_number_admin(request: Request) -> dict:
   return session
 
 
-def _twilio_active_number_rows(cucm_host: str, cucm_user: str, cucm_pass: str) -> tuple[list[dict], dict]:
-  lookup_sid = _resolve_twilio_lookup_account_sid()
-  lookup_token = _resolve_twilio_lookup_auth_token_for_sid(lookup_sid)
+def _twilio_active_number_rows(cucm_host: str, cucm_user: str, cucm_pass: str, account: str = "default") -> tuple[list[dict], dict]:
+  is_salesforce = (account or "").strip().lower() == "salesforce"
+  lookup_sid = _resolve_twilio_salesforce_account_sid() if is_salesforce else _resolve_twilio_lookup_account_sid()
+  lookup_token = (TWILIO_SALESFORCE_AUTH_TOKEN or TWILIO_AUTH_TOKEN) if is_salesforce else _resolve_twilio_lookup_auth_token_for_sid(lookup_sid)
+  account_name = TWILIO_SALESFORCE_SUBACCOUNT_NAME if is_salesforce else TWILIO_SUBACCOUNT_NAME
   if not lookup_sid or not lookup_token:
-    raise RuntimeError("Twilio AMIEWeb account is not configured.")
+    raise RuntimeError(f"Twilio {account_name} account is not configured.")
   if TWILIO_ACCOUNT_SID and lookup_sid == TWILIO_ACCOUNT_SID:
-    raise RuntimeError("Twilio AMIEWeb subaccount SID is required; parent account is not allowed for this lookup.")
+    raise RuntimeError(f"Twilio {account_name} subaccount SID is required; parent account is not allowed for this lookup.")
   listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token, force_refresh=True)
   if not listed.get("ok"):
     raise RuntimeError(str(listed.get("status", "Active-number lookup failed")))
@@ -48953,7 +48956,7 @@ def _twilio_active_number_rows(cucm_host: str, cucm_user: str, cucm_pass: str) -
       assignment = {"name": "Unassigned", "userid": "", "phone_details": ""}
     rows.append({"twilio_number": twilio_number, "friendly_name": str(number_item.get("friendly_name", "") or "").strip(), "phone_sid": str(number_item.get("sid", "") or "").strip(), "capabilities": _twilio_capabilities_text(number_item), "assignment": assignment, "desired_friendly_name": desired_friendly_name, "can_update": bool(desired_friendly_name and str(number_item.get("sid", "") or "").strip()), "status": "Found" if person else "Unassigned"})
   rows.sort(key=lambda item: item["twilio_number"])
-  debug.update({"twilio_account": TWILIO_SUBACCOUNT_NAME, "twilio_numbers": len(rows), "assigned": assigned_count})
+  debug.update({"twilio_account": account_name, "twilio_numbers": len(rows), "assigned": assigned_count})
   return rows, debug
 
 
@@ -49065,6 +49068,103 @@ table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; 
   except Exception as exc:
     logger.exception("AMIEWeb active-number page failed")
     return HTMLResponse(content=f"<h3>Active Number Lookup Failed</h3><p>{escape(str(exc))}</p><p><a href=\"/page3\">Back to SMS Item Menu</a></p>", status_code=500)
+
+
+@app.post("/twilio/salesforce/active-numbers/friendly-name")
+def twilio_salesforce_active_number_friendly_name_route(request: Request, phone_sid: str = Form("")):
+  try:
+    _require_twilio_active_number_admin(request)
+    clean_phone_sid = (phone_sid or "").strip()
+    if not clean_phone_sid:
+      return JSONResponse({"ok": False, "error": "Phone SID is required."}, status_code=400)
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
+    rows, _debug = _twilio_active_number_rows(cucm_host, cucm_user, cucm_pass, account="salesforce")
+    row = next((item for item in rows if item["phone_sid"] == clean_phone_sid), None)
+    if not row:
+      return JSONResponse({"ok": False, "error": "Phone SID was not found in the Salesforce Twilio subaccount."}, status_code=404)
+    friendly_name = str(row.get("desired_friendly_name", "") or "").strip()
+    if not friendly_name:
+      return JSONResponse({"ok": False, "error": "Cannot set a blank Friendly Name. The number is not assigned to a CUCM employee with a first and last name."}, status_code=400)
+    lookup_sid = _resolve_twilio_salesforce_account_sid()
+    lookup_token = TWILIO_SALESFORCE_AUTH_TOKEN or TWILIO_AUTH_TOKEN
+    response = requests.post(
+      f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers/{clean_phone_sid}.json",
+      data={"FriendlyName": friendly_name}, auth=(lookup_sid, lookup_token), verify=False, timeout=20,
+    )
+    body = response.json() if response.text else {}
+    if response.status_code not in {200, 201}:
+      return JSONResponse({"ok": False, "error": str(body.get("message", "") or f"Twilio update failed HTTP {response.status_code}")}, status_code=502)
+    with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
+      TWILIO_INCOMING_PHONE_NUMBER_CACHE.pop(lookup_sid, None)
+    return JSONResponse({"ok": True, "message": f"Friendly Name updated to {friendly_name} for {row['twilio_number']}.", "phone_sid": clean_phone_sid, "friendly_name": friendly_name})
+  except PermissionError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=401)
+  except Exception as exc:
+    logger.exception("Salesforce Twilio Friendly Name update failed")
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@app.get("/twilio/salesforce/active-numbers-page", response_class=HTMLResponse)
+def twilio_salesforce_active_numbers_page(request: Request):
+  try:
+    _require_twilio_active_number_admin(request)
+    load_requested = str(request.query_params.get("load", "") or "").strip() == "1"
+    rows = []
+    debug = {}
+    assigned = 0
+    if load_requested:
+      cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
+      rows, debug = _twilio_active_number_rows(cucm_host, cucm_user, cucm_pass, account="salesforce")
+      assigned = sum(1 for row in rows if row["status"] == "Found")
+    table_rows = []
+    for row in rows:
+      assignment = row.get("assignment", {}) or {}
+      action = "<span>Unassigned</span>"
+      if row.get("can_update"):
+        action = (
+          '<form method="post" action="/twilio/salesforce/active-numbers/friendly-name">'
+          f'<input type="hidden" name="phone_sid" value="{escape(str(row.get("phone_sid", "")))}">'
+          f'<button type="submit">Set to {escape(str(row.get("desired_friendly_name", "")))}</button>'
+          "</form>"
+        )
+      table_rows.append(
+        "<tr>"
+        f"<td>{escape(str(row.get('twilio_number', '') or '-'))}</td>"
+        f"<td>{escape(str(row.get('friendly_name', '') or '-'))}</td>"
+        f"<td>{escape(str(row.get('phone_sid', '') or '-'))}</td>"
+        f"<td>{escape(str(row.get('capabilities', '') or '-'))}</td>"
+        f"<td>{escape(str(assignment.get('name', '') or 'Unassigned'))}</td>"
+        f"<td>{escape(str(assignment.get('userid', '') or '-'))}</td>"
+        f"<td>{escape(str(assignment.get('phone_details', '') or '-'))}</td>"
+        f"<td>{escape(str(row.get('status', '') or '-'))}</td>"
+        f"<td>{action}</td></tr>"
+      )
+    result_section = (
+      '<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Phone SID</th><th>Capabilities</th><th>Assigned CUCM Employee</th><th>CUCM User ID</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>'
+      + "".join(table_rows)
+      + '</tbody></table><details style="margin-top:16px"><summary>Debug Details</summary><pre>'
+      + escape(json.dumps(debug, indent=2))
+      + '</pre></details>'
+    ) if load_requested else '<p style="margin-top:18px">Select <strong>Load Salesforce Twilio Numbers</strong> to query Enterprise Org Prod and match the returned numbers to CUCM employees.</p>'
+    summary_text = f"Enterprise Org Prod: {len(rows)} active number(s), {assigned} matched to CUCM." if load_requested else "Numbers have not been loaded yet."
+    html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>SalesForce-Twilio Number Lookup</title>
+<style>
+body {{ font-family:Segoe UI,Arial,sans-serif; margin:24px; background:#edf5fc; color:#12304a; }}
+.toolbar {{ display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:16px; }}
+.back, button {{ background:#005eb8; color:#fff; border:0; border-radius:6px; padding:8px 12px; font-weight:700; text-decoration:none; cursor:pointer; }}
+table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:#005eb8; color:#fff; text-align:left; padding:9px; }} td {{ padding:8px; border-bottom:1px solid #c8dbee; vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} form {{ margin:0; }}
+</style></head><body>
+<div class="toolbar"><div><h2 style="margin:0">SalesForce-Twilio Number Lookup</h2><p>{summary_text}</p></div><a class="back" href="/page3">Back to SMS Item Menu</a></div>
+<form method="get" action="/twilio/salesforce/active-numbers-page" style="margin:0 0 16px"><input type="hidden" name="load" value="1"><button type="submit">Load Salesforce Twilio Numbers</button></form>
+{result_section}
+</body></html>"""
+    return HTMLResponse(content=html)
+  except PermissionError as exc:
+    return HTMLResponse(content=f"<h3>Unauthorized</h3><p>{escape(str(exc))}</p>", status_code=401)
+  except Exception as exc:
+    logger.exception("Salesforce active-number page failed")
+    return HTMLResponse(content=f"<h3>Salesforce Twilio Number Lookup Failed</h3><p>{escape(str(exc))}</p><p><a href=\"/page3\">Back to SMS Item Menu</a></p>", status_code=500)
 
 
 @app.post("/lookup/twilio-by-number-sfdc")
