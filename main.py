@@ -11578,6 +11578,49 @@ def _list_twilio_incoming_phone_numbers(lookup_sid: str, lookup_token: str, forc
     return {"ok": False, "status": f"Lookup error: {exc}", "numbers": []}
 
 
+def _twilio_amieweb_messaging_webhook_rows(number_query: str = "") -> tuple[list[dict], dict]:
+  """List AMIEWeb numbers with the Twilio 'A Message Comes In' (SmsUrl) setting."""
+  lookup_sid = _resolve_twilio_lookup_account_sid()
+  lookup_token = _resolve_twilio_lookup_auth_token_for_sid(lookup_sid)
+  if not lookup_sid or not lookup_token:
+    raise RuntimeError("Twilio AMIEWeb account is not configured.")
+  if TWILIO_ACCOUNT_SID and lookup_sid == TWILIO_ACCOUNT_SID:
+    raise RuntimeError("Twilio AMIEWeb subaccount SID is required; parent account is not allowed for this lookup.")
+
+  partial_digits = "".join(ch for ch in str(number_query or "") if ch.isdigit())
+  listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token, force_refresh=True)
+  if not listed.get("ok"):
+    raise RuntimeError(str(listed.get("status", "Messaging webhook lookup failed")))
+
+  expected_url = TWILIO_AMIEWEB_DEFAULT_SMS_URL.rstrip("/")
+  rows = []
+  for item in listed.get("numbers", []) or []:
+    if not isinstance(item, dict):
+      continue
+    twilio_number = str(item.get("phone_number", "") or "").strip()
+    number_digits = "".join(ch for ch in twilio_number if ch.isdigit())
+    if partial_digits and partial_digits not in number_digits:
+      continue
+    sms_url = str(item.get("sms_url", "") or "").strip()
+    is_correct = sms_url.rstrip("/") == expected_url
+    rows.append({
+      "twilio_number": twilio_number,
+      "friendly_name": str(item.get("friendly_name", "") or "").strip(),
+      "phone_sid": str(item.get("sid", "") or "").strip(),
+      "sms_url": sms_url,
+      "sms_method": str(item.get("sms_method", "") or "").strip(),
+      "status": "Correct" if is_correct else "Needs Correction",
+      "can_correct": bool(item.get("sid")) and not is_correct,
+    })
+  rows.sort(key=lambda item: item["twilio_number"])
+  return rows, {
+    "twilio_account": TWILIO_SUBACCOUNT_NAME,
+    "number_query": partial_digits,
+    "expected_sms_url": TWILIO_AMIEWEB_DEFAULT_SMS_URL,
+    "twilio_numbers": len(rows),
+  }
+
+
 def _twilio_phone_match_keys(phone_number: str) -> set[str]:
   """Return normalized number keys shared by Twilio E.164 and CUCM fields."""
   digits = "".join(ch for ch in str(phone_number or "") if ch.isdigit())
@@ -49026,6 +49069,7 @@ def _twilio_lookup_sidebar_html(active_key: str) -> str:
     ("sms", "SMS Number Lookup", "/page3"),
     ("amieweb-lookup", "Twilio Number Lookup - AMIEWeb", "/page3?panel=twilio-lookup"),
     ("amieweb-active", "AMIEWeb-Twilio Active Number Lookup", "/twilio/amieweb/active-numbers-page"),
+    ("amieweb-messaging", "AMIEWeb-Twilio - Messaging and Webhook", "/twilio/amieweb/messaging-webhook-page"),
     ("salesforce-active", "SalesForce-Twilio Number Lookup", "/twilio/salesforce/active-numbers-page"),
     ("sms-hosting", "Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)", "/page3?panel=twilio-sms-hosting"),
     ("salesforce-lookup", "Twilio Number Lookup - Salesforce Enterprise Org Prod", "/page3?panel=twilio-lookup-sfdc"),
@@ -49039,6 +49083,109 @@ def _twilio_lookup_sidebar_html(active_key: str) -> str:
     active_class = " active" if key == active_key else ""
     links.append(f'<a class="nav-link{active_class}" href="{href}">{escape(label)}</a>')
   return "".join(links)
+
+
+@app.post("/twilio/amieweb/messaging-webhook/correct")
+def twilio_amieweb_messaging_webhook_correct_route(
+  request: Request,
+  phone_sid: str = Form(""),
+  return_to: str = Form(""),
+):
+  try:
+    _require_twilio_active_number_admin(request)
+    clean_phone_sid = (phone_sid or "").strip()
+    if not clean_phone_sid:
+      return HTMLResponse(content="<h3>Phone SID is required.</h3>", status_code=400)
+    lookup_sid = _resolve_twilio_lookup_account_sid()
+    lookup_token = _resolve_twilio_lookup_auth_token_for_sid(lookup_sid)
+    response = requests.post(
+      f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers/{clean_phone_sid}.json",
+      data={"SmsUrl": TWILIO_AMIEWEB_DEFAULT_SMS_URL, "SmsMethod": "POST"},
+      auth=(lookup_sid, lookup_token), verify=False, timeout=20,
+    )
+    body = response.json() if response.text else {}
+    if response.status_code not in {200, 201}:
+      message = str(body.get("message", "") or f"Twilio update failed HTTP {response.status_code}")
+      return HTMLResponse(content=f"<h3>Webhook update failed</h3><p>{escape(message)}</p>", status_code=502)
+    with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
+      TWILIO_INCOMING_PHONE_NUMBER_CACHE.pop(lookup_sid, None)
+    safe_return_to = (return_to or "").strip()
+    if safe_return_to.startswith("/twilio/amieweb/messaging-webhook-page"):
+      return RedirectResponse(url=safe_return_to, status_code=303)
+    return RedirectResponse(url="/twilio/amieweb/messaging-webhook-page?load=1", status_code=303)
+  except PermissionError as exc:
+    return HTMLResponse(content=f"<h3>Unauthorized</h3><p>{escape(str(exc))}</p>", status_code=401)
+  except Exception as exc:
+    logger.exception("AMIEWeb messaging webhook correction failed")
+    return HTMLResponse(content=f"<h3>Webhook update failed</h3><p>{escape(str(exc))}</p>", status_code=500)
+
+
+@app.get("/twilio/amieweb/messaging-webhook-page", response_class=HTMLResponse)
+def twilio_amieweb_messaging_webhook_page(request: Request):
+  try:
+    _require_twilio_active_number_admin(request)
+    load_requested = str(request.query_params.get("load", "") or "").strip() == "1"
+    number_query = str(request.query_params.get("number_query", "") or "").strip()
+    rows = []
+    debug = {}
+    if load_requested:
+      rows, debug = _twilio_amieweb_messaging_webhook_rows(number_query)
+    list_return_to = "/twilio/amieweb/messaging-webhook-page?load=1"
+    if number_query:
+      list_return_to += f"&number_query={quote(number_query)}"
+    table_rows = []
+    for row in rows:
+      action = '<span class="ok">Correct</span>'
+      if row.get("can_correct"):
+        action = (
+          '<form method="post" action="/twilio/amieweb/messaging-webhook/correct">'
+          f'<input type="hidden" name="phone_sid" value="{escape(str(row.get("phone_sid", "")))}">'
+          f'<input type="hidden" name="return_to" value="{escape(list_return_to)}">'
+          '<button type="submit" class="row-action" onclick="return confirm(\'Set A Message Comes In to the approved AMIEWeb listener URL?\');">Correct URL</button>'
+          "</form>"
+        )
+      table_rows.append(
+        "<tr>"
+        f"<td>{escape(str(row.get('twilio_number', '') or '-'))}</td>"
+        f"<td>{escape(str(row.get('friendly_name', '') or '-'))}</td>"
+        f"<td class=\"url\">{escape(str(row.get('sms_url', '') or '(not set)'))}</td>"
+        f"<td>{escape(str(row.get('sms_method', '') or '-'))}</td>"
+        f"<td>{escape(str(row.get('status', '') or '-'))}</td>"
+        f"<td>{action}</td></tr>"
+      )
+    result_section = (
+      '<table><thead><tr><th>Twilio Number</th><th>Friendly Name</th><th>A Message Comes In URL</th><th>Method</th><th>Status</th><th>Action</th></tr></thead><tbody>'
+      + "".join(table_rows)
+      + '</tbody></table><details style="margin-top:16px"><summary>Debug Details</summary><pre>'
+      + escape(json.dumps(debug, indent=2))
+      + '</pre></details>'
+    ) if load_requested else '<p style="margin-top:18px">Select <strong>Load AMIEWeb Messaging and Webhook</strong> to read the current Twilio <strong>A Message Comes In</strong> URL.</p>'
+    filter_text = f" Filter: {escape(number_query)}." if number_query else ""
+    summary_text = f"AMNOne-Notification-PROD: {len(rows)} number(s) loaded.{filter_text}" if load_requested else "Numbers have not been loaded yet."
+    sidebar_html = _twilio_lookup_sidebar_html("amieweb-messaging")
+    html = f"""<!doctype html>
+<html><head><meta charset="utf-8"><title>AMIEWeb Messaging and Webhook</title>
+<style>
+:root {{ --blue:#005eb8; --navy:#002f6c; --ice:#edf5fc; --border:#c8dbee; --text:#12304a; }}
+* {{ box-sizing:border-box; }} body {{ font-family:"Segoe UI",Tahoma,Arial,sans-serif; margin:0; background:var(--ice); color:var(--text); }}
+.topbar {{ padding:12px 20px; background:linear-gradient(120deg,#002f6c,#005eb8); color:#fff; font-weight:700; }} .content {{ max-width:1400px; margin:8px auto 14px; padding:0 12px 12px; }} .shell {{ display:grid; grid-template-columns:244px minmax(0,1fr); gap:10px; align-items:start; }}
+.hero {{ background:linear-gradient(135deg,rgba(255,255,255,.96),rgba(239,247,255,.95)); border:1px solid rgba(0,47,108,.1); border-radius:12px; padding:12px 14px; margin-bottom:10px; }} .hero-row {{ display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }} h2 {{ margin:0; color:var(--navy); font-size:22px; line-height:1.1; }} p {{ margin:4px 0 0; color:#4e6a84; font-size:12px; line-height:1.35; }}
+.back, button {{ background:linear-gradient(135deg,#0f5db8,#0a3f7d); color:#fff; border:0; border-radius:6px; padding:8px 20px; font-weight:600; text-decoration:none; cursor:pointer; font-size:14px; }} .lookup-panel {{ background:rgba(255,255,255,.93); border:1px solid rgba(0,47,108,.12); border-radius:14px; padding:10px; margin-bottom:12px; box-shadow:0 14px 30px rgba(0,47,108,.11); }} h3 {{ margin:0; color:var(--navy); font-size:18px; }}
+.search-row {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; }} input {{ min-height:32px; width:250px; padding:5px 9px; border:1px solid var(--border); border-radius:10px; font-size:14px; }} .divider {{ border-top:1px solid var(--border); margin:14px 0; padding-top:14px; }} .results {{ overflow-x:auto; }}
+table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:var(--blue); color:#fff; text-align:left; padding:9px; white-space:nowrap; }} td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} .results form {{ margin:0; }} .results .row-action {{ padding:4px 7px; font-size:11px; line-height:1.15; }} .url {{ overflow-wrap:anywhere; min-width:290px; }} .ok {{ color:#145c2e; font-weight:700; }}
+.sidebar {{ position:sticky; top:54px; padding:8px; border-radius:12px; background:linear-gradient(180deg,rgba(0,47,108,.97),rgba(7,75,138,.96)); box-shadow:0 18px 36px rgba(0,47,108,.18); }} .sidebar h3 {{ color:#fff; margin:4px 6px 8px; font-size:13px; letter-spacing:.3px; }} .nav-link {{ display:block; margin:6px 0; padding:7px 8px; border-radius:8px; color:rgba(255,255,255,.94); background:rgba(255,255,255,.09); border:1px solid rgba(255,255,255,.12); text-decoration:none; font-size:12px; font-weight:600; line-height:1.25; }} .nav-link.active {{ color:var(--navy); background:linear-gradient(90deg,#fff,#ecf6ff); border-color:rgba(255,255,255,.92); box-shadow:0 12px 24px rgba(0,0,0,.12); }}
+@media (max-width:700px) {{ .content {{ padding:10px; }} .shell {{ grid-template-columns:1fr; }} .sidebar {{ position:static; }} input {{ width:100%; }} .search-row button {{ width:100%; }} }}
+</style></head><body><header class="topbar">AMN Healthcare | Voice Operations Portal</header><main class="content">
+<section class="hero"><div class="hero-row"><div><h2>SMS Item Menu</h2><p>Manage Twilio numbers and inbound verification patterns for the organization.</p></div><a class="back" href="/page2">Back to Administrative Items</a></div></section>
+<div class="shell"><aside class="sidebar"><h3>Twilio Menu</h3>{sidebar_html}</aside><section><section class="hero"><div class="hero-row"><div><h2>AMIEWeb-Twilio - Messaging and Webhook</h2><p>{summary_text}</p></div></div></section>
+<section class="lookup-panel"><h3>Lookup by Number</h3><p>Review the Twilio <strong>A Message Comes In</strong> URL. The approved AMIEWeb listener is <strong>{escape(TWILIO_AMIEWEB_DEFAULT_SMS_URL)}</strong>.</p><form method="get" action="/twilio/amieweb/messaging-webhook-page" class="search-row"><input type="hidden" name="load" value="1"><input name="number_query" value="{escape(number_query)}" placeholder="Telephone - partial or full" inputmode="numeric"><button type="submit">Lookup by Number</button></form><div class="divider"><form method="get" action="/twilio/amieweb/messaging-webhook-page"><input type="hidden" name="load" value="1"><button type="submit">Load AMIEWeb Messaging and Webhook</button></form></div></section>
+<section class="results">{result_section}</section></section></div></main></body></html>"""
+    return HTMLResponse(content=html)
+  except PermissionError as exc:
+    return HTMLResponse(content=f"<h3>Unauthorized</h3><p>{escape(str(exc))}</p>", status_code=401)
+  except Exception as exc:
+    logger.exception("AMIEWeb messaging webhook page failed")
+    return HTMLResponse(content=f"<h3>Messaging and Webhook Lookup Failed</h3><p>{escape(str(exc))}</p><p><a href=\"/page3\">Back to SMS Item Menu</a></p>", status_code=500)
 
 
 @app.get("/twilio/amieweb/active-numbers-page", response_class=HTMLResponse)
