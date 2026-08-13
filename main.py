@@ -48920,8 +48920,15 @@ def _require_twilio_active_number_admin(request: Request) -> dict:
   return session
 
 
-def _twilio_active_number_rows(cucm_host: str, cucm_user: str, cucm_pass: str, account: str = "default") -> tuple[list[dict], dict]:
+def _twilio_active_number_rows(
+  cucm_host: str,
+  cucm_user: str,
+  cucm_pass: str,
+  account: str = "default",
+  number_query: str = "",
+) -> tuple[list[dict], dict]:
   is_salesforce = (account or "").strip().lower() == "salesforce"
+  partial_digits = "".join(ch for ch in str(number_query or "") if ch.isdigit())
   lookup_sid = _resolve_twilio_salesforce_account_sid() if is_salesforce else _resolve_twilio_lookup_account_sid()
   lookup_token = (TWILIO_SALESFORCE_AUTH_TOKEN or TWILIO_AUTH_TOKEN) if is_salesforce else _resolve_twilio_lookup_auth_token_for_sid(lookup_sid)
   account_name = TWILIO_SALESFORCE_SUBACCOUNT_NAME if is_salesforce else TWILIO_SUBACCOUNT_NAME
@@ -48939,6 +48946,8 @@ def _twilio_active_number_rows(cucm_host: str, cucm_user: str, cucm_pass: str, a
     if not isinstance(number_item, dict):
       continue
     twilio_number = str(number_item.get("phone_number", "") or "").strip()
+    if partial_digits and partial_digits not in "".join(ch for ch in twilio_number if ch.isdigit()):
+      continue
     matches, seen_users = [], set()
     for key in _twilio_phone_match_keys(twilio_number):
       for person in cucm_index.get(key, []):
@@ -48956,7 +48965,7 @@ def _twilio_active_number_rows(cucm_host: str, cucm_user: str, cucm_pass: str, a
       assignment = {"name": "Unassigned", "userid": "", "phone_details": ""}
     rows.append({"twilio_number": twilio_number, "friendly_name": str(number_item.get("friendly_name", "") or "").strip(), "phone_sid": str(number_item.get("sid", "") or "").strip(), "capabilities": _twilio_capabilities_text(number_item), "assignment": assignment, "desired_friendly_name": desired_friendly_name, "can_update": bool(desired_friendly_name and str(number_item.get("sid", "") or "").strip()), "status": "Found" if person else "Unassigned"})
   rows.sort(key=lambda item: item["twilio_number"])
-  debug.update({"twilio_account": account_name, "twilio_numbers": len(rows), "assigned": assigned_count})
+  debug.update({"twilio_account": account_name, "number_query": partial_digits, "twilio_numbers": len(rows), "assigned": assigned_count})
   return rows, debug
 
 
@@ -49010,12 +49019,13 @@ def twilio_amieweb_active_numbers_page(request: Request):
   try:
     _require_twilio_active_number_admin(request)
     load_requested = str(request.query_params.get("load", "") or "").strip() == "1"
+    number_query = str(request.query_params.get("number_query", "") or "").strip()
     rows = []
     debug = {}
     assigned = 0
     if load_requested:
       cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
-      rows, debug = _twilio_active_number_rows(cucm_host, cucm_user, cucm_pass)
+      rows, debug = _twilio_active_number_rows(cucm_host, cucm_user, cucm_pass, number_query=number_query)
       assigned = sum(1 for row in rows if row["status"] == "Found")
     table_rows = []
     for row in rows:
@@ -49049,7 +49059,8 @@ def twilio_amieweb_active_numbers_page(request: Request):
       + escape(json.dumps(debug, indent=2))
       + '</pre></details>'
     ) if load_requested else '<p style="margin-top:18px">Select <strong>Load Active AMIEWeb Numbers</strong> to query AMNOne-Notification-PROD and match the returned numbers to CUCM employees.</p>'
-    summary_text = f"AMNOne-Notification-PROD: {len(rows)} active number(s), {assigned} matched to CUCM." if load_requested else "Numbers have not been loaded yet."
+    filter_text = f" Filter: {escape(number_query)}." if number_query else ""
+    summary_text = f"AMNOne-Notification-PROD: {len(rows)} active number(s), {assigned} matched to CUCM.{filter_text}" if load_requested else "Numbers have not been loaded yet."
     html = f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>AMIEWeb Active Number Lookup</title>
 <style>
@@ -49059,7 +49070,7 @@ body {{ font-family:Segoe UI,Arial,sans-serif; margin:24px; background:#edf5fc; 
 table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:#005eb8; color:#fff; text-align:left; padding:9px; }} td {{ padding:8px; border-bottom:1px solid #c8dbee; vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} form {{ margin:0; }}
 </style></head><body>
 <div class="toolbar"><div><h2 style="margin:0">AMIEWeb-Twilio Active Number Lookup</h2><p>{summary_text}</p></div><a class="back" href="/page3">Back to SMS Item Menu</a></div>
-<form method="get" action="/twilio/amieweb/active-numbers-page" style="margin:0 0 16px"><input type="hidden" name="load" value="1"><button type="submit">Load Active AMIEWeb Numbers</button></form>
+<form method="get" action="/twilio/amieweb/active-numbers-page" style="margin:0 0 16px"><input type="hidden" name="load" value="1"><input name="number_query" value="{escape(number_query)}" placeholder="Optional partial Twilio number" inputmode="numeric"><button type="submit">Load Active AMIEWeb Numbers</button></form>
 {result_section}
 </body></html>"""
     return HTMLResponse(content=html)
@@ -49109,12 +49120,13 @@ def twilio_salesforce_active_numbers_page(request: Request):
   try:
     _require_twilio_active_number_admin(request)
     load_requested = str(request.query_params.get("load", "") or "").strip() == "1"
+    number_query = str(request.query_params.get("number_query", "") or "").strip()
     rows = []
     debug = {}
     assigned = 0
     if load_requested:
       cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
-      rows, debug = _twilio_active_number_rows(cucm_host, cucm_user, cucm_pass, account="salesforce")
+      rows, debug = _twilio_active_number_rows(cucm_host, cucm_user, cucm_pass, account="salesforce", number_query=number_query)
       assigned = sum(1 for row in rows if row["status"] == "Found")
     table_rows = []
     for row in rows:
@@ -49146,7 +49158,8 @@ def twilio_salesforce_active_numbers_page(request: Request):
       + escape(json.dumps(debug, indent=2))
       + '</pre></details>'
     ) if load_requested else '<p style="margin-top:18px">Select <strong>Load Salesforce Twilio Numbers</strong> to query Enterprise Org Prod and match the returned numbers to CUCM employees.</p>'
-    summary_text = f"Enterprise Org Prod: {len(rows)} active number(s), {assigned} matched to CUCM." if load_requested else "Numbers have not been loaded yet."
+    filter_text = f" Filter: {escape(number_query)}." if number_query else ""
+    summary_text = f"Enterprise Org Prod: {len(rows)} active number(s), {assigned} matched to CUCM.{filter_text}" if load_requested else "Numbers have not been loaded yet."
     html = f"""<!doctype html>
 <html><head><meta charset="utf-8"><title>SalesForce-Twilio Number Lookup</title>
 <style>
@@ -49156,7 +49169,7 @@ body {{ font-family:Segoe UI,Arial,sans-serif; margin:24px; background:#edf5fc; 
 table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:#005eb8; color:#fff; text-align:left; padding:9px; }} td {{ padding:8px; border-bottom:1px solid #c8dbee; vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} form {{ margin:0; }}
 </style></head><body>
 <div class="toolbar"><div><h2 style="margin:0">SalesForce-Twilio Number Lookup</h2><p>{summary_text}</p></div><a class="back" href="/page3">Back to SMS Item Menu</a></div>
-<form method="get" action="/twilio/salesforce/active-numbers-page" style="margin:0 0 16px"><input type="hidden" name="load" value="1"><button type="submit">Load Salesforce Twilio Numbers</button></form>
+<form method="get" action="/twilio/salesforce/active-numbers-page" style="margin:0 0 16px"><input type="hidden" name="load" value="1"><input name="number_query" value="{escape(number_query)}" placeholder="Optional partial Twilio number" inputmode="numeric"><button type="submit">Load Salesforce Twilio Numbers</button></form>
 {result_section}
 </body></html>"""
     return HTMLResponse(content=html)
