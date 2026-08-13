@@ -42534,7 +42534,7 @@ def page3_twilio_items(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lauraa">Twilio Verification - LauraA</button>
           <button type="button" class="portal-nav-btn" data-panel="aerialink-amieclassic">Aerialink SMS-AMIEClassic Lookup</button>
-          <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">AMIEWeb-Twilio SMS Hosting - (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-hosting-ready">Twilio Hosting Status - Ready to Verify Ownership (Testing)</button>
         </div>
       </aside>
@@ -42574,7 +42574,7 @@ def page3_twilio_items(request: Request):
 
         <section class="tool-panel" data-panel="twilio-sms-hosting">
           <div class="panel">
-            <h3>Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</h3>
+            <h3>AMIEWeb-Twilio SMS Hosting - (Developer Preview - NOT ACTIVE YET)</h3>
               <p style="color:#a01818; font-weight:700;">This function is currently not active pending Twilio Developer Preview enablement.</p>
               <p>Host SMS for one or more Twilio numbers in AMIEWeb. This updates SMS webhook fields only and does not modify voice webhook settings. If SMS URL is left blank, the default AMN listener URL is used.</p>
             <form id="twilio-sms-host-form">
@@ -49299,7 +49299,7 @@ def _twilio_lookup_sidebar_html(active_key: str) -> str:
     ("phimane", "Twilio Verification - Phimane", "/page3?panel=twilio-phimane"),
     ("lauraa", "Twilio Verification - LauraA", "/page3?panel=twilio-lauraa"),
     ("aerialink", "Aerialink SMS-AMIEClassic Lookup", "/page3?panel=aerialink-amieclassic"),
-    ("sms-hosting", "Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)", "/page3?panel=twilio-sms-hosting"),
+    ("sms-hosting", "AMIEWeb-Twilio SMS Hosting - (Developer Preview - NOT ACTIVE YET)", "/page3?panel=twilio-sms-hosting"),
     ("hosting-ready", "Twilio Hosting Status - Ready to Verify Ownership (Testing)", "/page3?panel=twilio-hosting-ready"),
   ]
   links = []
