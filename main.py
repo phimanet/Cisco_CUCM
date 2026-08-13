@@ -11743,8 +11743,9 @@ def _twilio_salesforce_configuration_rows(number_query: str = "") -> tuple[list[
     current_services = ", ".join(str(service.get("friendly_name", "") or "").strip() for service in assigned_services if service.get("friendly_name")) or "Not Set"
     current_app_sid = str(item.get("voice_application_sid", "") or "").strip()
     current_app_name = app_names.get(current_app_sid, TWILIO_SALESFORCE_TWIML_APP_NAME if current_app_sid == TWILIO_SALESFORCE_TWIML_APP_SID else "Not Set")
-    service_correct = any(str(service.get("sid", "") or "").strip() == str(expected_service.get("sid", "") or "").strip() for service in assigned_services)
-    app_correct = bool(expected_app and current_app_sid == str(expected_app.get("sid", "") or "").strip())
+    expected_service_name = " ".join(TWILIO_SALESFORCE_MESSAGING_SERVICE_NAME.lower().split())
+    service_correct = any(" ".join(str(service.get("friendly_name", "") or "").lower().split()) == expected_service_name for service in assigned_services)
+    app_correct = " ".join(str(current_app_name or "").lower().split()) == " ".join(TWILIO_SALESFORCE_TWIML_APP_NAME.lower().split()) or current_app_sid == TWILIO_SALESFORCE_TWIML_APP_SID
     rows.append({
       "twilio_number": twilio_number,
       "friendly_name": str(item.get("friendly_name", "") or "").strip(),
