@@ -190,6 +190,14 @@ TWILIO_SUBACCOUNT_NAME = (os.getenv("TWILIO_SUBACCOUNT_NAME", "AMNOne-Notificati
 TWILIO_SALESFORCE_SUBACCOUNT_SID = (os.getenv("TWILIO_SALESFORCE_SUBACCOUNT_SID", "") or "").strip()
 TWILIO_SALESFORCE_AUTH_TOKEN = (os.getenv("TWILIO_SALESFORCE_AUTH_TOKEN", "") or "").strip()
 TWILIO_SALESFORCE_SUBACCOUNT_NAME = (os.getenv("TWILIO_SALESFORCE_SUBACCOUNT_NAME", "Enterprise Org Prod") or "Enterprise Org Prod").strip()
+TWILIO_SALESFORCE_MESSAGING_SERVICE_NAME = (
+  os.getenv("TWILIO_SALESFORCE_MESSAGING_SERVICE_NAME", "1-1 Communication Msg Service")
+  or "1-1 Communication Msg Service"
+).strip()
+TWILIO_SALESFORCE_TWIML_APP_NAME = (
+  os.getenv("TWILIO_SALESFORCE_TWIML_APP_NAME", "AssociateNumberWithFunctionURL")
+  or "AssociateNumberWithFunctionURL"
+).strip()
 TWILIO_AMIEWEB_DEFAULT_SMS_URL = (
   os.getenv("TWILIO_AMIEWEB_DEFAULT_SMS_URL", "https://api.amnhealthcare.io/listener/notification/v1/twilio/listener")
   or "https://api.amnhealthcare.io/listener/notification/v1/twilio/listener"
@@ -11635,6 +11643,102 @@ def _find_twilio_messaging_service(services: list[dict], name: str) -> dict | No
     if candidate == target:
       return service
   return None
+
+
+def _list_twilio_twi_ml_apps(lookup_sid: str, lookup_token: str) -> dict:
+  """List legacy TwiML Apps for a subaccount, preserving pagination."""
+  if not lookup_sid or not lookup_token:
+    return {"ok": False, "status": "Twilio account not configured", "applications": []}
+  try:
+    applications = []
+    next_url = f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/Applications.json"
+    next_params = {"PageSize": 100}
+    while next_url:
+      response = requests.get(next_url, params=next_params, auth=(lookup_sid, lookup_token), verify=False, timeout=20)
+      if response.status_code != 200:
+        return {"ok": False, "status": f"TwiML App lookup failed HTTP {response.status_code}", "applications": applications}
+      payload = response.json() if response.text else {}
+      applications.extend(payload.get("applications", []) or [])
+      next_uri = str(payload.get("next_page_uri", "") or "").strip()
+      next_url = f"https://api.twilio.com{next_uri}" if next_uri.startswith("/") else next_uri
+      next_params = None
+    return {"ok": True, "status": "OK", "applications": applications}
+  except Exception as exc:
+    return {"ok": False, "status": f"TwiML App lookup error: {exc}", "applications": applications}
+
+
+def _twilio_salesforce_configuration_rows(number_query: str = "") -> tuple[list[dict], dict]:
+  """Read Salesforce numbers and their Messaging Service/TwiML App configuration."""
+  lookup_sid = _resolve_twilio_salesforce_account_sid()
+  lookup_token = TWILIO_SALESFORCE_AUTH_TOKEN or TWILIO_AUTH_TOKEN
+  if not lookup_sid or not lookup_token:
+    raise RuntimeError("Twilio Salesforce account is not configured.")
+  if TWILIO_ACCOUNT_SID and lookup_sid == TWILIO_ACCOUNT_SID:
+    raise RuntimeError("Twilio Salesforce subaccount SID is required; parent account is not allowed for this lookup.")
+
+  listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token, force_refresh=True)
+  if not listed.get("ok"):
+    raise RuntimeError(str(listed.get("status", "Salesforce number lookup failed")))
+  services = _list_twilio_messaging_services(lookup_sid, lookup_token)
+  if not services.get("ok"):
+    raise RuntimeError(str(services.get("status", "Salesforce Messaging Service lookup failed")))
+  applications = _list_twilio_twi_ml_apps(lookup_sid, lookup_token)
+  if not applications.get("ok"):
+    raise RuntimeError(str(applications.get("status", "Salesforce TwiML App lookup failed")))
+
+  expected_service = _find_twilio_messaging_service(services.get("services", []) or [], TWILIO_SALESFORCE_MESSAGING_SERVICE_NAME)
+  if not expected_service:
+    raise RuntimeError(f"Required Salesforce Messaging Service was not found: {TWILIO_SALESFORCE_MESSAGING_SERVICE_NAME}")
+  expected_app = next(
+    (item for item in applications.get("applications", []) or []
+     if " ".join(str(item.get("friendly_name", "") or "").lower().split())
+     == " ".join(TWILIO_SALESFORCE_TWIML_APP_NAME.lower().split())),
+    None,
+  )
+  if not expected_app:
+    raise RuntimeError(f"Required Salesforce TwiML App was not found: {TWILIO_SALESFORCE_TWIML_APP_NAME}")
+
+  service_assignments = services.get("assignments", {}) or {}
+  app_names = {
+    str(item.get("sid", "") or "").strip(): str(item.get("friendly_name", "") or "").strip()
+    for item in applications.get("applications", []) or []
+    if str(item.get("sid", "") or "").strip()
+  }
+  partial_digits = "".join(ch for ch in str(number_query or "") if ch.isdigit())
+  rows = []
+  for item in listed.get("numbers", []) or []:
+    if not isinstance(item, dict):
+      continue
+    twilio_number = str(item.get("phone_number", "") or "").strip()
+    if partial_digits and partial_digits not in "".join(ch for ch in twilio_number if ch.isdigit()):
+      continue
+    phone_sid = str(item.get("sid", "") or "").strip()
+    assigned_services = service_assignments.get(phone_sid, []) or []
+    current_services = ", ".join(str(service.get("friendly_name", "") or "").strip() for service in assigned_services if service.get("friendly_name")) or "Not Set"
+    current_app_sid = str(item.get("voice_application_sid", "") or "").strip()
+    current_app_name = app_names.get(current_app_sid, "Not Set")
+    service_correct = any(str(service.get("sid", "") or "").strip() == str(expected_service.get("sid", "") or "").strip() for service in assigned_services)
+    app_correct = current_app_sid == str(expected_app.get("sid", "") or "").strip()
+    rows.append({
+      "twilio_number": twilio_number,
+      "friendly_name": str(item.get("friendly_name", "") or "").strip(),
+      "phone_sid": phone_sid,
+      "current_service": current_services,
+      "current_app": current_app_name,
+      "current_app_sid": current_app_sid,
+      "status": "Correct" if service_correct and app_correct else "Needs Correction",
+      "can_correct": bool(phone_sid and expected_service.get("sid") and expected_app.get("sid")) and not (service_correct and app_correct),
+    })
+  rows.sort(key=lambda item: item["twilio_number"])
+  return rows, {
+    "twilio_account": TWILIO_SALESFORCE_SUBACCOUNT_NAME,
+    "number_query": partial_digits,
+    "expected_messaging_service": TWILIO_SALESFORCE_MESSAGING_SERVICE_NAME,
+    "expected_twiml_app": TWILIO_SALESFORCE_TWIML_APP_NAME,
+    "twilio_numbers": len(rows),
+    "messaging_service_count": len(services.get("services", []) or []),
+    "twiml_app_count": len(applications.get("applications", []) or []),
+  }
 
 
 def _twilio_remove_phone_from_service(lookup_sid: str, lookup_token: str, service_sid: str, phone_sid: str) -> None:
@@ -42395,7 +42499,7 @@ def page3_twilio_items(request: Request):
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">Twilio Number Lookup - AMIEWeb</button>
           <a class="portal-nav-btn" href="/twilio/amieweb/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio Active Number Lookup</a>
           <a class="portal-nav-btn" href="/twilio/amieweb/messaging-webhook-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio - Messaging and Webhook</a>
-          <a class="portal-nav-btn" href="/twilio/salesforce/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">SalesForce-Twilio Number Lookup</a>
+          <a class="portal-nav-btn" href="/twilio/salesforce/configuration-page" style="display:block; box-sizing:border-box; text-decoration:none;">6. SalesForce-Twilio Number Lookup</a>
           <button type="button" class="portal-nav-btn" data-panel="twilio-sms-hosting">Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">Twilio Number Lookup - Salesforce Enterprise Org Prod</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-phimane">Twilio Verification - Phimane</button>
@@ -49159,7 +49263,8 @@ def _twilio_lookup_sidebar_html(active_key: str) -> str:
     ("amieweb-lookup", "Twilio Number Lookup - AMIEWeb", "/page3?panel=twilio-lookup"),
     ("amieweb-active", "AMIEWeb-Twilio Active Number Lookup", "/twilio/amieweb/active-numbers-page"),
     ("amieweb-messaging", "AMIEWeb-Twilio - Messaging and Webhook", "/twilio/amieweb/messaging-webhook-page"),
-    ("salesforce-active", "SalesForce-Twilio Number Lookup", "/twilio/salesforce/active-numbers-page"),
+    ("salesforce-configuration", "6. SalesForce-Twilio Number Lookup", "/twilio/salesforce/configuration-page"),
+    ("salesforce-active", "SalesForce-Twilio Active Number Lookup", "/twilio/salesforce/active-numbers-page"),
     ("sms-hosting", "Twilio SMS Hosting - AMIEWeb (Developer Preview - NOT ACTIVE YET)", "/page3?panel=twilio-sms-hosting"),
     ("salesforce-lookup", "Twilio Number Lookup - Salesforce Enterprise Org Prod", "/page3?panel=twilio-lookup-sfdc"),
     ("phimane", "Twilio Verification - Phimane", "/page3?panel=twilio-phimane"),
@@ -49539,6 +49644,121 @@ def twilio_salesforce_active_numbers_page(request: Request):
   except Exception as exc:
     logger.exception("Salesforce active-number page failed")
     return HTMLResponse(content=f"<h3>Salesforce Twilio Number Lookup Failed</h3><p>{escape(str(exc))}</p><p><a href=\"/page3\">Back to SMS Item Menu</a></p>", status_code=500)
+
+
+@app.post("/twilio/salesforce/configuration/correct")
+def twilio_salesforce_configuration_correct_route(
+  request: Request,
+  phone_sid: str = Form(""),
+  return_to: str = Form(""),
+):
+  try:
+    _require_twilio_active_number_admin(request)
+    clean_phone_sid = (phone_sid or "").strip()
+    if not clean_phone_sid:
+      return HTMLResponse(content="<h3>Phone SID is required.</h3>", status_code=400)
+    lookup_sid = _resolve_twilio_salesforce_account_sid()
+    lookup_token = TWILIO_SALESFORCE_AUTH_TOKEN or TWILIO_AUTH_TOKEN
+    rows, _debug = _twilio_salesforce_configuration_rows("")
+    row = next((item for item in rows if item.get("phone_sid") == clean_phone_sid), None)
+    if not row:
+      return HTMLResponse(content="<h3>Salesforce number was not found.</h3>", status_code=404)
+
+    services = _list_twilio_messaging_services(lookup_sid, lookup_token)
+    target_service = _find_twilio_messaging_service(services.get("services", []) or [], TWILIO_SALESFORCE_MESSAGING_SERVICE_NAME)
+    applications = _list_twilio_twi_ml_apps(lookup_sid, lookup_token)
+    target_app = next(
+      (item for item in applications.get("applications", []) or []
+       if " ".join(str(item.get("friendly_name", "") or "").lower().split())
+       == " ".join(TWILIO_SALESFORCE_TWIML_APP_NAME.lower().split())),
+      None,
+    )
+    if not target_service or not target_app:
+      raise RuntimeError("Required Salesforce Messaging Service or TwiML App was not found.")
+
+    for assigned_service in services.get("assignments", {}).get(clean_phone_sid, []) or []:
+      assigned_sid = str(assigned_service.get("sid", "") or "").strip()
+      if assigned_sid and assigned_sid != str(target_service.get("sid", "") or "").strip():
+        _twilio_remove_phone_from_service(lookup_sid, lookup_token, assigned_sid, clean_phone_sid)
+    target_service_sid = str(target_service.get("sid", "") or "").strip()
+    if not any(str(item.get("sid", "") or "").strip() == target_service_sid for item in services.get("assignments", {}).get(clean_phone_sid, []) or []):
+      _twilio_add_phone_to_service(lookup_sid, lookup_token, target_service_sid, clean_phone_sid)
+
+    response = requests.post(
+      f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/IncomingPhoneNumbers/{clean_phone_sid}.json",
+      data={"VoiceApplicationSid": str(target_app.get("sid", "") or "").strip()},
+      auth=(lookup_sid, lookup_token), verify=False, timeout=20,
+    )
+    body = response.json() if response.text else {}
+    if response.status_code not in {200, 201}:
+      raise RuntimeError(str(body.get("message", "") or f"TwiML App update failed HTTP {response.status_code}"))
+    with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
+      TWILIO_INCOMING_PHONE_NUMBER_CACHE.pop(lookup_sid, None)
+    safe_return_to = (return_to or "").strip()
+    if safe_return_to.startswith("/twilio/salesforce/configuration-page"):
+      return RedirectResponse(url=safe_return_to, status_code=303)
+    return RedirectResponse(url="/twilio/salesforce/configuration-page?load=1", status_code=303)
+  except PermissionError as exc:
+    return HTMLResponse(content=f"<h3>Unauthorized</h3><p>{escape(str(exc))}</p>", status_code=401)
+  except Exception as exc:
+    logger.exception("Salesforce Twilio configuration correction failed")
+    return HTMLResponse(content=f"<h3>Salesforce configuration update failed</h3><p>{escape(str(exc))}</p>", status_code=500)
+
+
+@app.get("/twilio/salesforce/configuration-page", response_class=HTMLResponse)
+def twilio_salesforce_configuration_page(request: Request):
+  try:
+    _require_twilio_active_number_admin(request)
+    load_requested = str(request.query_params.get("load", "") or "").strip() == "1"
+    number_query = str(request.query_params.get("number_query", "") or "").strip()
+    rows, debug = ([], {})
+    if load_requested:
+      rows, debug = _twilio_salesforce_configuration_rows(number_query)
+    list_return_to = "/twilio/salesforce/configuration-page?load=1"
+    if number_query:
+      list_return_to += f"&number_query={quote(number_query)}"
+    table_rows = []
+    for row in rows:
+      action = '<span class="ok">Correct</span>'
+      if row.get("can_correct"):
+        action = (
+          '<form method="post" action="/twilio/salesforce/configuration/correct">'
+          f'<input type="hidden" name="phone_sid" value="{escape(str(row.get("phone_sid", "")))}">'
+          f'<input type="hidden" name="return_to" value="{escape(list_return_to)}">'
+          '<button type="submit" class="row-action" onclick="return confirm(\'Apply the Salesforce Messaging Service and TwiML App configuration?\');">Correct</button></form>'
+        )
+      table_rows.append(
+        "<tr>"
+        f"<td>{escape(str(row.get('twilio_number', '') or '-'))}</td>"
+        f"<td>{escape(str(row.get('friendly_name', '') or '-'))}</td>"
+        f"<td>{escape(str(row.get('current_service', '') or 'Not Set'))}</td>"
+        f"<td>{escape(str(row.get('current_app', '') or 'Not Set'))}</td>"
+        f"<td>{escape(str(row.get('status', '') or '-'))}</td>"
+        f"<td>{action}</td></tr>"
+      )
+    result_section = (
+      '<table><thead><tr><th>Twilio Number</th><th>Friendly Name</th><th>Current Messaging Service</th><th>Current TwiML App</th><th>Configuration Status</th><th>Action</th></tr></thead><tbody>'
+      + "".join(table_rows)
+      + '</tbody></table><details style="margin-top:16px"><summary>Debug Details</summary><pre>'
+      + escape(json.dumps(debug, indent=2))
+      + '</pre></details>'
+    ) if load_requested else '<p style="margin-top:18px">Select <strong>Load Salesforce Twilio Numbers</strong> to compare each number with the required Messaging Service and TwiML App configuration.</p>'
+    filter_text = f" Filter: {escape(number_query)}." if number_query else ""
+    summary_text = f"{len(rows)} Salesforce number(s) loaded.{filter_text}" if load_requested else "Numbers have not been loaded yet."
+    sidebar_html = _twilio_lookup_sidebar_html("salesforce-configuration")
+    html = f"""<!doctype html><html><head><meta charset="utf-8"><title>SalesForce-Twilio Number Lookup</title>
+<style>
+:root {{ --blue:#005eb8; --navy:#002f6c; --ice:#edf5fc; --border:#c8dbee; --text:#12304a; }} * {{ box-sizing:border-box; }} body {{ font-family:"Segoe UI",Tahoma,Arial,sans-serif; margin:0; background:var(--ice); color:var(--text); }}
+.topbar {{ padding:12px 20px; background:linear-gradient(120deg,#002f6c,#005eb8); color:#fff; font-weight:700; }} .content {{ max-width:1400px; margin:8px auto 14px; padding:0 12px 12px; }} .shell {{ display:grid; grid-template-columns:244px minmax(0,1fr); gap:10px; align-items:start; }} .hero {{ background:linear-gradient(135deg,rgba(255,255,255,.96),rgba(239,247,255,.95)); border:1px solid rgba(0,47,108,.1); border-radius:12px; padding:12px 14px; margin-bottom:10px; }} .hero-row {{ display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap; }} h2 {{ margin:0; color:var(--navy); font-size:22px; line-height:1.1; }} p {{ margin:4px 0 0; color:#4e6a84; font-size:12px; line-height:1.35; }}
+.back, button {{ background:linear-gradient(135deg,#0f5db8,#0a3f7d); color:#fff; border:0; border-radius:6px; padding:8px 20px; font-weight:600; text-decoration:none; cursor:pointer; font-size:14px; }} .lookup-panel {{ background:rgba(255,255,255,.93); border:1px solid rgba(0,47,108,.12); border-radius:14px; padding:10px; margin-bottom:12px; box-shadow:0 14px 30px rgba(0,47,108,.11); }} h3 {{ margin:0; color:var(--navy); font-size:18px; }} .search-row {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; }} input {{ min-height:32px; width:250px; padding:5px 9px; border:1px solid var(--border); border-radius:10px; font-size:14px; }} .divider {{ border-top:1px solid var(--border); margin:14px 0; padding-top:14px; }} .results {{ overflow-x:auto; }}
+table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:var(--blue); color:#fff; text-align:left; padding:9px; white-space:nowrap; }} td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} .results form {{ margin:0; }} .results .row-action {{ padding:4px 7px; font-size:11px; line-height:1.15; }} .ok {{ color:#145c2e; font-weight:700; }} .sidebar {{ position:sticky; top:54px; padding:8px; border-radius:12px; background:linear-gradient(180deg,rgba(0,47,108,.97),rgba(7,75,138,.96)); box-shadow:0 18px 36px rgba(0,47,108,.18); }} .sidebar h3 {{ color:#fff; margin:4px 6px 8px; font-size:13px; }} .nav-link {{ display:block; margin:6px 0; padding:7px 8px; border-radius:8px; color:rgba(255,255,255,.94); background:rgba(255,255,255,.09); border:1px solid rgba(255,255,255,.12); text-decoration:none; font-size:12px; font-weight:600; line-height:1.25; }} .nav-link.active {{ color:var(--navy); background:linear-gradient(90deg,#fff,#ecf6ff); }} @media (max-width:700px) {{ .content {{ padding:10px; }} .shell {{ grid-template-columns:1fr; }} .sidebar {{ position:static; }} input {{ width:100%; }} .search-row button {{ width:100%; }} }}
+</style></head><body><header class="topbar">AMN Healthcare | Voice Operations Portal</header><main class="content"><section class="hero"><div class="hero-row"><div><h2>SMS Item Menu</h2><p>Salesforce Twilio number configuration.</p></div><a class="back" href="/page2">Back to Administrative Items</a></div></section><div class="shell"><aside class="sidebar"><h3>Twilio Menu</h3>{sidebar_html}</aside><section><section class="hero"><div class="hero-row"><div><h2>6. SalesForce-Twilio Number Lookup</h2><p>{summary_text}</p></div></div></section><section class="lookup-panel"><h3>Lookup by Number</h3><p>Enter a full or partial Salesforce Twilio number. Digits only are used for matching. Required configuration: <strong>{escape(TWILIO_SALESFORCE_MESSAGING_SERVICE_NAME)}</strong> and TwiML App <strong>{escape(TWILIO_SALESFORCE_TWIML_APP_NAME)}</strong>.</p><form method="get" action="/twilio/salesforce/configuration-page" class="search-row"><input type="hidden" name="load" value="1"><input name="number_query" value="{escape(number_query)}" placeholder="Telephone - partial or full" inputmode="numeric"><button type="submit">Lookup by Number</button></form><div class="divider"><form method="get" action="/twilio/salesforce/configuration-page"><input type="hidden" name="load" value="1"><button type="submit">Load All Salesforce Twilio Numbers</button></form></div></section><section class="results">{result_section}</section></section></div></main></body></html>"""
+    return HTMLResponse(content=html)
+  except PermissionError as exc:
+    return HTMLResponse(content=f"<h3>Unauthorized</h3><p>{escape(str(exc))}</p>", status_code=401)
+  except Exception as exc:
+    logger.exception("Salesforce configuration page failed")
+    return HTMLResponse(content=f"<h3>Salesforce Number Configuration Lookup Failed</h3><p>{escape(str(exc))}</p><p><a href=\"/page3\">Back to SMS Item Menu</a></p>", status_code=500)
 
 
 @app.post("/lookup/twilio-by-number-sfdc")
