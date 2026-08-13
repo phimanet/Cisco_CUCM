@@ -11674,8 +11674,6 @@ def _twilio_amieweb_messaging_webhook_rows(number_query: str = "") -> tuple[list
   if not listed.get("ok"):
     raise RuntimeError(str(listed.get("status", "Messaging webhook lookup failed")))
   messaging_services = _list_twilio_messaging_services(lookup_sid, lookup_token)
-  if not messaging_services.get("ok"):
-    raise RuntimeError(str(messaging_services.get("status", "Messaging Service lookup failed")))
 
   expected_url = TWILIO_AMIEWEB_DEFAULT_SMS_URL.rstrip("/")
   rows = []
@@ -11708,6 +11706,7 @@ def _twilio_amieweb_messaging_webhook_rows(number_query: str = "") -> tuple[list
     "number_query": partial_digits,
     "expected_sms_url": TWILIO_AMIEWEB_DEFAULT_SMS_URL,
     "twilio_numbers": len(rows),
+    "messaging_service_lookup": str(messaging_services.get("status", "Unavailable")),
     "messaging_service_count": len(messaging_services.get("services", []) or []),
   }
 
@@ -49290,16 +49289,18 @@ def twilio_amieweb_messaging_webhook_page(request: Request):
           '<button type="submit" class="row-action" onclick="return confirm(\'Set A Message Comes In to the approved AMIEWeb listener URL?\');">Correct URL</button>'
           "</form>"
         )
-      service_action = (
-        '<form method="post" action="/twilio/amieweb/messaging-service/assign" class="service-action">'
-        f'<input type="hidden" name="phone_sid" value="{escape(str(row.get("phone_sid", "")))}">'
-        f'<input type="hidden" name="return_to" value="{escape(list_return_to)}">'
-        '<select name="service_action" aria-label="Messaging Service action">'
-        '<option value="mixed">Set Mixed A2P</option>'
-        '<option value="default">Set Default Conversations</option>'
-        '<option value="reset-mixed">Default then Mixed A2P</option>'
-        '</select><button type="submit" class="row-action" onclick="return confirm(\'Apply the selected Messaging Service action to this number?\');">Apply</button></form>'
-      )
+      service_action = '<span>Unavailable</span>'
+      if debug.get("messaging_service_lookup") == "OK":
+        service_action = (
+          '<form method="post" action="/twilio/amieweb/messaging-service/assign" class="service-action">'
+          f'<input type="hidden" name="phone_sid" value="{escape(str(row.get("phone_sid", "")))}">'
+          f'<input type="hidden" name="return_to" value="{escape(list_return_to)}">'
+          '<select name="service_action" aria-label="Messaging Service action">'
+          '<option value="mixed">Set Mixed A2P</option>'
+          '<option value="default">Set Default Conversations</option>'
+          '<option value="reset-mixed">Default then Mixed A2P</option>'
+          '</select><button type="submit" class="row-action" onclick="return confirm(\'Apply the selected Messaging Service action to this number?\');">Apply</button></form>'
+        )
       table_rows.append(
         "<tr>"
         f"<td>{escape(str(row.get('twilio_number', '') or '-'))}</td>"
