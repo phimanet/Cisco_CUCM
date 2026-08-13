@@ -11584,7 +11584,7 @@ def _list_twilio_messaging_services(lookup_sid: str, lookup_token: str) -> dict:
     return {"ok": False, "status": "Twilio account not configured", "services": [], "assignments": {}}
   try:
     services = []
-    next_url = f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/Messaging/Services.json"
+    next_url = "https://messaging.twilio.com/v1/Services"
     next_params = {"PageSize": 100}
     while next_url:
       response = requests.get(next_url, params=next_params, auth=(lookup_sid, lookup_token), verify=False, timeout=20)
@@ -11592,8 +11592,7 @@ def _list_twilio_messaging_services(lookup_sid: str, lookup_token: str) -> dict:
         return {"ok": False, "status": f"Messaging Service lookup failed HTTP {response.status_code}", "services": [], "assignments": {}}
       payload = response.json() if response.text else {}
       services.extend(payload.get("services", []) or [])
-      next_uri = str(payload.get("next_page_uri", "") or "").strip()
-      next_url = f"https://api.twilio.com{next_uri}" if next_uri.startswith("/") else next_uri
+      next_url = str((payload.get("meta", {}) or {}).get("next_page_url", "") or "").strip()
       next_params = None
 
     normalized_services = []
@@ -11609,7 +11608,7 @@ def _list_twilio_messaging_services(lookup_sid: str, lookup_token: str) -> dict:
         "friendly_name": str(service.get("friendly_name", "") or "").strip() or service_sid,
       }
       normalized_services.append(service_entry)
-      next_phone_url = f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/Messaging/Services/{service_sid}/PhoneNumbers.json"
+      next_phone_url = f"https://messaging.twilio.com/v1/Services/{service_sid}/PhoneNumbers"
       phone_params = {"PageSize": 100}
       while next_phone_url:
         response = requests.get(next_phone_url, params=phone_params, auth=(lookup_sid, lookup_token), verify=False, timeout=20)
@@ -11619,11 +11618,10 @@ def _list_twilio_messaging_services(lookup_sid: str, lookup_token: str) -> dict:
         for phone in payload.get("phone_numbers", []) or []:
           if not isinstance(phone, dict):
             continue
-          phone_sid = str(phone.get("sid", "") or phone.get("phone_number_sid", "") or "").strip()
+          phone_sid = str(phone.get("sid", "") or phone.get("phone_number_sid", "")).strip()
           if phone_sid:
             assignments.setdefault(phone_sid, []).append(service_entry)
-        next_uri = str(payload.get("next_page_uri", "") or "").strip()
-        next_phone_url = f"https://api.twilio.com{next_uri}" if next_uri.startswith("/") else next_uri
+        next_phone_url = str((payload.get("meta", {}) or {}).get("next_page_url", "") or "").strip()
         phone_params = None
     return {"ok": True, "status": "OK", "services": normalized_services, "assignments": assignments}
   except Exception as exc:
@@ -11641,7 +11639,7 @@ def _find_twilio_messaging_service(services: list[dict], name: str) -> dict | No
 
 def _twilio_remove_phone_from_service(lookup_sid: str, lookup_token: str, service_sid: str, phone_sid: str) -> None:
   response = requests.delete(
-    f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/Messaging/Services/{service_sid}/PhoneNumbers/{phone_sid}.json",
+    f"https://messaging.twilio.com/v1/Services/{service_sid}/PhoneNumbers/{phone_sid}",
     auth=(lookup_sid, lookup_token), verify=False, timeout=20,
   )
   if response.status_code not in {200, 204, 404}:
@@ -11650,7 +11648,7 @@ def _twilio_remove_phone_from_service(lookup_sid: str, lookup_token: str, servic
 
 def _twilio_add_phone_to_service(lookup_sid: str, lookup_token: str, service_sid: str, phone_sid: str) -> None:
   response = requests.post(
-    f"https://api.twilio.com/2010-04-01/Accounts/{lookup_sid}/Messaging/Services/{service_sid}/PhoneNumbers.json",
+    f"https://messaging.twilio.com/v1/Services/{service_sid}/PhoneNumbers",
     data={"PhoneNumberSid": phone_sid}, auth=(lookup_sid, lookup_token), verify=False, timeout=20,
   )
   if response.status_code not in {200, 201}:
