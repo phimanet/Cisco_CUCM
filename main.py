@@ -49067,19 +49067,21 @@ def twilio_amieweb_active_numbers_page(request: Request):
   :root {{ --blue:#005eb8; --navy:#002f6c; --ice:#edf5fc; --border:#c8dbee; --text:#12304a; }}
   * {{ box-sizing:border-box; }} body {{ font-family:"Segoe UI",Tahoma,Arial,sans-serif; margin:0; background:var(--ice); color:var(--text); }}
   .topbar {{ padding:12px 20px; background:linear-gradient(120deg,#002f6c,#005eb8); color:#fff; font-weight:700; }}
-  .content {{ max-width:1400px; margin:0 auto; padding:14px; }} .hero {{ background:#fff; border:1px solid var(--border); border-radius:8px; padding:14px; margin-bottom:12px; }}
+  .content {{ max-width:1400px; margin:0 auto; padding:14px; }} .shell {{ display:grid; grid-template-columns:240px minmax(0,1fr); gap:12px; align-items:start; }} .hero {{ background:#fff; border:1px solid var(--border); border-radius:8px; padding:14px; margin-bottom:12px; }}
   .hero-row {{ display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }} h2 {{ margin:0; color:var(--navy); font-size:20px; }} p {{ margin:5px 0 0; color:#355978; font-size:13px; }}
   .back, button {{ background:var(--blue); color:#fff; border:0; border-radius:6px; padding:9px 14px; font-weight:700; text-decoration:none; cursor:pointer; font-size:14px; }}
   .lookup-panel {{ background:#fff; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px; }} h3 {{ margin:0; color:var(--navy); font-size:16px; }}
   .search-row {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; }} input {{ min-height:36px; width:250px; padding:7px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px; }}
   .divider {{ border-top:1px solid var(--border); margin:14px 0; padding-top:14px; }} .results {{ overflow-x:auto; }}
   table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:var(--blue); color:#fff; text-align:left; padding:9px; white-space:nowrap; }} td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} .results form {{ margin:0; }}
-  @media (max-width:700px) {{ .content {{ padding:10px; }} input {{ width:100%; }} .search-row button {{ width:100%; }} }}
+  .sidebar {{ position:sticky; top:12px; padding:10px; border-radius:8px; background:linear-gradient(180deg,#002f6c,#07529a); box-shadow:0 12px 24px rgba(0,47,108,.18); }} .sidebar h3 {{ color:#fff; margin:2px 4px 10px; font-size:14px; }} .nav-link {{ display:block; margin:6px 0; padding:9px; border-radius:7px; color:#fff; background:rgba(255,255,255,.11); border:1px solid rgba(255,255,255,.14); text-decoration:none; font-size:13px; font-weight:700; line-height:1.25; }} .nav-link.active {{ color:var(--navy); background:#fff; border-color:#fff; }}
+  @media (max-width:700px) {{ .content {{ padding:10px; }} .shell {{ grid-template-columns:1fr; }} .sidebar {{ position:static; }} input {{ width:100%; }} .search-row button {{ width:100%; }} }}
   </style></head><body>
   <header class="topbar">AMN Healthcare | Voice Operations Portal</header><main class="content">
-  <section class="hero"><div class="hero-row"><div><h2>AMIEWeb-Twilio Active Number Lookup</h2><p>{summary_text}</p></div><a class="back" href="/page3">Back to SMS Item Menu</a></div></section>
+  <section class="hero"><div class="hero-row"><div><h2>SMS Item Menu</h2><p>Manage Twilio numbers and inbound verification patterns for the organization.</p></div><a class="back" href="/page2">Back to Administrative Items</a></div></section>
+  <div class="shell"><aside class="sidebar"><h3>Twilio Menu</h3><a class="nav-link" href="/page3">SMS Number Lookup</a><a class="nav-link" href="/page3?panel=twilio-lookup">Twilio Number Lookup - AMIEWeb</a><a class="nav-link active" href="/twilio/amieweb/active-numbers-page">AMIEWeb-Twilio Active Number Lookup</a><a class="nav-link" href="/twilio/salesforce/active-numbers-page">SalesForce-Twilio Number Lookup</a></aside><section><section class="hero"><div class="hero-row"><div><h2>AMIEWeb-Twilio Active Number Lookup</h2><p>{summary_text}</p></div></div></section>
   <section class="lookup-panel"><h3>Lookup by Number</h3><p>Enter a full or partial Twilio number. Digits only are used for matching.</p><form method="get" action="/twilio/amieweb/active-numbers-page" class="search-row"><input type="hidden" name="load" value="1"><input name="number_query" value="{escape(number_query)}" placeholder="Telephone - partial or full" inputmode="numeric"><button type="submit">Lookup by Number</button></form><div class="divider"><form method="get" action="/twilio/amieweb/active-numbers-page"><input type="hidden" name="load" value="1"><button type="submit">Load All Active AMIEWeb Numbers</button></form></div></section>
-  <section class="results">{result_section}</section>
+  <section class="results">{result_section}</section></section></div>
   </main></body></html>"""
     return HTMLResponse(content=html)
   except PermissionError as exc:
@@ -49174,19 +49176,21 @@ def twilio_salesforce_active_numbers_page(request: Request):
   :root {{ --blue:#005eb8; --navy:#002f6c; --ice:#edf5fc; --border:#c8dbee; --text:#12304a; }}
   * {{ box-sizing:border-box; }} body {{ font-family:"Segoe UI",Tahoma,Arial,sans-serif; margin:0; background:var(--ice); color:var(--text); }}
   .topbar {{ padding:12px 20px; background:linear-gradient(120deg,#002f6c,#005eb8); color:#fff; font-weight:700; }}
-  .content {{ max-width:1400px; margin:0 auto; padding:14px; }} .hero {{ background:#fff; border:1px solid var(--border); border-radius:8px; padding:14px; margin-bottom:12px; }}
+  .content {{ max-width:1400px; margin:0 auto; padding:14px; }} .shell {{ display:grid; grid-template-columns:240px minmax(0,1fr); gap:12px; align-items:start; }} .hero {{ background:#fff; border:1px solid var(--border); border-radius:8px; padding:14px; margin-bottom:12px; }}
   .hero-row {{ display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }} h2 {{ margin:0; color:var(--navy); font-size:20px; }} p {{ margin:5px 0 0; color:#355978; font-size:13px; }}
   .back, button {{ background:var(--blue); color:#fff; border:0; border-radius:6px; padding:9px 14px; font-weight:700; text-decoration:none; cursor:pointer; font-size:14px; }}
   .lookup-panel {{ background:#fff; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:12px; }} h3 {{ margin:0; color:var(--navy); font-size:16px; }}
   .search-row {{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; }} input {{ min-height:36px; width:250px; padding:7px 10px; border:1px solid var(--border); border-radius:6px; font-size:14px; }}
   .divider {{ border-top:1px solid var(--border); margin:14px 0; padding-top:14px; }} .results {{ overflow-x:auto; }}
   table {{ width:100%; border-collapse:collapse; background:#fff; font-size:13px; }} th {{ background:var(--blue); color:#fff; text-align:left; padding:9px; white-space:nowrap; }} td {{ padding:8px; border-bottom:1px solid var(--border); vertical-align:top; }} tr:nth-child(even) {{ background:#f7fbff; }} .results form {{ margin:0; }}
-  @media (max-width:700px) {{ .content {{ padding:10px; }} input {{ width:100%; }} .search-row button {{ width:100%; }} }}
+  .sidebar {{ position:sticky; top:12px; padding:10px; border-radius:8px; background:linear-gradient(180deg,#002f6c,#07529a); box-shadow:0 12px 24px rgba(0,47,108,.18); }} .sidebar h3 {{ color:#fff; margin:2px 4px 10px; font-size:14px; }} .nav-link {{ display:block; margin:6px 0; padding:9px; border-radius:7px; color:#fff; background:rgba(255,255,255,.11); border:1px solid rgba(255,255,255,.14); text-decoration:none; font-size:13px; font-weight:700; line-height:1.25; }} .nav-link.active {{ color:var(--navy); background:#fff; border-color:#fff; }}
+  @media (max-width:700px) {{ .content {{ padding:10px; }} .shell {{ grid-template-columns:1fr; }} .sidebar {{ position:static; }} input {{ width:100%; }} .search-row button {{ width:100%; }} }}
   </style></head><body>
   <header class="topbar">AMN Healthcare | Voice Operations Portal</header><main class="content">
-  <section class="hero"><div class="hero-row"><div><h2>SalesForce-Twilio Number Lookup</h2><p>{summary_text}</p></div><a class="back" href="/page3">Back to SMS Item Menu</a></div></section>
+  <section class="hero"><div class="hero-row"><div><h2>SMS Item Menu</h2><p>Manage Twilio numbers and inbound verification patterns for the organization.</p></div><a class="back" href="/page2">Back to Administrative Items</a></div></section>
+  <div class="shell"><aside class="sidebar"><h3>Twilio Menu</h3><a class="nav-link" href="/page3">SMS Number Lookup</a><a class="nav-link" href="/page3?panel=twilio-lookup">Twilio Number Lookup - AMIEWeb</a><a class="nav-link" href="/twilio/amieweb/active-numbers-page">AMIEWeb-Twilio Active Number Lookup</a><a class="nav-link active" href="/twilio/salesforce/active-numbers-page">SalesForce-Twilio Number Lookup</a></aside><section><section class="hero"><div class="hero-row"><div><h2>SalesForce-Twilio Number Lookup</h2><p>{summary_text}</p></div></div></section>
   <section class="lookup-panel"><h3>Lookup by Number</h3><p>Enter a full or partial Twilio number. Digits only are used for matching.</p><form method="get" action="/twilio/salesforce/active-numbers-page" class="search-row"><input type="hidden" name="load" value="1"><input name="number_query" value="{escape(number_query)}" placeholder="Telephone - partial or full" inputmode="numeric"><button type="submit">Lookup by Number</button></form><div class="divider"><form method="get" action="/twilio/salesforce/active-numbers-page"><input type="hidden" name="load" value="1"><button type="submit">Load All Salesforce Twilio Numbers</button></form></div></section>
-  <section class="results">{result_section}</section>
+  <section class="results">{result_section}</section></section></div>
   </main></body></html>"""
     return HTMLResponse(content=html)
   except PermissionError as exc:
