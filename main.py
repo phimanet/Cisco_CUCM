@@ -47485,10 +47485,30 @@ def _twilio_active_number_rows(
     else:
       desired_friendly_name = ""
       assignment = {"name": "Unassigned", "userid": "", "phone_details": ""}
-    rows.append({"twilio_number": twilio_number, "friendly_name": str(number_item.get("friendly_name", "") or "").strip(), "phone_sid": str(number_item.get("sid", "") or "").strip(), "capabilities": _twilio_capabilities_text(number_item), "assignment": assignment, "desired_friendly_name": desired_friendly_name, "can_update": bool(desired_friendly_name and str(number_item.get("sid", "") or "").strip()), "status": "Found" if person else "Unassigned"})
+    rows.append({"twilio_number": twilio_number, "friendly_name": str(number_item.get("friendly_name", "") or "").strip(), "phone_sid": str(number_item.get("sid", "") or "").strip(), "capabilities": _twilio_capabilities_text(number_item), "assignment": assignment, "assigned_cucm_employee": assignment["name"], "cucm_telephone_extension": assignment["phone_details"], "desired_friendly_name": desired_friendly_name, "can_update": bool(desired_friendly_name and str(number_item.get("sid", "") or "").strip()), "status": "Found" if person else "Unassigned"})
   rows.sort(key=lambda item: item["twilio_number"])
   debug.update({"twilio_account": account_name, "number_query": partial_digits, "twilio_numbers": len(rows), "assigned": assigned_count})
   return rows, debug
+
+
+def _twilio_csv_download_html(rows: list[dict], columns: list[tuple[str, str]], filename: str) -> str:
+  """Return a download link for the already-rendered, read-only Twilio result set."""
+  if not rows:
+    return ""
+
+  output = io.StringIO(newline="")
+  writer = csv.writer(output)
+  writer.writerow([header for header, _key in columns])
+  for row in rows:
+    writer.writerow([str((row or {}).get(key, "") or "") for _header, key in columns])
+
+  encoded = base64.b64encode(output.getvalue().encode("utf-8-sig")).decode("ascii")
+  return (
+    '<p style="margin:0 0 12px 0;">'
+    f'<a href="data:text/csv;base64,{encoded}" download="{escape(filename)}" '
+    'style="display:inline-block;padding:8px 12px;background:#0f5db8;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;">'
+    'Download CSV</a></p>'
+  )
 
 
 @app.post("/twilio/amieweb/active-numbers")
@@ -47701,7 +47721,12 @@ def twilio_amieweb_messaging_webhook_page(request: Request):
         f"<td>{webhook_action}</td><td>{service_action}</td></tr>"
       )
     result_section = (
-      '<table><thead><tr><th>Twilio Number</th><th>Friendly Name</th><th>Current Messaging Service</th><th>A Message Comes In URL</th><th>Method</th><th>Webhook Status</th><th>Webhook Action</th><th>Messaging Service Action</th></tr></thead><tbody>'
+      _twilio_csv_download_html(rows, [
+        ("Twilio Number", "twilio_number"), ("Friendly Name", "friendly_name"),
+        ("Current Messaging Service", "messaging_service"), ("A Message Comes In URL", "sms_url"),
+        ("SMS Method", "sms_method"), ("Webhook Status", "status"),
+      ], "amieweb_messaging_webhook.csv")
+      + '<table><thead><tr><th>Twilio Number</th><th>Friendly Name</th><th>Current Messaging Service</th><th>A Message Comes In URL</th><th>Method</th><th>Webhook Status</th><th>Webhook Action</th><th>Messaging Service Action</th></tr></thead><tbody>'
       + "".join(table_rows)
       + '</tbody></table><details style="margin-top:16px"><summary>Debug Details</summary><pre>'
       + escape(json.dumps(debug, indent=2))
@@ -47775,7 +47800,12 @@ def twilio_amieweb_active_numbers_page(request: Request):
         "</tr>"
       )
     result_section = (
-      '<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Assigned CUCM Employee</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>'
+      _twilio_csv_download_html(rows, [
+        ("Twilio Number", "twilio_number"), ("Current Friendly Name", "friendly_name"),
+        ("Phone SID", "phone_sid"), ("Assigned CUCM Employee", "assigned_cucm_employee"),
+        ("CUCM Telephone / Extension", "cucm_telephone_extension"), ("Twilio Status", "status"),
+      ], "amieweb_active_numbers.csv")
+      + '<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Assigned CUCM Employee</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>'
       + "".join(table_rows)
       + '</tbody></table><details style="margin-top:16px"><summary>Debug Details</summary><pre>'
       + escape(json.dumps(debug, indent=2))
@@ -47893,7 +47923,12 @@ def twilio_salesforce_active_numbers_page(request: Request):
         f"<td>{action}</td></tr>"
       )
     result_section = (
-      '<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Assigned CUCM Employee</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>'
+      _twilio_csv_download_html(rows, [
+        ("Twilio Number", "twilio_number"), ("Current Friendly Name", "friendly_name"),
+        ("Phone SID", "phone_sid"), ("Assigned CUCM Employee", "assigned_cucm_employee"),
+        ("CUCM Telephone / Extension", "cucm_telephone_extension"), ("Twilio Status", "status"),
+      ], "salesforce_active_numbers.csv")
+      + '<table><thead><tr><th>Twilio Number</th><th>Current Friendly Name</th><th>Assigned CUCM Employee</th><th>CUCM Telephone / Extension</th><th>Twilio Status</th><th>Action</th></tr></thead><tbody>'
       + "".join(table_rows)
       + '</tbody></table><details style="margin-top:16px"><summary>Debug Details</summary><pre>'
       + escape(json.dumps(debug, indent=2))
@@ -48019,7 +48054,13 @@ def twilio_salesforce_configuration_page(request: Request):
         f"<td>{action}</td></tr>"
       )
     result_section = (
-      '<table><thead><tr><th>Twilio Number</th><th>Friendly Name</th><th>Current Messaging Service</th><th>Current TwiML App</th><th>Configuration Status</th><th>Action</th></tr></thead><tbody>'
+      _twilio_csv_download_html(rows, [
+        ("Twilio Number", "twilio_number"), ("Friendly Name", "friendly_name"),
+        ("Phone SID", "phone_sid"), ("Current Messaging Service", "current_service"),
+        ("Current TwiML App", "current_app"), ("Current TwiML App SID", "current_app_sid"),
+        ("Configuration Status", "status"),
+      ], "salesforce_twilio_configuration.csv")
+      + '<table><thead><tr><th>Twilio Number</th><th>Friendly Name</th><th>Current Messaging Service</th><th>Current TwiML App</th><th>Configuration Status</th><th>Action</th></tr></thead><tbody>'
       + "".join(table_rows)
       + '</tbody></table><details style="margin-top:16px"><summary>Debug Details</summary><pre>'
       + escape(json.dumps(debug, indent=2))
