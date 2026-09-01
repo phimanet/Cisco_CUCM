@@ -70,6 +70,7 @@ from toolkit.ad_phone_fields import (
   inspect_ad_group_identifiers,
   manage_ad_group_membership,
   lookup_ad_identity_by_email,
+  lookup_ad_identities_by_full_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -36436,6 +36437,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="hunt-list-members">Hunt List Members (Search Line Groups)</button>
             <button type="button" class="portal-nav-btn" data-panel="linegroup-admin">Update Hunt List Line Group</button>
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
+            <button type="button" class="portal-nav-btn" data-panel="ad-user-lookups">Active Directory User Lookups</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/opentext-admin'">OpenText Admin</button>
@@ -37379,6 +37381,18 @@ def menu_admin_page(request: Request):
         <p id="jabbernotify-search-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter a last name and click Search.</p>
         <div id="jabbernotify-results" style="overflow-x:auto;"></div>
         <p id="jabbernotify-send-status" style="margin-top:14px; font-weight:700; min-height:18px;"></p>
+      </section>
+
+      <section class="panel tool-panel" data-panel="ad-user-lookups">
+        <h3>Active Directory User Lookups</h3>
+        <p>Paste one full name per line. This is an LDAP-only lookup and returns Username, First Name, Last Name, Email Address, and ipPhone.</p>
+        <form id="ad-user-lookups-form">
+          <textarea id="ad-user-lookups-names" name="names_text" rows="12" placeholder="Marina Balderian&#10;Jay Bryan Cataluna&#10;Ma. Zobel Magalona" required></textarea>
+          <br><br><button type="submit">Run Active Directory Lookup</button>
+        </form>
+        <p id="ad-user-lookups-status" style="color:#2c5c8a;min-height:18px;margin-top:12px;"></p>
+        <p><a id="ad-user-lookups-download" href="#" style="display:none;font-weight:700;">Download CSV Output</a></p>
+        <textarea id="ad-user-lookups-preview" rows="10" readonly style="width:100%;"></textarea>
       </section>
 
       <section class="panel tool-panel" data-panel="bulkperson">
@@ -39877,6 +39891,40 @@ def menu_admin_page(request: Request):
             failedText: "Bulk extension lookup failed.",
             defaultFilename: "bulk_extension_lookup.csv",
           });
+
+          (function () {
+            const form = document.getElementById("ad-user-lookups-form");
+            const statusEl = document.getElementById("ad-user-lookups-status");
+            const previewEl = document.getElementById("ad-user-lookups-preview");
+            const downloadEl = document.getElementById("ad-user-lookups-download");
+            if (!form || !statusEl || !previewEl || !downloadEl) {
+              return;
+            }
+            form.addEventListener("submit", async function (event) {
+              event.preventDefault();
+              statusEl.textContent = "Looking up Active Directory users...";
+              previewEl.value = "";
+              downloadEl.style.display = "none";
+              try {
+                const response = await fetch("/admin/ad-user-lookups", {
+                  method: "POST", body: new FormData(form), credentials: "same-origin",
+                });
+                const payload = await response.json();
+                if (!response.ok || !payload.ok) {
+                  throw new Error(String(payload.error || "Active Directory lookup failed."));
+                }
+                const summary = payload.summary || {};
+                statusEl.textContent = "Completed: " + String(summary.found || 0) + " found, " + String(summary.not_found || 0) + " not found.";
+                previewEl.value = payload.output_text || "";
+                if (payload.download_url) {
+                  downloadEl.href = payload.download_url;
+                  downloadEl.style.display = "inline";
+                }
+              } catch (err) {
+                statusEl.textContent = "Active Directory lookup failed: " + String(err && err.message ? err.message : err);
+              }
+            });
+          })();
 
           // ---- SMS Separation Email Process panel -----------------------------
           (function () {
@@ -46491,6 +46539,54 @@ async def bulk_lookup_person_route(
       "filename": job_output["filename"],
       "output_text": job_output["output_text"],
       "download_url": f"/download/job-output/{job_output['job_id']}",
+    })
+
+
+@app.post("/admin/ad-user-lookups")
+def ad_user_lookups_route(request: Request, names_text: str = Form("")):
+    session = _get_auth_session(request) or {}
+    if not _is_admin_user(str(session.get("username", "") or "").strip()):
+      return JSONResponse({"ok": False, "error": "Not authorized for Active Directory User Lookups."}, status_code=403)
+
+    names = []
+    seen = set()
+    for line in str(names_text or "").splitlines():
+      name = " ".join(line.split())
+      if name and name.lower() not in seen:
+        seen.add(name.lower())
+        names.append(name)
+    if not names:
+      return JSONResponse({"ok": False, "error": "Paste at least one full name, one per line."}, status_code=422)
+    if len(names) > 200:
+      return JSONResponse({"ok": False, "error": "Limit each lookup to 200 names."}, status_code=422)
+
+    result = lookup_ad_identities_by_full_name(names)
+    if not result.get("ok"):
+      return JSONResponse({"ok": False, "error": str(result.get("error") or "Active Directory lookup failed.")}, status_code=502)
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Input Name", "Status", "Username", "First Name", "Last Name", "Email Address", "ipPhone"])
+    found_count = 0
+    for row in result.get("results", []):
+      found = bool(row.get("found"))
+      found_count += int(found)
+      writer.writerow([
+        row.get("input_name", ""), "FOUND" if found else "NOT_FOUND", row.get("samAccountName", ""),
+        row.get("firstName", ""), row.get("lastName", ""), row.get("mail", ""), row.get("ipPhone", ""),
+      ])
+
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"active_directory_user_lookups_{timestamp}.csv"
+    job_output = _prepare_job_output(output.getvalue().encode("utf-8"), filename)
+    _append_audit_event(
+      action="active_directory_user_lookups", cucm_host="", operator=str(session.get("username", "") or ""),
+      target=f"names={len(names)};found={found_count}", output_filename=filename, inline_mode=True,
+    )
+    return JSONResponse({
+      "ok": True,
+      "summary": {"input_names": len(names), "found": found_count, "not_found": len(names) - found_count},
+      "filename": filename, "output_text": output.getvalue(), "download_url": f"/download/job-output/{job_output['job_id']}",
     })
 
 

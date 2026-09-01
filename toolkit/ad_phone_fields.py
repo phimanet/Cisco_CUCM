@@ -2164,3 +2164,69 @@ def lookup_ad_identity_by_email(email, auth_context=None):
         return merged
 
     return result
+
+
+def lookup_ad_identities_by_full_name(full_names, auth_context=None):
+    """Resolve exact AD display names in one LDAP query."""
+    clean_names = []
+    seen = set()
+    for value in full_names or []:
+        name = " ".join(str(value or "").split())
+        key = name.lower()
+        if name and key not in seen:
+            seen.add(key)
+            clean_names.append(name)
+
+    if not clean_names:
+        return {"ok": True, "results": [], "source": "ldap"}
+    if not LDAP3_AVAILABLE:
+        return {"ok": False, "error": "ldap3 package is not installed on this server"}
+
+    config, config_error = _resolve_ldap_config()
+    if config_error:
+        return {"ok": False, "error": config_error}
+    bind_user, bind_auth, bind_error = _resolve_ldap_bind_credentials(auth_context, config)
+    if bind_error:
+        return {"ok": False, "error": bind_error}
+    bind_password = str(os.getenv("AD_LDAP_BIND_PASSWORD") or str((auth_context or {}).get("password") or ""))
+    try:
+        server = Server(config["server"], port=config["port"], use_ssl=config["use_ssl"], get_info=ALL, connect_timeout=20)
+        conn = Connection(server, user=bind_user, password=bind_password, authentication=bind_auth, auto_bind=True, receive_timeout=30)
+        clauses = "".join(f"(displayName={_escape_ldap_filter_value(name)})" for name in clean_names)
+        conn.search(
+            search_base=config["base_dn"],
+            search_filter=f"(&(objectClass=user)(|{clauses}))",
+            search_scope=SUBTREE,
+            attributes=["sAMAccountName", "givenName", "sn", "displayName", "mail", "ipPhone"],
+        )
+    except Exception as exc:
+        return {"ok": False, "error": f"AD full-name lookup failed: {exc}"}
+
+    by_name = {}
+    for entry in conn.entries:
+        def _val(attribute):
+            return str(getattr(getattr(entry, attribute, None), "value", "") or "").strip()
+        display_name = _val("displayName")
+        if display_name:
+            by_name[display_name.lower()] = {
+                "found": bool(_val("sAMAccountName")), "input_name": display_name,
+                "samAccountName": _val("sAMAccountName"), "firstName": _val("givenName"),
+                "lastName": _val("sn"), "mail": _val("mail"), "ipPhone": _val("ipPhone"),
+            }
+    try:
+        conn.unbind()
+    except Exception:
+        pass
+
+    results = []
+    for name in clean_names:
+        row = dict(by_name.get(name.lower()) or {})
+        row.setdefault("found", False)
+        row["input_name"] = name
+        row.setdefault("samAccountName", "")
+        row.setdefault("firstName", "")
+        row.setdefault("lastName", "")
+        row.setdefault("mail", "")
+        row.setdefault("ipPhone", "")
+        results.append(row)
+    return {"ok": True, "results": results, "source": "ldap"}
