@@ -33729,7 +33729,7 @@ def sinch_admin_page(request: Request):
             const rawTnQuery = String(formData.get("tn_query") || "");
             const cleanTnQuery = rawTnQuery.replace(/[\s().-]/g, "");
 
-            if (!extractAllMode && !/^[0-9xX]{10}$/.test(cleanTnQuery)) {{
+            if (!extractAllMode && !/^[0-9xX]{{10}}$/.test(cleanTnQuery)) {{
               statusEl.textContent = "Enter exactly 10 digits, or a 10-character pattern such as 858xxxxxxx.";
               return;
             }}
