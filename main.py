@@ -37395,6 +37395,7 @@ def menu_admin_page(request: Request):
           <a id="ad-user-lookups-download" href="#" style="display:none;font-weight:700;">Download CSV Output</a>
           <button type="button" id="ad-user-lookups-copy" disabled>Copy Output</button>
         </div>
+        <div id="ad-user-lookups-table" style="overflow-x:auto;"></div>
         <label for="ad-user-lookups-preview" style="display:block;font-size:12px;font-weight:700;color:#12304a;margin-bottom:4px;">Lookup Output (select or copy)</label>
         <textarea id="ad-user-lookups-preview" rows="10" readonly style="width:100%;" placeholder="Completed lookup results will appear here."></textarea>
       </section>
@@ -39902,8 +39903,37 @@ def menu_admin_page(request: Request):
             const previewEl = document.getElementById("ad-user-lookups-preview");
             const downloadEl = document.getElementById("ad-user-lookups-download");
             const copyBtn = document.getElementById("ad-user-lookups-copy");
-            if (!form || !statusEl || !previewEl || !downloadEl || !copyBtn) {
+            const tableEl = document.getElementById("ad-user-lookups-table");
+            if (!form || !statusEl || !previewEl || !downloadEl || !copyBtn || !tableEl) {
               return;
+            }
+            function renderTable(csvText) {
+              const lines = String(csvText || "").trim().split(/\r?\n/).filter(Boolean);
+              if (lines.length < 2) {
+                tableEl.innerHTML = "";
+                return;
+              }
+              const rows = lines.map(function (line) {
+                const values = [];
+                let value = "";
+                let quoted = false;
+                for (let index = 0; index < line.length; index += 1) {
+                  const character = line[index];
+                  if (character === '"') {
+                    if (quoted && line[index + 1] === '"') { value += '"'; index += 1; }
+                    else { quoted = !quoted; }
+                  } else if (character === ',' && !quoted) { values.push(value); value = ""; }
+                  else { value += character; }
+                }
+                values.push(value);
+                return values;
+              });
+              const header = rows.shift();
+              let html = "<table><thead><tr>" + header.map(function (value) { return "<th>" + escapeHtml(value) + "</th>"; }).join("") + "</tr></thead><tbody>";
+              rows.forEach(function (row) {
+                html += "<tr>" + header.map(function (_, index) { return "<td>" + escapeHtml(row[index] || "") + "</td>"; }).join("") + "</tr>";
+              });
+              tableEl.innerHTML = html + "</tbody></table>";
             }
             copyBtn.addEventListener("click", async function () {
               if (!previewEl.value) {
@@ -39922,6 +39952,7 @@ def menu_admin_page(request: Request):
               event.preventDefault();
               statusEl.textContent = "Looking up Active Directory users...";
               previewEl.value = "";
+              tableEl.innerHTML = "";
               copyBtn.disabled = true;
               downloadEl.style.display = "none";
               try {
@@ -39935,6 +39966,7 @@ def menu_admin_page(request: Request):
                 const summary = payload.summary || {};
                 statusEl.textContent = "Completed: " + String(summary.found || 0) + " found, " + String(summary.not_found || 0) + " not found.";
                 previewEl.value = payload.output_text || "";
+                renderTable(previewEl.value);
                 copyBtn.disabled = !previewEl.value;
                 if (payload.download_url) {
                   downloadEl.href = payload.download_url;
