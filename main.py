@@ -46560,7 +46560,11 @@ def ad_user_lookups_route(request: Request, names_text: str = Form("")):
     if len(names) > 200:
       return JSONResponse({"ok": False, "error": "Limit each lookup to 200 names."}, status_code=422)
 
-    result = lookup_ad_identities_by_full_name(names)
+    _, ad_username, ad_password = _resolve_cucm_credentials(request, "", "", "")
+    result = lookup_ad_identities_by_full_name(
+      names,
+      {"username": ad_username, "password": ad_password},
+    )
     if not result.get("ok"):
       return JSONResponse({"ok": False, "error": str(result.get("error") or "Active Directory lookup failed.")}, status_code=502)
 
