@@ -34318,7 +34318,13 @@ def _inteliquent_extract_routing_options(raw_payload: dict) -> list[dict]:
       candidates.extend([item for item in rows if isinstance(item, dict)])
 
   for item in candidates:
-    _add(item.get("routingOption"), item.get("customerAssignedName"))
+    _add(
+      item.get("routingOption"),
+      item.get("customerAssignedName", "")
+      or item.get("customerRoutingOption", "")
+      or item.get("customerRoutingOptionName", "")
+      or item.get("routingLabel", ""),
+    )
 
   return values
 
