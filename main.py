@@ -33403,17 +33403,53 @@ def sinch_admin_page(request: Request):
       <div id="sinch-order-section" style="display:{order_display_style};">
       <div class="panel">
         <h3>Order New TN</h3>
-        <p style="margin:0 0 10px 0;">Copy and paste one or more telephone numbers. Supported separators: new line, comma, or space.</p>
+        <p style="margin:0 0 10px 0;">Search available carrier inventory, select the numbers to order, then choose their routing option.</p>
+        <form id="inteliquent-tn-availability-form">
+          <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+            <div>
+              <label for="order_area_code" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Area Code (NPA)</label>
+              <input type="text" id="order_area_code" name="order_area_code" inputmode="numeric" maxlength="3" placeholder="858" style="width:110px;" />
+            </div>
+            <div>
+              <label for="order_tn_pattern" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN Pattern (optional)</label>
+              <input type="text" id="order_tn_pattern" name="order_tn_pattern" placeholder="858xxxxxxx" style="min-width:180px;" />
+            </div>
+            <div>
+              <label for="order_quantity" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Available Results</label>
+              <input type="number" id="order_quantity" name="order_quantity" value="20" min="1" max="100" style="width:110px;" />
+            </div>
+            <button type="submit" id="order-search-btn">Find Available TNs</button>
+          </div>
+        </form>
+        <p id="tn-availability-status" class="status-msg"></p>
+        <div id="tn-availability-results" style="overflow-x:auto;"></div>
+      </div>
+      <div class="panel">
+        <h3 style="margin:0 0 8px 0;">Order Selected TNs</h3>
         <form id="inteliquent-tn-order-form">
           <div style="margin-bottom:10px;">
-            <label for="order_tn_list" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN List</label>
-            <textarea id="order_tn_list" name="order_tn_list" placeholder="Paste TNs here, for example:\n8585551000\n8585551001"></textarea>
+            <label for="order_tn_list" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Selected TNs</label>
+            <textarea id="order_tn_list" name="order_tn_list" readonly placeholder="Select available TNs above."></textarea>
+          </div>
+          <div style="margin-bottom:10px;max-width:420px;">
+            <label for="order_routing_option_value" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Routing Option</label>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <select id="order_routing_option_value" name="order_routing_option_value" style="width:100%;min-height:34px;border:1px solid #c8dbee;border-radius:10px;padding:6px 10px;">
+                <option value="">Loading routing options...</option>
+              </select>
+              <button type="button" id="order-routing-option-refresh-btn" style="white-space:nowrap;">Refresh</button>
+            </div>
+            <div id="order-routing-option-status" style="margin-top:6px;font-size:12px;color:#4e6a84;">Fetching available routing options from Sinch...</div>
+          </div>
+          <div style="margin-bottom:10px;max-width:240px;">
+            <label for="order_pon" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">PON (required)</label>
+            <input type="text" id="order_pon" name="order_pon" maxlength="64" placeholder="Enter purchase order number" required style="width:100%;" />
           </div>
           <div style="margin-bottom:10px;max-width:240px;">
             <label for="order_pin_code" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Authorization PIN</label>
             <input type="password" id="order_pin_code" name="order_pin_code" inputmode="numeric" maxlength="4" placeholder="Enter 4-digit PIN" style="width:100%;" />
           </div>
-          <button type="submit" id="order-tn-submit-btn">Submit TN Order</button>
+          <button type="submit" id="order-tn-submit-btn" disabled>Submit Order and Routing Update</button>
         </form>
         <p id="tn-order-status" class="status-msg"></p>
       </div>
@@ -33556,6 +33592,14 @@ def sinch_admin_page(request: Request):
         const tfResultsEl = document.getElementById("tf-results");
         const tfDebugEl = document.getElementById("tf-debug");
         const tfExportBtn = document.getElementById("tf-export-csv-btn");
+        const orderAvailabilityForm = document.getElementById("inteliquent-tn-availability-form");
+        const orderAvailabilityStatusEl = document.getElementById("tn-availability-status");
+        const orderAvailabilityResultsEl = document.getElementById("tn-availability-results");
+        const orderTnListEl = document.getElementById("order_tn_list");
+        const orderRoutingOptionEl = document.getElementById("order_routing_option_value");
+        const orderRoutingOptionStatusEl = document.getElementById("order-routing-option-status");
+        const orderRoutingOptionRefreshBtn = document.getElementById("order-routing-option-refresh-btn");
+        const orderPonEl = document.getElementById("order_pon");
         const orderForm = document.getElementById("inteliquent-tn-order-form");
         const orderPinEl = document.getElementById("order_pin_code");
         const orderSubmitBtn = document.getElementById("order-tn-submit-btn");
@@ -33977,12 +34021,97 @@ def sinch_admin_page(request: Request):
         }}
 
         if (orderForm) {{
+          let selectedOrderNumbers = [];
+
           function syncOrderSubmitState() {{
-            if (!orderSubmitBtn || !orderPinEl) {{
+            if (!orderSubmitBtn || !orderPinEl || !orderRoutingOptionEl || !orderPonEl) {{
               return;
             }}
-            const pinOk = String(orderPinEl.value || "").trim() === "1776";
-            orderSubmitBtn.disabled = !pinOk;
+            orderSubmitBtn.disabled = !(
+              selectedOrderNumbers.length
+              && String(orderPinEl.value || "").trim() === "1776"
+              && String(orderRoutingOptionEl.value || "").trim()
+              && String(orderPonEl.value || "").trim()
+            );
+          }}
+
+          function syncOrderSelection() {{
+            selectedOrderNumbers = Array.from(document.querySelectorAll("input[name='order_available_tn']:checked"))
+              .map(function (input) {{ return String(input.value || "").trim(); }})
+              .filter(Boolean);
+            if (orderTnListEl) {{
+              orderTnListEl.value = selectedOrderNumbers.join("\n");
+            }}
+            syncOrderSubmitState();
+          }}
+
+          function renderOrderAvailability(rows) {{
+            if (!orderAvailabilityResultsEl) {{
+              return;
+            }}
+            if (!rows.length) {{
+              orderAvailabilityResultsEl.innerHTML = '<p style="color:#4e6a84;">No available TNs returned.</p>';
+              return;
+            }}
+            let html = '<table><thead><tr><th>Select</th><th>Telephone Number</th><th>Rate Center</th><th>City</th><th>State</th></tr></thead><tbody>';
+            rows.forEach(function (row) {{
+              const number = String((row && row.number) || "");
+              html += '<tr><td><input type="checkbox" name="order_available_tn" value="' + escapeHtml(number) + '"></td>'
+                + '<td>' + escapeHtml(number) + '</td><td>' + escapeHtml(String((row && row.rate_center) || "")) + '</td>'
+                + '<td>' + escapeHtml(String((row && row.city) || "")) + '</td><td>' + escapeHtml(String((row && row.state) || "")) + '</td></tr>';
+            }});
+            orderAvailabilityResultsEl.innerHTML = html + '</tbody></table>';
+            orderAvailabilityResultsEl.querySelectorAll("input[name='order_available_tn']").forEach(function (input) {{
+              input.addEventListener("change", syncOrderSelection);
+            }});
+          }}
+
+          async function loadOrderRoutingOptions() {{
+            if (!orderRoutingOptionEl) {{
+              return;
+            }}
+            try {{
+              const response = await fetch("/inteliquent/routing-options", {{ method: "GET", credentials: "same-origin" }});
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {{ throw new Error(String(payload.error || "Routing options lookup failed.")); }}
+              const options = Array.isArray(payload.options) ? payload.options : [];
+              orderRoutingOptionEl.innerHTML = '<option value="">Select routing option</option>';
+              options.forEach(function (opt) {{
+                const value = String((opt && opt.value) || "").trim();
+                if (!value) {{ return; }}
+                const option = document.createElement("option");
+                option.value = value;
+                option.textContent = String((opt && opt.label) || value).trim();
+                orderRoutingOptionEl.appendChild(option);
+              }});
+              if (orderRoutingOptionStatusEl) {{ orderRoutingOptionStatusEl.textContent = "Loaded " + options.length + " routing option(s)."; }}
+            }} catch (err) {{
+              orderRoutingOptionEl.innerHTML = '<option value="">Unable to load routing options</option>';
+              if (orderRoutingOptionStatusEl) {{ orderRoutingOptionStatusEl.textContent = "Routing options lookup failed: " + String(err && err.message ? err.message : err); }}
+            }}
+            syncOrderSubmitState();
+          }}
+
+          if (orderAvailabilityForm) {{
+            orderAvailabilityForm.addEventListener("submit", async function (event) {{
+              event.preventDefault();
+              const formData = new FormData(orderAvailabilityForm);
+              orderAvailabilityStatusEl.textContent = "Searching available TN inventory...";
+              orderAvailabilityResultsEl.innerHTML = "";
+              selectedOrderNumbers = [];
+              if (orderTnListEl) {{ orderTnListEl.value = ""; }}
+              syncOrderSubmitState();
+              try {{
+                const response = await fetch("/inteliquent/tn-availability", {{ method: "POST", body: formData }});
+                const payload = await response.json();
+                if (!response.ok || !payload.ok) {{ throw new Error(String(payload.error || "Inventory lookup failed.")); }}
+                const rows = Array.isArray(payload.rows) ? payload.rows : [];
+                orderAvailabilityStatusEl.textContent = "Returned " + rows.length + " available TN(s). Select the TNs to order.";
+                renderOrderAvailability(rows);
+              }} catch (err) {{
+                orderAvailabilityStatusEl.textContent = "Inventory lookup failed: " + String(err && err.message ? err.message : err);
+              }}
+            }});
           }}
 
           if (orderPinEl) {{
@@ -33990,7 +34119,11 @@ def sinch_admin_page(request: Request):
               syncOrderSubmitState();
             }});
           }}
+          if (orderPonEl) {{ orderPonEl.addEventListener("input", syncOrderSubmitState); }}
+          if (orderRoutingOptionEl) {{ orderRoutingOptionEl.addEventListener("change", syncOrderSubmitState); }}
+          if (orderRoutingOptionRefreshBtn) {{ orderRoutingOptionRefreshBtn.addEventListener("click", loadOrderRoutingOptions); }}
           syncOrderSubmitState();
+          loadOrderRoutingOptions();
 
           orderForm.addEventListener("submit", async function (event) {{
             event.preventDefault();
@@ -34014,7 +34147,7 @@ def sinch_admin_page(request: Request):
                 orderStatusEl.textContent = "Order failed: " + (payload.error || "Unknown error");
                 return;
               }}
-              orderStatusEl.textContent = "TN order submitted successfully.";
+              orderStatusEl.textContent = payload.message || "TN order submitted successfully.";
               renderActionResult(orderResultsEl, payload, "TN Order");
             }} catch (err) {{
               orderStatusEl.textContent = "Order failed: " + String(err && err.message ? err.message : err);
@@ -35204,8 +35337,67 @@ def inteliquent_tn_inventory_route(request: Request, tn_query: str = Form(""), q
   )
 
 
+@app.post("/inteliquent/tn-availability")
+def inteliquent_tn_availability_route(
+  request: Request,
+  area_code: str = Form(""),
+  tn_pattern: str = Form(""),
+  quantity: int = Form(20),
+):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", "") or "").strip()
+  if not session_username:
+    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
+  if not _is_admin_user(session_username):
+    return JSONResponse({"ok": False, "error": "Not authorized for Inteliquent Admin."}, status_code=403)
+
+  clean_area_code = re.sub(r"\D", "", str(area_code or ""))
+  clean_pattern = re.sub(r"[\s().-]", "", str(tn_pattern or "").strip()).lower()
+  if clean_pattern and not re.fullmatch(r"[0-9x]{10}", clean_pattern):
+    return JSONResponse({"ok": False, "error": "Pattern must contain exactly 10 digits or x placeholders."}, status_code=422)
+  if not clean_pattern and len(clean_area_code) != 3:
+    return JSONResponse({"ok": False, "error": "Enter a 3-digit area code or a 10-character TN pattern."}, status_code=422)
+
+  wildcard = clean_pattern or f"{clean_area_code}xxxxxxx"
+  safe_quantity = max(1, min(int(quantity or 20), 100))
+  call_result = _inteliquent_post_json(
+    "/tnInventory",
+    {
+      "privateKey": INTELIQUENT_PRIVATE_KEY,
+      "tnWildcard": wildcard,
+      "quantity": safe_quantity,
+    },
+  )
+  if not call_result.get("ok"):
+    status_code = max(400, int(call_result.get("status_code") or 400))
+    return JSONResponse(
+      {"ok": False, "error": str(call_result.get("error") or "Inteliquent inventory lookup failed."), "raw": call_result.get("raw", {})},
+      status_code=status_code,
+    )
+
+  raw_payload = call_result.get("raw", {}) or {}
+  rows = []
+  for item in _inteliquent_extract_tn_rows(raw_payload):
+    number = str(item.get("tn", "") or item.get("telephoneNumber", "") or item.get("number", "")).strip()
+    if not re.fullmatch(r"\d{10}", number):
+      continue
+    rows.append({
+      "number": number,
+      "rate_center": str(item.get("rateCenter", "") or item.get("rateCenterAbbr", "")).strip(),
+      "city": str(item.get("city", "") or item.get("locName", "")).strip(),
+      "state": str(item.get("province", "") or item.get("state", "")).strip(),
+    })
+  return JSONResponse({"ok": True, "count": len(rows), "rows": rows, "wildcard": wildcard})
+
+
 @app.post("/inteliquent/tn-order")
-def inteliquent_tn_order_route(request: Request, order_tn_list: str = Form(""), order_pin_code: str = Form("")):
+def inteliquent_tn_order_route(
+  request: Request,
+  order_tn_list: str = Form(""),
+  order_routing_option_value: str = Form(""),
+  order_pon: str = Form(""),
+  order_pin_code: str = Form(""),
+):
   session = _get_auth_session(request) or {}
   session_username = str(session.get("username", "") or "").strip()
   if not session_username:
@@ -35225,6 +35417,15 @@ def inteliquent_tn_order_route(request: Request, order_tn_list: str = Form(""), 
       {"ok": False, "error": "Authorization PIN is invalid."},
       status_code=403,
     )
+
+  target_option = str(order_routing_option_value or "").strip()
+  target_pon = str(order_pon or "").strip()
+  if not target_option:
+    return JSONResponse({"ok": False, "error": "Routing Option is required."}, status_code=400)
+  if not target_pon:
+    return JSONResponse({"ok": False, "error": "PON is required."}, status_code=400)
+  if not re.fullmatch(r"[A-Za-z0-9._\-/]{1,64}", target_pon):
+    return JSONResponse({"ok": False, "error": "PON contains invalid characters."}, status_code=400)
 
   payload = {
     "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
@@ -35250,13 +35451,28 @@ def inteliquent_tn_order_route(request: Request, order_tn_list: str = Form(""), 
     )
 
   raw_payload = call_result.get("raw", {}) or {}
+  routing_result = _inteliquent_post_json(
+    "/tnUpdate",
+    {
+      "privateKey": INTELIQUENT_PRIVATE_KEY,
+      "customerOrderReference": target_pon,
+      "tnList": {"tnItem": [{"tn": tn, "routingOption": target_option} for tn in numbers]},
+    },
+  )
+  routing_payload = routing_result.get("raw", {}) or {}
+  routing_ok = bool(routing_result.get("ok"))
+  message = (
+    f"TN order accepted and routing update to '{target_option}' submitted for {len(numbers)} TN(s)."
+    if routing_ok
+    else f"TN order accepted, but routing update to '{target_option}' failed: {routing_result.get('error') or 'Unknown error'}"
+  )
   _inteliquent_send_tn_action_email(
     request=request,
-    action_label="TN Order",
+    action_label=f"TN Order ({target_option}, PON {target_pon})",
     numbers=numbers,
-    api_status=str(raw_payload.get("status", "") or "").strip(),
-    api_status_code=str(raw_payload.get("statusCode", "") or "").strip(),
-    api_message=str(raw_payload.get("message", "") or "").strip(),
+    api_status="order_and_routing_submitted" if routing_ok else "order_accepted_routing_failed",
+    api_status_code=str(routing_payload.get("statusCode", "") or raw_payload.get("statusCode", "") or "").strip(),
+    api_message=message,
   )
   return JSONResponse(
     {
@@ -35265,7 +35481,11 @@ def inteliquent_tn_order_route(request: Request, order_tn_list: str = Form(""), 
       "submitted_numbers": numbers,
       "status": str(raw_payload.get("status", "") or "").strip(),
       "statusCode": str(raw_payload.get("statusCode", "") or "").strip(),
-      "message": str(raw_payload.get("message", "") or "").strip(),
+      "routing_option": target_option,
+      "pon": target_pon,
+      "routing_update_ok": routing_ok,
+      "routing_update": routing_payload,
+      "message": message,
       "raw": raw_payload,
     }
   )
