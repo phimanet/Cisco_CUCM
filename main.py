@@ -1051,7 +1051,7 @@ def _inteliquent_post_json(path: str, payload: dict) -> dict:
         parsed_local = {"raw": body_text[:500]}
     return response, parsed_local, req_body
 
-  configured_private_key = str(body.get("privateKey") or INTELIQUENT_PRIVATE_KEY or INTELIQUENT_API_KEY).strip()
+  configured_private_key = str(INTELIQUENT_PRIVATE_KEY or INTELIQUENT_API_KEY).strip()
   fallback_private_key = str(INTELIQUENT_API_KEY or "").strip()
 
   try:
@@ -1062,15 +1062,16 @@ def _inteliquent_post_json(path: str, payload: dict) -> dict:
   initial_code = str(parsed.get("statusCode", "") or "").strip()
   initial_message = str(parsed.get("message", "") or parsed.get("status", "")).lower()
   private_key_mismatch = initial_code == "400001" or "private key" in initial_message and "match" in initial_message
-  if response.status_code != 200 and private_key_mismatch and fallback_private_key and fallback_private_key != configured_private_key:
+  if private_key_mismatch and fallback_private_key and fallback_private_key != configured_private_key:
     try:
       response, parsed, payload_used = _send_with_private_key(fallback_private_key)
     except Exception as exc:
       return {"ok": False, "error": f"Inteliquent request failed on retry: {exc}", "status_code": 0, "raw": {}}
 
-  if response.status_code != 200:
+  api_status_code = str(parsed.get("statusCode", "") or "").strip()
+  if response.status_code != 200 or api_status_code != "200":
     message = str(parsed.get("status", "") or parsed.get("message", "")).strip() or f"HTTP {response.status_code}"
-    code = str(parsed.get("statusCode", "") or "").strip()
+    code = api_status_code
     if code:
       message = f"{message} (statusCode {code})"
     if code == "400001":
@@ -1078,7 +1079,7 @@ def _inteliquent_post_json(path: str, payload: dict) -> dict:
     return {
       "ok": False,
       "error": message,
-      "status_code": int(response.status_code or 0),
+      "status_code": int(code) if code.isdigit() else int(response.status_code or 0),
       "raw": parsed,
     }
 
@@ -34167,7 +34168,7 @@ def sinch_admin_page(request: Request):
                 terminateStatusEl.textContent = "Termination failed: " + (payload.error || "Unknown error");
                 return;
               }}
-              terminateStatusEl.textContent = "TN termination submitted successfully.";
+              terminateStatusEl.textContent = payload.message || "TN disconnect order submitted to Inteliquent.";
               renderActionResult(terminateResultsEl, payload, "TN Termination");
             }} catch (err) {{
               terminateStatusEl.textContent = "Termination failed: " + String(err && err.message ? err.message : err);
@@ -34309,20 +34310,7 @@ def _inteliquent_extract_routing_options(raw_payload: dict) -> list[dict]:
       candidates.extend([item for item in rows if isinstance(item, dict)])
 
   for item in candidates:
-    option_code = str(
-      item.get("routingOptionCode", "")
-      or item.get("customerRoutingOptionCode", "")
-      or item.get("code", "")
-      or item.get("id", "")
-      or ""
-    ).strip()
-    _add(item.get("routingOption"), option_code)
-    _add(item.get("routingOptionName"), option_code)
-    _add(item.get("customerRoutingOption"), option_code)
-    _add(item.get("customerRoutingOptionName"), option_code)
-    _add(item.get("routingLabel"), option_code)
-    _add(item.get("name"), option_code)
-    _add(item.get("description"), option_code)
+    _add(item.get("routingOption"))
 
   return values
 
@@ -34332,13 +34320,7 @@ def _inteliquent_fetch_routing_options() -> dict:
   endpoint_candidates = ["/routingOptionList"]
 
   base_payload = {
-    "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
-    "pageSort": {
-      "page": 1,
-      "size": 200,
-      "direction": "asc",
-      "property": "name",
-    },
+    "privateKey": INTELIQUENT_PRIVATE_KEY,
   }
 
   for endpoint in endpoint_candidates:
@@ -34502,19 +34484,6 @@ def inteliquent_tn_routing_option_update_route(
       status_code=400,
     )
 
-  endpoint_candidates = []
-
-  if target_option_code:
-    endpoint_candidates.extend([
-      ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOptionCode": target_option_code, "pon": target_pon}]}}),
-      ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "routingOptionCode": target_option_code, "purchaseOrderNumber": target_pon}]}}),
-    ])
-
-  endpoint_candidates.extend([
-    ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOption": target_option, "pon": target_pon}]}}),
-    ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "routingOption": target_option, "purchaseOrderNumber": target_pon}]}}),
-  ])
-
   per_number = []
   success_count = 0
   pending_count = 0
@@ -34579,75 +34548,62 @@ def inteliquent_tn_routing_option_update_route(
 
     return False, "", "TN not found in verification response."
 
-  for tn in numbers:
-    updated = False
-    last_error = ""
-    attempt_log = []
+  call_result = _inteliquent_post_json(
+    "/tnUpdate",
+    {
+      "privateKey": INTELIQUENT_PRIVATE_KEY,
+      "customerOrderReference": target_pon,
+      "tnList": {"tnItem": [{"tn": tn, "routingOption": target_option} for tn in numbers]},
+    },
+  )
+  raw_payload = call_result.get("raw", {}) or {}
+  attempt_log = [{
+    "endpoint": "/tnUpdate",
+    "ok": bool(call_result.get("ok")),
+    "status_code": int(call_result.get("status_code") or 0),
+    "api_status": str(raw_payload.get("status", "") or "").strip(),
+    "api_status_code": str(raw_payload.get("statusCode", "") or "").strip(),
+    "api_message": str(raw_payload.get("message", "") or "").strip(),
+    "submitted_option": target_option,
+  }]
 
-    for endpoint, payload_builder in endpoint_candidates:
-      payload = payload_builder(tn)
-      call_result = _inteliquent_post_json(endpoint, payload)
-      raw_payload = call_result.get("raw", {}) or {}
-      attempt_log.append(
-        {
-          "endpoint": endpoint,
-          "ok": bool(call_result.get("ok")),
-          "status_code": int(call_result.get("status_code") or 0),
-          "api_status": str(raw_payload.get("status", "") or "").strip(),
-          "api_status_code": str(raw_payload.get("statusCode", "") or "").strip(),
-          "api_message": str(raw_payload.get("message", "") or "").strip(),
-          "submitted_code": target_option_code,
-          "submitted_option": target_option,
-        }
-      )
-
-      if call_result.get("ok"):
-        updated = True
-        break
-      last_error = str(call_result.get("error") or "Update attempt failed.")
-
-    if updated:
+  if not call_result.get("ok"):
+    failed_count = len(numbers)
+    for tn in numbers:
+      per_number.append({
+        "number": tn,
+        "status": "Failed",
+        "details": str(call_result.get("error") or "Unable to update routing option."),
+        "attempts": attempt_log,
+        "verified": False,
+        "actual_routing_option": "",
+      })
+  else:
+    for tn in numbers:
       verified, actual_option, verify_error = _verify_tn_routing_option(tn, target_option)
       if not verified:
         pending_count += 1
         details = verify_error or "Update accepted by provider but immediate verification did not confirm change yet."
         if actual_option:
           details += f" Current routing option: '{actual_option}'."
-        per_number.append(
-          {
-            "number": tn,
-            "status": "Pending",
-            "details": details,
-            "attempts": attempt_log,
-            "verified": False,
-            "actual_routing_option": actual_option,
-          }
-        )
-        continue
-
-      success_count += 1
-      per_number.append(
-        {
+        per_number.append({
           "number": tn,
-          "status": "Success",
-          "details": f"Routing option set to '{target_option}'.",
-          "attempts": attempt_log,
-          "verified": True,
-          "actual_routing_option": actual_option,
-        }
-      )
-    else:
-      failed_count += 1
-      per_number.append(
-        {
-          "number": tn,
-          "status": "Failed",
-          "details": last_error or "Unable to update routing option.",
+          "status": "Pending",
+          "details": details,
           "attempts": attempt_log,
           "verified": False,
-          "actual_routing_option": "",
-        }
-      )
+          "actual_routing_option": actual_option,
+        })
+        continue
+      success_count += 1
+      per_number.append({
+        "number": tn,
+        "status": "Success",
+        "details": f"Routing option set to '{target_option}'.",
+        "attempts": attempt_log,
+        "verified": True,
+        "actual_routing_option": actual_option,
+      })
 
   _inteliquent_send_tn_action_email(
     request=request,
@@ -35041,7 +34997,7 @@ def inteliquent_tn_disconnect_route(
     )
 
   payload = {
-    "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
+    "privateKey": INTELIQUENT_PRIVATE_KEY,
     "tnList": {
       "tnItem": [{"tn": tn} for tn in numbers],
     },
@@ -35062,13 +35018,39 @@ def inteliquent_tn_disconnect_route(
     )
 
   raw_payload = call_result.get("raw", {}) or {}
+  order_id = str(raw_payload.get("orderId", "") or "").strip()
+  order_status = ""
+  order_detail = {}
+  verification_message = "Disconnect request accepted by Inteliquent."
+  if order_id and order_id.lower() != "null":
+    detail_result = _inteliquent_post_json(
+      "/orderDetail",
+      {"privateKey": INTELIQUENT_PRIVATE_KEY, "orderId": order_id},
+    )
+    if detail_result.get("ok"):
+      order_detail = detail_result.get("raw", {}) or {}
+      order_status = str(
+        (order_detail.get("orderDetailResponse", {}) or {}).get("orderStatus", "")
+        or order_detail.get("orderStatus", "")
+        or ""
+      ).strip()
+      verification_message = (
+        f"Disconnect order {order_id} is {order_status}."
+        if order_status
+        else f"Disconnect order {order_id} was accepted; status is still being processed."
+      )
+    else:
+      verification_message = f"Disconnect order {order_id} was accepted; immediate status lookup is not yet available."
+  else:
+    verification_message = "Disconnect request completed synchronously; verify the TN status with a follow-up lookup."
+
   _inteliquent_send_tn_action_email(
     request=request,
     action_label="TN Termination",
     numbers=numbers,
     api_status=str(raw_payload.get("status", "") or "").strip(),
     api_status_code=str(raw_payload.get("statusCode", "") or "").strip(),
-    api_message=str(raw_payload.get("message", "") or "").strip(),
+    api_message=verification_message,
   )
   return JSONResponse(
     {
@@ -35077,7 +35059,10 @@ def inteliquent_tn_disconnect_route(
       "submitted_numbers": numbers,
       "status": str(raw_payload.get("status", "") or "").strip(),
       "statusCode": str(raw_payload.get("statusCode", "") or "").strip(),
-      "message": str(raw_payload.get("message", "") or "").strip(),
+      "order_id": order_id,
+      "order_status": order_status,
+      "message": verification_message,
+      "order_detail": order_detail,
       "raw": raw_payload,
     }
   )
