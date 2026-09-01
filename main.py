@@ -34040,7 +34040,7 @@ def sinch_admin_page(request: Request):
               .map(function (input) {{ return String(input.value || "").trim(); }})
               .filter(Boolean);
             if (orderTnListEl) {{
-              orderTnListEl.value = selectedOrderNumbers.join("\n");
+              orderTnListEl.value = selectedOrderNumbers.join("\\n");
             }}
             syncOrderSubmitState();
           }}
