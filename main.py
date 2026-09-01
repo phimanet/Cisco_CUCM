@@ -281,9 +281,9 @@ AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
 AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
 AERIALINK_ACCOUNT_CODE_LOOKUP_PATH = (os.getenv("AERIALINK_ACCOUNT_CODE_LOOKUP_PATH", "/codes") or "/codes").strip()
 INTELIQUENT_API_ENV = (os.getenv("INTELIQUENT_API_ENV", "production") or "production").strip().lower()
-_inteliquent_base_default = "https://services.inteliquent.com/Services/1.0.0"
+_inteliquent_base_default = "https://services.inteliquent.com/Services/2.0.0"
 if INTELIQUENT_API_ENV == "sandbox":
-  _inteliquent_base_default = "https://services-sandbox.inteliquent.com/Services/1.0.0"
+  _inteliquent_base_default = "https://services-sandbox.inteliquent.com/Services/2.0.0"
 INTELIQUENT_BASE_URL = (os.getenv("INTELIQUENT_BASE_URL", _inteliquent_base_default) or _inteliquent_base_default).strip().rstrip("/")
 INTELIQUENT_AUTH_MODE = (os.getenv("INTELIQUENT_AUTH_MODE", "basic") or "basic").strip().lower()
 INTELIQUENT_API_KEY = (os.getenv("INTELIQUENT_API_KEY", "") or "").strip()
@@ -34329,13 +34329,7 @@ def _inteliquent_extract_routing_options(raw_payload: dict) -> list[dict]:
 
 def _inteliquent_fetch_routing_options() -> dict:
   attempts = []
-  endpoint_candidates = [
-    "/routingOptionList",
-    "/tnRoutingOptionList",
-    "/tnRoutingOptions",
-    "/routingOptions",
-    "/tnRoutingOption",
-  ]
+  endpoint_candidates = ["/routingOptionList"]
 
   base_payload = {
     "privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY,
@@ -34514,15 +34508,11 @@ def inteliquent_tn_routing_option_update_route(
     endpoint_candidates.extend([
       ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOptionCode": target_option_code, "pon": target_pon}]}}),
       ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "routingOptionCode": target_option_code, "purchaseOrderNumber": target_pon}]}}),
-      ("/tnRoutingOptionUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOptionCode": target_option_code, "customerPurchaseOrderNumber": target_pon}]}}),
-      ("/tnRoutingOption", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tn": tn, "customerRoutingOptionCode": target_option_code, "pon": target_pon}),
     ])
 
   endpoint_candidates.extend([
     ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOption": target_option, "pon": target_pon}]}}),
     ("/tnUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "routingOption": target_option, "purchaseOrderNumber": target_pon}]}}),
-    ("/tnRoutingOptionUpdate", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tnList": {"tnItem": [{"tn": tn, "customerRoutingOption": target_option, "customerPurchaseOrderNumber": target_pon}]}}),
-    ("/tnRoutingOption", lambda tn: {"privateKey": INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY, "tn": tn, "customerRoutingOption": target_option, "pon": target_pon}),
   ])
 
   per_number = []
