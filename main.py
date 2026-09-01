@@ -281,9 +281,9 @@ AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
 AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
 AERIALINK_ACCOUNT_CODE_LOOKUP_PATH = (os.getenv("AERIALINK_ACCOUNT_CODE_LOOKUP_PATH", "/codes") or "/codes").strip()
 INTELIQUENT_API_ENV = (os.getenv("INTELIQUENT_API_ENV", "production") or "production").strip().lower()
-_inteliquent_base_default = "https://services.inteliquent.com/Services/2.0.0"
+_inteliquent_base_default = "https://services.inteliquent.com/Services/1.0.0"
 if INTELIQUENT_API_ENV == "sandbox":
-  _inteliquent_base_default = "https://services-sandbox.inteliquent.com/Services/2.0.0"
+  _inteliquent_base_default = "https://services-sandbox.inteliquent.com/Services/1.0.0"
 INTELIQUENT_BASE_URL = (os.getenv("INTELIQUENT_BASE_URL", _inteliquent_base_default) or _inteliquent_base_default).strip().rstrip("/")
 INTELIQUENT_AUTH_MODE = (os.getenv("INTELIQUENT_AUTH_MODE", "basic") or "basic").strip().lower()
 INTELIQUENT_API_KEY = (os.getenv("INTELIQUENT_API_KEY", "") or "").strip()
