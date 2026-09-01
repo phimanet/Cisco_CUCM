@@ -39908,7 +39908,7 @@ def menu_admin_page(request: Request):
               return;
             }
             function renderTable(csvText) {
-              const lines = String(csvText || "").trim().split(/\r?\n/).filter(Boolean);
+              const lines = String(csvText || "").trim().split(/\\r?\\n/).filter(Boolean);
               if (lines.length < 2) {
                 tableEl.innerHTML = "";
                 return;
