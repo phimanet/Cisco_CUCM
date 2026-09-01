@@ -33990,13 +33990,14 @@ def sinch_admin_page(request: Request):
               routingOptionEl.appendChild(placeholder);
 
               options.forEach(function (opt) {{
-                const text = String((opt && opt.value) || "").trim();
+                const value = String((opt && opt.value) || "").trim();
+                const text = String((opt && opt.label) || value).trim();
                 const code = String((opt && opt.code) || "").trim();
-                if (!text) {{
+                if (!value) {{
                   return;
                 }}
                 const option = document.createElement("option");
-                option.value = text;
+                option.value = value;
                 option.textContent = text;
                 if (code) {{
                   option.setAttribute("data-code", code);
@@ -34283,19 +34284,22 @@ def _inteliquent_extract_routing_options(raw_payload: dict) -> list[dict]:
   values = []
   seen_index = {}
 
-  def _add(value, code=""):
+  def _add(value, label="", code=""):
     text = str(value or "").strip()
     if not text:
       return
     key = text.lower()
+    clean_label = str(label or "").strip()
     clean_code = str(code or "").strip()
     if key in seen_index:
       existing_idx = seen_index[key]
+      if clean_label and not str(values[existing_idx].get("label") or "").strip():
+        values[existing_idx]["label"] = clean_label
       if clean_code and not str(values[existing_idx].get("code") or "").strip():
         values[existing_idx]["code"] = clean_code
       return
     seen_index[key] = len(values)
-    values.append({"value": text, "code": clean_code})
+    values.append({"value": text, "label": clean_label or text, "code": clean_code})
 
   candidates = []
   for key in ("routingOptionList", "routingOptions", "tnRoutingOptions", "options"):
@@ -34314,7 +34318,7 @@ def _inteliquent_extract_routing_options(raw_payload: dict) -> list[dict]:
       candidates.extend([item for item in rows if isinstance(item, dict)])
 
   for item in candidates:
-    _add(item.get("routingOption"))
+    _add(item.get("routingOption"), item.get("customerAssignedName"))
 
   return values
 
@@ -34342,7 +34346,7 @@ def _inteliquent_fetch_routing_options() -> dict:
     if call_result.get("ok") and options:
       return {
         "ok": True,
-        "options": sorted(options, key=lambda row: str(row.get("value", "")).lower()),
+        "options": sorted(options, key=lambda row: str(row.get("label", row.get("value", ""))).lower()),
         "source": endpoint,
         "attempts": attempts,
       }
