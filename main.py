@@ -33376,14 +33376,14 @@ def sinch_admin_page(request: Request):
           <input type="hidden" id="tf_extract_all" name="extract_all" value="0" />
           <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
             <div>
-              <label for="tf_mask" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Toll-Free Number</label>
-              <input type="text" id="tf_mask" name="tf_mask" placeholder="800xxxxxxx" style="min-width:180px;" />
+              <label for="tf_mask" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Toll-Free Number or Pattern</label>
+              <input type="text" id="tf_mask" name="tf_mask" placeholder="8005551000 or 800xxxxxxx" style="min-width:230px;" />
             </div>
             <div>
-              <label for="tf_quantity" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Quantity</label>
+              <label for="tf_quantity" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Max Results (pattern)</label>
               <input type="number" id="tf_quantity" name="tf_quantity" value="20" min="1" max="100" style="width:110px;" />
             </div>
-            <button type="submit" id="run-tf-btn">Run Toll-Free Lookup</button>
+            <button type="submit" id="run-tf-btn">Run Read-Only Extract</button>
             <button type="button" id="extract-all-tf-btn">Extract All Toll-Free</button>
           </div>
         </form>
@@ -33823,6 +33823,13 @@ def sinch_admin_page(request: Request):
             event.preventDefault();
             const formData = new FormData(tfForm);
             const extractAllTfMode = String(formData.get("extract_all") || formData.get("tf_extract_all") || "0") === "1";
+            const rawTfMask = String(formData.get("tf_mask") || "");
+            const cleanTfMask = rawTfMask.replace(/[\s().-]/g, "");
+
+            if (!extractAllTfMode && !/^[0-9xX]{{10}}$/.test(cleanTfMask)) {{
+              tfStatusEl.textContent = "Enter exactly 10 digits, or a 10-character pattern such as 800xxxxxxx.";
+              return;
+            }}
 
             tfStatusEl.textContent = extractAllTfMode
               ? "Running Inteliquent all-assigned toll-free extract..."
@@ -33834,7 +33841,7 @@ def sinch_admin_page(request: Request):
             }}
 
             const body = new URLSearchParams();
-            body.set("tf_mask", String(formData.get("tf_mask") || ""));
+            body.set("tf_mask", cleanTfMask);
             body.set("quantity", String(formData.get("tf_quantity") || "20"));
             body.set("extract_all", extractAllTfMode ? "1" : "0");
 
@@ -35098,10 +35105,13 @@ def inteliquent_tf_detail_route(request: Request, tf_mask: str = Form(""), quant
   if not _is_admin_user(session_username):
     return JSONResponse({"ok": False, "error": "Not authorized for Inteliquent Admin."}, status_code=403)
 
-  clean_mask = str(tf_mask or "").strip()
+  clean_mask = re.sub(r"[\s().-]", "", str(tf_mask or "").strip())
   extract_all_mode = str(extract_all or "").strip().lower() in {"1", "true", "yes", "y", "on"}
-  if not clean_mask and not extract_all_mode:
-    return JSONResponse({"ok": False, "error": "Toll-free number is required."}, status_code=400)
+  if not extract_all_mode and not re.fullmatch(r"[0-9xX]{10}", clean_mask):
+    return JSONResponse(
+      {"ok": False, "error": "Enter one 10-digit toll-free number or a pattern such as 800xxxxxxx."},
+      status_code=422,
+    )
 
   safe_quantity = max(1, min(int(quantity or 20), 100))
   call_result = None
