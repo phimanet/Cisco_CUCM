@@ -37391,8 +37391,12 @@ def menu_admin_page(request: Request):
           <br><br><button type="submit">Run Active Directory Lookup</button>
         </form>
         <p id="ad-user-lookups-status" style="color:#2c5c8a;min-height:18px;margin-top:12px;"></p>
-        <p><a id="ad-user-lookups-download" href="#" style="display:none;font-weight:700;">Download CSV Output</a></p>
-        <textarea id="ad-user-lookups-preview" rows="10" readonly style="width:100%;"></textarea>
+        <div style="display:flex;align-items:center;gap:12px;margin:8px 0;">
+          <a id="ad-user-lookups-download" href="#" style="display:none;font-weight:700;">Download CSV Output</a>
+          <button type="button" id="ad-user-lookups-copy" disabled>Copy Output</button>
+        </div>
+        <label for="ad-user-lookups-preview" style="display:block;font-size:12px;font-weight:700;color:#12304a;margin-bottom:4px;">Lookup Output (select or copy)</label>
+        <textarea id="ad-user-lookups-preview" rows="10" readonly style="width:100%;" placeholder="Completed lookup results will appear here."></textarea>
       </section>
 
       <section class="panel tool-panel" data-panel="bulkperson">
@@ -39897,13 +39901,28 @@ def menu_admin_page(request: Request):
             const statusEl = document.getElementById("ad-user-lookups-status");
             const previewEl = document.getElementById("ad-user-lookups-preview");
             const downloadEl = document.getElementById("ad-user-lookups-download");
-            if (!form || !statusEl || !previewEl || !downloadEl) {
+            const copyBtn = document.getElementById("ad-user-lookups-copy");
+            if (!form || !statusEl || !previewEl || !downloadEl || !copyBtn) {
               return;
             }
+            copyBtn.addEventListener("click", async function () {
+              if (!previewEl.value) {
+                return;
+              }
+              try {
+                await navigator.clipboard.writeText(previewEl.value);
+                statusEl.textContent = "Output copied to clipboard.";
+              } catch (err) {
+                previewEl.focus();
+                previewEl.select();
+                statusEl.textContent = "Select the output and copy it from the box.";
+              }
+            });
             form.addEventListener("submit", async function (event) {
               event.preventDefault();
               statusEl.textContent = "Looking up Active Directory users...";
               previewEl.value = "";
+              copyBtn.disabled = true;
               downloadEl.style.display = "none";
               try {
                 const response = await fetch("/admin/ad-user-lookups", {
@@ -39916,6 +39935,7 @@ def menu_admin_page(request: Request):
                 const summary = payload.summary || {};
                 statusEl.textContent = "Completed: " + String(summary.found || 0) + " found, " + String(summary.not_found || 0) + " not found.";
                 previewEl.value = payload.output_text || "";
+                copyBtn.disabled = !previewEl.value;
                 if (payload.download_url) {
                   downloadEl.href = payload.download_url;
                   downloadEl.style.display = "inline";
