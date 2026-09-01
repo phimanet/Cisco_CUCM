@@ -33726,6 +33726,13 @@ def sinch_admin_page(request: Request):
             event.preventDefault();
             const formData = new FormData(form);
             const extractAllMode = String(formData.get("extract_all") || "0") === "1";
+            const rawTnQuery = String(formData.get("tn_query") || "");
+            const cleanTnQuery = rawTnQuery.replace(/[\s().-]/g, "");
+
+            if (!extractAllMode && !/^[0-9xX]{10}$/.test(cleanTnQuery)) {{
+              statusEl.textContent = "Enter exactly 10 digits, or a 10-character pattern such as 858xxxxxxx.";
+              return;
+            }}
 
             statusEl.textContent = extractAllMode
               ? "Running Inteliquent all-assigned TN extract..."
@@ -33737,7 +33744,7 @@ def sinch_admin_page(request: Request):
             }}
 
             const body = new URLSearchParams();
-            body.set("tn_query", String(formData.get("tn_query") || ""));
+            body.set("tn_query", cleanTnQuery);
             body.set("quantity", String(formData.get("quantity") || "20"));
             body.set("extract_all", extractAllMode ? "1" : "0");
 
@@ -34635,13 +34642,13 @@ def inteliquent_tn_inventory_route(request: Request, tn_query: str = Form(""), q
   if not _is_admin_user(session_username):
     return JSONResponse({"ok": False, "error": "Not authorized for Inteliquent Admin."}, status_code=403)
 
-  clean_query = str(tn_query or "").strip()
+  clean_query = re.sub(r"[\s().-]", "", str(tn_query or "").strip())
   clean_mask = clean_query if "x" not in clean_query.lower() else ""
   clean_wildcard = clean_query if "x" in clean_query.lower() else ""
   safe_quantity = max(1, min(int(quantity or 20), 100))
   extract_all_mode = str(extract_all or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
-  if not extract_all_mode and not clean_query:
+  if not extract_all_mode and not re.fullmatch(r"[0-9xX]{10}", clean_query):
     return JSONResponse(
       {"ok": False, "error": "Enter one 10-digit TN or a pattern such as 858xxxxxxx."},
       status_code=422,
