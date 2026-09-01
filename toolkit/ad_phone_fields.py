@@ -2179,9 +2179,6 @@ def lookup_ad_identities_by_full_name(full_names, auth_context=None):
 
     if not clean_names:
         return {"ok": True, "results": [], "source": "ldap"}
-    if not LDAP3_AVAILABLE:
-        return {"ok": False, "error": "ldap3 package is not installed on this server"}
-
     config, config_error = _resolve_ldap_config()
     if config_error:
         return {"ok": False, "error": config_error}
@@ -2189,6 +2186,32 @@ def lookup_ad_identities_by_full_name(full_names, auth_context=None):
     if bind_error:
         return {"ok": False, "error": bind_error}
     bind_password = str(os.getenv("AD_LDAP_BIND_PASSWORD") or str((auth_context or {}).get("password") or ""))
+    attributes = ["sAMAccountName", "givenName", "sn", "displayName", "mail", "ipPhone"]
+
+    if not LDAP3_AVAILABLE:
+        ldapsearch_bind_user = _resolve_ldapsearch_bind_user(auth_context, config)
+        if not ldapsearch_bind_user or not bind_password:
+            return {"ok": False, "error": "LDAP bind credentials are required for ldapsearch fallback"}
+        results = []
+        for name in clean_names:
+            attrs, lookup_error = _run_ldapsearch_query(
+                config,
+                ldapsearch_bind_user,
+                bind_password,
+                f"(&(objectClass=user)(displayName={_escape_ldap_filter_value(name)}))",
+                attributes,
+            )
+            attrs = attrs or {}
+            if lookup_error:
+                return {"ok": False, "error": lookup_error}
+            sam = _first_attr_value(attrs, ["sAMAccountName", "samAccountName"])
+            results.append({
+                "found": bool(sam), "input_name": name, "samAccountName": sam,
+                "firstName": _first_attr_value(attrs, ["givenName"]), "lastName": _first_attr_value(attrs, ["sn"]),
+                "mail": _first_attr_value(attrs, ["mail"]), "ipPhone": _first_attr_value(attrs, ["ipPhone"]),
+            })
+        return {"ok": True, "results": results, "source": "ldapsearch"}
+
     try:
         server = Server(config["server"], port=config["port"], use_ssl=config["use_ssl"], get_info=ALL, connect_timeout=20)
         conn = Connection(server, user=bind_user, password=bind_password, authentication=bind_auth, auto_bind=True, receive_timeout=30)
@@ -2197,7 +2220,7 @@ def lookup_ad_identities_by_full_name(full_names, auth_context=None):
             search_base=config["base_dn"],
             search_filter=f"(&(objectClass=user)(|{clauses}))",
             search_scope=SUBTREE,
-            attributes=["sAMAccountName", "givenName", "sn", "displayName", "mail", "ipPhone"],
+            attributes=attributes,
         )
     except Exception as exc:
         return {"ok": False, "error": f"AD full-name lookup failed: {exc}"}
