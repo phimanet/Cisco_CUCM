@@ -34712,6 +34712,23 @@ def inteliquent_tn_inventory_route(request: Request, tn_query: str = Form(""), q
   tn_rows = []
   attempt_summaries = []
   response_truncated = False
+  data_source = "/tnInventory"
+
+  if not extract_all_mode and exact_10:
+    call_result = _inteliquent_tn_detail_lookup(exact_10, quantity=safe_quantity)
+    attempt_summaries.append(
+      {
+        "endpoint": "/tnDetail",
+        "tnMask": exact_10,
+        "quantity": safe_quantity,
+        "ok": bool(call_result.get("ok")),
+        "status_code": int(call_result.get("status_code") or 0),
+      }
+    )
+    if call_result.get("ok"):
+      raw_payload = call_result.get("raw", {}) or {}
+      tn_rows = _inteliquent_extract_tn_rows(raw_payload)
+      data_source = "/tnDetail"
 
   if extract_all_mode:
     max_pages = max(1, min(int(INTELIQUENT_ALL_TN_MAX_PAGES or 20), 200))
@@ -34774,7 +34791,7 @@ def inteliquent_tn_inventory_route(request: Request, tn_query: str = Form(""), q
       if total_pages_seen and total_pages_seen > max_pages:
         response_truncated = True
 
-  if not extract_all_mode:
+  if not extract_all_mode and not exact_10:
     for candidate in payload_candidates:
       call_result = _inteliquent_post_json("/tnInventory", candidate)
       attempt_summaries.append(
@@ -34793,29 +34810,6 @@ def inteliquent_tn_inventory_route(request: Request, tn_query: str = Form(""), q
       tn_rows = _inteliquent_extract_tn_rows(raw_payload)
       if tn_rows:
         break
-
-  data_source = "/tnInventory"
-  # If inventory is empty but the search is an exact number, check assigned-number detail.
-  if not extract_all_mode and call_result and call_result.get("ok") and not tn_rows and exact_10:
-    detail_result = _inteliquent_tn_detail_lookup(exact_10, quantity=safe_quantity)
-    attempt_summaries.append(
-      {
-        "endpoint": "/tnDetail",
-        "tnMask": exact_10,
-        "tnWildcard": "",
-        "quantity": safe_quantity,
-        "ok": bool(detail_result.get("ok")),
-        "status_code": int(detail_result.get("status_code") or 0),
-      }
-    )
-    if detail_result.get("ok"):
-      detail_payload = detail_result.get("raw", {}) or {}
-      detail_rows = _inteliquent_extract_tn_rows(detail_payload)
-      if detail_rows:
-        call_result = detail_result
-        raw_payload = detail_payload
-        tn_rows = detail_rows
-        data_source = "/tnDetail"
 
   if not call_result or not call_result.get("ok"):
     status_code = int(call_result.get("status_code") or 400)
