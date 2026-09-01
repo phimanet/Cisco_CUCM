@@ -33348,19 +33348,11 @@ def sinch_admin_page(request: Request):
           <input type="hidden" id="extract_all" name="extract_all" value="0" />
           <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
             <div>
-              <label for="tn_wildcard" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN Wildcard</label>
-              <input type="text" id="tn_wildcard" name="tn_wildcard" placeholder="858xxxxxxx" style="min-width:180px;" />
+              <label for="tn_query" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN or Pattern</label>
+              <input type="text" id="tn_query" name="tn_query" placeholder="8585551000 or 858xxxxxxx" style="min-width:230px;" />
             </div>
             <div>
-              <label for="tn_area_code" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Area Code (NPA)</label>
-              <input type="text" id="tn_area_code" name="tn_area_code" placeholder="858" style="min-width:110px;" maxlength="3" />
-            </div>
-            <div>
-              <label for="tn_mask" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN Mask (optional)</label>
-              <input type="text" id="tn_mask" name="tn_mask" placeholder="312xxx1x2x" style="min-width:180px;" />
-            </div>
-            <div>
-              <label for="quantity" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Quantity</label>
+              <label for="quantity" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Max Results (pattern)</label>
               <input type="number" id="quantity" name="quantity" value="20" min="1" max="100" style="width:110px;" />
             </div>
             <button type="submit" id="run-tn-btn">Run Read-Only Extract</button>
@@ -33745,9 +33737,7 @@ def sinch_admin_page(request: Request):
             }}
 
             const body = new URLSearchParams();
-            body.set("tn_wildcard", String(formData.get("tn_wildcard") || ""));
-            body.set("tn_area_code", String(formData.get("tn_area_code") || ""));
-            body.set("tn_mask", String(formData.get("tn_mask") || ""));
+            body.set("tn_query", String(formData.get("tn_query") || ""));
             body.set("quantity", String(formData.get("quantity") || "20"));
             body.set("extract_all", extractAllMode ? "1" : "0");
 
@@ -34637,7 +34627,7 @@ def inteliquent_tn_routing_option_update_route(
 
 
 @app.post("/inteliquent/tn-inventory")
-def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form(""), tn_area_code: str = Form(""), tn_mask: str = Form(""), quantity: int = Form(20), extract_all: str = Form("0")):
+def inteliquent_tn_inventory_route(request: Request, tn_query: str = Form(""), quantity: int = Form(20), extract_all: str = Form("0")):
   session = _get_auth_session(request) or {}
   session_username = str(session.get("username", "") or "").strip()
   if not session_username:
@@ -34645,15 +34635,17 @@ def inteliquent_tn_inventory_route(request: Request, tn_wildcard: str = Form("")
   if not _is_admin_user(session_username):
     return JSONResponse({"ok": False, "error": "Not authorized for Inteliquent Admin."}, status_code=403)
 
-  clean_mask = str(tn_mask or "").strip()
-  clean_wildcard = str(tn_wildcard or "").strip()
-  clean_area_code = re.sub(r"\D", "", str(tn_area_code or ""))
+  clean_query = str(tn_query or "").strip()
+  clean_mask = clean_query if "x" not in clean_query.lower() else ""
+  clean_wildcard = clean_query if "x" in clean_query.lower() else ""
   safe_quantity = max(1, min(int(quantity or 20), 100))
   extract_all_mode = str(extract_all or "").strip().lower() in {"1", "true", "yes", "y", "on"}
 
-  # Area-code search helper: if only NPA is provided, search available TNs in that NPA.
-  if not extract_all_mode and not clean_mask and not clean_wildcard and len(clean_area_code) == 3:
-    clean_wildcard = f"{clean_area_code}xxxxxxx"
+  if not extract_all_mode and not clean_query:
+    return JSONResponse(
+      {"ok": False, "error": "Enter one 10-digit TN or a pattern such as 858xxxxxxx."},
+      status_code=422,
+    )
 
   default_wildcard = "xxxxxxxxxx"
   requested_private_key = INTELIQUENT_API_KEY or INTELIQUENT_PRIVATE_KEY
