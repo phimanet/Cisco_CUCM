@@ -33408,15 +33408,15 @@ def sinch_admin_page(request: Request):
           <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
             <div>
               <label for="order_area_code" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Area Code (NPA)</label>
-              <input type="text" id="order_area_code" name="order_area_code" inputmode="numeric" maxlength="3" placeholder="858" style="width:110px;" />
+              <input type="text" id="order_area_code" name="area_code" inputmode="numeric" maxlength="3" placeholder="858" style="width:110px;" />
             </div>
             <div>
               <label for="order_tn_pattern" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">TN Pattern (optional)</label>
-              <input type="text" id="order_tn_pattern" name="order_tn_pattern" placeholder="858xxxxxxx" style="min-width:180px;" />
+              <input type="text" id="order_tn_pattern" name="tn_pattern" placeholder="858xxxxxxx" style="min-width:180px;" />
             </div>
             <div>
               <label for="order_quantity" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Available Results</label>
-              <input type="number" id="order_quantity" name="order_quantity" value="20" min="1" max="100" style="width:110px;" />
+              <input type="number" id="order_quantity" name="quantity" value="20" min="1" max="100" style="width:110px;" />
             </div>
             <button type="submit" id="order-search-btn">Find Available TNs</button>
           </div>
