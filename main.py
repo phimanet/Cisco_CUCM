@@ -34730,6 +34730,34 @@ def inteliquent_tn_inventory_route(request: Request, tn_query: str = Form(""), q
       tn_rows = _inteliquent_extract_tn_rows(raw_payload)
       data_source = "/tnDetail"
 
+  if not extract_all_mode and clean_wildcard:
+    wildcard_payload = {
+      "privateKey": requested_private_key,
+      "tnSearchList": {
+        "tnSearchItem": [{"tnMask": clean_wildcard.lower()}],
+      },
+      "pageSort": {
+        "page": 1,
+        "size": safe_quantity,
+        "direction": "asc",
+        "property": "tn",
+      },
+    }
+    call_result = _inteliquent_post_json("/tnDetail", wildcard_payload)
+    attempt_summaries.append(
+      {
+        "endpoint": "/tnDetail",
+        "tnMask": clean_wildcard.lower(),
+        "quantity": safe_quantity,
+        "ok": bool(call_result.get("ok")),
+        "status_code": int(call_result.get("status_code") or 0),
+      }
+    )
+    if call_result.get("ok"):
+      raw_payload = call_result.get("raw", {}) or {}
+      tn_rows = _inteliquent_extract_tn_rows(raw_payload)
+      data_source = "/tnDetail"
+
   if extract_all_mode:
     max_pages = max(1, min(int(INTELIQUENT_ALL_TN_MAX_PAGES or 20), 200))
     page_size = max(1, min(int(INTELIQUENT_ALL_TN_PAGE_SIZE or 500), 1000))
@@ -34791,7 +34819,7 @@ def inteliquent_tn_inventory_route(request: Request, tn_query: str = Form(""), q
       if total_pages_seen and total_pages_seen > max_pages:
         response_truncated = True
 
-  if not extract_all_mode and not exact_10:
+  if not extract_all_mode and not exact_10 and not clean_wildcard:
     for candidate in payload_candidates:
       call_result = _inteliquent_post_json("/tnInventory", candidate)
       attempt_summaries.append(
