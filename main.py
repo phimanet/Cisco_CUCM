@@ -37392,7 +37392,7 @@ def menu_admin_page(request: Request):
         </form>
         <p id="ad-user-lookups-status" style="color:#2c5c8a;min-height:18px;margin-top:12px;"></p>
         <div style="display:flex;align-items:center;gap:12px;margin:8px 0;">
-          <a id="ad-user-lookups-download" href="#" style="display:none;font-weight:700;">Download CSV Output</a>
+          <button type="button" id="ad-user-lookups-download" disabled>Export CSV</button>
           <button type="button" id="ad-user-lookups-copy" disabled>Copy Output</button>
         </div>
         <div id="ad-user-lookups-table" style="overflow-x:auto;"></div>
@@ -39907,6 +39907,14 @@ def menu_admin_page(request: Request):
             if (!form || !statusEl || !previewEl || !downloadEl || !copyBtn || !tableEl) {
               return;
             }
+            function escapeTableCell(value) {
+              return String(value || "")
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/>/g, "&gt;")
+                .replace(/"/g, "&quot;")
+                .replace(/'/g, "&#39;");
+            }
             function renderTable(csvText) {
               const lines = String(csvText || "").trim().split(/\\r?\\n/).filter(Boolean);
               if (lines.length < 2) {
@@ -39929,12 +39937,18 @@ def menu_admin_page(request: Request):
                 return values;
               });
               const header = rows.shift();
-              let html = "<table><thead><tr>" + header.map(function (value) { return "<th>" + escapeHtml(value) + "</th>"; }).join("") + "</tr></thead><tbody>";
+              let html = "<table><thead><tr>" + header.map(function (value) { return "<th>" + escapeTableCell(value) + "</th>"; }).join("") + "</tr></thead><tbody>";
               rows.forEach(function (row) {
-                html += "<tr>" + header.map(function (_, index) { return "<td>" + escapeHtml(row[index] || "") + "</td>"; }).join("") + "</tr>";
+                html += "<tr>" + header.map(function (_, index) { return "<td>" + escapeTableCell(row[index] || "") + "</td>"; }).join("") + "</tr>";
               });
               tableEl.innerHTML = html + "</tbody></table>";
             }
+            downloadEl.addEventListener("click", function () {
+              const url = String(downloadEl.getAttribute("data-download-url") || "");
+              if (url) {
+                window.location.href = url;
+              }
+            });
             copyBtn.addEventListener("click", async function () {
               if (!previewEl.value) {
                 return;
@@ -39954,7 +39968,8 @@ def menu_admin_page(request: Request):
               previewEl.value = "";
               tableEl.innerHTML = "";
               copyBtn.disabled = true;
-              downloadEl.style.display = "none";
+              downloadEl.disabled = true;
+              downloadEl.removeAttribute("data-download-url");
               try {
                 const response = await fetch("/admin/ad-user-lookups", {
                   method: "POST", body: new FormData(form), credentials: "same-origin",
@@ -39969,8 +39984,8 @@ def menu_admin_page(request: Request):
                 renderTable(previewEl.value);
                 copyBtn.disabled = !previewEl.value;
                 if (payload.download_url) {
-                  downloadEl.href = payload.download_url;
-                  downloadEl.style.display = "inline";
+                  downloadEl.setAttribute("data-download-url", payload.download_url);
+                  downloadEl.disabled = false;
                 }
               } catch (err) {
                 statusEl.textContent = "Active Directory lookup failed: " + String(err && err.message ? err.message : err);
