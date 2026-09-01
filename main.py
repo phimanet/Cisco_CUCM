@@ -33134,17 +33134,19 @@ def sinch_admin_page(request: Request):
 
   auth_user = escape(session_username)
   initial_panel = str(request.query_params.get("panel", "tn") or "tn").strip().lower()
-  if initial_panel not in {"tn", "tf", "order", "routing", "terminate"}:
+  if initial_panel not in {"tn", "tf", "order", "routing", "tf-routing", "terminate"}:
     initial_panel = "tn"
   tn_active_class = "active" if initial_panel == "tn" else ""
   tf_active_class = "active" if initial_panel == "tf" else ""
   order_active_class = "active" if initial_panel == "order" else ""
   routing_active_class = "active" if initial_panel == "routing" else ""
+  tf_routing_active_class = "active" if initial_panel == "tf-routing" else ""
   terminate_active_class = "active" if initial_panel == "terminate" else ""
   tn_display_style = "block" if initial_panel == "tn" else "none"
   tf_display_style = "block" if initial_panel == "tf" else "none"
   order_display_style = "block" if initial_panel == "order" else "none"
   routing_display_style = "block" if initial_panel == "routing" else "none"
+  tf_routing_display_style = "block" if initial_panel == "tf-routing" else "none"
   terminate_display_style = "block" if initial_panel == "terminate" else "none"
   html = f"""
 <html>
@@ -33336,6 +33338,7 @@ def sinch_admin_page(request: Request):
           <button type="button" id="sinch-menu-tf" class="portal-nav-btn {tf_active_class}" onclick="window.location.href='/sinch-work?panel=tf'">Toll-Free Extract</button>
           <button type="button" id="sinch-menu-order" class="portal-nav-btn {order_active_class}" onclick="window.location.href='/sinch-work?panel=order'">Order New TN</button>
           <button type="button" id="sinch-menu-routing" class="portal-nav-btn {routing_active_class}" onclick="window.location.href='/sinch-work?panel=routing'">Update TN Routing Option</button>
+          <button type="button" id="sinch-menu-tf-routing" class="portal-nav-btn {tf_routing_active_class}" onclick="window.location.href='/sinch-work?panel=tf-routing'">Update Toll-Free Routing Option</button>
           <button type="button" id="sinch-menu-terminate" class="portal-nav-btn {terminate_active_class}" onclick="window.location.href='/sinch-work?panel=terminate'">Delete TN (Terminate)</button>
           <button type="button" id="sinch-menu-back-main" class="portal-nav-btn" onclick="window.location.href='/menu'">Back to Main Operations</button>
           <button type="button" id="sinch-menu-back-admin" class="portal-nav-btn" onclick="window.location.href='/page2'">Back to Administrative Items</button>
@@ -33456,6 +33459,43 @@ def sinch_admin_page(request: Request):
         <div id="tn-routing-results"></div>
       </div>
       </div>
+      <div id="sinch-tf-routing-section" style="display:{tf_routing_display_style};">
+      <div class="panel">
+        <h3>Update Toll-Free Routing Option</h3>
+        <p style="margin:0 0 10px 0;">Paste one or more toll-free numbers, then choose the routing option to apply to all of them.</p>
+        <form id="inteliquent-tf-routing-form">
+          <div style="margin-bottom:10px;">
+            <label for="tf_routing_tn_list" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Toll-Free Number List</label>
+            <textarea id="tf_routing_tn_list" name="tf_routing_tn_list" placeholder="Paste toll-free numbers here, for example:\n8005551000\n8885551001"></textarea>
+          </div>
+          <div style="margin-bottom:10px;max-width:420px;">
+            <label for="tf_routing_option_value" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Routing Option</label>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <select id="tf_routing_option_value" name="tf_routing_option_value" style="width:100%;min-height:34px;border:1px solid #c8dbee;border-radius:10px;padding:6px 10px;">
+                <option value="">Loading routing options...</option>
+              </select>
+              <input type="hidden" id="tf_routing_option_code" name="tf_routing_option_code" value="" />
+              <button type="button" id="tf-routing-option-refresh-btn" style="white-space:nowrap;">Refresh</button>
+            </div>
+            <div id="tf-routing-option-status" style="margin-top:6px;font-size:12px;color:#4e6a84;">Fetching available routing options from Sinch...</div>
+          </div>
+          <div style="margin-bottom:10px;max-width:240px;">
+            <label for="tf_routing_pon" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">PON (required)</label>
+            <input type="text" id="tf_routing_pon" name="tf_routing_pon" maxlength="64" placeholder="Enter purchase order number" required style="width:100%;" />
+          </div>
+          <div style="margin-bottom:10px;max-width:240px;">
+            <label for="tf_routing_pin_code" style="display:block;font-size:12px;margin-bottom:3px;color:#12304a;">Authorization PIN</label>
+            <input type="password" id="tf_routing_pin_code" name="tf_routing_pin_code" inputmode="numeric" maxlength="4" placeholder="Enter 4-digit PIN" style="width:100%;" />
+          </div>
+          <button type="submit" id="tf-routing-submit-btn">Submit Toll-Free Routing Update</button>
+        </form>
+        <p id="tf-routing-status" class="status-msg"></p>
+      </div>
+      <div class="panel">
+        <h3 style="margin:0 0 8px 0;">Toll-Free Routing Update Results</h3>
+        <div id="tf-routing-results"></div>
+      </div>
+      </div>
       <div id="sinch-terminate-section" style="display:{terminate_display_style};">
       <div class="panel">
         <h3>Delete TN (Terminate)</h3>
@@ -33491,11 +33531,13 @@ def sinch_admin_page(request: Request):
         const menuTfBtn = document.getElementById("sinch-menu-tf");
         const menuOrderBtn = document.getElementById("sinch-menu-order");
         const menuRoutingBtn = document.getElementById("sinch-menu-routing");
+        const menuTfRoutingBtn = document.getElementById("sinch-menu-tf-routing");
         const menuTerminateBtn = document.getElementById("sinch-menu-terminate");
         const tnSection = document.getElementById("sinch-tn-section");
         const tfSection = document.getElementById("sinch-tf-section");
         const orderSection = document.getElementById("sinch-order-section");
         const routingSection = document.getElementById("sinch-routing-section");
+        const tfRoutingSection = document.getElementById("sinch-tf-routing-section");
         const terminateSection = document.getElementById("sinch-terminate-section");
         const form = document.getElementById("inteliquent-inventory-form");
         const statusEl = document.getElementById("inventory-status");
@@ -33529,6 +33571,16 @@ def sinch_admin_page(request: Request):
         const routingOptionStatusEl = document.getElementById("routing-option-status");
         const routingOptionRefreshBtn = document.getElementById("routing-option-refresh-btn");
         const routingSubmitBtn = document.getElementById("routing-tn-submit-btn");
+        const tfRoutingForm = document.getElementById("inteliquent-tf-routing-form");
+        const tfRoutingStatusEl = document.getElementById("tf-routing-status");
+        const tfRoutingResultsEl = document.getElementById("tf-routing-results");
+        const tfRoutingPinEl = document.getElementById("tf_routing_pin_code");
+        const tfRoutingPonEl = document.getElementById("tf_routing_pon");
+        const tfRoutingOptionEl = document.getElementById("tf_routing_option_value");
+        const tfRoutingOptionCodeEl = document.getElementById("tf_routing_option_code");
+        const tfRoutingOptionStatusEl = document.getElementById("tf-routing-option-status");
+        const tfRoutingOptionRefreshBtn = document.getElementById("tf-routing-option-refresh-btn");
+        const tfRoutingSubmitBtn = document.getElementById("tf-routing-submit-btn");
         const terminateForm = document.getElementById("inteliquent-tn-terminate-form");
         const terminateStatusEl = document.getElementById("tn-terminate-status");
         const terminateResultsEl = document.getElementById("tn-terminate-results");
@@ -33542,16 +33594,19 @@ def sinch_admin_page(request: Request):
           const showTf = section === "tf";
           const showOrder = section === "order";
           const showRouting = section === "routing";
+          const showTfRouting = section === "tf-routing";
           const showTerminate = section === "terminate";
           if (tnSection) tnSection.style.display = showTn ? "block" : "none";
           if (tfSection) tfSection.style.display = showTf ? "block" : "none";
           if (orderSection) orderSection.style.display = showOrder ? "block" : "none";
           if (routingSection) routingSection.style.display = showRouting ? "block" : "none";
+          if (tfRoutingSection) tfRoutingSection.style.display = showTfRouting ? "block" : "none";
           if (terminateSection) terminateSection.style.display = showTerminate ? "block" : "none";
           if (menuTnBtn) menuTnBtn.classList.toggle("active", showTn);
           if (menuTfBtn) menuTfBtn.classList.toggle("active", showTf);
           if (menuOrderBtn) menuOrderBtn.classList.toggle("active", showOrder);
           if (menuRoutingBtn) menuRoutingBtn.classList.toggle("active", showRouting);
+          if (menuTfRoutingBtn) menuTfRoutingBtn.classList.toggle("active", showTfRouting);
           if (menuTerminateBtn) menuTerminateBtn.classList.toggle("active", showTerminate);
         }}
 
@@ -33577,6 +33632,12 @@ def sinch_admin_page(request: Request):
           menuRoutingBtn.addEventListener("click", function (event) {{
             event.preventDefault();
             setSinchMenu("routing");
+          }});
+        }}
+        if (menuTfRoutingBtn) {{
+          menuTfRoutingBtn.addEventListener("click", function (event) {{
+            event.preventDefault();
+            setSinchMenu("tf-routing");
           }});
         }}
         if (menuTerminateBtn) {{
@@ -34124,6 +34185,102 @@ def sinch_admin_page(request: Request):
           }});
         }}
 
+        if (tfRoutingForm) {{
+          function syncTfRoutingSubmitState() {{
+            if (!tfRoutingSubmitBtn || !tfRoutingPinEl || !tfRoutingOptionEl || !tfRoutingPonEl) {{
+              return;
+            }}
+            tfRoutingSubmitBtn.disabled = !(
+              String(tfRoutingPinEl.value || "").trim() === "1776"
+              && String(tfRoutingOptionEl.value || "").trim()
+              && String(tfRoutingPonEl.value || "").trim()
+            );
+          }}
+
+          async function loadTfRoutingOptions() {{
+            if (!tfRoutingOptionEl) {{
+              return;
+            }}
+            if (tfRoutingOptionStatusEl) {{
+              tfRoutingOptionStatusEl.textContent = "Fetching available routing options from Sinch...";
+              tfRoutingOptionStatusEl.style.color = "#4e6a84";
+            }}
+            try {{
+              const response = await fetch("/inteliquent/routing-options", {{
+                method: "GET", credentials: "same-origin", headers: {{ "Accept": "application/json" }},
+              }});
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {{
+                throw new Error(String(payload.error || "Routing options lookup failed."));
+              }}
+              const options = Array.isArray(payload.options) ? payload.options : [];
+              tfRoutingOptionEl.innerHTML = "";
+              const placeholder = document.createElement("option");
+              placeholder.value = "";
+              placeholder.textContent = options.length ? "Select routing option" : "No options returned";
+              tfRoutingOptionEl.appendChild(placeholder);
+              options.forEach(function (opt) {{
+                const value = String((opt && opt.value) || "").trim();
+                const label = String((opt && opt.label) || value).trim();
+                if (!value) {{
+                  return;
+                }}
+                const option = document.createElement("option");
+                option.value = value;
+                option.textContent = label;
+                option.setAttribute("data-code", String((opt && opt.code) || "").trim());
+                tfRoutingOptionEl.appendChild(option);
+              }});
+              if (tfRoutingOptionStatusEl) {{
+                tfRoutingOptionStatusEl.textContent = "Loaded " + options.length + " routing option(s).";
+                tfRoutingOptionStatusEl.style.color = "#0d5d3d";
+              }}
+            }} catch (err) {{
+              tfRoutingOptionEl.innerHTML = '<option value="">Unable to load routing options</option>';
+              if (tfRoutingOptionStatusEl) {{
+                tfRoutingOptionStatusEl.textContent = "Routing options lookup failed: " + String(err && err.message ? err.message : err);
+                tfRoutingOptionStatusEl.style.color = "#a42323";
+              }}
+            }}
+            syncTfRoutingSubmitState();
+          }}
+
+          [tfRoutingPinEl, tfRoutingPonEl, tfRoutingOptionEl].forEach(function (element) {{
+            if (element) {{
+              element.addEventListener("input", syncTfRoutingSubmitState);
+              element.addEventListener("change", syncTfRoutingSubmitState);
+            }}
+          }});
+          if (tfRoutingOptionRefreshBtn) {{
+            tfRoutingOptionRefreshBtn.addEventListener("click", loadTfRoutingOptions);
+          }}
+          syncTfRoutingSubmitState();
+          loadTfRoutingOptions();
+
+          tfRoutingForm.addEventListener("submit", async function (event) {{
+            event.preventDefault();
+            if (String(tfRoutingPinEl && tfRoutingPinEl.value || "").trim() !== "1776") {{
+              tfRoutingStatusEl.textContent = "Authorization PIN is required and must be correct before submit.";
+              return;
+            }}
+            const formData = new FormData(tfRoutingForm);
+            tfRoutingStatusEl.textContent = "Submitting Toll-Free routing update...";
+            tfRoutingResultsEl.innerHTML = "";
+            try {{
+              const response = await fetch("/inteliquent/tf-routing-option-update", {{ method: "POST", body: formData }});
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) {{
+                tfRoutingStatusEl.textContent = "Routing update failed: " + (payload.error || "Unknown error");
+                return;
+              }}
+              tfRoutingStatusEl.textContent = payload.message || "Toll-Free routing update submitted.";
+              renderActionResult(tfRoutingResultsEl, payload, "Toll-Free Routing Update");
+            }} catch (err) {{
+              tfRoutingStatusEl.textContent = "Routing update failed: " + String(err && err.message ? err.message : err);
+            }}
+          }});
+        }}
+
         function syncTerminateSubmitState() {{
           if (!terminateSubmitBtn || !terminateConfirmEl || !terminatePinEl) {{
             return;
@@ -34648,6 +34805,120 @@ def inteliquent_tn_routing_option_update_route(
     },
     status_code=200,
   )
+
+
+@app.post("/inteliquent/tf-routing-option-update")
+def inteliquent_tf_routing_option_update_route(
+  request: Request,
+  tf_routing_tn_list: str = Form(""),
+  tf_routing_option_value: str = Form(""),
+  tf_routing_option_code: str = Form(""),
+  tf_routing_pon: str = Form(""),
+  tf_routing_pin_code: str = Form(""),
+):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", "") or "").strip()
+  if not session_username:
+    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
+  if not _is_admin_user(session_username):
+    return JSONResponse({"ok": False, "error": "Not authorized for Inteliquent Admin."}, status_code=403)
+  if str(tf_routing_pin_code or "").strip() != "1776":
+    return JSONResponse({"ok": False, "error": "Authorization PIN is invalid."}, status_code=403)
+
+  target_option = str(tf_routing_option_value or "").strip()
+  target_option_code = str(tf_routing_option_code or "").strip()
+  target_pon = str(tf_routing_pon or "").strip()
+  if not target_option:
+    return JSONResponse({"ok": False, "error": "Routing Option is required."}, status_code=400)
+  if not target_pon:
+    return JSONResponse({"ok": False, "error": "PON is required."}, status_code=400)
+  if not re.fullmatch(r"[A-Za-z0-9._\-/]{1,64}", target_pon):
+    return JSONResponse({"ok": False, "error": "PON contains invalid characters."}, status_code=400)
+
+  numbers = _inteliquent_parse_tn_list(tf_routing_tn_list)
+  if not numbers:
+    return JSONResponse({"ok": False, "error": "At least one valid 10-digit toll-free number is required."}, status_code=400)
+
+  call_result = _inteliquent_post_json(
+    "/tfUpdate",
+    {
+      "privateKey": INTELIQUENT_PRIVATE_KEY,
+      "customerOrderReference": target_pon,
+      "tfList": {"tfItem": [{"tn": number, "routingOption": target_option} for number in numbers]},
+    },
+  )
+  raw_payload = call_result.get("raw", {}) or {}
+  attempt_log = [{
+    "endpoint": "/tfUpdate",
+    "ok": bool(call_result.get("ok")),
+    "status_code": int(call_result.get("status_code") or 0),
+    "api_status": str(raw_payload.get("status", "") or "").strip(),
+    "api_status_code": str(raw_payload.get("statusCode", "") or "").strip(),
+    "api_message": str(raw_payload.get("message", "") or "").strip(),
+    "submitted_option": target_option,
+  }]
+  results = []
+  success_count = 0
+  pending_count = 0
+  failed_count = 0
+
+  if not call_result.get("ok"):
+    failed_count = len(numbers)
+    results = [{
+      "number": number, "status": "Failed",
+      "details": str(call_result.get("error") or "Unable to update routing option."),
+      "attempts": attempt_log, "verified": False, "actual_routing_option": "",
+    } for number in numbers]
+  else:
+    for number in numbers:
+      detail_call = _inteliquent_post_json(
+        "/tfDetail",
+        {
+          "privateKey": INTELIQUENT_PRIVATE_KEY,
+          "tfSearchList": {"tfSearchItem": [{"tnMask": number}]},
+          "pageSort": {"page": 1, "size": 20, "direction": "asc", "property": "tn"},
+        },
+      )
+      actual_option = ""
+      for row in _inteliquent_extract_tn_rows(detail_call.get("raw", {}) or {}):
+        row_number = re.sub(r"\D", "", str(row.get("tn", "") or row.get("telephoneNumber", "")))
+        if row_number != number:
+          continue
+        actual_option = str(
+          row.get("customerRoutingOption", "") or row.get("customerRoutingOptionName", "")
+          or row.get("routingOptionName", "") or row.get("routingOption", "") or row.get("routingLabel", "") or ""
+        ).strip()
+        break
+      if detail_call.get("ok") and actual_option.lower() == target_option.lower():
+        success_count += 1
+        results.append({
+          "number": number, "status": "Success", "details": f"Routing option set to '{target_option}'.",
+          "attempts": attempt_log, "verified": True, "actual_routing_option": actual_option,
+        })
+      else:
+        pending_count += 1
+        detail_message = str(detail_call.get("error") or "Update accepted by provider but immediate verification did not confirm change yet.")
+        results.append({
+          "number": number, "status": "Pending", "details": detail_message,
+          "attempts": attempt_log, "verified": False, "actual_routing_option": actual_option,
+        })
+
+  _inteliquent_send_tn_action_email(
+    request=request,
+    action_label=f"Toll-Free Routing Update ({target_option}, PON {target_pon})",
+    numbers=numbers,
+    api_status="partial_failed" if failed_count else ("submitted_pending_verification" if pending_count else "success"),
+    api_message=f"{success_count} verified, {pending_count} pending, {failed_count} failed.",
+  )
+  return JSONResponse({
+    "ok": True, "all_succeeded": failed_count == 0 and pending_count == 0,
+    "all_submitted": failed_count == 0, "submitted_count": len(numbers),
+    "submitted_numbers": numbers, "routing_option": target_option,
+    "routing_option_code": target_option_code, "pon": target_pon,
+    "success_count": success_count, "pending_count": pending_count, "failed_count": failed_count,
+    "message": f"{success_count} verified, {pending_count} pending, {failed_count} failed out of {len(numbers)} toll-free number(s).",
+    "results": results,
+  })
 
 
 @app.post("/inteliquent/tn-inventory")
