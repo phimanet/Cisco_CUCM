@@ -1531,6 +1531,7 @@ def _genesys_send_json(
   path: str,
   payload: dict | None = None,
   params: dict | None = None,
+  content_type: str = "",
 ) -> tuple[bool, dict, str, int]:
   clean_method = method.upper()
   # For DELETE (and GET) with no payload, send no body and omit Content-Type.
@@ -1541,7 +1542,7 @@ def _genesys_send_json(
     "Authorization": f"Bearer {access_token}",
   }
   if effective_payload is not None:
-    headers["Content-Type"] = "application/json"
+    headers["Content-Type"] = content_type or "application/json"
   url = f"{api_base}{path}"
   try:
     response = requests.request(
@@ -3741,6 +3742,24 @@ def _genesys_ensure_group_membership(api_base: str, access_token: str, user_id: 
     return False, f"Genesys group '{clean_group_name}' detail lookup failed: {detail_error or 'Unknown error.'}"
 
   add_errors = []
+  scim_payload = {
+    "schemas": ["urn:ietf:params:scim:api:messages:2.0:PatchOp"],
+    "Operations": [{"op": "add", "path": "members", "value": [{"value": clean_user_id}]}],
+  }
+  for scim_path in [f"/api/v2/scim/groups/{group_id}", f"/api/v2/scim/v2/groups/{group_id}"]:
+    ok, _, error, status_code = _genesys_send_json(
+      "PATCH",
+      api_base,
+      access_token,
+      scim_path,
+      payload=scim_payload,
+      content_type="application/scim+json",
+    )
+    error_text = str(error or "").strip()
+    if ok:
+      return True, f"scim_group_write_accepted (group={clean_group_name})"
+    add_errors.append(f"{scim_path}: {error_text or f'HTTP {status_code}'}")
+
   for payload in [
     [clean_user_id],
     {"ids": [clean_user_id]},
