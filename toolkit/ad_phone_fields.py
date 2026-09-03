@@ -821,9 +821,62 @@ if ($payload.username -and $payload.password) {
         rows = ps_data if isinstance(ps_data, list) else ([ps_data] if isinstance(ps_data, dict) and ps_data.get("name") else [])
         return [dict(row) for row in rows if isinstance(row, dict) and str(row.get("name", "")).startswith(clean_prefix)], ""
 
-    if not LDAP3_AVAILABLE:
-        return [], ps_error
+    ldapsearch_bin = _resolve_ldapsearch_executable()
     config, config_error = _resolve_ldap_config()
+    if ldapsearch_bin and not config_error:
+        password = str(os.getenv("AD_LDAP_BIND_PASSWORD") or (auth_context or {}).get("password") or "")
+        bind_user = _resolve_ldapsearch_bind_user(auth_context, config)
+        if password and bind_user:
+            escaped = _escape_ldap_filter_value(clean_prefix)
+            search_filter = f"(&(objectClass=group)(|(cn={escaped}*)(name={escaped}*)(sAMAccountName={escaped}*)))"
+            for uri in _ldap_uri_candidates(config):
+                try:
+                    completed = subprocess.run(
+                        [ldapsearch_bin, "-LLL", "-x", "-o", "nettimeout=8", "-o", "TLS_REQCERT=never", "-H", uri, "-D", bind_user, "-w", password, "-b", str(config.get("base_dn") or ""), search_filter, "cn", "name", "sAMAccountName", "distinguishedName", "objectGUID", "objectSid", "groupType"],
+                        capture_output=True,
+                        text=True,
+                        timeout=30,
+                        check=False,
+                    )
+                except Exception:
+                    continue
+                if completed.returncode != 0:
+                    continue
+                records = []
+                current = {}
+                for line in (completed.stdout or "").splitlines() + [""]:
+                    if not line.strip():
+                        if current:
+                            records.append(current)
+                            current = {}
+                        continue
+                    if ":" not in line:
+                        continue
+                    key, value = line.split(":", 1)
+                    current.setdefault(key.strip(), []).append(value.strip())
+                rows = []
+                for attrs in records:
+                    name = _first_attr_value(attrs, ["name", "cn"])
+                    if not name.startswith(clean_prefix):
+                        continue
+                    group_type_raw = _first_attr_value(attrs, ["groupType"])
+                    try:
+                        group_type = int(group_type_raw)
+                    except Exception:
+                        group_type = None
+                    rows.append({
+                        "name": name,
+                        "samAccountName": _first_attr_value(attrs, ["sAMAccountName"]),
+                        "distinguishedName": _first_attr_value(attrs, ["distinguishedName", "dn"]),
+                        "objectGUID": _first_attr_value(attrs, ["objectGUID"]),
+                        "sid": _first_attr_value(attrs, ["objectSid"]),
+                        "groupCategory": _group_category_from_group_type(group_type) if group_type is not None else "",
+                        "groupScope": _group_scope_from_group_type(group_type) if group_type is not None else "",
+                    })
+                return rows, ""
+
+    if not LDAP3_AVAILABLE:
+        return [], ps_error or f"LDAP fallback unavailable: {config_error or 'ldap3 and ldapsearch are unavailable'}"
     if config_error:
         return [], f"{ps_error}; LDAP fallback failed: {config_error}"
     bind_user, bind_auth, bind_error = _resolve_ldap_bind_credentials(auth_context, config)

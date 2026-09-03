@@ -109,7 +109,8 @@ Priority keys:
 
 ### 2026-09-03 (Genesys AD role-group delayed WebRTC workflow — implementation complete, LAB validation pending)
 - Added Genesys menu item for CUCM employee lookup, selectable `Genesys_User_Role*` AD security groups, optional saved Genesys division filter, and queued WebRTC build submission.
-- Added server-side AD prefix lookup with PowerShell/LDAP fallback and server-side group-prefix enforcement.
+- Added server-side AD prefix lookup with PowerShell/ldap3/ldapsearch fallback, multi-group parsing, and server-side group-prefix enforcement.
+- Corrected the panel filter loader to use the live `/genesys/catalog/options` path from Menu item 1, while retaining saved filters and allowing live catalog divisions as targets.
 - Adding membership now precedes job creation; queued job will wait at least 15 minutes, create/associate WebRTC, apply the saved Division/Skills/Queues filter, and email the submitter on completion or failure.
 - Added in-memory queue status endpoint and operator-visible job status polling. Runtime queue state is lost on service restart; validate operational restart behavior in LAB before production rollout.
 

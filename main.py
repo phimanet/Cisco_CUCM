@@ -17477,8 +17477,8 @@ def genesys_admin_placeholder(request: Request):
             <div style="padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f4f9ff;">
               <strong>1. Employee lookup</strong>
               <div class="search-filter-row" style="margin-top:8px;">
-                <input id="genesys-ad-employee-last" placeholder="Last Name *" style="width:220px;">
                 <input id="genesys-ad-employee-first" placeholder="First Name (optional)" style="width:220px;">
+                <input id="genesys-ad-employee-last" placeholder="Last Name *" style="width:220px;">
                 <button type="button" id="genesys-ad-employee-search-btn" style="background:#385977;">Search CUCM</button>
               </div>
               <div id="genesys-ad-employee-results" style="overflow-x:auto; margin-top:8px;"></div>
@@ -17526,7 +17526,18 @@ def genesys_admin_placeholder(request: Request):
                   try { var payload = await jsonFetch("/genesys/ad-webrtc/groups", { method: "POST", body: new FormData() }); groupSelect.innerHTML = "<option value=''>Select a group...</option>" + (payload.groups || []).map(function (row) { return "<option value='" + esc(row.name) + "'>" + esc(row.name) + "</option>"; }).join(""); employeeStatus.textContent = (payload.groups || []).length + " Genesys role group(s) loaded."; } catch (err) { employeeStatus.textContent = "Group lookup failed: " + err.message; }
                 }
                 async function loadFilters() {
-                  try { var payload = await jsonFetch("/genesys/division-filters", { method: "GET" }); filterSelect.innerHTML = "<option value=''>No filter</option>" + (payload.filters || []).map(function (row) { var label = row.filter_name || row.division_name || row.division_id; return "<option value='" + esc(row.filter_id || row.division_id) + "'>" + esc(label) + "</option>"; }).join(""); } catch (err) { employeeStatus.textContent = "Filter lookup failed: " + err.message; }
+                  try {
+                    var saved = await jsonFetch("/genesys/division-filters", { method: "GET" });
+                    var catalog = await jsonFetch("/genesys/catalog/options", { method: "GET" });
+                    var savedRows = Array.isArray(saved.filters) ? saved.filters : [];
+                    var savedIds = {};
+                    var html = "<option value=''>No filter</option>";
+                    savedRows.forEach(function (row) { var id = String(row.filter_id || row.division_id || ""); savedIds[id] = true; var label = row.filter_name || row.division_name || row.division_id; html += "<option value='" + esc(id) + "'>Saved: " + esc(label) + "</option>"; });
+                    (catalog.divisions || []).forEach(function (row) { var id = String(row.id || ""); if (!id || savedIds[id]) return; html += "<option value='catalog:" + esc(id) + "'>Division: " + esc(row.name || id) + "</option>"; });
+                    filterSelect.innerHTML = html;
+                    employeeStatus.textContent = savedRows.length + " saved filter(s) and " + (catalog.divisions || []).length + " live catalog division(s) loaded.";
+                  } catch (err) { employeeStatus.textContent = "Filter/catalog lookup failed: " + err.message; }
+                }
                 }
                 async function searchEmployees() {
                   var data = new FormData(); data.append("last_name", document.getElementById("genesys-ad-employee-last").value); data.append("first_name", document.getElementById("genesys-ad-employee-first").value); employeeStatus.textContent = "Searching CUCM employees...";
@@ -22966,11 +22977,14 @@ def genesys_ad_webrtc_queue_route(
   selected_filter = {}
   clean_filter_id = str(filter_id or "").strip()
   if clean_filter_id:
-    filter_payload = _load_genesys_division_filters()
-    filters = filter_payload.get("filters", {}) if isinstance(filter_payload, dict) else {}
-    selected_filter = dict(filters.get(clean_filter_id, {}) or {}) if isinstance(filters, dict) else {}
-    if not selected_filter:
-      return JSONResponse({"ok": False, "error": "Selected Genesys division filter was not found."}, status_code=400)
+    if clean_filter_id.lower().startswith("catalog:"):
+      selected_filter = {"division_id": clean_filter_id.split(":", 1)[1].strip(), "filter_name": "Live catalog division"}
+    else:
+      filter_payload = _load_genesys_division_filters()
+      filters = filter_payload.get("filters", {}) if isinstance(filter_payload, dict) else {}
+      selected_filter = dict(filters.get(clean_filter_id, {}) or {}) if isinstance(filters, dict) else {}
+      if not selected_filter:
+        return JSONResponse({"ok": False, "error": "Selected Genesys division filter was not found."}, status_code=400)
 
   now_epoch = time.time()
   job_id = str(uuid4())
