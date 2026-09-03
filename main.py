@@ -17833,7 +17833,7 @@ def genesys_admin_placeholder(request: Request):
                   if (!window.confirm("Add " + groupSelect.value + " to " + (selected.displayname || selected.userid) + " and queue the WebRTC build for 15 minutes from now?")) return;
                   queueBtn.disabled = true; employeeStatus.textContent = "Adding AD membership and creating delayed job...";
                   var data = new FormData(); data.append("target_user", selected.userid); data.append("user_id", selected.userid); data.append("user_name", selected.displayname || ((selected.firstname || "") + " " + (selected.lastname || "")).trim()); data.append("first_name", selected.firstname || ""); data.append("last_name", selected.lastname || ""); data.append("user_email", selected.email); data.append("group_name", groupSelect.value); data.append("filter_id", filterSelect.value);
-                  try { var payload = await jsonFetch("/genesys/ad-webrtc/queue", { method: "POST", body: data }); employeeStatus.textContent = "AD membership confirmed. WebRTC build queued."; renderJob(payload); pollJob(payload.job_id); } catch (err) { employeeStatus.textContent = "Queue failed: " + err.message; queueBtn.disabled = false; }
+                  try { var payload = await jsonFetch("/genesys/ad-webrtc/queue", { method: "POST", body: data }); employeeStatus.textContent = "AD membership confirmed. WebRTC build queued."; await refreshQueue(); pollJob(payload.job_id); } catch (err) { employeeStatus.textContent = "Queue failed: " + err.message; queueBtn.disabled = false; }
                 }
                 var queueStatus = document.getElementById("genesys-ad-queue-status");
                 function renderJobs(jobs) {
