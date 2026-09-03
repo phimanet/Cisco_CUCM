@@ -23468,8 +23468,7 @@ def genesys_ad_webrtc_groups_inspect_route(format: str = ""):
   )
 
 
-@app.post("/genesys/ad-webrtc/groups/test-add")
-def genesys_ad_webrtc_group_test_add_route(user_email: str = Form(""), group_name: str = Form("")):
+def _genesys_ad_webrtc_group_test_add_impl(user_email: str = Form(""), group_name: str = Form("")):
   clean_email = str(user_email or "").strip().lower()
   clean_group = str(group_name or "").strip()
   if not clean_email or "@" not in clean_email or not clean_group.lower().startswith("genesys_user_role"):
@@ -23495,6 +23494,21 @@ def genesys_ad_webrtc_group_test_add_route(user_email: str = Form(""), group_nam
     f"<pre style='white-space:pre-wrap;padding:12px;background:#f8fcff;border:1px solid #c8dbee;'>{escape(result_text)}</pre>"
     f"<p><a href='/genesys/ad-webrtc/groups/inspect?format=html'>Back to Groups and Contents</a></p></body></html>"
   )
+
+
+@app.post("/genesys/ad-webrtc/groups/test-add")
+def genesys_ad_webrtc_group_test_add_route(user_email: str = Form(""), group_name: str = Form("")):
+  try:
+    return _genesys_ad_webrtc_group_test_add_impl(user_email=user_email, group_name=group_name)
+  except Exception as exc:
+    logger.exception("Genesys group write test failed unexpectedly")
+    return HTMLResponse(
+      f"<html><body style='font-family:Segoe UI,Arial,sans-serif;color:#12304a;margin:24px;'>"
+      f"<h2>Genesys Group Write Test Error</h2><p>The request reached the server but raised an unexpected exception.</p>"
+      f"<pre style='white-space:pre-wrap;padding:12px;background:#fff3f3;border:1px solid #c62828;'>{escape(str(exc))}</pre>"
+      f"<p><a href='/genesys/ad-webrtc/groups/inspect?format=html'>Back to Groups and Contents</a></p></body></html>",
+      status_code=500,
+    )
 
 
 @app.post("/genesys/ad-webrtc/queue")
