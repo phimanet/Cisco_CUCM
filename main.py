@@ -17761,7 +17761,7 @@ def genesys_admin_placeholder(request: Request):
           <div id="genesys-role-groups-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Inspect Genesys Role Groups</h3>
             <p style="color:#4e6a84;font-size:12px;">Read-only diagnostic. Lists groups beginning with Genesys_User_Role and displays the group detail contents returned by Genesys. No membership changes are made.</p>
-            <button type="button" id="genesys-role-groups-inspect-btn" style="background:#385977;" onclick="if (window.inspectGenesysRoleGroups) { window.inspectGenesysRoleGroups(); } else { var s=document.getElementById('genesys-role-groups-status'); if (s) { s.textContent='Diagnostic handler did not load. Refresh the page and retry.'; } }">Read Groups and Contents</button>
+            <a href="/genesys/ad-webrtc/groups/inspect?format=html" class="topbar-btn topbar-btn-login" style="display:inline-block;background:linear-gradient(180deg,#0c77d8,#005eb8);">Read Groups and Contents</a>
             <p id="genesys-role-groups-status" style="color:#2c5c8a;min-height:18px;">Ready.</p>
             <div id="genesys-role-groups-output" style="overflow-x:auto;"></div>
             <script>
@@ -23402,7 +23402,7 @@ def genesys_ad_webrtc_groups_route(
 
 
 @app.get("/genesys/ad-webrtc/groups/inspect")
-def genesys_ad_webrtc_groups_inspect_route():
+def genesys_ad_webrtc_groups_inspect_route(format: str = ""):
   clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
   token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
   if not token_result.get("ok"):
@@ -23439,14 +23439,31 @@ def genesys_ad_webrtc_groups_inspect_route():
       "member_probe": "not attempted (read-only group detail inspection)",
     })
   inspected.sort(key=lambda item: item["name"].lower())
-  return JSONResponse({
+  response_payload = {
     "ok": True,
     "region": region,
     "list_path": "/api/v2/groups",
     "pages_scanned": pages,
     "prefix": "Genesys_User_Role",
     "groups": inspected,
-  })
+  }
+  if str(format or "").strip().lower() != "html":
+    return JSONResponse(response_payload)
+  rows_html = "".join(
+    f"<details style='margin:10px 0;padding:10px;border:1px solid #c8dbee;border-radius:6px;background:#f8fcff;'>"
+    f"<summary style='cursor:pointer;font-weight:700;color:#12304a;'>{escape(item['name'])} ({escape(item['id'])})</summary>"
+    f"<p><strong>Detail API:</strong> {escape(item['detail_path'])}</p>"
+    f"<p><strong>Detail error:</strong> {escape(item.get('detail_error', '') or 'none')}</p>"
+    f"<pre style='white-space:pre-wrap;max-height:420px;overflow:auto;background:#fff;border:1px solid #d7e3ee;padding:8px;'>{escape(json.dumps(item.get('detail', {}), indent=2))}</pre>"
+    f"</details>"
+    for item in inspected
+  )
+  return HTMLResponse(
+    f"<html><head><title>Genesys Role Group Contents</title></head><body style='font-family:Segoe UI,Arial,sans-serif;color:#12304a;margin:24px;'>"
+    f"<h2>Genesys Role Group Contents (Read-Only)</h2><p>Groups beginning with Genesys_User_Role. No membership changes were made.</p>"
+    f"<p><a href='/genesys-admin?panel=genesys-role-groups-panel'>Back to Genesys Admin</a></p>"
+    f"<p>Groups inspected: {len(inspected)}</p>{rows_html or '<p>No Genesys_User_Role groups were returned.</p>'}</body></html>"
+  )
 
 
 @app.post("/genesys/ad-webrtc/queue")
