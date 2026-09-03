@@ -26786,7 +26786,7 @@ __ADMIN_CARD__
           <strong>Action History</strong>
           <span>Review recent portal actions and download the audit CSV.</span>
         </a>
-        <a class="hero-link-card" href="/genesys-admin">
+        <a class="hero-link-card" href="/genesys-admin?panel=genesys-ad-webrtc-panel">
           <strong>Genesys Admin Page</strong>
           <span>Reserved path for the separate Genesys administration workflow.</span>
         </a>
@@ -51472,7 +51472,7 @@ def change_extension_page(request: Request):
       <a class="hero-link-card" href="/sip-call-search"><strong>SIP Call Search</strong></a>
       <a class="hero-link-card" href="/menu2"><strong>Administrative Items</strong></a>
       <a class="hero-link-card" href="/audit-trail"><strong>Action History</strong></a>
-      <a class="hero-link-card" href="/genesys-admin"><strong>Genesys Admin Page</strong></a>
+      <a class="hero-link-card" href="/genesys-admin?panel=genesys-ad-webrtc-panel"><strong>Add Genesys User</strong></a>
     </div>
   </section>
   <div class="portal-shell">
