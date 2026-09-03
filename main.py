@@ -521,7 +521,7 @@ GENESYS_UPDATE_BATCH_JOBS_MAX = int((os.getenv("GENESYS_UPDATE_BATCH_JOBS_MAX", 
 GENESYS_AD_WEBRTC_QUEUE_JOBS = {}
 GENESYS_AD_WEBRTC_QUEUE_LOCK = threading.Lock()
 GENESYS_AD_WEBRTC_QUEUE_WORKER_STARTED = False
-GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS = int((os.getenv("GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS", "1800") or "1800").strip())
+GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS = int((os.getenv("GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS", "900") or "900").strip())
 GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS = min(60, max(1, int((os.getenv("GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS", "60") or "60").strip())))
 _genesys_queue_data_root = (os.getenv("GENESYS_AD_WEBRTC_QUEUE_DATA_DIR", "") or "").strip()
 if not _genesys_queue_data_root:
@@ -17727,7 +17727,7 @@ def genesys_admin_placeholder(request: Request):
         <section class="portal-main">
           <div id="genesys-ad-webrtc-panel" class="panel genesys-panel" style="display:block; margin-top:0;">
             <h3 style="margin-top:0;">Add Genesys User</h3>
-            <p style="margin:0 0 10px 0; color:#4e6a84; font-size:12px;">Find an employee, add one Genesys_User_Role security group, choose an optional saved Genesys filter, then queue WebRTC creation for 30 minutes from now.</p>
+            <p style="margin:0 0 10px 0; color:#4e6a84; font-size:12px;">Find an employee, add one Genesys_User_Role security group, choose an optional saved Genesys filter, then queue WebRTC creation for 15 minutes from now.</p>
             <div style="padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#fffdf4;">
               <strong>0. Inspect an example employee (lookup only)</strong>
               <div class="search-filter-row" style="margin-top:8px;">
@@ -23386,7 +23386,7 @@ def genesys_ad_webrtc_queue_route(
 
   now_epoch = time.time()
   job_id = str(uuid4())
-  scheduled_epoch = now_epoch + max(1800, int(GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS or 1800))
+  scheduled_epoch = now_epoch + max(900, int(GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS or 900))
   job = {
     "job_id": job_id,
     "status": "queued",
