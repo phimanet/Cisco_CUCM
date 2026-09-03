@@ -102,6 +102,28 @@ def _soap_get_user(userid):
 </soapenv:Envelope>"""
 
 
+def lookup_person_email_by_userid(cucm_host, cucm_user, cucm_pass, userid):
+    """Return one CUCM user's email by userid for workflows that need a reliable address."""
+    clean_userid = (userid or "").strip()
+    if not clean_userid:
+        return ""
+
+    session = requests.Session()
+    session.trust_env = False
+    session.verify = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+    try:
+        response = _axl_post(session, cucm_host, _soap_get_user(clean_userid))
+        root = ET.fromstring(response)
+    except Exception:
+        return ""
+
+    for elem in root.iter():
+        if _strip_ns(elem.tag).lower() in {"mailid", "email"} and (elem.text or "").strip():
+            return elem.text.strip()
+    return ""
+
+
 def _soap_get_phone(phone_name):
     return f"""<?xml version="1.0" encoding="utf-8"?>
 <soapenv:Envelope xmlns:soapenv="{SOAPENV_NS}" xmlns:axl="{AXL_NS}">

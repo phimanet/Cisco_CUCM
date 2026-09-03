@@ -54,7 +54,7 @@ from toolkit.add_secondary_devices import (
 from toolkit.called_name_change import run_called_name_change
 from toolkit.edit_line_group_members import edit_line_group_members, search_line_groups, get_line_group_members
 from toolkit.extract_rpo_phones import extract_rpo_phones
-from toolkit.person_lookup import search_persons_by_name
+from toolkit.person_lookup import search_persons_by_name, lookup_person_email_by_userid
 from toolkit.extension_lookup import lookup_extension_owner, check_user_devices
 from toolkit.translation_pattern_lookup import (
   lookup_translation_patterns,
@@ -520,7 +520,7 @@ GENESYS_UPDATE_BATCH_JOBS_MAX = int((os.getenv("GENESYS_UPDATE_BATCH_JOBS_MAX", 
 GENESYS_AD_WEBRTC_QUEUE_JOBS = {}
 GENESYS_AD_WEBRTC_QUEUE_LOCK = threading.Lock()
 GENESYS_AD_WEBRTC_QUEUE_WORKER_STARTED = False
-GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS = int((os.getenv("GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS", "900") or "900").strip())
+GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS = int((os.getenv("GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS", "1800") or "1800").strip())
 GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS = int((os.getenv("GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS", "100") or "100").strip())
 _genesys_default_filter_path = (os.getenv("GENESYS_DIVISION_FILTERS_PATH", "") or "").strip()
 if not _genesys_default_filter_path:
@@ -3258,6 +3258,86 @@ def _genesys_get_queue_members(api_base: str, access_token: str, queue_id: str) 
   return members, err
 
 
+def _genesys_ensure_user_by_email(
+  region: str,
+  access_token: str,
+  user_email: str,
+  first_name: str = "",
+  last_name: str = "",
+) -> dict:
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+  clean_email = str(user_email or "").strip().lower()
+  if not clean_email or "@" not in clean_email:
+    return {"ok": False, "error": "A valid employee email is required to resolve the Genesys user."}
+
+  existing = _genesys_lookup_user_by_email(clean_region, access_token, clean_email)
+  if existing.get("ok") and str(existing.get("user_id", "") or "").strip():
+    existing["created_now"] = False
+    return existing
+
+  clean_first = str(first_name or "").strip()
+  clean_last = str(last_name or "").strip()
+  full_name = " ".join(part for part in [clean_first, clean_last] if part).strip()
+  if not full_name:
+    full_name = clean_email.split("@", 1)[0].replace(".", " ").strip().title()
+  if not full_name:
+    return {"ok": False, "error": "First name and last name are required to create a missing Genesys user."}
+
+  ok_divisions, divisions_payload, divisions_error = _genesys_get_json(
+    api_base,
+    access_token,
+    "/api/v2/authorization/divisions",
+    params={"pageSize": 100, "pageNumber": 1},
+  )
+  if not ok_divisions:
+    return {"ok": False, "error": f"Could not load Genesys divisions before user creation: {divisions_error}"}
+  divisions = divisions_payload.get("entities", []) if isinstance(divisions_payload, dict) else []
+  amn_division = next(
+    (item for item in divisions if isinstance(item, dict) and str(item.get("name", "") or "").strip().casefold() == "amn"),
+    None,
+  )
+  amn_division_id = str((amn_division or {}).get("id", "") or "").strip()
+  if not amn_division_id:
+    return {"ok": False, "error": "Genesys division 'AMN' was not found; user creation was not attempted."}
+
+  create_payload = {
+    "name": full_name,
+    "email": clean_email,
+    "divisionId": amn_division_id,
+    "state": "active",
+  }
+  ok_create, create_body, create_error, create_status = _genesys_send_json(
+    "POST",
+    api_base,
+    access_token,
+    "/api/v2/users",
+    payload=create_payload,
+  )
+  if not ok_create and int(create_status or 0) not in {409}:
+    return {"ok": False, "error": f"Genesys user creation failed: {create_error or 'Unknown error.'}"}
+
+  created_id = str((create_body or {}).get("id", "") or "").strip() if isinstance(create_body, dict) else ""
+  verified = _genesys_lookup_user_by_email(clean_region, access_token, clean_email)
+  if verified.get("ok") and str(verified.get("user_id", "") or "").strip():
+    verified["created_now"] = True
+    return verified
+  if created_id:
+    ok_user, user_payload, user_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{created_id}")
+    if ok_user and isinstance(user_payload, dict):
+      return {
+        "ok": True,
+        "user_id": created_id,
+        "user_name": str(user_payload.get("name", "") or full_name).strip(),
+        "first_name": str(user_payload.get("firstName", "") or clean_first).strip(),
+        "last_name": str(user_payload.get("lastName", "") or clean_last).strip(),
+        "display_name": str(user_payload.get("name", "") or full_name).strip(),
+        "email": clean_email,
+        "created_now": True,
+      }
+    return {"ok": False, "error": f"Genesys user was created but verification failed: {user_error or 'user lookup returned no record.'}"}
+  return {"ok": False, "error": f"Genesys user creation was accepted but the user could not be verified by email: {verified.get('error', 'unknown error')}"}
+
+
 def _genesys_extract_queue_id_hint(queue_query: str) -> str:
   clean_query = str(queue_query or "").strip()
   if not clean_query:
@@ -3607,6 +3687,81 @@ def _genesys_add_user_to_queue(api_base: str, access_token: str, user_id: str, q
     return False, permission_errors[0]
 
   return False, " | ".join(errors) if errors else "Queue membership update failed."
+
+
+def _genesys_ensure_group_membership(api_base: str, access_token: str, user_id: str, group_name: str, user_email: str = "", user_name: str = "") -> tuple[bool, str]:
+  clean_user_id = str(user_id or "").strip()
+  clean_group_name = str(group_name or "").strip()
+  if not clean_user_id or not clean_group_name:
+    return False, "Genesys user ID and group name are required."
+
+  group_rows = []
+  lookup_errors = []
+  for path in ["/api/v2/groups", "/api/v2/authorization/groups"]:
+    ok, payload, error = _genesys_get_json(
+      api_base,
+      access_token,
+      path,
+      params={"pageSize": 100, "pageNumber": 1, "name": clean_group_name},
+    )
+    if not ok:
+      lookup_errors.append(f"{path}: {error}")
+      continue
+    entities = payload.get("entities", []) if isinstance(payload, dict) else []
+    if isinstance(entities, list):
+      group_rows.extend(item for item in entities if isinstance(item, dict))
+    if group_rows:
+      break
+
+  matching_groups = [
+    row for row in group_rows
+    if str(row.get("name", "") or "").strip().casefold() == clean_group_name.casefold()
+    and str(row.get("id", "") or "").strip()
+  ]
+  if not matching_groups:
+    return False, f"Genesys group '{clean_group_name}' was not found." + (" " + " | ".join(lookup_errors) if lookup_errors else "")
+  group_id = str(matching_groups[0].get("id", "") or "").strip()
+
+  members = []
+  member_errors = []
+  for path in [f"/api/v2/groups/{group_id}/members", f"/api/v2/authorization/groups/{group_id}/members"]:
+    ok, payload, error = _genesys_get_json(api_base, access_token, path, params={"pageSize": 100, "pageNumber": 1})
+    if ok:
+      entities = payload.get("entities", []) if isinstance(payload, dict) else []
+      members = entities if isinstance(entities, list) else []
+      break
+    member_errors.append(f"{path}: {error}")
+
+  is_member = any(_genesys_queue_member_matches_user(member, clean_user_id, user_email, user_name) for member in members if isinstance(member, dict))
+  if not is_member:
+    add_errors = []
+    for method, path, payload in [
+      ("POST", f"/api/v2/groups/{group_id}/members", [{"id": clean_user_id}]),
+      ("POST", f"/api/v2/groups/{group_id}/members", {"userIds": [clean_user_id]}),
+      ("POST", f"/api/v2/authorization/groups/{group_id}/members", [{"id": clean_user_id}]),
+    ]:
+      ok, _, error, status_code = _genesys_send_json(method, api_base, access_token, path, payload=payload)
+      if ok or (int(status_code or 0) in {409} and "already" in str(error or "").lower()):
+        is_member = True
+        break
+      add_errors.append(f"{path}: {error}")
+    if not is_member:
+      return False, "Could not add user to Genesys group '" + clean_group_name + "'. " + " | ".join(add_errors or member_errors)
+
+    verify_ok, verify_payload, verify_error = _genesys_get_json(
+      api_base,
+      access_token,
+      f"/api/v2/groups/{group_id}/members",
+      params={"pageSize": 100, "pageNumber": 1},
+    )
+    if verify_ok:
+      verify_members = verify_payload.get("entities", []) if isinstance(verify_payload, dict) else []
+      if not any(_genesys_queue_member_matches_user(member, clean_user_id, user_email, user_name) for member in verify_members if isinstance(member, dict)):
+        return False, f"Genesys group '{clean_group_name}' add was accepted but membership could not be verified."
+    elif not members:
+      return False, f"Genesys group '{clean_group_name}' membership verification failed: {verify_error or 'Unknown error.'}"
+
+  return True, "already_member" if members and is_member else "added_and_verified"
 
 
 def _genesys_remove_user_from_queue(
@@ -8911,6 +9066,7 @@ def _genesys_ad_webrtc_queue_status_payload(job: dict) -> dict:
     "status": str(clean_job.get("status", "queued") or "queued").strip(),
     "queued": str(clean_job.get("status", "queued") or "queued").strip() in {"queued", "running"},
     "created_at": str(clean_job.get("created_at", "") or "").strip(),
+    "submitted_at": str(clean_job.get("created_at", "") or "").strip(),
     "scheduled_at": str(clean_job.get("scheduled_at", "") or "").strip(),
     "started_at": str(clean_job.get("started_at", "") or "").strip(),
     "finished_at": str(clean_job.get("finished_at", "") or "").strip(),
@@ -8919,9 +9075,18 @@ def _genesys_ad_webrtc_queue_status_payload(job: dict) -> dict:
     "user_email": str(clean_job.get("user_email", "") or "").strip(),
     "group_name": str(clean_job.get("group_name", "") or "").strip(),
     "filter_name": str(clean_job.get("filter_name", "") or "").strip(),
+    "genesys_user_created": bool(clean_job.get("genesys_user_created", False)),
+    "genesys_group_state": str(clean_job.get("genesys_group_state", "") or "").strip(),
     "phone_name": str(clean_job.get("phone_name", "") or "").strip(),
     "error": str(clean_job.get("error", "") or "").strip(),
   }
+
+
+def _genesys_ad_webrtc_queue_list_payload() -> list[dict]:
+  with GENESYS_AD_WEBRTC_QUEUE_LOCK:
+    jobs = [dict(job) for job in GENESYS_AD_WEBRTC_QUEUE_JOBS.values() if isinstance(job, dict)]
+  jobs.sort(key=lambda job: float(job.get("created_epoch", 0) or 0), reverse=True)
+  return [_genesys_ad_webrtc_queue_status_payload(job) for job in jobs]
 
 
 def _genesys_ad_webrtc_queue_get_job(job_id: str) -> dict | None:
@@ -8951,6 +9116,33 @@ def _run_genesys_ad_webrtc_queue_job(job_id: str):
     if not token_result.get("ok"):
       raise RuntimeError(token_result.get("error", "Genesys token request failed."))
     region = str(token_result.get("region", region) or region).strip().lower()
+    genesys_user = _genesys_ensure_user_by_email(
+      region,
+      token_result.get("access_token", ""),
+      user_email,
+      first_name=str(job.get("first_name", "") or "").strip(),
+      last_name=str(job.get("last_name", "") or "").strip(),
+    )
+    if not genesys_user.get("ok"):
+      raise RuntimeError(genesys_user.get("error", "Could not resolve the employee in Genesys by email."))
+    user_id = str(genesys_user.get("user_id", "") or "").strip()
+    user_name = str(genesys_user.get("user_name", "") or user_name).strip()
+    if not user_id:
+      raise RuntimeError("Genesys email lookup returned no user ID.")
+    _genesys_ad_webrtc_queue_update(job_id, user_id=user_id, user_name=user_name)
+    _genesys_ad_webrtc_queue_update(job_id, genesys_user_created=bool(genesys_user.get("created_now", False)))
+    _, _, api_base = _genesys_region_to_urls(region)
+    group_ok, group_state = _genesys_ensure_group_membership(
+      api_base,
+      token_result.get("access_token", ""),
+      user_id,
+      str(job.get("group_name", "") or "").strip(),
+      user_email=user_email,
+      user_name=user_name,
+    )
+    if not group_ok:
+      raise RuntimeError("Genesys group membership failed: " + str(group_state or "Unknown error."))
+    _genesys_ad_webrtc_queue_update(job_id, genesys_group_state=group_state)
     build_result = _genesys_build_webrtc_phone_for_user(region, token_result.get("access_token", ""), user_id, user_name, user_email)
     if not build_result.get("ok"):
       raise RuntimeError(build_result.get("error", "WebRTC phone build failed."))
@@ -8996,6 +9188,8 @@ def _run_genesys_ad_webrtc_queue_job(job_id: str):
         f"User: {user_email or user_id}",
         f"AD group: {job.get('group_name', '')}",
         f"Division filter: {job.get('filter_name', '') or '(none)'}",
+        f"Genesys user: {'Created in AMN division' if genesys_user.get('created_now') else 'Already existed'}",
+        f"Genesys group: {group_state}",
         f"Phone: {phone_name or '(not returned)'}",
       ],
     )
@@ -9018,7 +9212,16 @@ def _run_genesys_ad_webrtc_queue_job(job_id: str):
       region=region,
       duration_seconds=max(0.0, time.time() - started_epoch),
       failures=[error_text],
-      details=[f"User: {user_email or user_id}", f"AD group: {job.get('group_name', '')}"],
+      details=[
+        f"Job ID: {job_id}",
+        f"User: {user_name or user_email or user_id} ({user_email or 'no email'})",
+        f"Genesys User ID: {user_id or '(not resolved)'}",
+        f"AD group: {job.get('group_name', '')}",
+        f"Division filter: {job.get('filter_name', '') or '(none)'}",
+        f"Submitted: {job.get('created_at', '')}",
+        f"Scheduled kickoff: {job.get('scheduled_at', '')}",
+        f"Failure: {error_text}",
+      ],
     )
 
 
@@ -17546,7 +17749,7 @@ def genesys_admin_placeholder(request: Request):
                   if (!selected || !groupSelect.value) { employeeStatus.textContent = "Choose an employee and an AD security group first."; return; }
                   if (!window.confirm("Add " + groupSelect.value + " to " + (selected.displayname || selected.userid) + " and queue the WebRTC build for 15 minutes from now?")) return;
                   queueBtn.disabled = true; employeeStatus.textContent = "Adding AD membership and creating delayed job...";
-                  var data = new FormData(); data.append("target_user", selected.userid); data.append("user_id", selected.userid); data.append("user_name", selected.displayname || ((selected.firstname || "") + " " + (selected.lastname || "")).trim()); data.append("user_email", selected.email); data.append("group_name", groupSelect.value); data.append("filter_id", filterSelect.value);
+                  var data = new FormData(); data.append("target_user", selected.userid); data.append("user_id", selected.userid); data.append("user_name", selected.displayname || ((selected.firstname || "") + " " + (selected.lastname || "")).trim()); data.append("first_name", selected.firstname || ""); data.append("last_name", selected.lastname || ""); data.append("user_email", selected.email); data.append("group_name", groupSelect.value); data.append("filter_id", filterSelect.value);
                   try { var payload = await jsonFetch("/genesys/ad-webrtc/queue", { method: "POST", body: data }); employeeStatus.textContent = "AD membership confirmed. WebRTC build queued."; renderJob(payload); pollJob(payload.job_id); } catch (err) { employeeStatus.textContent = "Queue failed: " + err.message; queueBtn.disabled = false; }
                 }
                 function renderJob(job) { jobEl.style.display = "block"; jobEl.innerHTML = "<strong>Queued job " + esc(job.job_id) + "</strong><div style='margin-top:6px;'>Status: <span id='genesys-ad-job-status'>" + esc(job.status) + "</span></div><div>Scheduled: " + esc(job.scheduled_at) + "</div><div>Group: " + esc(job.group_name) + "</div><div>Filter: " + esc(job.filter_name || "(none)") + "</div>"; }
@@ -22948,6 +23151,8 @@ def genesys_ad_webrtc_queue_route(
   user_id: str = Form(""),
   user_name: str = Form(""),
   user_email: str = Form(""),
+  first_name: str = Form(""),
+  last_name: str = Form(""),
   group_name: str = Form(""),
   filter_id: str = Form(""),
   cucm_host: str = Form(""),
@@ -22959,8 +23164,12 @@ def genesys_ad_webrtc_queue_route(
   clean_group = str(group_name or "").strip()
   clean_email = str(user_email or "").strip().lower()
   clean_user_id = str(user_id or clean_target).strip()
-  if not clean_target or not clean_group or not clean_email or "@" not in clean_email:
-    return JSONResponse({"ok": False, "error": "Employee, AD group, and valid email are required."}, status_code=400)
+  if not clean_target or not clean_group:
+    return JSONResponse({"ok": False, "error": "Employee and AD group are required."}, status_code=400)
+  if (not clean_email or "@" not in clean_email) and resolved_host and resolved_user and resolved_pass:
+    clean_email = lookup_person_email_by_userid(resolved_host, resolved_user, resolved_pass, clean_target).strip().lower()
+  if not clean_email or "@" not in clean_email:
+    return JSONResponse({"ok": False, "error": "Could not find a valid email for the selected employee."}, status_code=400)
   if not clean_group.lower().startswith("genesys_user_role"):
     return JSONResponse({"ok": False, "error": "Only Genesys_User_Role security groups may be selected."}, status_code=400)
 
@@ -22987,17 +23196,20 @@ def genesys_ad_webrtc_queue_route(
 
   now_epoch = time.time()
   job_id = str(uuid4())
-  scheduled_epoch = now_epoch + max(900, int(GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS or 900))
+  scheduled_epoch = now_epoch + max(1800, int(GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS or 1800))
   job = {
     "job_id": job_id,
     "status": "queued",
     "created_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
     "scheduled_at": datetime.datetime.fromtimestamp(scheduled_epoch, tz=datetime.timezone.utc).isoformat(),
     "scheduled_epoch": scheduled_epoch,
+    "created_epoch": now_epoch,
     "region": GENESYS_CLOUD_REGION,
     "operator_username": resolved_user,
     "user_id": clean_user_id,
     "user_name": str(user_name or "").strip(),
+    "first_name": str(first_name or "").strip(),
+    "last_name": str(last_name or "").strip(),
     "user_email": clean_email,
     "group_name": clean_group,
     "filter_name": str(selected_filter.get("filter_name", "") or selected_filter.get("division_name", "") or "").strip(),
@@ -23026,6 +23238,25 @@ def genesys_ad_webrtc_queue_status_route(job_id: str = ""):
   if not job:
     return JSONResponse({"ok": False, "error": "Queued job was not found."}, status_code=404)
   return JSONResponse(_genesys_ad_webrtc_queue_status_payload(job))
+
+
+@app.get("/genesys/ad-webrtc/queue")
+def genesys_ad_webrtc_queue_list_route():
+  return JSONResponse({"ok": True, "jobs": _genesys_ad_webrtc_queue_list_payload()})
+
+
+@app.post("/genesys/ad-webrtc/queue/cancel")
+def genesys_ad_webrtc_queue_cancel_route(job_id: str = Form("")):
+  clean_job_id = str(job_id or "").strip()
+  with GENESYS_AD_WEBRTC_QUEUE_LOCK:
+    job = GENESYS_AD_WEBRTC_QUEUE_JOBS.get(clean_job_id)
+    if not isinstance(job, dict):
+      return JSONResponse({"ok": False, "error": "Queued job was not found."}, status_code=404)
+    if str(job.get("status", "") or "") != "queued":
+      return JSONResponse({"ok": False, "error": "Only jobs that have not started can be cancelled."}, status_code=409)
+    job["status"] = "cancelled"
+    job["finished_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+  return JSONResponse({"ok": True, **_genesys_ad_webrtc_queue_status_payload(job)})
 
 
 @app.post("/genesys/users/extract-org-snapshot")
