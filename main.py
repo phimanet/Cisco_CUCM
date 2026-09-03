@@ -17705,7 +17705,7 @@ def genesys_admin_placeholder(request: Request):
         </div>
       </div>
       <div class="topbar-actions">
-        <a class="topbar-btn topbar-btn-login" href="/menu">Back to Page 1</a>
+        <a class="topbar-btn topbar-btn-login" href="/menu">Back to Landing Page</a>
         <a class="topbar-btn topbar-btn-login" href="/">Log In</a>
         <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
       </div>
