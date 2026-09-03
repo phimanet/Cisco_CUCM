@@ -17655,6 +17655,7 @@ def genesys_admin_placeholder(request: Request):
         </div>
       </div>
       <div class="topbar-actions">
+        <a class="topbar-btn topbar-btn-login" href="/menu">Back to Page 1</a>
         <a class="topbar-btn topbar-btn-login" href="/">Log In</a>
         <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
       </div>
@@ -17676,7 +17677,7 @@ def genesys_admin_placeholder(request: Request):
         <section class="portal-main">
           <div id="genesys-ad-webrtc-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Add Genesys User</h3>
-            <p style="margin:0 0 10px 0; color:#4e6a84; font-size:12px;">Find an employee, add one Genesys_User_Role security group, choose an optional saved Genesys filter, then queue WebRTC creation for at least 15 minutes from now.</p>
+            <p style="margin:0 0 10px 0; color:#4e6a84; font-size:12px;">Find an employee, add one Genesys_User_Role security group, choose an optional saved Genesys filter, then queue WebRTC creation for 30 minutes from now.</p>
             <div style="padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f4f9ff;">
               <strong>1. Employee lookup</strong>
               <div class="search-filter-row" style="margin-top:8px;">
@@ -21171,7 +21172,8 @@ def genesys_admin_placeholder(request: Request):
             });
           });
 
-          showPanel("genesys-user-update-panel");
+          const requestedPanel = new URLSearchParams(window.location.search).get("panel");
+          showPanel(requestedPanel && document.getElementById(requestedPanel) ? requestedPanel : "genesys-user-update-panel");
         }
 
         if (!updateCatalogLoaded && updateDivisionSelect && updateSkillsSelect && updateQueuesSelect) {
@@ -26640,7 +26642,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
           <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
           <button type="button" class="portal-nav-btn" data-panel="genesys-ls-user-did-assignment">Genesys LS User DID Assignment</button>
-          <button type="button" class="portal-nav-btn" onclick="window.location.href='/genesys-admin'">Add Genesys User</button>
+          <button type="button" class="portal-nav-btn" onclick="window.location.href='/genesys-admin?panel=genesys-ad-webrtc-panel'">Add Genesys User</button>
         </div>
       </aside>
 
