@@ -113,6 +113,7 @@ Priority keys:
 - Corrected the panel filter loader to use the live `/genesys/catalog/options` path from Menu item 1, while retaining saved filters and allowing live catalog divisions as targets.
 - Adding membership now precedes job creation; queued job will wait at least 15 minutes, create/associate WebRTC, apply the saved Division/Skills/Queues filter, and email the submitter on completion or failure.
 - Added in-memory queue status endpoint and operator-visible job status polling. Runtime queue state is lost on service restart; validate operational restart behavior in LAB before production rollout.
+- Queue is now durable across restarts in `GENESYS_AD_WEBRTC_QUEUE_PATH`, with atomic JSON writes, startup reload, a 60-job retention cap, and cancellation limited to jobs still in `queued` state.
 - Added read-only Step Zero example inspection: employee lookup, actual AD `Genesys_User_Role*` memberships, Genesys user profile Division/Skills/Queues, and saved-filter match comparison before creating a new user.
 
 ### 2026-08-11 (Name Change enhancement — complete, validated LAB+PROD)

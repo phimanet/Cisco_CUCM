@@ -144,6 +144,7 @@ def _app_startup_tasks():
 
 def _startup_background_services():
   _greenlight_load_state()
+  _load_genesys_ad_webrtc_queue()
   _start_genesys_ad_webrtc_queue_worker()
   if _is_lab_runtime_host() and SIP_CALL_SEARCH_ENABLED and SIP_CALL_SEARCH_LAB_ONLY:
     _start_sip_call_search_listener()
@@ -521,7 +522,11 @@ GENESYS_AD_WEBRTC_QUEUE_JOBS = {}
 GENESYS_AD_WEBRTC_QUEUE_LOCK = threading.Lock()
 GENESYS_AD_WEBRTC_QUEUE_WORKER_STARTED = False
 GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS = int((os.getenv("GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS", "1800") or "1800").strip())
-GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS = int((os.getenv("GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS", "100") or "100").strip())
+GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS = min(60, max(1, int((os.getenv("GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS", "60") or "60").strip())))
+_genesys_queue_data_root = (os.getenv("GENESYS_AD_WEBRTC_QUEUE_DATA_DIR", "") or "").strip()
+if not _genesys_queue_data_root:
+  _genesys_queue_data_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data") if os.name == "nt" else "/opt/cucm-web-data"
+GENESYS_AD_WEBRTC_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue.json")
 _genesys_default_filter_path = (os.getenv("GENESYS_DIVISION_FILTERS_PATH", "") or "").strip()
 if not _genesys_default_filter_path:
   if os.name == "nt":
@@ -9082,6 +9087,48 @@ def _genesys_ad_webrtc_queue_status_payload(job: dict) -> dict:
   }
 
 
+def _persist_genesys_ad_webrtc_queue_locked():
+  payload = {
+    "version": 1,
+    "jobs": [job for job in GENESYS_AD_WEBRTC_QUEUE_JOBS.values() if isinstance(job, dict)],
+  }
+  try:
+    parent = os.path.dirname(GENESYS_AD_WEBRTC_QUEUE_PATH)
+    if parent:
+      os.makedirs(parent, exist_ok=True)
+    temp_path = GENESYS_AD_WEBRTC_QUEUE_PATH + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+      json.dump(payload, handle, indent=2)
+    os.replace(temp_path, GENESYS_AD_WEBRTC_QUEUE_PATH)
+  except OSError as exc:
+    logger.warning("Genesys AD WebRTC queue persistence failed: %s", exc)
+
+
+def _load_genesys_ad_webrtc_queue():
+  try:
+    with open(GENESYS_AD_WEBRTC_QUEUE_PATH, "r", encoding="utf-8") as handle:
+      payload = json.load(handle)
+    jobs = payload.get("jobs", []) if isinstance(payload, dict) else []
+    if not isinstance(jobs, list):
+      return
+    with GENESYS_AD_WEBRTC_QUEUE_LOCK:
+      for job in jobs:
+        if not isinstance(job, dict) or not str(job.get("job_id", "") or "").strip():
+          continue
+        if str(job.get("status", "") or "") in {"queued", "running"}:
+          job["status"] = "queued"
+          job.pop("started_at", None)
+        GENESYS_AD_WEBRTC_QUEUE_JOBS[str(job["job_id"]).strip()] = job
+      if len(GENESYS_AD_WEBRTC_QUEUE_JOBS) > max(1, GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS):
+        ordered = sorted(GENESYS_AD_WEBRTC_QUEUE_JOBS.items(), key=lambda item: float(item[1].get("created_epoch", 0) or 0), reverse=True)
+        GENESYS_AD_WEBRTC_QUEUE_JOBS.clear()
+        GENESYS_AD_WEBRTC_QUEUE_JOBS.update(dict(ordered[:GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS]))
+  except FileNotFoundError:
+    return
+  except (OSError, ValueError, TypeError) as exc:
+    logger.warning("Genesys AD WebRTC queue load failed: %s", exc)
+
+
 def _genesys_ad_webrtc_queue_list_payload() -> list[dict]:
   with GENESYS_AD_WEBRTC_QUEUE_LOCK:
     jobs = [dict(job) for job in GENESYS_AD_WEBRTC_QUEUE_JOBS.values() if isinstance(job, dict)]
@@ -9100,6 +9147,7 @@ def _genesys_ad_webrtc_queue_update(job_id: str, **updates):
     job = GENESYS_AD_WEBRTC_QUEUE_JOBS.get(str(job_id or "").strip())
     if isinstance(job, dict):
       job.update(updates)
+      _persist_genesys_ad_webrtc_queue_locked()
 
 
 def _run_genesys_ad_webrtc_queue_job(job_id: str):
@@ -17773,7 +17821,7 @@ def genesys_admin_placeholder(request: Request):
                   if (!exampleSelected) return;
                   exampleLookupBtn.disabled = true; employeeStatus.textContent = "Running read-only Step Zero inspection...";
                   var data = new FormData(); data.append("target_user", exampleSelected.userid); data.append("user_email", exampleSelected.email); data.append("first_name", exampleSelected.firstname || ""); data.append("last_name", exampleSelected.lastname || "");
-                  try { var payload = await jsonFetch("/genesys/ad-webrtc/example-lookup", { method: "POST", body: data }); var g = payload.genesys || {}; var groups = (payload.ad_groups || []).map(function (row) { return "<li>" + esc(row.name) + (row.error ? " - " + esc(row.error) : " - member") + "</li>"; }).join("") || "<li>No Genesys-related AD role group found for this employee.</li>"; var filters = (payload.saved_filters || []).map(function (row) { return "<li>" + esc(row.filter_name || row.division_name || row.filter_id) + ": " + (row.matches ? "MATCH" : "does not match") + "</li>"; }).join("") || "<li>No saved filters</li>"; var matching = (payload.matching_saved_filters || []).map(function (name) { return "<li>" + esc(name) + "</li>"; }).join("") || "<li>No saved filter matches this employee.</li>"; exampleOutput.innerHTML = "<div style='padding:8px;border:1px solid #d7e3ee;background:#fff;'><strong>Step Zero Results (lookup only)</strong><div style='margin-top:6px;'><strong>AD Genesys Security Group(s) this employee has:</strong><ul>" + groups + "</ul></div><div><strong>Saved Genesys Filter Match:</strong><ul>" + matching + "</ul></div><div>Genesys User: " + esc(g.name) + " (" + esc(g.email) + ")</div><div>Division: " + esc(g.division_name || g.division_id || "(none)") + "</div><div>Skills: " + esc((g.skill_ids || []).join(", ") || "(none)") + "</div><div>Queues: " + esc((g.queue_ids || []).join(", ") || "(none)") + "</div><div style='margin-top:6px;'><strong>All saved filter comparisons</strong><ul>" + filters + "</ul></div></div>"; employeeStatus.textContent = "Step Zero complete. No changes were made."; } catch (err) { employeeStatus.textContent = "Step Zero failed: " + err.message; } finally { exampleLookupBtn.disabled = false; }
+                  try { var payload = await jsonFetch("/genesys/ad-webrtc/example-lookup", { method: "POST", body: data }); var g = payload.genesys || {}; var groups = (payload.ad_groups || []).map(function (row) { return "<li>" + esc(row.name) + (row.error ? " - " + esc(row.error) : " - member") + "</li>"; }).join("") || "<li>No Genesys-related AD role group found for this employee.</li>"; var filters = (payload.saved_filters || []).map(function (row) { return "<li>" + esc(row.filter_name || row.division_name || row.filter_id) + ": " + (row.matches ? "MATCH" : "does not match") + "</li>"; }).join("") || "<li>No saved filters</li>"; var matching = (payload.matching_saved_filters || []).map(function (name) { return "<li>" + esc(name) + "</li>"; }).join("") || "<li>No saved filter matches this employee.</li>"; exampleOutput.innerHTML = "<div style='padding:8px;border:1px solid #d7e3ee;background:#fff;'><strong>Step Zero Results (lookup only)</strong><div style='margin-top:6px;'><strong>AD Genesys Security Group(s) this employee has:</strong><ul>" + groups + "</ul></div><div><strong>Saved Genesys Filter Match:</strong><ul>" + matching + "</ul></div><div>Genesys User: " + esc(g.name) + " (" + esc(g.email) + ")</div><div>Division: " + esc(g.division_name || g.division_id || "(none)") + "</div><div>Skills: " + esc((g.skill_ids || []).join(", ") || "(none)") + "</div><div>Queues: " + esc((g.queue_ids || []).join(", ") || "(none)") + "</div><details style='margin-top:6px;'><summary style='cursor:pointer;font-weight:700;color:#2c5c8a;'>All saved filter comparisons</summary><ul>" + filters + "</ul></details></div>"; employeeStatus.textContent = "Step Zero complete. No changes were made."; } catch (err) { employeeStatus.textContent = "Step Zero failed: " + err.message; } finally { exampleLookupBtn.disabled = false; }
                 }
                 async function queueBuild() {
                   if (!selected || !groupSelect.value) { employeeStatus.textContent = "Choose an employee and an AD security group first."; return; }
@@ -23357,6 +23405,7 @@ def genesys_ad_webrtc_queue_route(
       oldest_id = min(GENESYS_AD_WEBRTC_QUEUE_JOBS, key=lambda key: float(GENESYS_AD_WEBRTC_QUEUE_JOBS[key].get("scheduled_epoch", 0) or 0))
       GENESYS_AD_WEBRTC_QUEUE_JOBS.pop(oldest_id, None)
     GENESYS_AD_WEBRTC_QUEUE_JOBS[job_id] = job
+    _persist_genesys_ad_webrtc_queue_locked()
   _append_audit_event(
     action="genesys_ad_group_webrtc_queued",
     cucm_host=resolved_host,
@@ -23393,6 +23442,7 @@ def genesys_ad_webrtc_queue_cancel_route(job_id: str = Form("")):
       return JSONResponse({"ok": False, "error": "Only jobs that have not started can be cancelled."}, status_code=409)
     job["status"] = "cancelled"
     job["finished_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+    _persist_genesys_ad_webrtc_queue_locked()
   return JSONResponse({"ok": True, **_genesys_ad_webrtc_queue_status_payload(job)})
 
 
