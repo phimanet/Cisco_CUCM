@@ -9181,6 +9181,7 @@ def _run_genesys_ad_webrtc_queue_job(job_id: str):
   user_id = str(job.get("user_id", "") or "").strip()
   user_name = str(job.get("user_name", "") or "").strip()
   user_email = str(job.get("user_email", "") or "").strip().lower()
+  submitter_email = str(job.get("submitter_email", "") or "").strip().lower()
   filter_data = job.get("filter", {}) if isinstance(job.get("filter"), dict) else {}
   try:
     token_result = _genesys_get_access_token(region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
@@ -9253,6 +9254,7 @@ def _run_genesys_ad_webrtc_queue_job(job_id: str):
       success_count=1,
       failure_count=0,
       operator_username=str(job.get("operator_username", "") or ""),
+      recipient_email=submitter_email,
       region=region,
       duration_seconds=max(0.0, time.time() - started_epoch),
       details=[
@@ -9280,6 +9282,7 @@ def _run_genesys_ad_webrtc_queue_job(job_id: str):
       success_count=0,
       failure_count=1,
       operator_username=str(job.get("operator_username", "") or ""),
+      recipient_email=submitter_email,
       region=region,
       duration_seconds=max(0.0, time.time() - started_epoch),
       failures=[error_text],
@@ -11057,6 +11060,7 @@ def _genesys_send_update_completion_email(
   failure_count: int,
   request: Request | None = None,
   operator_username: str = "",
+  recipient_email: str = "",
   region: str = "",
   duration_seconds: float = 0.0,
   failures: list[str] | None = None,
@@ -11072,8 +11076,11 @@ def _genesys_send_update_completion_email(
       operator = str(session.get("username", "") or "").strip()
 
   recipient_list = []
+  explicit_recipient = str(recipient_email or "").strip().lower()
+  if explicit_recipient and "@" in explicit_recipient:
+    recipient_list.append(explicit_recipient)
   derived = _derive_admin_audit_email(operator)
-  if derived:
+  if derived and derived not in recipient_list:
     recipient_list.append(derived)
   for extra in GENESYS_UPDATE_NOTIFY_RECIPIENTS:
     if extra not in recipient_list:
@@ -23574,6 +23581,7 @@ def genesys_ad_webrtc_queue_route(
     "created_epoch": now_epoch,
     "region": GENESYS_CLOUD_REGION,
     "operator_username": resolved_user,
+    "submitter_email": _derive_admin_audit_email(resolved_user),
     "user_id": clean_user_id,
     "user_name": str(user_name or "").strip(),
     "first_name": str(first_name or "").strip(),
