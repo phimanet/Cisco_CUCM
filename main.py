@@ -23448,11 +23448,52 @@ def genesys_ad_webrtc_groups_inspect_route(format: str = ""):
     f"</details>"
     for item in inspected
   )
+  group_options_html = "".join(
+    f"<option value='{escape(item['name'])}'{' selected' if item['name'].casefold() == 'genesys_user_role_besinterim_agent' else ''}>{escape(item['name'])}</option>"
+    for item in inspected
+  )
   return HTMLResponse(
     f"<html><head><title>Genesys Role Group Contents</title></head><body style='font-family:Segoe UI,Arial,sans-serif;color:#12304a;margin:24px;'>"
     f"<h2>Genesys Role Group Contents (Read-Only)</h2><p>Groups beginning with Genesys_User_Role. No membership changes were made.</p>"
     f"<p><a href='/genesys-admin?panel=genesys-role-groups-panel'>Back to Genesys Admin</a></p>"
-    f"<p>Groups inspected: {len(inspected)}</p>{rows_html or '<p>No Genesys_User_Role groups were returned.</p>'}</body></html>"
+    f"<p>Groups inspected: {len(inspected)}</p>"
+    f"<section style='padding:14px;border:2px solid #c58b00;border-radius:8px;background:#fff8dc;max-width:760px;'>"
+    f"<h3 style='margin-top:0;'>Write Test: Add User to Selected Group</h3>"
+    f"<p>This performs a real Genesys group membership add. It does not read the group member list.</p>"
+    f"<form method='post' action='/genesys/ad-webrtc/groups/test-add'>"
+    f"<label>Email<br><input name='user_email' value='phimane.tiaokhiao@amnhealthcare.com' required style='width:360px;padding:7px;'></label><br><br>"
+    f"<label>Genesys role group<br><select name='group_name' required style='width:520px;padding:7px;'><option value=''>Select a group...</option>{group_options_html}</select></label><br><br>"
+    f"<button type='submit' style='background:#2d7a43;color:#fff;border:0;border-radius:6px;padding:9px 14px;font-weight:700;'>Add User to Selected Group</button>"
+    f"</form></section>{rows_html or '<p>No Genesys_User_Role groups were returned.</p>'}</body></html>"
+  )
+
+
+@app.post("/genesys/ad-webrtc/groups/test-add")
+def genesys_ad_webrtc_group_test_add_route(user_email: str = Form(""), group_name: str = Form("")):
+  clean_email = str(user_email or "").strip().lower()
+  clean_group = str(group_name or "").strip()
+  if not clean_email or "@" not in clean_email or not clean_group.lower().startswith("genesys_user_role"):
+    return HTMLResponse("<h2>Invalid write test input</h2><p>Provide a valid email and a Genesys_User_Role group.</p><p><a href='/genesys/ad-webrtc/groups/inspect?format=html'>Back</a></p>", status_code=400)
+  token_result = _genesys_get_access_token(GENESYS_CLOUD_REGION, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    result_text = token_result.get("error", "Genesys token request failed.")
+  else:
+    region = token_result.get("region", GENESYS_CLOUD_REGION)
+    access_token = token_result.get("access_token", "")
+    _, _, api_base = _genesys_region_to_urls(region)
+    user_result = _genesys_lookup_user_by_email(region, access_token, clean_email)
+    if not user_result.get("ok"):
+      result_text = user_result.get("error", "Genesys user was not found.")
+    else:
+      user_id = str(user_result.get("user_id", "") or "").strip()
+      user_name = str(user_result.get("user_name", "") or user_result.get("display_name", "") or "").strip()
+      group_ok, group_state = _genesys_ensure_group_membership(api_base, access_token, user_id, clean_group, clean_email, user_name)
+      result_text = ("SUCCESS: " if group_ok else "FAILED: ") + str(group_state or "No result.")
+  return HTMLResponse(
+    f"<html><body style='font-family:Segoe UI,Arial,sans-serif;color:#12304a;margin:24px;'><h2>Genesys Group Write Test</h2>"
+    f"<p><strong>User:</strong> {escape(clean_email)}</p><p><strong>Group:</strong> {escape(clean_group)}</p>"
+    f"<pre style='white-space:pre-wrap;padding:12px;background:#f8fcff;border:1px solid #c8dbee;'>{escape(result_text)}</pre>"
+    f"<p><a href='/genesys/ad-webrtc/groups/inspect?format=html'>Back to Groups and Contents</a></p></body></html>"
   )
 
 
