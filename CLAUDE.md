@@ -115,6 +115,7 @@ Priority keys:
 - Added in-memory queue status endpoint and operator-visible job status polling. Runtime queue state is lost on service restart; validate operational restart behavior in LAB before production rollout.
 - Queue is now durable across restarts in `GENESYS_AD_WEBRTC_QUEUE_PATH`, with separate 60-job history in `GENESYS_AD_WEBRTC_QUEUE_HISTORY_PATH`, atomic JSON writes, startup reload, and cancellation limited to jobs still in `queued` state.
 - Added read-only Step Zero example inspection: employee lookup, actual AD `Genesys_User_Role*` memberships, Genesys user profile Division/Skills/Queues, and saved-filter match comparison before creating a new user.
+- Added read-only `Inspect Genesys Role Groups` diagnostic menu item to list `Genesys_User_Role*` groups and display each `/api/v2/groups/{id}` detail payload before implementing tenant-specific membership writes.
 
 ### 2026-08-11 (Name Change enhancement — complete, validated LAB+PROD)
 - Enhanced `toolkit/called_name_change.py` to also update translation pattern descriptions after updating phones/lines/Unity.

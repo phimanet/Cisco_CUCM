@@ -17754,9 +17754,42 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-queue-remove-panel" onclick="(function(){var id='genesys-user-queue-remove-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Lookup + Remove (User)</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel" onclick="(function(){var id='genesys-queue-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Info</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-blocked-caller-panel" onclick="(function(){var id='genesys-blocked-caller-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Block Incoming Calls</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-role-groups-panel" onclick="(function(){var id='genesys-role-groups-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Inspect Genesys Role Groups</button>
         </aside>
 
         <section class="portal-main">
+          <div id="genesys-role-groups-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+            <h3 style="margin-top:0;">Inspect Genesys Role Groups</h3>
+            <p style="color:#4e6a84;font-size:12px;">Read-only diagnostic. Lists groups beginning with Genesys_User_Role and displays the group detail contents returned by Genesys. No membership changes are made.</p>
+            <button type="button" id="genesys-role-groups-inspect-btn" style="background:#385977;">Read Groups and Contents</button>
+            <p id="genesys-role-groups-status" style="color:#2c5c8a;min-height:18px;">Ready.</p>
+            <div id="genesys-role-groups-output" style="overflow-x:auto;"></div>
+            <script>
+              (function () {
+                var button = document.getElementById("genesys-role-groups-inspect-btn");
+                var status = document.getElementById("genesys-role-groups-status");
+                var output = document.getElementById("genesys-role-groups-output");
+                if (!button || button.dataset.bound === "1") return;
+                button.dataset.bound = "1";
+                function esc(value) { return String(value || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+                button.addEventListener("click", async function () {
+                  button.disabled = true; status.textContent = "Reading Genesys role groups and group contents..."; output.innerHTML = "";
+                  try {
+                    var response = await fetch("/genesys/ad-webrtc/groups/inspect", { method: "GET", headers: { "Accept": "application/json" } });
+                    var payload = await response.json();
+                    if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
+                    var groups = Array.isArray(payload.groups) ? payload.groups : [];
+                    output.innerHTML = groups.length ? groups.map(function (group) {
+                      return "<details style='margin:8px 0;padding:8px;border:1px solid #c8dbee;border-radius:6px;background:#f8fcff;'><summary style='cursor:pointer;font-weight:700;color:#12304a;'>" + esc(group.name) + " (" + esc(group.id) + ")</summary><div style='margin-top:8px;'><div><strong>Detail API:</strong> " + esc(group.detail_path) + "</div><div><strong>Member endpoint probe:</strong> " + esc(group.member_probe || "not attempted") + "</div><pre style='white-space:pre-wrap;max-height:360px;overflow:auto;background:#fff;border:1px solid #d7e3ee;padding:8px;">" + esc(JSON.stringify(group.detail, null, 2)) + "</pre></div></details>";
+                    }).join("") : "<div style='color:#8a2d2d;'>No Genesys_User_Role groups were returned.</div>";
+                    status.textContent = groups.length + " Genesys_User_Role group(s) inspected. Read-only; no changes made.";
+                  } catch (err) { status.textContent = "Role-group inspection failed: " + ((err && err.message) || "Unknown error."); }
+                  finally { button.disabled = false; }
+                });
+              })();
+            </script>
+          </div>
+
           <div id="genesys-ad-webrtc-panel" class="panel genesys-panel" style="display:block; margin-top:0;">
             <h3 style="margin-top:0;">Add Genesys User</h3>
             <p style="margin:0 0 10px 0; color:#4e6a84; font-size:12px;">Find an employee, add one Genesys_User_Role security group, choose an optional saved Genesys filter, then queue WebRTC creation for 15 minutes from now.</p>
@@ -23366,6 +23399,54 @@ def genesys_ad_webrtc_groups_route(
     })
   clean_rows.sort(key=lambda row: row["name"].lower())
   return JSONResponse({"ok": True, "prefix": "Genesys_User_Role", "groups": clean_rows})
+
+
+@app.get("/genesys/ad-webrtc/groups/inspect")
+def genesys_ad_webrtc_groups_inspect_route():
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  region = token_result.get("region", clean_region)
+  access_token = token_result.get("access_token", "")
+  _, _, api_base = _genesys_region_to_urls(region)
+  groups, pages, list_error = _genesys_collect_paged_entities(
+    api_base,
+    access_token,
+    "/api/v2/groups",
+    page_size=100,
+    max_pages=20,
+  )
+  if list_error:
+    return JSONResponse({"ok": False, "error": f"Genesys group list failed: {list_error}"}, status_code=400)
+
+  inspected = []
+  for group in groups:
+    if not isinstance(group, dict):
+      continue
+    name = str(group.get("name", "") or "").strip()
+    group_id = str(group.get("id", "") or "").strip()
+    if not name.lower().startswith("genesys_user_role") or not group_id:
+      continue
+    detail_path = f"/api/v2/groups/{group_id}"
+    ok_detail, detail_payload, detail_error = _genesys_get_json(api_base, access_token, detail_path)
+    inspected.append({
+      "name": name,
+      "id": group_id,
+      "detail_path": detail_path,
+      "detail": detail_payload if ok_detail else {},
+      "detail_error": detail_error if not ok_detail else "",
+      "member_probe": "not attempted (read-only group detail inspection)",
+    })
+  inspected.sort(key=lambda item: item["name"].lower())
+  return JSONResponse({
+    "ok": True,
+    "region": region,
+    "list_path": "/api/v2/groups",
+    "pages_scanned": pages,
+    "prefix": "Genesys_User_Role",
+    "groups": inspected,
+  })
 
 
 @app.post("/genesys/ad-webrtc/queue")
