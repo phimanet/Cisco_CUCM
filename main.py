@@ -17538,7 +17538,6 @@ def genesys_admin_placeholder(request: Request):
                     employeeStatus.textContent = savedRows.length + " saved filter(s) and " + (catalog.divisions || []).length + " live catalog division(s) loaded.";
                   } catch (err) { employeeStatus.textContent = "Filter/catalog lookup failed: " + err.message; }
                 }
-                }
                 async function searchEmployees() {
                   var data = new FormData(); data.append("last_name", document.getElementById("genesys-ad-employee-last").value); data.append("first_name", document.getElementById("genesys-ad-employee-first").value); employeeStatus.textContent = "Searching CUCM employees...";
                   try { var payload = await jsonFetch("/genesys/ad-webrtc/employee-lookup", { method: "POST", body: data }); renderEmployees(payload.rows || []); employeeStatus.textContent = (payload.rows || []).length + " employee(s) found. Choose one."; } catch (err) { employeeStatus.textContent = "Employee lookup failed: " + err.message; }
