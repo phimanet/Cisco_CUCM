@@ -17670,12 +17670,12 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-queue-remove-panel" onclick="(function(){var id='genesys-user-queue-remove-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Lookup + Remove (User)</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel" onclick="(function(){var id='genesys-queue-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Info</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-blocked-caller-panel" onclick="(function(){var id='genesys-blocked-caller-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Block Incoming Calls</button>
-          <button type="button" class="portal-nav-btn" data-panel-target="genesys-ad-webrtc-panel" onclick="(function(){var id='genesys-ad-webrtc-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">AD Group -> Delayed WebRTC Build</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-ad-webrtc-panel" onclick="(function(){var id='genesys-ad-webrtc-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Add Genesys User</button>
         </aside>
 
         <section class="portal-main">
           <div id="genesys-ad-webrtc-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
-            <h3 style="margin-top:0;">AD Security Group -> Delayed Genesys WebRTC Build</h3>
+            <h3 style="margin-top:0;">Add Genesys User</h3>
             <p style="margin:0 0 10px 0; color:#4e6a84; font-size:12px;">Find an employee, add one Genesys_User_Role security group, choose an optional saved Genesys filter, then queue WebRTC creation for at least 15 minutes from now.</p>
             <div style="padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f4f9ff;">
               <strong>1. Employee lookup</strong>
@@ -17698,7 +17698,11 @@ def genesys_admin_placeholder(request: Request):
               <button type="button" id="genesys-ad-queue-btn" style="margin-top:10px; background:#2d7a43;" disabled>Add Group + Queue WebRTC Build</button>
             </div>
             <p id="genesys-ad-webrtc-status" style="color:#2c5c8a; min-height:18px; margin-top:10px;">Ready.</p>
-            <div id="genesys-ad-webrtc-job" style="display:none; padding:10px; border:1px solid #c8dbee; border-radius:8px; background:#f8fcff;"></div>
+            <div style="margin-top:10px; padding:10px; border:1px solid #c8dbee; border-radius:8px; background:#f8fcff;">
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;"><strong>Queued WebRTC Jobs</strong><button type="button" id="genesys-ad-queue-refresh-btn" style="background:#385977;">Refresh Queue</button></div>
+              <p id="genesys-ad-queue-status" style="margin:8px 0; color:#4e6a84; min-height:18px;">Loading queued jobs...</p>
+              <div id="genesys-ad-webrtc-job" style="overflow-x:auto;"></div>
+            </div>
             <script>
               (function () {
                 if (window._genesysAdWebrtcBound) return;
@@ -17752,13 +17756,24 @@ def genesys_admin_placeholder(request: Request):
                   var data = new FormData(); data.append("target_user", selected.userid); data.append("user_id", selected.userid); data.append("user_name", selected.displayname || ((selected.firstname || "") + " " + (selected.lastname || "")).trim()); data.append("first_name", selected.firstname || ""); data.append("last_name", selected.lastname || ""); data.append("user_email", selected.email); data.append("group_name", groupSelect.value); data.append("filter_id", filterSelect.value);
                   try { var payload = await jsonFetch("/genesys/ad-webrtc/queue", { method: "POST", body: data }); employeeStatus.textContent = "AD membership confirmed. WebRTC build queued."; renderJob(payload); pollJob(payload.job_id); } catch (err) { employeeStatus.textContent = "Queue failed: " + err.message; queueBtn.disabled = false; }
                 }
-                function renderJob(job) { jobEl.style.display = "block"; jobEl.innerHTML = "<strong>Queued job " + esc(job.job_id) + "</strong><div style='margin-top:6px;'>Status: <span id='genesys-ad-job-status'>" + esc(job.status) + "</span></div><div>Scheduled: " + esc(job.scheduled_at) + "</div><div>Group: " + esc(job.group_name) + "</div><div>Filter: " + esc(job.filter_name || "(none)") + "</div>"; }
-                async function pollJob(jobId) { try { var job = await jsonFetch("/genesys/ad-webrtc/queue/status?job_id=" + encodeURIComponent(jobId)); renderJob(job); if (job.status === "queued" || job.status === "running") { window.setTimeout(function () { pollJob(jobId); }, 10000); } else { employeeStatus.textContent = job.status === "completed" ? "Genesys WebRTC build and filter application completed. Completion email sent to the submitter." : "Queued Genesys build failed: " + (job.error || "Unknown error."); queueBtn.disabled = false; } } catch (err) { employeeStatus.textContent = "Job status lookup failed: " + err.message; queueBtn.disabled = false; } }
+                var queueStatus = document.getElementById("genesys-ad-queue-status");
+                function renderJobs(jobs) {
+                  if (!jobs.length) { jobEl.innerHTML = "<span style='color:#4e6a84;'>No queued jobs.</span>"; return; }
+                  jobEl.innerHTML = "<table><thead><tr><th>Status</th><th>Employee</th><th>AD Group</th><th>Filter</th><th>Submitted</th><th>Kickoff</th><th>Action</th></tr></thead><tbody>" + jobs.map(function (job) {
+                    var action = job.status === "queued" ? "<button type='button' data-cancel-job='" + esc(job.job_id) + "' style='background:#8a2d2d;padding:5px 9px;'>Cancel</button>" : esc(job.error || job.phone_name || "-");
+                    return "<tr><td>" + esc(job.status) + "</td><td>" + esc(job.user_name || job.user_email || job.user_id) + "</td><td>" + esc(job.group_name) + "</td><td>" + esc(job.filter_name || "(none)") + "</td><td>" + esc(job.submitted_at || job.created_at) + "</td><td>" + esc(job.scheduled_at) + "</td><td>" + action + "</td></tr>";
+                  }).join("") + "</tbody></table>";
+                  jobEl.querySelectorAll("[data-cancel-job]").forEach(function (button) { button.addEventListener("click", function () { cancelJob(button.getAttribute("data-cancel-job")); }); });
+                }
+                async function refreshQueue() { try { var payload = await jsonFetch("/genesys/ad-webrtc/queue", { method: "GET" }); renderJobs(payload.jobs || []); queueStatus.textContent = (payload.jobs || []).length + " queued job(s) loaded."; } catch (err) { queueStatus.textContent = "Queue load failed: " + err.message; } }
+                async function cancelJob(jobId) { if (!window.confirm("Cancel this job before it starts?")) return; try { var data = new FormData(); data.append("job_id", jobId); await jsonFetch("/genesys/ad-webrtc/queue/cancel", { method: "POST", body: data }); employeeStatus.textContent = "Queued job cancelled."; refreshQueue(); } catch (err) { employeeStatus.textContent = "Cancel failed: " + err.message; } }
+                async function pollJob(jobId) { try { var job = await jsonFetch("/genesys/ad-webrtc/queue/status?job_id=" + encodeURIComponent(jobId)); refreshQueue(); if (job.status === "queued" || job.status === "running") { window.setTimeout(function () { pollJob(jobId); }, 10000); } else { employeeStatus.textContent = job.status === "completed" ? "Genesys WebRTC build and filter application completed. Completion email sent to the submitter." : (job.status === "cancelled" ? "Queued job cancelled." : "Queued Genesys build failed: " + (job.error || "Unknown error.")); queueBtn.disabled = false; } } catch (err) { employeeStatus.textContent = "Job status lookup failed: " + err.message; queueBtn.disabled = false; } }
                 document.getElementById("genesys-ad-employee-search-btn").addEventListener("click", searchEmployees);
                 document.getElementById("genesys-ad-group-load-btn").addEventListener("click", loadGroups);
                 document.getElementById("genesys-ad-filter-load-btn").addEventListener("click", loadFilters);
+                document.getElementById("genesys-ad-queue-refresh-btn").addEventListener("click", refreshQueue);
                 queueBtn.addEventListener("click", queueBuild);
-                loadGroups(); loadFilters();
+                loadGroups(); loadFilters(); refreshQueue();
               })();
             </script>
           </div>
@@ -26625,6 +26640,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
           <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
           <button type="button" class="portal-nav-btn" data-panel="genesys-ls-user-did-assignment">Genesys LS User DID Assignment</button>
+          <button type="button" class="portal-nav-btn" onclick="window.location.href='/genesys-admin'">Add Genesys User</button>
         </div>
       </aside>
 
