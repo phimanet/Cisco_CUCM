@@ -17678,6 +17678,17 @@ def genesys_admin_placeholder(request: Request):
           <div id="genesys-ad-webrtc-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Add Genesys User</h3>
             <p style="margin:0 0 10px 0; color:#4e6a84; font-size:12px;">Find an employee, add one Genesys_User_Role security group, choose an optional saved Genesys filter, then queue WebRTC creation for 30 minutes from now.</p>
+            <div style="padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#fffdf4;">
+              <strong>Step Zero: Inspect an example employee (lookup only)</strong>
+              <div class="search-filter-row" style="margin-top:8px;">
+                <input id="genesys-ad-example-first" placeholder="First Name (optional)" style="width:220px;">
+                <input id="genesys-ad-example-last" placeholder="Last Name *" style="width:220px;">
+                <button type="button" id="genesys-ad-example-search-btn" style="background:#385977;">Find Example Employee</button>
+              </div>
+              <div id="genesys-ad-example-results" style="overflow-x:auto; margin-top:8px;"></div>
+              <button type="button" id="genesys-ad-example-lookup-btn" style="margin-top:8px; background:#a56a00;" disabled>Inspect AD Role + Genesys Profile</button>
+              <div id="genesys-ad-example-output" style="margin-top:8px;"></div>
+            </div>
             <div style="padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f4f9ff;">
               <strong>1. Employee lookup</strong>
               <div class="search-filter-row" style="margin-top:8px;">
@@ -17709,6 +17720,7 @@ def genesys_admin_placeholder(request: Request):
                 if (window._genesysAdWebrtcBound) return;
                 window._genesysAdWebrtcBound = true;
                 var selected = null;
+                var exampleSelected = null;
                 var employeeResults = document.getElementById("genesys-ad-employee-results");
                 var employeeStatus = document.getElementById("genesys-ad-webrtc-status");
                 var selectedUserEl = document.getElementById("genesys-ad-selected-user");
@@ -17716,6 +17728,9 @@ def genesys_admin_placeholder(request: Request):
                 var groupSelect = document.getElementById("genesys-ad-group-select");
                 var filterSelect = document.getElementById("genesys-ad-filter-select");
                 var jobEl = document.getElementById("genesys-ad-webrtc-job");
+                var exampleResults = document.getElementById("genesys-ad-example-results");
+                var exampleOutput = document.getElementById("genesys-ad-example-output");
+                var exampleLookupBtn = document.getElementById("genesys-ad-example-lookup-btn");
                 function esc(value) { return String(value || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
                 async function jsonFetch(url, options) {
                   var response = await fetch(url, options || {});
@@ -17750,6 +17765,16 @@ def genesys_admin_placeholder(request: Request):
                   var data = new FormData(); data.append("last_name", document.getElementById("genesys-ad-employee-last").value); data.append("first_name", document.getElementById("genesys-ad-employee-first").value); employeeStatus.textContent = "Searching CUCM employees...";
                   try { var payload = await jsonFetch("/genesys/ad-webrtc/employee-lookup", { method: "POST", body: data }); renderEmployees(payload.rows || []); employeeStatus.textContent = (payload.rows || []).length + " employee(s) found. Choose one."; } catch (err) { employeeStatus.textContent = "Employee lookup failed: " + err.message; }
                 }
+                async function searchExampleEmployees() {
+                  var data = new FormData(); data.append("last_name", document.getElementById("genesys-ad-example-last").value); data.append("first_name", document.getElementById("genesys-ad-example-first").value); employeeStatus.textContent = "Searching for example employee...";
+                  try { var payload = await jsonFetch("/genesys/ad-webrtc/employee-lookup", { method: "POST", body: data }); exampleResults.innerHTML = (payload.rows || []).length ? "<table><thead><tr><th>Select</th><th>Name</th><th>User ID</th><th>Email</th></tr></thead><tbody>" + (payload.rows || []).map(function (row, index) { return "<tr><td><button type='button' data-example-index='" + index + "' style='padding:5px 9px;'>Choose</button></td><td>" + esc(row.displayname || ((row.firstname || "") + " " + (row.lastname || "")).trim()) + "</td><td>" + esc(row.userid) + "</td><td>" + esc(row.email) + "</td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No example employees found.</span>"; exampleResults.querySelectorAll("[data-example-index]").forEach(function (button) { button.addEventListener("click", function () { exampleSelected = payload.rows[Number(button.getAttribute("data-example-index"))] || null; exampleLookupBtn.disabled = !exampleSelected; employeeStatus.textContent = exampleSelected ? "Example selected: " + (exampleSelected.displayname || exampleSelected.userid) : "No example selected."; }); }); } catch (err) { employeeStatus.textContent = "Example employee lookup failed: " + err.message; }
+                }
+                async function inspectExample() {
+                  if (!exampleSelected) return;
+                  exampleLookupBtn.disabled = true; employeeStatus.textContent = "Running read-only Step Zero inspection...";
+                  var data = new FormData(); data.append("target_user", exampleSelected.userid); data.append("user_email", exampleSelected.email); data.append("first_name", exampleSelected.firstname || ""); data.append("last_name", exampleSelected.lastname || "");
+                  try { var payload = await jsonFetch("/genesys/ad-webrtc/example-lookup", { method: "POST", body: data }); var g = payload.genesys || {}; var groups = (payload.ad_groups || []).map(function (row) { return "<li>" + esc(row.name) + (row.error ? " - " + esc(row.error) : " - member") + "</li>"; }).join("") || "<li>None found</li>"; var filters = (payload.saved_filters || []).map(function (row) { return "<li>" + esc(row.filter_name || row.division_name || row.filter_id) + ": " + (row.matches ? "MATCH" : "does not match") + "</li>"; }).join("") || "<li>No saved filters</li>"; exampleOutput.innerHTML = "<div style='padding:8px;border:1px solid #d7e3ee;background:#fff;'><strong>Read-only example profile</strong><div>Genesys User: " + esc(g.name) + " (" + esc(g.email) + ")</div><div>Division: " + esc(g.division_name || g.division_id || "(none)") + "</div><div>Skills: " + esc((g.skill_ids || []).join(", ") || "(none)") + "</div><div>Queues: " + esc((g.queue_ids || []).join(", ") || "(none)") + "</div><div><strong>AD Genesys roles</strong><ul>" + groups + "</ul></div><div><strong>Saved filter comparison</strong><ul>" + filters + "</ul></div></div>"; employeeStatus.textContent = "Step Zero complete. No changes were made."; } catch (err) { employeeStatus.textContent = "Step Zero failed: " + err.message; } finally { exampleLookupBtn.disabled = false; }
+                }
                 async function queueBuild() {
                   if (!selected || !groupSelect.value) { employeeStatus.textContent = "Choose an employee and an AD security group first."; return; }
                   if (!window.confirm("Add " + groupSelect.value + " to " + (selected.displayname || selected.userid) + " and queue the WebRTC build for 15 minutes from now?")) return;
@@ -17770,6 +17795,8 @@ def genesys_admin_placeholder(request: Request):
                 async function cancelJob(jobId) { if (!window.confirm("Cancel this job before it starts?")) return; try { var data = new FormData(); data.append("job_id", jobId); await jsonFetch("/genesys/ad-webrtc/queue/cancel", { method: "POST", body: data }); employeeStatus.textContent = "Queued job cancelled."; refreshQueue(); } catch (err) { employeeStatus.textContent = "Cancel failed: " + err.message; } }
                 async function pollJob(jobId) { try { var job = await jsonFetch("/genesys/ad-webrtc/queue/status?job_id=" + encodeURIComponent(jobId)); refreshQueue(); if (job.status === "queued" || job.status === "running") { window.setTimeout(function () { pollJob(jobId); }, 10000); } else { employeeStatus.textContent = job.status === "completed" ? "Genesys WebRTC build and filter application completed. Completion email sent to the submitter." : (job.status === "cancelled" ? "Queued job cancelled." : "Queued Genesys build failed: " + (job.error || "Unknown error.")); queueBtn.disabled = false; } } catch (err) { employeeStatus.textContent = "Job status lookup failed: " + err.message; queueBtn.disabled = false; } }
                 document.getElementById("genesys-ad-employee-search-btn").addEventListener("click", searchEmployees);
+                document.getElementById("genesys-ad-example-search-btn").addEventListener("click", searchExampleEmployees);
+                exampleLookupBtn.addEventListener("click", inspectExample);
                 document.getElementById("genesys-ad-group-load-btn").addEventListener("click", loadGroups);
                 document.getElementById("genesys-ad-filter-load-btn").addEventListener("click", loadFilters);
                 document.getElementById("genesys-ad-queue-refresh-btn").addEventListener("click", refreshQueue);
@@ -23127,6 +23154,93 @@ def genesys_ad_webrtc_employee_lookup_route(
       "email": str(person.get("email", "") or "").strip().lower(),
     })
   return JSONResponse({"ok": True, "rows": rows})
+
+
+@app.post("/genesys/ad-webrtc/example-lookup")
+def genesys_ad_webrtc_example_lookup_route(
+  request: Request,
+  target_user: str = Form(""),
+  user_email: str = Form(""),
+  first_name: str = Form(""),
+  last_name: str = Form(""),
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  clean_target = str(target_user or "").strip()
+  clean_email = str(user_email or "").strip().lower()
+  if not clean_target:
+    return JSONResponse({"ok": False, "error": "Choose an example employee first."}, status_code=400)
+  if (not clean_email or "@" not in clean_email) and resolved_host and resolved_user and resolved_pass:
+    clean_email = lookup_person_email_by_userid(resolved_host, resolved_user, resolved_pass, clean_target).strip().lower()
+  if not clean_email or "@" not in clean_email:
+    return JSONResponse({"ok": False, "error": "Could not resolve a valid email for the example employee."}, status_code=400)
+
+  groups, group_error = lookup_ad_groups_by_prefix(
+    "Genesys_User_Role",
+    auth_context={"username": resolved_user, "password": resolved_pass},
+  )
+  if group_error:
+    return JSONResponse({"ok": False, "error": group_error}, status_code=400)
+  memberships = []
+  for group in groups or []:
+    group_name = str(group.get("name", "") or "").strip()
+    if not group_name:
+      continue
+    check_ok, check_result, check_error = manage_ad_group_membership(
+      clean_target,
+      group_name,
+      "check",
+      auth_context={"username": resolved_user, "password": resolved_pass},
+    )
+    if check_ok and isinstance(check_result, dict) and check_result.get("isMember"):
+      memberships.append({"name": group_name, "samAccountName": str(group.get("samAccountName", "") or "").strip()})
+    elif check_error:
+      memberships.append({"name": group_name, "samAccountName": str(group.get("samAccountName", "") or "").strip(), "error": check_error})
+
+  token_result = _genesys_get_access_token(GENESYS_CLOUD_REGION, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  region = token_result.get("region", GENESYS_CLOUD_REGION)
+  access_token = token_result.get("access_token", "")
+  genesys_user = _genesys_lookup_user_by_email(region, access_token, clean_email)
+  if not genesys_user.get("ok"):
+    return JSONResponse({"ok": False, "error": genesys_user.get("error", "Example was not found in Genesys.")}, status_code=400)
+  profile = _genesys_get_user_search_profile(region, access_token, genesys_user.get("user_id", ""), clean_email)
+  if not profile.get("ok"):
+    return JSONResponse({"ok": False, "error": profile.get("error", "Genesys profile lookup failed.")}, status_code=400)
+
+  filter_payload = _load_genesys_division_filters()
+  filter_rows = []
+  observed_skill_ids = set(str(item or "").strip() for item in profile.get("skill_ids", []) if str(item or "").strip())
+  observed_queue_ids = set(str(item or "").strip() for item in profile.get("queue_ids", []) if str(item or "").strip())
+  for filter_id, item in (filter_payload.get("filters", {}).items() if isinstance(filter_payload.get("filters", {}), dict) else []):
+    if not isinstance(item, dict):
+      continue
+    filter_skills = set(str(value or "").strip() for value in item.get("skill_ids", []) if str(value or "").strip())
+    filter_queues = set(str(value or "").strip() for value in item.get("queue_ids", []) if str(value or "").strip())
+    filter_rows.append({
+      "filter_id": str(filter_id or "").strip(),
+      "filter_name": str(item.get("filter_name", "") or item.get("division_name", "") or "").strip(),
+      "division_name": str(item.get("division_name", "") or "").strip(),
+      "matches": str(item.get("division_id", "") or "").strip() == str(profile.get("division_id", "") or "").strip() and filter_skills == observed_skill_ids and filter_queues == observed_queue_ids,
+    })
+  return JSONResponse({
+    "ok": True,
+    "example": {"userid": clean_target, "email": clean_email, "first_name": str(first_name or "").strip(), "last_name": str(last_name or "").strip()},
+    "ad_groups": memberships,
+    "genesys": {
+      "user_id": str(genesys_user.get("user_id", "") or "").strip(),
+      "name": str(profile.get("user_name", "") or genesys_user.get("display_name", "") or "").strip(),
+      "email": str(profile.get("user_email", "") or clean_email).strip().lower(),
+      "division_id": str(profile.get("division_id", "") or "").strip(),
+      "division_name": str(profile.get("division_name", "") or "").strip(),
+      "skill_ids": sorted(observed_skill_ids),
+      "queue_ids": sorted(observed_queue_ids),
+    },
+    "saved_filters": filter_rows,
+  })
 
 
 @app.post("/genesys/ad-webrtc/groups")
