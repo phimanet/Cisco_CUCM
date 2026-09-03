@@ -3729,46 +3729,36 @@ def _genesys_ensure_group_membership(api_base: str, access_token: str, user_id: 
     return False, f"Genesys group '{clean_group_name}' was not found." + (" " + " | ".join(lookup_errors) if lookup_errors else "")
   group_id = str(matching_groups[0].get("id", "") or "").strip()
 
-  members = []
-  member_errors = []
-  for path in [f"/api/v2/groups/{group_id}/members", f"/api/v2/authorization/groups/{group_id}/members"]:
-    ok, payload, error = _genesys_get_json(api_base, access_token, path, params={"pageSize": 100, "pageNumber": 1})
-    if ok:
-      entities = payload.get("entities", []) if isinstance(payload, dict) else []
-      members = entities if isinstance(entities, list) else []
-      break
-    member_errors.append(f"{path}: {error}")
+  # Official SCIM-backed groups expose memberCount and owners in the group
+  # detail payload, but this tenant does not expose a readable /members list.
+  # Use the Groups write contract directly and let Genesys handle idempotency.
+  detail_ok, detail_payload, detail_error = _genesys_get_json(
+    api_base,
+    access_token,
+    f"/api/v2/groups/{group_id}",
+  )
+  if not detail_ok:
+    return False, f"Genesys group '{clean_group_name}' detail lookup failed: {detail_error or 'Unknown error.'}"
 
-  is_member = any(_genesys_queue_member_matches_user(member, clean_user_id, user_email, user_name) for member in members if isinstance(member, dict))
-  if not is_member:
-    add_errors = []
-    for method, path, payload in [
-      ("POST", f"/api/v2/groups/{group_id}/members", [{"id": clean_user_id}]),
-      ("POST", f"/api/v2/groups/{group_id}/members", {"userIds": [clean_user_id]}),
-      ("POST", f"/api/v2/authorization/groups/{group_id}/members", [{"id": clean_user_id}]),
-    ]:
-      ok, _, error, status_code = _genesys_send_json(method, api_base, access_token, path, payload=payload)
-      if ok or (int(status_code or 0) in {409} and "already" in str(error or "").lower()):
-        is_member = True
-        break
-      add_errors.append(f"{path}: {error}")
-    if not is_member:
-      return False, "Could not add user to Genesys group '" + clean_group_name + "'. " + " | ".join(add_errors or member_errors)
-
-    verify_ok, verify_payload, verify_error = _genesys_get_json(
+  add_errors = []
+  for payload in [
+    {"ids": [clean_user_id]},
+    [{"id": clean_user_id}],
+    {"userIds": [clean_user_id]},
+  ]:
+    ok, _, error, status_code = _genesys_send_json(
+      "POST",
       api_base,
-      access_token,
       f"/api/v2/groups/{group_id}/members",
-      params={"pageSize": 100, "pageNumber": 1},
+      payload=payload,
     )
-    if verify_ok:
-      verify_members = verify_payload.get("entities", []) if isinstance(verify_payload, dict) else []
-      if not any(_genesys_queue_member_matches_user(member, clean_user_id, user_email, user_name) for member in verify_members if isinstance(member, dict)):
-        return False, f"Genesys group '{clean_group_name}' add was accepted but membership could not be verified."
-    elif not members:
-      return False, f"Genesys group '{clean_group_name}' membership verification failed: {verify_error or 'Unknown error.'}"
+    error_text = str(error or "").strip()
+    if ok or (int(status_code or 0) == 409 and "already" in error_text.lower()):
+      member_count = detail_payload.get("memberCount", "") if isinstance(detail_payload, dict) else ""
+      return True, f"group_write_accepted (group={clean_group_name}, memberCountBefore={member_count or 'unknown'})"
+    add_errors.append(f"payload={json.dumps(payload)}: {error_text or f'HTTP {status_code}'}")
 
-  return True, "already_member" if members and is_member else "added_and_verified"
+  return False, "Could not add user to Genesys group '" + clean_group_name + "'. " + " | ".join(add_errors)
 
 
 def _genesys_remove_user_from_queue(
