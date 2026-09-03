@@ -181,6 +181,7 @@ _CHANGE_EXT_TEST_EMAILS: set = {e.strip().lower() for e in (os.getenv("CHANGE_EX
 _CHANGE_EXT_EMAIL_REDIRECT_TO: str = (os.getenv("CHANGE_EXT_EMAIL_REDIRECT_TO", "phimane.tiaokhiao@amnhealthcare.com") or "phimane.tiaokhiao@amnhealthcare.com").strip()
 DN_DELETE_NOTIFY_RECIPIENT = (os.getenv("DN_DELETE_NOTIFY_RECIPIENT", "Laura.Alvarez@amnhealthcare.com") or "Laura.Alvarez@amnhealthcare.com").strip()
 AUDIT_LOG_EMAIL_DOMAIN = (os.getenv("AUDIT_LOG_EMAIL_DOMAIN", "amnhealthcare.com") or "amnhealthcare.com").strip().lstrip("@")
+GENESYS_EMAIL_CC = (os.getenv("GENESYS_EMAIL_CC", "phimane.tiaokhiao@amnealthcare.com") or "phimane.tiaokhiao@amnealthcare.com").strip().lower()
 GENESYS_UPDATE_NOTIFY_RECIPIENTS = [
   item.strip()
   for item in (os.getenv("GENESYS_UPDATE_NOTIFY_RECIPIENTS", "") or "").split(",")
@@ -9088,6 +9089,9 @@ def _genesys_ad_webrtc_queue_status_payload(job: dict) -> dict:
     "genesys_user_created": bool(clean_job.get("genesys_user_created", False)),
     "genesys_group_state": str(clean_job.get("genesys_group_state", "") or "").strip(),
     "phone_name": str(clean_job.get("phone_name", "") or "").strip(),
+    "email_status": str(clean_job.get("email_status", "") or "").strip(),
+    "email_recipient": str(clean_job.get("email_recipient", "") or "").strip(),
+    "email_error": str(clean_job.get("email_error", "") or "").strip(),
     "error": str(clean_job.get("error", "") or "").strip(),
   }
 
@@ -9259,7 +9263,7 @@ def _run_genesys_ad_webrtc_queue_job(job_id: str):
       phone_name=phone_name,
       duration_seconds=max(0.0, time.time() - started_epoch),
     )
-    _genesys_send_update_completion_email(
+    email_result = _genesys_send_update_completion_email(
       operation="Genesys AD Security Group WebRTC Build",
       status="completed",
       requested=1,
@@ -9278,6 +9282,12 @@ def _run_genesys_ad_webrtc_queue_job(job_id: str):
         f"Phone: {phone_name or '(not returned)'}",
       ],
     )
+    _genesys_ad_webrtc_queue_update(
+      job_id,
+      email_status="sent" if isinstance(email_result, dict) and email_result.get("sent") else "failed",
+      email_recipient=str((email_result or {}).get("recipient", "") if isinstance(email_result, dict) else "").strip(),
+      email_error=str((email_result or {}).get("error", "") if isinstance(email_result, dict) else "Email helper returned no delivery result.").strip(),
+    )
   except Exception as exc:
     error_text = str(exc or "Queued Genesys WebRTC build failed.").strip()
     _genesys_ad_webrtc_queue_update(
@@ -9287,7 +9297,7 @@ def _run_genesys_ad_webrtc_queue_job(job_id: str):
       error=error_text,
       duration_seconds=max(0.0, time.time() - started_epoch),
     )
-    _genesys_send_update_completion_email(
+    email_result = _genesys_send_update_completion_email(
       operation="Genesys AD Security Group WebRTC Build",
       status="failed",
       requested=1,
@@ -9308,6 +9318,12 @@ def _run_genesys_ad_webrtc_queue_job(job_id: str):
         f"Scheduled kickoff: {job.get('scheduled_at', '')}",
         f"Failure: {error_text}",
       ],
+    )
+    _genesys_ad_webrtc_queue_update(
+      job_id,
+      email_status="sent" if isinstance(email_result, dict) and email_result.get("sent") else "failed",
+      email_recipient=str((email_result or {}).get("recipient", "") if isinstance(email_result, dict) else "").strip(),
+      email_error=str((email_result or {}).get("error", "") if isinstance(email_result, dict) else "Email helper returned no delivery result.").strip(),
     )
 
 
@@ -10995,6 +11011,7 @@ def _send_smtp_email(
     subject: str,
     body: str,
   html_body: str = "",
+    cc_recipients: list[str] | None = None,
     smtp_user: str = "",
     smtp_pass: str = "",
     smtp_port: int | None = None,
@@ -11011,6 +11028,9 @@ def _send_smtp_email(
     message = EmailMessage()
     message["From"] = sender
     message["To"] = ", ".join(clean_recipients)
+    clean_cc_recipients = [r.strip() for r in (cc_recipients or []) if (r or "").strip() and r.strip() not in clean_recipients]
+    if clean_cc_recipients:
+      message["Cc"] = ", ".join(clean_cc_recipients)
     message["Subject"] = subject or "CUCM Web SMTP Test"
     message.set_content(body or "SMTP test message from CUCM web portal.")
     if (html_body or "").strip():
@@ -11100,7 +11120,7 @@ def _genesys_send_update_completion_email(
 
   if not recipient_list:
     logger.warning("genesys completion email skipped for %s: no recipient resolved (operator=%s)", operation, operator)
-    return
+    return {"sent": False, "recipient": "", "error": "No submitter email could be derived."}
 
   clean_status = str(status or "").strip().lower()
   if clean_status in {"completed", "success"} and int(failure_count or 0) == 0:
@@ -11174,6 +11194,7 @@ def _genesys_send_update_completion_email(
       subject=subject,
       body=plain_body,
       html_body=html_body,
+      cc_recipients=[GENESYS_EMAIL_CC] if GENESYS_EMAIL_CC else [],
       smtp_port=SMTP_PORT,
       use_starttls=SMTP_USE_STARTTLS,
     )
@@ -11185,6 +11206,11 @@ def _genesys_send_update_completion_email(
       ",".join(recipient_list),
       exc,
     )
+    return {
+      "sent": False,
+      "recipient": ",".join(recipient_list),
+      "error": str(exc),
+    }
   else:
     logger.info(
       "genesys completion email sent for %s (sender=%s recipients=%s)",
@@ -11192,6 +11218,11 @@ def _genesys_send_update_completion_email(
       SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com",
       ",".join(recipient_list),
     )
+    return {
+      "sent": True,
+      "recipient": ",".join(recipient_list),
+      "error": "",
+    }
 
 
 def _normalize_phone_to_e164(phone_number: str) -> str:
