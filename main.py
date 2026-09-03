@@ -69,6 +69,7 @@ from toolkit.remove_teams_telephony_user import (
 from toolkit.ad_phone_fields import (
   inspect_ad_group_identifiers,
   manage_ad_group_membership,
+  lookup_ad_groups_by_prefix,
   lookup_ad_identity_by_email,
   lookup_ad_identities_by_full_name,
 )
@@ -143,6 +144,7 @@ def _app_startup_tasks():
 
 def _startup_background_services():
   _greenlight_load_state()
+  _start_genesys_ad_webrtc_queue_worker()
   if _is_lab_runtime_host() and SIP_CALL_SEARCH_ENABLED and SIP_CALL_SEARCH_LAB_ONLY:
     _start_sip_call_search_listener()
 PROD_CUCM_HOST = "lascucmpp01.ahs.int"
@@ -515,6 +517,11 @@ GENESYS_UPDATE_BATCH_MAX_WORKERS = int((os.getenv("GENESYS_UPDATE_BATCH_MAX_WORK
 GENESYS_UPDATE_BATCH_JOBS = {}
 GENESYS_UPDATE_BATCH_JOBS_LOCK = threading.Lock()
 GENESYS_UPDATE_BATCH_JOBS_MAX = int((os.getenv("GENESYS_UPDATE_BATCH_JOBS_MAX", "100") or "100").strip())
+GENESYS_AD_WEBRTC_QUEUE_JOBS = {}
+GENESYS_AD_WEBRTC_QUEUE_LOCK = threading.Lock()
+GENESYS_AD_WEBRTC_QUEUE_WORKER_STARTED = False
+GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS = int((os.getenv("GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS", "900") or "900").strip())
+GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS = int((os.getenv("GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS", "100") or "100").strip())
 _genesys_default_filter_path = (os.getenv("GENESYS_DIVISION_FILTERS_PATH", "") or "").strip()
 if not _genesys_default_filter_path:
   if os.name == "nt":
@@ -8894,6 +8901,150 @@ def _genesys_update_batch_job_status_payload(job: dict) -> dict:
     payload["failed_emails_download_url"] = str(clean_job.get("failed_emails_download_url", "") or "").strip()
 
   return payload
+
+
+def _genesys_ad_webrtc_queue_status_payload(job: dict) -> dict:
+  clean_job = dict(job or {})
+  return {
+    "ok": True,
+    "job_id": str(clean_job.get("job_id", "") or "").strip(),
+    "status": str(clean_job.get("status", "queued") or "queued").strip(),
+    "queued": str(clean_job.get("status", "queued") or "queued").strip() in {"queued", "running"},
+    "created_at": str(clean_job.get("created_at", "") or "").strip(),
+    "scheduled_at": str(clean_job.get("scheduled_at", "") or "").strip(),
+    "started_at": str(clean_job.get("started_at", "") or "").strip(),
+    "finished_at": str(clean_job.get("finished_at", "") or "").strip(),
+    "user_id": str(clean_job.get("user_id", "") or "").strip(),
+    "user_name": str(clean_job.get("user_name", "") or "").strip(),
+    "user_email": str(clean_job.get("user_email", "") or "").strip(),
+    "group_name": str(clean_job.get("group_name", "") or "").strip(),
+    "filter_name": str(clean_job.get("filter_name", "") or "").strip(),
+    "phone_name": str(clean_job.get("phone_name", "") or "").strip(),
+    "error": str(clean_job.get("error", "") or "").strip(),
+  }
+
+
+def _genesys_ad_webrtc_queue_get_job(job_id: str) -> dict | None:
+  with GENESYS_AD_WEBRTC_QUEUE_LOCK:
+    job = GENESYS_AD_WEBRTC_QUEUE_JOBS.get(str(job_id or "").strip())
+    return dict(job) if isinstance(job, dict) else None
+
+
+def _genesys_ad_webrtc_queue_update(job_id: str, **updates):
+  with GENESYS_AD_WEBRTC_QUEUE_LOCK:
+    job = GENESYS_AD_WEBRTC_QUEUE_JOBS.get(str(job_id or "").strip())
+    if isinstance(job, dict):
+      job.update(updates)
+
+
+def _run_genesys_ad_webrtc_queue_job(job_id: str):
+  job = _genesys_ad_webrtc_queue_get_job(job_id) or {}
+  _genesys_ad_webrtc_queue_update(job_id, status="running", started_at=_audit_now().strftime(AUDIT_TIMESTAMP_FORMAT))
+  started_epoch = time.time()
+  region = str(job.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION).strip().lower()
+  user_id = str(job.get("user_id", "") or "").strip()
+  user_name = str(job.get("user_name", "") or "").strip()
+  user_email = str(job.get("user_email", "") or "").strip().lower()
+  filter_data = job.get("filter", {}) if isinstance(job.get("filter"), dict) else {}
+  try:
+    token_result = _genesys_get_access_token(region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+    if not token_result.get("ok"):
+      raise RuntimeError(token_result.get("error", "Genesys token request failed."))
+    region = str(token_result.get("region", region) or region).strip().lower()
+    build_result = _genesys_build_webrtc_phone_for_user(region, token_result.get("access_token", ""), user_id, user_name, user_email)
+    if not build_result.get("ok"):
+      raise RuntimeError(build_result.get("error", "WebRTC phone build failed."))
+
+    division_id = str(filter_data.get("division_id", "") or "").strip()
+    skill_ids = filter_data.get("skill_ids", []) if isinstance(filter_data.get("skill_ids"), list) else []
+    queue_ids = filter_data.get("queue_ids", []) if isinstance(filter_data.get("queue_ids"), list) else []
+    if division_id or skill_ids or queue_ids:
+      update_result = _genesys_apply_user_search_update(
+        region,
+        token_result.get("access_token", ""),
+        user_id,
+        division_id,
+        skill_ids,
+        queue_ids,
+        user_email=user_email,
+        user_name=user_name,
+        update_division=bool(division_id),
+        update_skills=bool(skill_ids),
+        update_queues=bool(queue_ids),
+      )
+      if not update_result.get("ok"):
+        raise RuntimeError(update_result.get("error", "Genesys filter update failed."))
+
+    phone_name = str(build_result.get("phone_name", "") or "").strip()
+    _genesys_ad_webrtc_queue_update(
+      job_id,
+      status="completed",
+      finished_at=_audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+      phone_name=phone_name,
+      duration_seconds=max(0.0, time.time() - started_epoch),
+    )
+    _genesys_send_update_completion_email(
+      operation="Genesys AD Security Group WebRTC Build",
+      status="completed",
+      requested=1,
+      success_count=1,
+      failure_count=0,
+      operator_username=str(job.get("operator_username", "") or ""),
+      region=region,
+      duration_seconds=max(0.0, time.time() - started_epoch),
+      details=[
+        f"User: {user_email or user_id}",
+        f"AD group: {job.get('group_name', '')}",
+        f"Division filter: {job.get('filter_name', '') or '(none)'}",
+        f"Phone: {phone_name or '(not returned)'}",
+      ],
+    )
+  except Exception as exc:
+    error_text = str(exc or "Queued Genesys WebRTC build failed.").strip()
+    _genesys_ad_webrtc_queue_update(
+      job_id,
+      status="failed",
+      finished_at=_audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+      error=error_text,
+      duration_seconds=max(0.0, time.time() - started_epoch),
+    )
+    _genesys_send_update_completion_email(
+      operation="Genesys AD Security Group WebRTC Build",
+      status="failed",
+      requested=1,
+      success_count=0,
+      failure_count=1,
+      operator_username=str(job.get("operator_username", "") or ""),
+      region=region,
+      duration_seconds=max(0.0, time.time() - started_epoch),
+      failures=[error_text],
+      details=[f"User: {user_email or user_id}", f"AD group: {job.get('group_name', '')}"],
+    )
+
+
+def _start_genesys_ad_webrtc_queue_worker():
+  global GENESYS_AD_WEBRTC_QUEUE_WORKER_STARTED
+  with GENESYS_AD_WEBRTC_QUEUE_LOCK:
+    if GENESYS_AD_WEBRTC_QUEUE_WORKER_STARTED:
+      return
+    GENESYS_AD_WEBRTC_QUEUE_WORKER_STARTED = True
+
+  def worker():
+    while True:
+      due_job_id = ""
+      now_epoch = time.time()
+      with GENESYS_AD_WEBRTC_QUEUE_LOCK:
+        for job_id, job in GENESYS_AD_WEBRTC_QUEUE_JOBS.items():
+          if str(job.get("status", "") or "") == "queued" and float(job.get("scheduled_epoch", 0) or 0) <= now_epoch:
+            due_job_id = job_id
+            break
+      if due_job_id:
+        _run_genesys_ad_webrtc_queue_job(due_job_id)
+      else:
+        time.sleep(5)
+
+
+  threading.Thread(target=worker, name="genesys-ad-webrtc-queue", daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -17316,9 +17467,89 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-queue-remove-panel" onclick="(function(){var id='genesys-user-queue-remove-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Lookup + Remove (User)</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel" onclick="(function(){var id='genesys-queue-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Info</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-blocked-caller-panel" onclick="(function(){var id='genesys-blocked-caller-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Block Incoming Calls</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-ad-webrtc-panel" onclick="(function(){var id='genesys-ad-webrtc-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">AD Group -> Delayed WebRTC Build</button>
         </aside>
 
         <section class="portal-main">
+          <div id="genesys-ad-webrtc-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+            <h3 style="margin-top:0;">AD Security Group -> Delayed Genesys WebRTC Build</h3>
+            <p style="margin:0 0 10px 0; color:#4e6a84; font-size:12px;">Find an employee, add one Genesys_User_Role security group, choose an optional saved Genesys filter, then queue WebRTC creation for at least 15 minutes from now.</p>
+            <div style="padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f4f9ff;">
+              <strong>1. Employee lookup</strong>
+              <div class="search-filter-row" style="margin-top:8px;">
+                <input id="genesys-ad-employee-last" placeholder="Last Name *" style="width:220px;">
+                <input id="genesys-ad-employee-first" placeholder="First Name (optional)" style="width:220px;">
+                <button type="button" id="genesys-ad-employee-search-btn" style="background:#385977;">Search CUCM</button>
+              </div>
+              <div id="genesys-ad-employee-results" style="overflow-x:auto; margin-top:8px;"></div>
+            </div>
+            <div style="padding:10px; margin-top:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f8fcff;">
+              <strong>2. Select AD security group and Genesys filter</strong>
+              <div class="search-filter-row" style="margin-top:8px; align-items:flex-end;">
+                <div><label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Genesys_User_Role group</label><select id="genesys-ad-group-select" style="width:360px;"><option value="">Load groups...</option></select></div>
+                <button type="button" id="genesys-ad-group-load-btn" style="background:#385977;">Reload Groups</button>
+                <div><label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Saved Genesys filter (optional)</label><select id="genesys-ad-filter-select" style="width:360px;"><option value="">No filter</option></select></div>
+                <button type="button" id="genesys-ad-filter-load-btn" style="background:#385977;">Reload Filters</button>
+              </div>
+              <div id="genesys-ad-selected-user" style="margin-top:8px; color:#2c5c8a;">No employee selected.</div>
+              <button type="button" id="genesys-ad-queue-btn" style="margin-top:10px; background:#2d7a43;" disabled>Add Group + Queue WebRTC Build</button>
+            </div>
+            <p id="genesys-ad-webrtc-status" style="color:#2c5c8a; min-height:18px; margin-top:10px;">Ready.</p>
+            <div id="genesys-ad-webrtc-job" style="display:none; padding:10px; border:1px solid #c8dbee; border-radius:8px; background:#f8fcff;"></div>
+            <script>
+              (function () {
+                if (window._genesysAdWebrtcBound) return;
+                window._genesysAdWebrtcBound = true;
+                var selected = null;
+                var employeeResults = document.getElementById("genesys-ad-employee-results");
+                var employeeStatus = document.getElementById("genesys-ad-webrtc-status");
+                var selectedUserEl = document.getElementById("genesys-ad-selected-user");
+                var queueBtn = document.getElementById("genesys-ad-queue-btn");
+                var groupSelect = document.getElementById("genesys-ad-group-select");
+                var filterSelect = document.getElementById("genesys-ad-filter-select");
+                var jobEl = document.getElementById("genesys-ad-webrtc-job");
+                function esc(value) { return String(value || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+                async function jsonFetch(url, options) {
+                  var response = await fetch(url, options || {});
+                  var payload = await response.json();
+                  if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
+                  return payload;
+                }
+                function renderEmployees(rows) {
+                  employeeResults.innerHTML = rows.length ? "<table><thead><tr><th>Select</th><th>Name</th><th>User ID</th><th>Email</th></tr></thead><tbody>" + rows.map(function (row, index) {
+                    return "<tr><td><button type='button' data-employee-index='" + index + "' style='padding:5px 9px;'>Choose</button></td><td>" + esc(row.displayname || ((row.firstname || "") + " " + (row.lastname || "")).trim()) + "</td><td>" + esc(row.userid) + "</td><td>" + esc(row.email) + "</td></tr>";
+                  }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No employees found.</span>";
+                  employeeResults.querySelectorAll("[data-employee-index]").forEach(function (button) { button.addEventListener("click", function () { selected = rows[Number(button.getAttribute("data-employee-index"))] || null; selectedUserEl.textContent = selected ? ("Selected: " + (selected.displayname || selected.userid) + " | " + selected.email + " | AD User ID: " + selected.userid) : "No employee selected."; queueBtn.disabled = !selected; }); });
+                }
+                async function loadGroups() {
+                  employeeStatus.textContent = "Loading Genesys_User_Role security groups...";
+                  try { var payload = await jsonFetch("/genesys/ad-webrtc/groups", { method: "POST", body: new FormData() }); groupSelect.innerHTML = "<option value=''>Select a group...</option>" + (payload.groups || []).map(function (row) { return "<option value='" + esc(row.name) + "'>" + esc(row.name) + "</option>"; }).join(""); employeeStatus.textContent = (payload.groups || []).length + " Genesys role group(s) loaded."; } catch (err) { employeeStatus.textContent = "Group lookup failed: " + err.message; }
+                }
+                async function loadFilters() {
+                  try { var payload = await jsonFetch("/genesys/division-filters", { method: "GET" }); filterSelect.innerHTML = "<option value=''>No filter</option>" + (payload.filters || []).map(function (row) { var label = row.filter_name || row.division_name || row.division_id; return "<option value='" + esc(row.filter_id || row.division_id) + "'>" + esc(label) + "</option>"; }).join(""); } catch (err) { employeeStatus.textContent = "Filter lookup failed: " + err.message; }
+                }
+                async function searchEmployees() {
+                  var data = new FormData(); data.append("last_name", document.getElementById("genesys-ad-employee-last").value); data.append("first_name", document.getElementById("genesys-ad-employee-first").value); employeeStatus.textContent = "Searching CUCM employees...";
+                  try { var payload = await jsonFetch("/genesys/ad-webrtc/employee-lookup", { method: "POST", body: data }); renderEmployees(payload.rows || []); employeeStatus.textContent = (payload.rows || []).length + " employee(s) found. Choose one."; } catch (err) { employeeStatus.textContent = "Employee lookup failed: " + err.message; }
+                }
+                async function queueBuild() {
+                  if (!selected || !groupSelect.value) { employeeStatus.textContent = "Choose an employee and an AD security group first."; return; }
+                  if (!window.confirm("Add " + groupSelect.value + " to " + (selected.displayname || selected.userid) + " and queue the WebRTC build for 15 minutes from now?")) return;
+                  queueBtn.disabled = true; employeeStatus.textContent = "Adding AD membership and creating delayed job...";
+                  var data = new FormData(); data.append("target_user", selected.userid); data.append("user_id", selected.userid); data.append("user_name", selected.displayname || ((selected.firstname || "") + " " + (selected.lastname || "")).trim()); data.append("user_email", selected.email); data.append("group_name", groupSelect.value); data.append("filter_id", filterSelect.value);
+                  try { var payload = await jsonFetch("/genesys/ad-webrtc/queue", { method: "POST", body: data }); employeeStatus.textContent = "AD membership confirmed. WebRTC build queued."; renderJob(payload); pollJob(payload.job_id); } catch (err) { employeeStatus.textContent = "Queue failed: " + err.message; queueBtn.disabled = false; }
+                }
+                function renderJob(job) { jobEl.style.display = "block"; jobEl.innerHTML = "<strong>Queued job " + esc(job.job_id) + "</strong><div style='margin-top:6px;'>Status: <span id='genesys-ad-job-status'>" + esc(job.status) + "</span></div><div>Scheduled: " + esc(job.scheduled_at) + "</div><div>Group: " + esc(job.group_name) + "</div><div>Filter: " + esc(job.filter_name || "(none)") + "</div>"; }
+                async function pollJob(jobId) { try { var job = await jsonFetch("/genesys/ad-webrtc/queue/status?job_id=" + encodeURIComponent(jobId)); renderJob(job); if (job.status === "queued" || job.status === "running") { window.setTimeout(function () { pollJob(jobId); }, 10000); } else { employeeStatus.textContent = job.status === "completed" ? "Genesys WebRTC build and filter application completed. Completion email sent to the submitter." : "Queued Genesys build failed: " + (job.error || "Unknown error."); queueBtn.disabled = false; } } catch (err) { employeeStatus.textContent = "Job status lookup failed: " + err.message; queueBtn.disabled = false; } }
+                document.getElementById("genesys-ad-employee-search-btn").addEventListener("click", searchEmployees);
+                document.getElementById("genesys-ad-group-load-btn").addEventListener("click", loadGroups);
+                document.getElementById("genesys-ad-filter-load-btn").addEventListener("click", loadFilters);
+                queueBtn.addEventListener("click", queueBuild);
+                loadGroups(); loadFilters();
+              })();
+            </script>
+          </div>
+
           <div id="genesys-user-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Genesys User WebRTC Lookup</h3>
 
@@ -22636,6 +22867,152 @@ def genesys_extract_users_route(
     "raw_download_url": f"/download/job-output/{raw_job_id}",
     "raw_filename": raw_filename,
   })
+
+
+@app.post("/genesys/ad-webrtc/employee-lookup")
+def genesys_ad_webrtc_employee_lookup_route(
+  request: Request,
+  last_name: str = Form(""),
+  first_name: str = Form(""),
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  clean_last = str(last_name or "").strip()
+  clean_first = str(first_name or "").strip()
+  if not clean_last:
+    return JSONResponse({"ok": False, "error": "Last name is required.", "rows": []}, status_code=400)
+  try:
+    people = search_persons_by_name(resolved_host, resolved_user, resolved_pass, clean_last, clean_first)
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": f"Employee lookup failed: {exc}", "rows": []}, status_code=400)
+  rows = []
+  for person in people or []:
+    rows.append({
+      "userid": str(person.get("userid", "") or "").strip(),
+      "displayname": str(person.get("displayname", "") or "").strip(),
+      "firstname": str(person.get("firstname", "") or "").strip(),
+      "lastname": str(person.get("lastname", "") or "").strip(),
+      "email": str(person.get("email", "") or "").strip().lower(),
+    })
+  return JSONResponse({"ok": True, "rows": rows})
+
+
+@app.post("/genesys/ad-webrtc/groups")
+def genesys_ad_webrtc_groups_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  rows, error = lookup_ad_groups_by_prefix(
+    "Genesys_User_Role",
+    auth_context={"username": resolved_user, "password": resolved_pass},
+  )
+  if error:
+    return JSONResponse({"ok": False, "error": error, "groups": []}, status_code=400)
+  clean_rows = []
+  seen = set()
+  for row in rows or []:
+    name = str(row.get("name", "") or "").strip()
+    if not name or not name.lower().startswith("genesys_user_role") or name.lower() in seen:
+      continue
+    seen.add(name.lower())
+    clean_rows.append({
+      "name": name,
+      "samAccountName": str(row.get("samAccountName", "") or "").strip(),
+      "distinguishedName": str(row.get("distinguishedName", "") or "").strip(),
+      "groupCategory": str(row.get("groupCategory", "") or "").strip(),
+      "groupScope": str(row.get("groupScope", "") or "").strip(),
+    })
+  clean_rows.sort(key=lambda row: row["name"].lower())
+  return JSONResponse({"ok": True, "prefix": "Genesys_User_Role", "groups": clean_rows})
+
+
+@app.post("/genesys/ad-webrtc/queue")
+def genesys_ad_webrtc_queue_route(
+  request: Request,
+  target_user: str = Form(""),
+  user_id: str = Form(""),
+  user_name: str = Form(""),
+  user_email: str = Form(""),
+  group_name: str = Form(""),
+  filter_id: str = Form(""),
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  clean_target = str(target_user or "").strip()
+  clean_group = str(group_name or "").strip()
+  clean_email = str(user_email or "").strip().lower()
+  clean_user_id = str(user_id or clean_target).strip()
+  if not clean_target or not clean_group or not clean_email or "@" not in clean_email:
+    return JSONResponse({"ok": False, "error": "Employee, AD group, and valid email are required."}, status_code=400)
+  if not clean_group.lower().startswith("genesys_user_role"):
+    return JSONResponse({"ok": False, "error": "Only Genesys_User_Role security groups may be selected."}, status_code=400)
+
+  membership_ok, membership_result, membership_error = manage_ad_group_membership(
+    clean_target,
+    clean_group,
+    "add",
+    auth_context={"username": resolved_user, "password": resolved_pass},
+  )
+  if not membership_ok or not isinstance(membership_result, dict) or not membership_result.get("isMember"):
+    return JSONResponse({"ok": False, "error": membership_error or "AD group membership could not be confirmed."}, status_code=400)
+
+  selected_filter = {}
+  clean_filter_id = str(filter_id or "").strip()
+  if clean_filter_id:
+    filter_payload = _load_genesys_division_filters()
+    filters = filter_payload.get("filters", {}) if isinstance(filter_payload, dict) else {}
+    selected_filter = dict(filters.get(clean_filter_id, {}) or {}) if isinstance(filters, dict) else {}
+    if not selected_filter:
+      return JSONResponse({"ok": False, "error": "Selected Genesys division filter was not found."}, status_code=400)
+
+  now_epoch = time.time()
+  job_id = str(uuid4())
+  scheduled_epoch = now_epoch + max(900, int(GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS or 900))
+  job = {
+    "job_id": job_id,
+    "status": "queued",
+    "created_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+    "scheduled_at": datetime.datetime.fromtimestamp(scheduled_epoch, tz=datetime.timezone.utc).isoformat(),
+    "scheduled_epoch": scheduled_epoch,
+    "region": GENESYS_CLOUD_REGION,
+    "operator_username": resolved_user,
+    "user_id": clean_user_id,
+    "user_name": str(user_name or "").strip(),
+    "user_email": clean_email,
+    "group_name": clean_group,
+    "filter_name": str(selected_filter.get("filter_name", "") or selected_filter.get("division_name", "") or "").strip(),
+    "filter": selected_filter,
+  }
+  with GENESYS_AD_WEBRTC_QUEUE_LOCK:
+    if len(GENESYS_AD_WEBRTC_QUEUE_JOBS) >= max(1, GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS):
+      oldest_id = min(GENESYS_AD_WEBRTC_QUEUE_JOBS, key=lambda key: float(GENESYS_AD_WEBRTC_QUEUE_JOBS[key].get("scheduled_epoch", 0) or 0))
+      GENESYS_AD_WEBRTC_QUEUE_JOBS.pop(oldest_id, None)
+    GENESYS_AD_WEBRTC_QUEUE_JOBS[job_id] = job
+  _append_audit_event(
+    action="genesys_ad_group_webrtc_queued",
+    cucm_host=resolved_host,
+    operator=resolved_user,
+    target=f"{clean_target};group={clean_group};filter={job['filter_name'] or '(none)'};job={job_id}",
+    output_filename="",
+    inline_mode=True,
+    account=clean_email,
+  )
+  return JSONResponse({"ok": True, **_genesys_ad_webrtc_queue_status_payload(job), "delay_seconds": int(scheduled_epoch - now_epoch)})
+
+
+@app.get("/genesys/ad-webrtc/queue/status")
+def genesys_ad_webrtc_queue_status_route(job_id: str = ""):
+  job = _genesys_ad_webrtc_queue_get_job(job_id)
+  if not job:
+    return JSONResponse({"ok": False, "error": "Queued job was not found."}, status_code=404)
+  return JSONResponse(_genesys_ad_webrtc_queue_status_payload(job))
 
 
 @app.post("/genesys/users/extract-org-snapshot")

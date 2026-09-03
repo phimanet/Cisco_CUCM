@@ -780,6 +780,92 @@ def inspect_ad_group_identifiers(group_name, auth_context=None):
     return None, ps_error or ldap_error or ldapsearch_error or "AD group lookup failed"
 
 
+def lookup_ad_groups_by_prefix(prefix, auth_context=None):
+    clean_prefix = _normalize_group_lookup_name(prefix)
+    if not clean_prefix:
+        return [], "group prefix is required"
+
+    payload = {
+        "username": (auth_context or {}).get("username", ""),
+        "password": (auth_context or {}).get("password", ""),
+        "prefix": clean_prefix,
+    }
+    script = r"""
+$payload = [Console]::In.ReadToEnd() | ConvertFrom-Json
+Import-Module ActiveDirectory -ErrorAction Stop
+
+$prefixValue = [string]$payload.prefix
+if ($payload.username -and $payload.password) {
+    $secure = ConvertTo-SecureString $payload.password -AsPlainText -Force
+    $cred = [System.Management.Automation.PSCredential]::new($payload.username, $secure)
+    $groups = @(Get-ADGroup -Credential $cred -Filter "Name -like '$prefixValue*'" -Properties DistinguishedName,ObjectGUID,SID,GroupCategory,GroupScope,Name,SamAccountName -ErrorAction Stop)
+} else {
+    $groups = @(Get-ADGroup -Filter "Name -like '$prefixValue*'" -Properties DistinguishedName,ObjectGUID,SID,GroupCategory,GroupScope,Name,SamAccountName -ErrorAction Stop)
+}
+
+@($groups | ForEach-Object {
+    @{
+        name = [string]$_.Name
+        samAccountName = [string]$_.SamAccountName
+        distinguishedName = [string]$_.DistinguishedName
+        objectGUID = [string]$_.ObjectGUID
+        sid = [string]$_.SID
+        groupCategory = [string]$_.GroupCategory
+        groupScope = [string]$_.GroupScope
+    }
+}) | ConvertTo-Json -Compress
+"""
+
+    ps_data, ps_error = _run_powershell_json(script, payload)
+    if not ps_error:
+        rows = ps_data if isinstance(ps_data, list) else ([ps_data] if isinstance(ps_data, dict) and ps_data.get("name") else [])
+        return [dict(row) for row in rows if isinstance(row, dict) and str(row.get("name", "")).startswith(clean_prefix)], ""
+
+    if not LDAP3_AVAILABLE:
+        return [], ps_error
+    config, config_error = _resolve_ldap_config()
+    if config_error:
+        return [], f"{ps_error}; LDAP fallback failed: {config_error}"
+    bind_user, bind_auth, bind_error = _resolve_ldap_bind_credentials(auth_context, config)
+    if bind_error:
+        return [], f"{ps_error}; LDAP fallback failed: {bind_error}"
+    try:
+        server = Server(config["server"], port=config["port"], use_ssl=config["use_ssl"], get_info=ALL, connect_timeout=20)
+        conn = Connection(server, user=bind_user, password=str(os.getenv("AD_LDAP_BIND_PASSWORD") or (auth_context or {}).get("password") or ""), authentication=bind_auth, auto_bind=True, receive_timeout=20)
+        escaped = _escape_ldap_filter_value(clean_prefix)
+        ok = conn.search(
+            search_base=config["base_dn"],
+            search_filter=f"(&(objectClass=group)(|(cn={escaped}*)(name={escaped}*)(sAMAccountName={escaped}*)))",
+            search_scope=SUBTREE,
+            attributes=["distinguishedName", "cn", "name", "sAMAccountName", "objectGUID", "objectSid", "groupType"],
+        )
+        if not ok:
+            return [], f"{ps_error}; LDAP prefix search failed"
+        rows = []
+        for entry in conn.entries:
+            name = str(getattr(getattr(entry, "name", None), "value", "") or getattr(getattr(entry, "cn", None), "value", "") or "").strip()
+            if not name.startswith(clean_prefix):
+                continue
+            group_type = getattr(getattr(entry, "groupType", None), "value", None)
+            rows.append({
+                "name": name,
+                "samAccountName": str(getattr(getattr(entry, "sAMAccountName", None), "value", "") or "").strip(),
+                "distinguishedName": str(getattr(entry, "entry_dn", "") or "").strip(),
+                "objectGUID": _guid_to_string(getattr(getattr(entry, "objectGUID", None), "value", None)),
+                "sid": _sid_to_string(getattr(getattr(entry, "objectSid", None), "value", None)),
+                "groupCategory": _group_category_from_group_type(group_type),
+                "groupScope": _group_scope_from_group_type(group_type),
+            })
+        return rows, ""
+    except Exception as exc:
+        return [], f"{ps_error}; LDAP fallback failed: {exc}"
+    finally:
+        try:
+            conn.unbind()
+        except Exception:
+            pass
+
+
 def _normalize_membership_action(value):
     action = str(value or "").strip().lower()
     if action in {"check", "add", "remove"}:

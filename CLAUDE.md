@@ -80,6 +80,7 @@ Priority keys:
 - HTTPS migration target host confirmed: `lascrtmp01.ahs.int` (DNS already working).
 - Ubuntu server IP confirmed: `10.241.18.15`.
 - SIP Call Search is now LAB-only and hidden from PROD navigation; next step is LAB restart and CUBE syslog validation.
+- Genesys AD role-group WebRTC workflow implemented; requires LAB validation of AD prefix lookup, membership add, 15-minute queue execution, selected filter application, and completion email.
 
 ## Completed Tasks
 - [x] Created central project tracking structure in `CLAUDE.md`.
@@ -105,6 +106,12 @@ Priority keys:
 
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
+
+### 2026-09-03 (Genesys AD role-group delayed WebRTC workflow — implementation complete, LAB validation pending)
+- Added Genesys menu item for CUCM employee lookup, selectable `Genesys_User_Role*` AD security groups, optional saved Genesys division filter, and queued WebRTC build submission.
+- Added server-side AD prefix lookup with PowerShell/LDAP fallback and server-side group-prefix enforcement.
+- Adding membership now precedes job creation; queued job will wait at least 15 minutes, create/associate WebRTC, apply the saved Division/Skills/Queues filter, and email the submitter on completion or failure.
+- Added in-memory queue status endpoint and operator-visible job status polling. Runtime queue state is lost on service restart; validate operational restart behavior in LAB before production rollout.
 
 ### 2026-08-11 (Name Change enhancement — complete, validated LAB+PROD)
 - Enhanced `toolkit/called_name_change.py` to also update translation pattern descriptions after updating phones/lines/Unity.
