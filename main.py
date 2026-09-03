@@ -17761,7 +17761,7 @@ def genesys_admin_placeholder(request: Request):
           <div id="genesys-role-groups-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Inspect Genesys Role Groups</h3>
             <p style="color:#4e6a84;font-size:12px;">Read-only diagnostic. Lists groups beginning with Genesys_User_Role and displays the group detail contents returned by Genesys. No membership changes are made.</p>
-            <button type="button" id="genesys-role-groups-inspect-btn" style="background:#385977;">Read Groups and Contents</button>
+            <button type="button" id="genesys-role-groups-inspect-btn" style="background:#385977;" onclick="if (window.inspectGenesysRoleGroups) { window.inspectGenesysRoleGroups(); } else { var s=document.getElementById('genesys-role-groups-status'); if (s) { s.textContent='Diagnostic handler did not load. Refresh the page and retry.'; } }">Read Groups and Contents</button>
             <p id="genesys-role-groups-status" style="color:#2c5c8a;min-height:18px;">Ready.</p>
             <div id="genesys-role-groups-output" style="overflow-x:auto;"></div>
             <script>
@@ -17772,7 +17772,7 @@ def genesys_admin_placeholder(request: Request):
                 if (!button || button.dataset.bound === "1") return;
                 button.dataset.bound = "1";
                 function esc(value) { return String(value || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
-                button.addEventListener("click", async function () {
+                window.inspectGenesysRoleGroups = async function () {
                   button.disabled = true; status.textContent = "Reading Genesys role groups and group contents..."; output.innerHTML = "";
                   try {
                     var response = await fetch("/genesys/ad-webrtc/groups/inspect", { method: "GET", headers: { "Accept": "application/json" } });
@@ -17785,7 +17785,7 @@ def genesys_admin_placeholder(request: Request):
                     status.textContent = groups.length + " Genesys_User_Role group(s) inspected. Read-only; no changes made.";
                   } catch (err) { status.textContent = "Role-group inspection failed: " + ((err && err.message) || "Unknown error."); }
                   finally { button.disabled = false; }
-                });
+                };
               })();
             </script>
           </div>
