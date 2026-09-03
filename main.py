@@ -17839,13 +17839,15 @@ def genesys_admin_placeholder(request: Request):
                 function renderJobs(jobs) {
                   if (!jobs.length) { jobEl.innerHTML = "<span style='color:#4e6a84;'>No queued jobs.</span>"; return; }
                   jobEl.innerHTML = "<table><thead><tr><th>Status</th><th>Employee</th><th>AD Group</th><th>Filter</th><th>Submitted</th><th>Kickoff</th><th>Action</th></tr></thead><tbody>" + jobs.map(function (job) {
-                    var action = job.status === "queued" ? "<button type='button' data-cancel-job='" + esc(job.job_id) + "' style='background:#8a2d2d;padding:5px 9px;'>Cancel</button>" : esc(job.error || job.phone_name || "-");
+                    var action = job.status === "queued" ? "<button type='button' data-execute-job='" + esc(job.job_id) + "' style='background:#2d7a43;padding:5px 9px;'>Execute Now</button> <button type='button' data-cancel-job='" + esc(job.job_id) + "' style='background:#8a2d2d;padding:5px 9px;'>Cancel</button>" : esc(job.error || job.phone_name || "-");
                     return "<tr><td>" + esc(job.status) + "</td><td>" + esc(job.user_name || job.user_email || job.user_id) + "</td><td>" + esc(job.group_name) + "</td><td>" + esc(job.filter_name || "(none)") + "</td><td>" + esc(job.submitted_at || job.created_at) + "</td><td>" + esc(job.scheduled_at) + "</td><td>" + action + "</td></tr>";
                   }).join("") + "</tbody></table>";
                   jobEl.querySelectorAll("[data-cancel-job]").forEach(function (button) { button.addEventListener("click", function () { cancelJob(button.getAttribute("data-cancel-job")); }); });
+                  jobEl.querySelectorAll("[data-execute-job]").forEach(function (button) { button.addEventListener("click", function () { executeJob(button.getAttribute("data-execute-job")); }); });
                 }
                 async function refreshQueue() { try { var payload = await jsonFetch("/genesys/ad-webrtc/queue", { method: "GET" }); renderJobs(payload.jobs || []); queueStatus.textContent = (payload.jobs || []).length + " queued job(s) loaded."; } catch (err) { queueStatus.textContent = "Queue load failed: " + err.message; } }
                 async function cancelJob(jobId) { if (!window.confirm("Cancel this job before it starts?")) return; try { var data = new FormData(); data.append("job_id", jobId); await jsonFetch("/genesys/ad-webrtc/queue/cancel", { method: "POST", body: data }); employeeStatus.textContent = "Queued job cancelled."; refreshQueue(); } catch (err) { employeeStatus.textContent = "Cancel failed: " + err.message; } }
+                async function executeJob(jobId) { if (!window.confirm("Execute this queued Genesys job now?")) return; try { var data = new FormData(); data.append("job_id", jobId); await jsonFetch("/genesys/ad-webrtc/queue/execute", { method: "POST", body: data }); employeeStatus.textContent = "Job marked for immediate execution."; refreshQueue(); } catch (err) { employeeStatus.textContent = "Execute now failed: " + err.message; } }
                 async function pollJob(jobId) { try { var job = await jsonFetch("/genesys/ad-webrtc/queue/status?job_id=" + encodeURIComponent(jobId)); refreshQueue(); if (job.status === "queued" || job.status === "running") { window.setTimeout(function () { pollJob(jobId); }, 10000); } else { employeeStatus.textContent = job.status === "completed" ? "Genesys WebRTC build and filter application completed. Completion email sent to the submitter." : (job.status === "cancelled" ? "Queued job cancelled." : "Queued Genesys build failed: " + (job.error || "Unknown error.")); queueBtn.disabled = false; } } catch (err) { employeeStatus.textContent = "Job status lookup failed: " + err.message; queueBtn.disabled = false; } }
                 document.getElementById("genesys-ad-employee-search-btn").addEventListener("click", searchEmployees);
                 document.getElementById("genesys-ad-example-search-btn").addEventListener("click", searchExampleEmployees);
@@ -23449,6 +23451,23 @@ def genesys_ad_webrtc_queue_cancel_route(job_id: str = Form("")):
     job["finished_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
     _persist_genesys_ad_webrtc_queue_locked()
   return JSONResponse({"ok": True, **_genesys_ad_webrtc_queue_status_payload(job)})
+
+
+@app.post("/genesys/ad-webrtc/queue/execute")
+def genesys_ad_webrtc_queue_execute_route(job_id: str = Form("")):
+  clean_job_id = str(job_id or "").strip()
+  with GENESYS_AD_WEBRTC_QUEUE_LOCK:
+    job = GENESYS_AD_WEBRTC_QUEUE_JOBS.get(clean_job_id)
+    if not isinstance(job, dict):
+      return JSONResponse({"ok": False, "error": "Queued job was not found."}, status_code=404)
+    if str(job.get("status", "") or "") != "queued":
+      return JSONResponse({"ok": False, "error": "Only jobs that have not started can be executed now."}, status_code=409)
+    job["scheduled_epoch"] = time.time()
+    job["scheduled_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+    job["execute_now_requested_at"] = job["scheduled_at"]
+    _persist_genesys_ad_webrtc_queue_locked()
+    response_job = dict(job)
+  return JSONResponse({"ok": True, **_genesys_ad_webrtc_queue_status_payload(response_job), "execute_now": True})
 
 
 @app.post("/genesys/users/extract-org-snapshot")
