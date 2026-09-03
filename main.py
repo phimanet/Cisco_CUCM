@@ -5196,13 +5196,25 @@ def _genesys_apply_user_search_update(
         )
         return {"ok": False, "error": "Queue update failed: " + " | ".join(queue_errors)}
 
-    if touched_queue_errors:
+    if touched_queue_errors and not queue_errors:
       logger.warning(
         "genesys queue sync touched-queue verify failed: user_id=%s errors=%s",
         clean_user_id,
         " | ".join(touched_queue_errors),
       )
-      return {"ok": False, "error": "Queue update failed: " + " | ".join(touched_queue_errors)}
+      queues_status = (
+        f"updated with verification warning (added={queue_add_count}, "
+        f"removed={queue_remove_count}, already={queue_existing_count}, target={len(desired_queue_ids)}): "
+        + " | ".join(touched_queue_errors)
+      )
+      return {
+        "ok": True,
+        "region": clean_region,
+        "division_status": division_status,
+        "skills_status": skills_status,
+        "queues_status": queues_status,
+        "queues_warning": " | ".join(touched_queue_errors),
+      }
 
     if queue_errors:
       if verify_queue_err:
