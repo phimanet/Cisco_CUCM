@@ -3749,6 +3749,7 @@ def _genesys_ensure_group_membership(api_base: str, access_token: str, user_id: 
     ok, _, error, status_code = _genesys_send_json(
       "POST",
       api_base,
+      access_token,
       f"/api/v2/groups/{group_id}/members",
       payload=payload,
     )
