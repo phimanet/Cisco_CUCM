@@ -17440,6 +17440,8 @@ def genesys_admin_placeholder(request: Request):
   session = _get_auth_session(request) or {}
   if not session or not str(session.get("username", "") or "").strip():
     return RedirectResponse(url="/genesys-login", status_code=303)
+  if not str(request.query_params.get("panel", "") or "").strip():
+    return RedirectResponse(url="/genesys-admin?panel=genesys-ad-webrtc-panel", status_code=303)
   now_epoch = time.time()
   auth_cucm_host = str(session.get("cucm_host", "") or "").strip()
   auth_user = str(session.get("username", "") or "").strip()
@@ -17714,7 +17716,7 @@ def genesys_admin_placeholder(request: Request):
         <aside class="portal-sidebar">
           <h4>Genesys Menu</h4>
           <button type="button" class="portal-nav-btn active" data-panel-target="genesys-ad-webrtc-panel" onclick="(function(){var id='genesys-ad-webrtc-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Add Genesys User</button>
-          <button type="button" class="portal-nav-btn active" data-panel-target="genesys-user-update-panel" onclick="(function(){var id='genesys-user-update-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Search and Update</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-update-panel" onclick="(function(){var id='genesys-user-update-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Search and Update</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-panel" onclick="(function(){var id='genesys-user-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User WebRTC Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-bulk-email-panel" onclick="(function(){var id='genesys-bulk-email-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Bulk WebRTC build</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-queue-remove-panel" onclick="(function(){var id='genesys-user-queue-remove-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Lookup + Remove (User)</button>
@@ -17723,7 +17725,7 @@ def genesys_admin_placeholder(request: Request):
         </aside>
 
         <section class="portal-main">
-          <div id="genesys-ad-webrtc-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+          <div id="genesys-ad-webrtc-panel" class="panel genesys-panel" style="display:block; margin-top:0;">
             <h3 style="margin-top:0;">Add Genesys User</h3>
             <p style="margin:0 0 10px 0; color:#4e6a84; font-size:12px;">Find an employee, add one Genesys_User_Role security group, choose an optional saved Genesys filter, then queue WebRTC creation for 30 minutes from now.</p>
             <div style="padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#fffdf4;">
@@ -18174,7 +18176,7 @@ def genesys_admin_placeholder(request: Request):
             })();
           </script>
 
-          <div id="genesys-user-update-panel" class="panel genesys-panel" style="display:block; margin-top:0;">
+          <div id="genesys-user-update-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Genesys User Search and Update</h3>
 
             <div style="margin-top:8px; padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f4f9ff;">
