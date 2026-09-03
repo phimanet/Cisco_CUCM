@@ -3759,27 +3759,7 @@ def _genesys_ensure_group_membership(api_base: str, access_token: str, user_id: 
     if ok:
       return True, f"scim_group_write_accepted (group={clean_group_name})"
     add_errors.append(f"{scim_path}: {error_text or f'HTTP {status_code}'}")
-
-  for payload in [
-    [clean_user_id],
-    {"ids": [clean_user_id]},
-    [{"id": clean_user_id}],
-    {"userIds": [clean_user_id]},
-  ]:
-    ok, _, error, status_code = _genesys_send_json(
-      "POST",
-      api_base,
-      access_token,
-      f"/api/v2/groups/{group_id}/members",
-      payload=payload,
-    )
-    error_text = str(error or "").strip()
-    if ok or (int(status_code or 0) == 409 and "already" in error_text.lower()):
-      member_count = detail_payload.get("memberCount", "") if isinstance(detail_payload, dict) else ""
-      return True, f"group_write_accepted (group={clean_group_name}, memberCountBefore={member_count or 'unknown'})"
-    add_errors.append(f"payload={json.dumps(payload)}: {error_text or f'HTTP {status_code}'}")
-
-  return False, "Could not add user to Genesys group '" + clean_group_name + "'. " + " | ".join(add_errors)
+  return False, "SCIM group write failed for '" + clean_group_name + "': " + " | ".join(add_errors)
 
 
 def _genesys_remove_user_from_queue(
