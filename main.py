@@ -11157,7 +11157,7 @@ def _genesys_send_update_completion_email(
 
   try:
     _send_smtp_email(
-      sender="noreply@amnhealthcare.com",
+      sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com",
       recipients=recipient_list,
       subject=subject,
       body=plain_body,
@@ -11166,7 +11166,20 @@ def _genesys_send_update_completion_email(
       use_starttls=SMTP_USE_STARTTLS,
     )
   except Exception as exc:
-    logger.warning("genesys completion email failed for %s (recipients=%s): %s", operation, ",".join(recipient_list), exc)
+    logger.warning(
+      "genesys completion email failed for %s (sender=%s recipients=%s): %s",
+      operation,
+      SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com",
+      ",".join(recipient_list),
+      exc,
+    )
+  else:
+    logger.info(
+      "genesys completion email sent for %s (sender=%s recipients=%s)",
+      operation,
+      SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com",
+      ",".join(recipient_list),
+    )
 
 
 def _normalize_phone_to_e164(phone_number: str) -> str:
