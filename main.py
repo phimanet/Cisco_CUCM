@@ -3742,6 +3742,7 @@ def _genesys_ensure_group_membership(api_base: str, access_token: str, user_id: 
 
   add_errors = []
   for payload in [
+    [clean_user_id],
     {"ids": [clean_user_id]},
     [{"id": clean_user_id}],
     {"userIds": [clean_user_id]},
