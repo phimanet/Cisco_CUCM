@@ -181,7 +181,8 @@ _CHANGE_EXT_TEST_EMAILS: set = {e.strip().lower() for e in (os.getenv("CHANGE_EX
 _CHANGE_EXT_EMAIL_REDIRECT_TO: str = (os.getenv("CHANGE_EXT_EMAIL_REDIRECT_TO", "phimane.tiaokhiao@amnhealthcare.com") or "phimane.tiaokhiao@amnhealthcare.com").strip()
 DN_DELETE_NOTIFY_RECIPIENT = (os.getenv("DN_DELETE_NOTIFY_RECIPIENT", "Laura.Alvarez@amnhealthcare.com") or "Laura.Alvarez@amnhealthcare.com").strip()
 AUDIT_LOG_EMAIL_DOMAIN = (os.getenv("AUDIT_LOG_EMAIL_DOMAIN", "amnhealthcare.com") or "amnhealthcare.com").strip().lstrip("@")
-GENESYS_EMAIL_CC = (os.getenv("GENESYS_EMAIL_CC", "phimane.tiaokhiao@amnealthcare.com") or "phimane.tiaokhiao@amnealthcare.com").strip().lower()
+GENESYS_EMAIL_CC = (os.getenv("GENESYS_EMAIL_CC", "phimane.tiaokhiao@amnhealthcare.com") or "phimane.tiaokhiao@amnhealthcare.com").strip().lower()
+GENESYS_EMAIL_CC = GENESYS_EMAIL_CC.replace("@amnealthcare.com", "@amnhealthcare.com")
 GENESYS_UPDATE_NOTIFY_RECIPIENTS = [
   item.strip()
   for item in (os.getenv("GENESYS_UPDATE_NOTIFY_RECIPIENTS", "") or "").split(",")
@@ -18000,9 +18001,10 @@ def genesys_admin_placeholder(request: Request):
                 var queueStatus = document.getElementById("genesys-ad-queue-status");
                 function renderJobs(jobs) {
                   if (!jobs.length) { jobEl.innerHTML = "<span style='color:#4e6a84;'>No queued jobs.</span>"; return; }
-                  jobEl.innerHTML = "<table><thead><tr><th>Status</th><th>Employee</th><th>AD Groups</th><th>Filter</th><th>Submitted</th><th>Kickoff</th><th>Action</th></tr></thead><tbody>" + jobs.map(function (job) {
+                  jobEl.innerHTML = "<table><thead><tr><th>Status</th><th>Employee</th><th>AD Groups</th><th>Filter</th><th>Email</th><th>Submitted</th><th>Kickoff</th><th>Action</th></tr></thead><tbody>" + jobs.map(function (job) {
                     var action = job.status === "queued" ? "<button type='button' data-execute-job='" + esc(job.job_id) + "' style='background:#2d7a43;padding:5px 9px;'>Execute Now</button> <button type='button' data-cancel-job='" + esc(job.job_id) + "' style='background:#8a2d2d;padding:5px 9px;'>Cancel</button>" : esc(job.error || job.phone_name || "-");
-                    return "<tr><td>" + esc(job.status) + "</td><td>" + esc(job.user_name || job.user_email || job.user_id) + "</td><td>" + esc((job.group_names || [job.group_name]).join(", ")) + "</td><td>" + esc(job.filter_name || "(none)") + "</td><td>" + esc(job.submitted_at || job.created_at) + "</td><td>" + esc(job.scheduled_at) + "</td><td>" + action + "</td></tr>";
+                    var emailText = job.email_status ? (job.email_status + (job.email_recipient ? " to " + job.email_recipient : "") + (job.email_error ? ": " + job.email_error : "")) : "pending";
+                    return "<tr><td>" + esc(job.status) + "</td><td>" + esc(job.user_name || job.user_email || job.user_id) + "</td><td>" + esc((job.group_names || [job.group_name]).join(", ")) + "</td><td>" + esc(job.filter_name || "(none)") + "</td><td>" + esc(emailText) + "</td><td>" + esc(job.submitted_at || job.created_at) + "</td><td>" + esc(job.scheduled_at) + "</td><td>" + action + "</td></tr>";
                   }).join("") + "</tbody></table>";
                   jobEl.querySelectorAll("[data-cancel-job]").forEach(function (button) { button.addEventListener("click", function () { cancelJob(button.getAttribute("data-cancel-job")); }); });
                   jobEl.querySelectorAll("[data-execute-job]").forEach(function (button) { button.addEventListener("click", function () { executeJob(button.getAttribute("data-execute-job")); }); });
