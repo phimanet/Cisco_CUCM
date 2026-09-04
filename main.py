@@ -41952,31 +41952,8 @@ def _update_aerialink_loa_docx(template_bytes: bytes, phone_number: str) -> byte
   return output.getvalue()
 
 
-def _convert_aerialink_loa_docx_to_pdf(docx_bytes: bytes, filename_stem: str) -> bytes:
-  converter = shutil.which("soffice") or shutil.which("libreoffice")
-  if not converter:
-    raise RuntimeError("PDF conversion is unavailable. Install LibreOffice (soffice) on the server and retry.")
-  with tempfile.TemporaryDirectory(prefix="aerialink-loa-") as work_dir:
-    docx_path = os.path.join(work_dir, f"{filename_stem}.docx")
-    with open(docx_path, "wb") as handle:
-      handle.write(docx_bytes)
-    completed = subprocess.run(
-      [converter, "--headless", "--convert-to", "pdf", "--outdir", work_dir, docx_path],
-      capture_output=True,
-      text=True,
-      timeout=90,
-      check=False,
-    )
-    pdf_path = os.path.join(work_dir, f"{filename_stem}.pdf")
-    if completed.returncode != 0 or not os.path.isfile(pdf_path):
-      detail = (completed.stderr or completed.stdout or "No converter output.").strip()
-      raise RuntimeError(f"Word-to-PDF conversion failed: {detail[:500]}")
-    with open(pdf_path, "rb") as handle:
-      return handle.read()
-
-
 @app.post("/sms/aerialink-loa/create")
-async def create_aerialink_loa_pdf_route(request: Request, phone_numbers: str = Form("")):
+async def create_aerialink_loa_docx_route(request: Request, phone_numbers: str = Form("")):
   session = _get_auth_session(request) or {}
   operator = str(session.get("username", "") or "").strip()
   if not operator:
@@ -41994,12 +41971,12 @@ async def create_aerialink_loa_pdf_route(request: Request, phone_numbers: str = 
   with open(template_path, "rb") as handle:
     template_bytes = handle.read()
   try:
-    pdfs = []
+    documents = []
     for number in numbers:
       updated_docx = _update_aerialink_loa_docx(template_bytes, number)
-      pdfs.append((number, _convert_aerialink_loa_docx_to_pdf(updated_docx, f"aerialink_sms_loa_{number}")))
+      documents.append((number, updated_docx))
   except Exception as exc:
-    logger.exception("Aerialink LOA PDF creation failed")
+    logger.exception("Aerialink LOA Word document creation failed")
     return Response(str(exc).encode("utf-8", errors="replace"), status_code=500, media_type="text/plain")
 
   _append_audit_event(
@@ -42007,16 +41984,16 @@ async def create_aerialink_loa_pdf_route(request: Request, phone_numbers: str = 
     cucm_host=str(session.get("cucm_host", "") or ""),
     operator=operator,
     target=f"numbers={','.join(numbers)}",
-    output_filename="aerialink_sms_loa.pdf" if len(pdfs) == 1 else "aerialink_sms_loa_pdfs.zip",
+    output_filename="aerialink_sms_loa.docx" if len(documents) == 1 else "aerialink_sms_loa_documents.zip",
     inline_mode=True,
   )
-  if len(pdfs) == 1:
-    return Response(pdfs[0][1], media_type="application/pdf", headers={"Content-Disposition": f'attachment; filename="aerialink_sms_loa_{pdfs[0][0]}.pdf"'})
+  if len(documents) == 1:
+    return Response(documents[0][1], media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers={"Content-Disposition": f'attachment; filename="aerialink_sms_loa_{documents[0][0]}.docx"'})
   archive = io.BytesIO()
   with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zip_handle:
-    for number, pdf_bytes in pdfs:
-      zip_handle.writestr(f"aerialink_sms_loa_{number}.pdf", pdf_bytes)
-  return Response(archive.getvalue(), media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="aerialink_sms_loa_pdfs.zip"'})
+    for number, document_bytes in documents:
+      zip_handle.writestr(f"aerialink_sms_loa_{number}.docx", document_bytes)
+  return Response(archive.getvalue(), media_type="application/zip", headers={"Content-Disposition": 'attachment; filename="aerialink_sms_loa_documents.zip"'})
 
 
 @app.get("/page3", response_class=HTMLResponse)
@@ -42054,20 +42031,20 @@ def page3_twilio_items(request: Request):
   sms_look_menu_html = ""
   sms_look_panel_html = ""
   sms_experimental_menu_html = ""
-  aerialink_loa_menu_html = '<button type="button" class="portal-nav-btn" data-panel="aerialink-loa-pdf">Create Aerialink SMS LOA PDF</button>'
+  aerialink_loa_menu_html = '<button type="button" class="portal-nav-btn" data-panel="aerialink-loa-docx">Create Aerialink SMS LOA Word Document</button>'
   aerialink_loa_panel_html = """
-        <section class="tool-panel" data-panel="aerialink-loa-pdf">
+        <section class="tool-panel" data-panel="aerialink-loa-docx">
           <div class="panel">
-            <h3>Create Aerialink SMS LOA PDF</h3>
-            <p>Enter one or more SMS numbers and download the completed PDF using the standard Aerialink LOA template. The sample number 9432195134 is replaced and the document date is updated to today.</p>
+            <h3>Create Aerialink SMS LOA Word Document</h3>
+            <p>Enter one or more SMS numbers and download a new Word document using the standard Aerialink LOA template. The sample number 9432195134 is replaced and the document date is updated to today.</p>
             <form method="post" action="/sms/aerialink-loa/create" target="_blank">
               <div style="margin:10px 0;">
                 <label style="display:block; font-weight:700; margin-bottom:5px;">SMS number(s)</label>
                 <textarea name="phone_numbers" rows="5" style="width:100%; max-width:520px; box-sizing:border-box;" placeholder="One 10-digit number per line, or comma-separated" required></textarea>
               </div>
-              <button type="submit" style="background:linear-gradient(180deg,#19743a,#145c2e);">Create and Download PDF</button>
+              <button type="submit" style="background:linear-gradient(180deg,#19743a,#145c2e);">Create and Download Word Document</button>
             </form>
-            <p style="color:#4e6a84; font-size:12px; margin-top:10px;">For multiple numbers, one PDF is created per number and downloaded together as a ZIP file.</p>
+            <p style="color:#4e6a84; font-size:12px; margin-top:10px;">For multiple numbers, one Word document is created per number and downloaded together as a ZIP file.</p>
           </div>
         </section>
 """
