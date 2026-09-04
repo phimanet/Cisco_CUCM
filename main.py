@@ -50882,10 +50882,10 @@ def repair_unity_ldap_integration_lookup_route(
   if not clean_first and not clean_last:
     return JSONResponse({"ok": False, "error": "Enter a first name or last name.", "rows": []}, status_code=400)
   unity_server = _get_unity_server_for_session(request)
-  resolved_user = str(unity_user or session.get("username", "") or "").strip()
-  resolved_pass = str(unity_pass or session.get("unity_pass", "") or session.get("cucm_pass", "") or "").strip()
-  if not unity_server or not resolved_user or not resolved_pass:
-    return JSONResponse({"ok": False, "error": "Unity credentials unavailable. Log in again.", "rows": []}, status_code=400)
+  try:
+    resolved_user, resolved_pass = _resolve_unity_credentials(request, unity_user, unity_pass)
+  except RuntimeError as exc:
+    return JSONResponse({"ok": False, "error": str(exc), "rows": []}, status_code=400)
   clauses = []
   if clean_first:
     clauses.append(f"(FirstName contains {clean_first})")
@@ -50937,10 +50937,10 @@ def repair_unity_ldap_integration_route(
   if not session:
     return HTMLResponse("<h3>401 Unauthorized</h3><p>Please log in first.</p>", status_code=401)
   unity_server = _get_unity_server_for_session(request)
-  resolved_user = str(unity_user or session.get("username", "") or "").strip()
-  resolved_pass = str(unity_pass or session.get("unity_pass", "") or session.get("cucm_pass", "") or "").strip()
-  if not unity_server or not resolved_user or not resolved_pass:
-    return HTMLResponse("<h3>Unity credentials unavailable</h3><p>Log in again so cached Unity credentials are available.</p>", status_code=400)
+  try:
+    resolved_user, resolved_pass = _resolve_unity_credentials(request, unity_user, unity_pass)
+  except RuntimeError as exc:
+    return HTMLResponse(f"<h3>Unity credentials unavailable</h3><p>{escape(str(exc))}</p>", status_code=400)
   data, filename = _repair_unity_ldap_integration(unity_server, resolved_user, resolved_pass, voicemail_user)
   _append_audit_event(
     action="repair_unity_ldap_integration",
