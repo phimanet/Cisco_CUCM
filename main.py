@@ -9071,6 +9071,12 @@ def _genesys_update_batch_job_status_payload(job: dict) -> dict:
 
 def _genesys_ad_webrtc_queue_status_payload(job: dict) -> dict:
   clean_job = dict(job or {})
+  group_names = clean_job.get("group_names", [])
+  if not isinstance(group_names, list):
+    group_names = []
+  group_names = [str(name or "").strip() for name in group_names if str(name or "").strip()]
+  if not group_names and str(clean_job.get("group_name", "") or "").strip():
+    group_names = [str(clean_job.get("group_name", "") or "").strip()]
   return {
     "ok": True,
     "job_id": str(clean_job.get("job_id", "") or "").strip(),
@@ -9085,6 +9091,8 @@ def _genesys_ad_webrtc_queue_status_payload(job: dict) -> dict:
     "user_name": str(clean_job.get("user_name", "") or "").strip(),
     "user_email": str(clean_job.get("user_email", "") or "").strip(),
     "group_name": str(clean_job.get("group_name", "") or "").strip(),
+    "group_name_2": str(clean_job.get("group_name_2", "") or "").strip(),
+    "group_names": group_names,
     "filter_name": str(clean_job.get("filter_name", "") or "").strip(),
     "genesys_user_created": bool(clean_job.get("genesys_user_created", False)),
     "genesys_group_state": str(clean_job.get("genesys_group_state", "") or "").strip(),
@@ -9220,16 +9228,23 @@ def _run_genesys_ad_webrtc_queue_job(job_id: str):
     _genesys_ad_webrtc_queue_update(job_id, user_id=user_id, user_name=user_name)
     _genesys_ad_webrtc_queue_update(job_id, genesys_user_created=bool(genesys_user.get("created_now", False)))
     _, _, api_base = _genesys_region_to_urls(region)
-    group_ok, group_state = _genesys_ensure_group_membership(
-      api_base,
-      token_result.get("access_token", ""),
-      user_id,
-      str(job.get("group_name", "") or "").strip(),
-      user_email=user_email,
-      user_name=user_name,
-    )
-    if not group_ok:
-      raise RuntimeError("Genesys group membership failed: " + str(group_state or "Unknown error."))
+    group_names = job.get("group_names", []) if isinstance(job.get("group_names"), list) else []
+    if not group_names:
+      group_names = [str(job.get("group_name", "") or "").strip()]
+    group_states = []
+    for group_name in group_names:
+      group_ok, group_state = _genesys_ensure_group_membership(
+        api_base,
+        token_result.get("access_token", ""),
+        user_id,
+        str(group_name or "").strip(),
+        user_email=user_email,
+        user_name=user_name,
+      )
+      if not group_ok:
+        raise RuntimeError("Genesys group membership failed for " + str(group_name or "(blank)") + ": " + str(group_state or "Unknown error."))
+      group_states.append(str(group_state or "").strip())
+    group_state = " | ".join(group_states)
     _genesys_ad_webrtc_queue_update(job_id, genesys_group_state=group_state)
     build_result = _genesys_build_webrtc_phone_for_user(region, token_result.get("access_token", ""), user_id, user_name, user_email)
     if not build_result.get("ok"):
@@ -9275,10 +9290,10 @@ def _run_genesys_ad_webrtc_queue_job(job_id: str):
       duration_seconds=max(0.0, time.time() - started_epoch),
       details=[
         f"User: {user_email or user_id}",
-        f"AD group: {job.get('group_name', '')}",
+        f"AD groups: {', '.join(group_names)}",
         f"Division filter: {job.get('filter_name', '') or '(none)'}",
         f"Genesys user: {'Created in AMN division' if genesys_user.get('created_now') else 'Already existed'}",
-        f"Genesys group: {group_state}",
+        f"Genesys groups: {group_state}",
         f"Phone: {phone_name or '(not returned)'}",
       ],
     )
@@ -9312,7 +9327,7 @@ def _run_genesys_ad_webrtc_queue_job(job_id: str):
         f"Job ID: {job_id}",
         f"User: {user_name or user_email or user_id} ({user_email or 'no email'})",
         f"Genesys User ID: {user_id or '(not resolved)'}",
-        f"AD group: {job.get('group_name', '')}",
+        f"AD groups: {', '.join(group_names)}",
         f"Division filter: {job.get('filter_name', '') or '(none)'}",
         f"Submitted: {job.get('created_at', '')}",
         f"Scheduled kickoff: {job.get('scheduled_at', '')}",
@@ -17846,7 +17861,7 @@ def genesys_admin_placeholder(request: Request):
 
           <div id="genesys-ad-webrtc-panel" class="panel genesys-panel" style="display:block; margin-top:0;">
             <h3 style="margin-top:0;">Add Genesys User</h3>
-            <p style="margin:0 0 10px 0; color:#4e6a84; font-size:12px;">Find an employee, add one Genesys_User_Role security group, choose an optional saved Genesys filter, then queue WebRTC creation for 15 minutes from now.</p>
+            <p style="margin:0 0 10px 0; color:#4e6a84; font-size:12px;">Find an employee, add one or two Genesys_User_Role security groups, choose an optional saved Genesys filter, then queue WebRTC creation for 15 minutes from now.</p>
             <div style="padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#fffdf4;">
               <strong>0. Inspect an example employee (lookup only)</strong>
               <div class="search-filter-row" style="margin-top:8px;">
@@ -17871,7 +17886,8 @@ def genesys_admin_placeholder(request: Request):
             <div style="padding:10px; margin-top:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f8fcff;">
               <strong>2. Select AD security group and Genesys filter</strong>
               <div class="search-filter-row" style="margin-top:8px; align-items:flex-end;">
-                <div><label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Genesys_User_Role group</label><select id="genesys-ad-group-select" style="width:360px;"><option value="">Load groups...</option></select></div>
+                <div><label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Genesys_User_Role group 1 *</label><select id="genesys-ad-group-select" style="width:360px;"><option value="">Load groups...</option></select></div>
+                <div><label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Genesys_User_Role group 2 (optional)</label><select id="genesys-ad-group-select-2" style="width:360px;"><option value="">No second group</option></select></div>
                 <button type="button" id="genesys-ad-group-load-btn" style="background:#385977;">Reload Groups</button>
                 <div><label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Saved Genesys filter (optional)</label><select id="genesys-ad-filter-select" style="width:360px;"><option value="">No filter</option></select></div>
                 <button type="button" id="genesys-ad-filter-load-btn" style="background:#385977;">Reload Filters</button>
@@ -17896,6 +17912,7 @@ def genesys_admin_placeholder(request: Request):
                 var selectedUserEl = document.getElementById("genesys-ad-selected-user");
                 var queueBtn = document.getElementById("genesys-ad-queue-btn");
                 var groupSelect = document.getElementById("genesys-ad-group-select");
+                var groupSelect2 = document.getElementById("genesys-ad-group-select-2");
                 var filterSelect = document.getElementById("genesys-ad-filter-select");
                 var jobEl = document.getElementById("genesys-ad-webrtc-job");
                 var exampleResults = document.getElementById("genesys-ad-example-results");
@@ -17918,7 +17935,7 @@ def genesys_admin_placeholder(request: Request):
                 }
                 async function loadGroups() {
                   employeeStatus.textContent = "Loading Genesys_User_Role security groups...";
-                  try { var payload = await jsonFetch("/genesys/ad-webrtc/groups", { method: "POST", body: new FormData() }); groupSelect.innerHTML = "<option value=''>Select a group...</option>" + (payload.groups || []).map(function (row) { return "<option value='" + esc(row.name) + "'>" + esc(row.name) + "</option>"; }).join(""); employeeStatus.textContent = (payload.groups || []).length + " Genesys role group(s) loaded."; } catch (err) { employeeStatus.textContent = "Group lookup failed: " + err.message; }
+                  try { var payload = await jsonFetch("/genesys/ad-webrtc/groups", { method: "POST", body: new FormData() }); var options = (payload.groups || []).map(function (row) { return "<option value='" + esc(row.name) + "'>" + esc(row.name) + "</option>"; }).join(""); groupSelect.innerHTML = "<option value=''>Select a group...</option>" + options; groupSelect2.innerHTML = "<option value=''>No second group</option>" + options; employeeStatus.textContent = (payload.groups || []).length + " Genesys role group(s) loaded."; } catch (err) { employeeStatus.textContent = "Group lookup failed: " + err.message; }
                 }
                 async function loadFilters() {
                   try {
@@ -17948,18 +17965,21 @@ def genesys_admin_placeholder(request: Request):
                   try { var payload = await jsonFetch("/genesys/ad-webrtc/example-lookup", { method: "POST", body: data }); var g = payload.genesys || {}; var groups = (payload.ad_groups || []).map(function (row) { return "<li>" + esc(row.name) + (row.error ? " - " + esc(row.error) : " - member") + "</li>"; }).join("") || "<li>No Genesys-related AD role group found for this employee.</li>"; var filters = (payload.saved_filters || []).map(function (row) { return "<li>" + esc(row.filter_name || row.division_name || row.filter_id) + ": " + (row.matches ? "MATCH" : "does not match") + "</li>"; }).join("") || "<li>No saved filters</li>"; var matching = (payload.matching_saved_filters || []).map(function (name) { return "<li>" + esc(name) + "</li>"; }).join("") || "<li>No saved filter matches this employee.</li>"; var quick = "<div style='display:flex;gap:12px;flex-wrap:wrap;padding:8px;background:#e5f5e9;border:1px solid #6aa77a;border-radius:4px;'><div style='flex:1 1 280px;'><strong>AD Genesys Security Group(s):</strong><ul style='margin:4px 0 0 18px;'>" + groups + "</ul></div><div style='flex:1 1 280px;background:#fff3a6;padding:4px 8px;border-radius:3px;'><strong>Saved Genesys Filter Match:</strong><ul style='margin:4px 0 0 18px;'>" + matching + "</ul></div></div>"; var details = "<details style='margin-top:6px;padding:8px;border:2px solid #b00020;border-radius:6px;background:#ffe6cc;'><summary style='cursor:pointer;font-weight:700;color:#b00020;'>0. Results (lookup only) - expand for full data</summary><div style='margin-top:8px;padding:8px;background:#fff3a6;border:1px solid #d6b656;border-radius:4px;'><div>Genesys User: " + esc(g.name) + " (" + esc(g.email) + ")</div><div>Division: " + esc(g.division_name || g.division_id || "(none)") + "</div><div>Skills: " + esc((g.skill_ids || []).join(", ") || "(none)") + "</div><div>Queues: " + esc((g.queue_ids || []).join(", ") || "(none)") + "</div><details style='margin-top:6px;'><summary style='cursor:pointer;font-weight:700;color:#2c5c8a;'>All saved filter comparisons</summary><ul>" + filters + "</ul></details></div></details>"; exampleOutput.innerHTML = quick + details; setExampleStatus("Example inspection complete. No changes were made."); } catch (err) { setExampleStatus("Example inspection failed: " + err.message); } finally { exampleLookupBtn.disabled = false; }
                 }
                 async function queueBuild() {
-                  if (!selected || !groupSelect.value) { employeeStatus.textContent = "Choose an employee and an AD security group first."; return; }
-                  if (!window.confirm("Add " + groupSelect.value + " to " + (selected.displayname || selected.userid) + " and queue the WebRTC build for 15 minutes from now?")) return;
+                  var secondGroup = groupSelect2.value || "";
+                  if (!selected || !groupSelect.value) { employeeStatus.textContent = "Choose an employee and the first AD security group first."; return; }
+                  if (secondGroup && secondGroup === groupSelect.value) { employeeStatus.textContent = "Choose two different AD security groups."; return; }
+                  var selectedGroups = secondGroup ? groupSelect.value + " and " + secondGroup : groupSelect.value;
+                  if (!window.confirm("Add " + selectedGroups + " to " + (selected.displayname || selected.userid) + " and queue the WebRTC build for 15 minutes from now?")) return;
                   queueBtn.disabled = true; employeeStatus.textContent = "Adding AD membership and creating delayed job...";
-                  var data = new FormData(); data.append("target_user", selected.userid); data.append("user_id", selected.userid); data.append("user_name", selected.displayname || ((selected.firstname || "") + " " + (selected.lastname || "")).trim()); data.append("first_name", selected.firstname || ""); data.append("last_name", selected.lastname || ""); data.append("user_email", selected.email); data.append("group_name", groupSelect.value); data.append("filter_id", filterSelect.value);
+                  var data = new FormData(); data.append("target_user", selected.userid); data.append("user_id", selected.userid); data.append("user_name", selected.displayname || ((selected.firstname || "") + " " + (selected.lastname || "")).trim()); data.append("first_name", selected.firstname || ""); data.append("last_name", selected.lastname || ""); data.append("user_email", selected.email); data.append("group_name", groupSelect.value); data.append("group_name_2", secondGroup); data.append("filter_id", filterSelect.value);
                   try { var payload = await jsonFetch("/genesys/ad-webrtc/queue", { method: "POST", body: data }); employeeStatus.textContent = "AD membership confirmed. WebRTC build queued."; await refreshQueue(); pollJob(payload.job_id); } catch (err) { employeeStatus.textContent = "Queue failed: " + err.message; queueBtn.disabled = false; }
                 }
                 var queueStatus = document.getElementById("genesys-ad-queue-status");
                 function renderJobs(jobs) {
                   if (!jobs.length) { jobEl.innerHTML = "<span style='color:#4e6a84;'>No queued jobs.</span>"; return; }
-                  jobEl.innerHTML = "<table><thead><tr><th>Status</th><th>Employee</th><th>AD Group</th><th>Filter</th><th>Submitted</th><th>Kickoff</th><th>Action</th></tr></thead><tbody>" + jobs.map(function (job) {
+                  jobEl.innerHTML = "<table><thead><tr><th>Status</th><th>Employee</th><th>AD Groups</th><th>Filter</th><th>Submitted</th><th>Kickoff</th><th>Action</th></tr></thead><tbody>" + jobs.map(function (job) {
                     var action = job.status === "queued" ? "<button type='button' data-execute-job='" + esc(job.job_id) + "' style='background:#2d7a43;padding:5px 9px;'>Execute Now</button> <button type='button' data-cancel-job='" + esc(job.job_id) + "' style='background:#8a2d2d;padding:5px 9px;'>Cancel</button>" : esc(job.error || job.phone_name || "-");
-                    return "<tr><td>" + esc(job.status) + "</td><td>" + esc(job.user_name || job.user_email || job.user_id) + "</td><td>" + esc(job.group_name) + "</td><td>" + esc(job.filter_name || "(none)") + "</td><td>" + esc(job.submitted_at || job.created_at) + "</td><td>" + esc(job.scheduled_at) + "</td><td>" + action + "</td></tr>";
+                    return "<tr><td>" + esc(job.status) + "</td><td>" + esc(job.user_name || job.user_email || job.user_id) + "</td><td>" + esc((job.group_names || [job.group_name]).join(", ")) + "</td><td>" + esc(job.filter_name || "(none)") + "</td><td>" + esc(job.submitted_at || job.created_at) + "</td><td>" + esc(job.scheduled_at) + "</td><td>" + action + "</td></tr>";
                   }).join("") + "</tbody></table>";
                   jobEl.querySelectorAll("[data-cancel-job]").forEach(function (button) { button.addEventListener("click", function () { cancelJob(button.getAttribute("data-cancel-job")); }); });
                   jobEl.querySelectorAll("[data-execute-job]").forEach(function (button) { button.addEventListener("click", function () { executeJob(button.getAttribute("data-execute-job")); }); });
@@ -23585,6 +23605,7 @@ def genesys_ad_webrtc_queue_route(
   first_name: str = Form(""),
   last_name: str = Form(""),
   group_name: str = Form(""),
+  group_name_2: str = Form(""),
   filter_id: str = Form(""),
   cucm_host: str = Form(""),
   cucm_user: str = Form(""),
@@ -23593,25 +23614,30 @@ def genesys_ad_webrtc_queue_route(
   resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
   clean_target = str(target_user or "").strip()
   clean_group = str(group_name or "").strip()
+  clean_group_2 = str(group_name_2 or "").strip()
+  clean_groups = [group for group in (clean_group, clean_group_2) if group]
   clean_email = str(user_email or "").strip().lower()
   clean_user_id = str(user_id or clean_target).strip()
   if not clean_target or not clean_group:
-    return JSONResponse({"ok": False, "error": "Employee and AD group are required."}, status_code=400)
+    return JSONResponse({"ok": False, "error": "Employee and the first AD group are required."}, status_code=400)
+  if clean_group_2 and clean_group_2 == clean_group:
+    return JSONResponse({"ok": False, "error": "The two AD security groups must be different."}, status_code=400)
   if (not clean_email or "@" not in clean_email) and resolved_host and resolved_user and resolved_pass:
     clean_email = lookup_person_email_by_userid(resolved_host, resolved_user, resolved_pass, clean_target).strip().lower()
   if not clean_email or "@" not in clean_email:
     return JSONResponse({"ok": False, "error": "Could not find a valid email for the selected employee."}, status_code=400)
-  if not clean_group.lower().startswith("genesys_user_role"):
+  if any(not group.lower().startswith("genesys_user_role") for group in clean_groups):
     return JSONResponse({"ok": False, "error": "Only Genesys_User_Role security groups may be selected."}, status_code=400)
 
-  membership_ok, membership_result, membership_error = manage_ad_group_membership(
-    clean_target,
-    clean_group,
-    "add",
-    auth_context={"username": resolved_user, "password": resolved_pass},
-  )
-  if not membership_ok or not isinstance(membership_result, dict) or not membership_result.get("isMember"):
-    return JSONResponse({"ok": False, "error": membership_error or "AD group membership could not be confirmed."}, status_code=400)
+  for selected_group in clean_groups:
+    membership_ok, membership_result, membership_error = manage_ad_group_membership(
+      clean_target,
+      selected_group,
+      "add",
+      auth_context={"username": resolved_user, "password": resolved_pass},
+    )
+    if not membership_ok or not isinstance(membership_result, dict) or not membership_result.get("isMember"):
+      return JSONResponse({"ok": False, "error": f"AD group membership could not be confirmed for {selected_group}: {membership_error or 'Unknown error.'}"}, status_code=400)
 
   selected_filter = {}
   clean_filter_id = str(filter_id or "").strip()
@@ -23644,6 +23670,8 @@ def genesys_ad_webrtc_queue_route(
     "last_name": str(last_name or "").strip(),
     "user_email": clean_email,
     "group_name": clean_group,
+    "group_name_2": clean_group_2,
+    "group_names": clean_groups,
     "filter_name": str(selected_filter.get("filter_name", "") or selected_filter.get("division_name", "") or "").strip(),
     "filter": selected_filter,
   }
@@ -23657,7 +23685,7 @@ def genesys_ad_webrtc_queue_route(
     action="genesys_ad_group_webrtc_queued",
     cucm_host=resolved_host,
     operator=resolved_user,
-    target=f"{clean_target};group={clean_group};filter={job['filter_name'] or '(none)'};job={job_id}",
+    target=f"{clean_target};groups={', '.join(clean_groups)};filter={job['filter_name'] or '(none)'};job={job_id}",
     output_filename="",
     inline_mode=True,
     account=clean_email,
