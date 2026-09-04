@@ -9113,18 +9113,18 @@ def _persist_genesys_ad_webrtc_queue_locked():
     key=lambda job: float(job.get("created_epoch", 0) or 0),
     reverse=True,
   )[:max(1, GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS)]
-  payload = {
-    "version": 1,
-    "jobs": [job for job in GENESYS_AD_WEBRTC_QUEUE_JOBS.values() if isinstance(job, dict)],
-  }
   history_payload = {"version": 1, "jobs": history_jobs}
+  active_jobs = [
+    job for job in GENESYS_AD_WEBRTC_QUEUE_JOBS.values()
+    if isinstance(job, dict) and str(job.get("status", "") or "").strip() in {"queued", "running"}
+  ]
   try:
     parent = os.path.dirname(GENESYS_AD_WEBRTC_QUEUE_PATH)
     if parent:
       os.makedirs(parent, exist_ok=True)
     temp_path = GENESYS_AD_WEBRTC_QUEUE_PATH + ".tmp"
     with open(temp_path, "w", encoding="utf-8") as handle:
-      json.dump(payload, handle, indent=2)
+      json.dump({"version": 1, "jobs": active_jobs}, handle, indent=2)
     os.replace(temp_path, GENESYS_AD_WEBRTC_QUEUE_PATH)
     history_temp_path = GENESYS_AD_WEBRTC_QUEUE_HISTORY_PATH + ".tmp"
     with open(history_temp_path, "w", encoding="utf-8") as handle:
@@ -9160,8 +9160,11 @@ def _load_genesys_ad_webrtc_queue():
         if str(job.get("status", "") or "") in {"queued", "running"}:
           job["status"] = "queued"
           job.pop("started_at", None)
-        GENESYS_AD_WEBRTC_QUEUE_JOBS[str(job["job_id"]).strip()] = job
-        GENESYS_AD_WEBRTC_QUEUE_HISTORY[str(job["job_id"]).strip()] = dict(job)
+        clean_job_id = str(job["job_id"]).strip()
+        if str(job.get("status", "") or "").strip() in {"queued", "running"}:
+          GENESYS_AD_WEBRTC_QUEUE_JOBS[clean_job_id] = job
+        else:
+          GENESYS_AD_WEBRTC_QUEUE_HISTORY[clean_job_id] = dict(job)
       if len(GENESYS_AD_WEBRTC_QUEUE_JOBS) > max(1, GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS):
         ordered = sorted(GENESYS_AD_WEBRTC_QUEUE_JOBS.items(), key=lambda item: float(item[1].get("created_epoch", 0) or 0), reverse=True)
         GENESYS_AD_WEBRTC_QUEUE_JOBS.clear()
