@@ -9360,6 +9360,7 @@ def _start_genesys_ad_webrtc_queue_worker():
             break
       if due_job_id:
         _run_genesys_ad_webrtc_queue_job(due_job_id)
+        time.sleep(5)
       else:
         time.sleep(5)
 
