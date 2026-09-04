@@ -17894,6 +17894,9 @@ def genesys_admin_placeholder(request: Request):
                 <button type="button" id="genesys-ad-filter-load-btn" style="background:#385977;">Reload Filters</button>
               </div>
               <div id="genesys-ad-selected-user" style="margin-top:8px; color:#2c5c8a;">No employee selected.</div>
+            </div>
+            <div style="padding:10px; margin-top:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f4f9ff;">
+              <strong>3. Queue WebRTC build</strong>
               <button type="button" id="genesys-ad-queue-btn" style="margin-top:10px; background:#2d7a43;" disabled>Add Group + Queue WebRTC Build</button>
             </div>
             <p id="genesys-ad-webrtc-status" style="color:#2c5c8a; min-height:18px; margin-top:10px;">Ready.</p>
