@@ -523,7 +523,7 @@ GENESYS_AD_WEBRTC_QUEUE_JOBS = {}
 GENESYS_AD_WEBRTC_QUEUE_HISTORY = {}
 GENESYS_AD_WEBRTC_QUEUE_LOCK = threading.Lock()
 GENESYS_AD_WEBRTC_QUEUE_WORKER_STARTED = False
-GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS = int((os.getenv("GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS", "900") or "900").strip())
+GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS = int((os.getenv("GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS", "600") or "600").strip())
 GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS = min(60, max(1, int((os.getenv("GENESYS_AD_WEBRTC_QUEUE_MAX_JOBS", "60") or "60").strip())))
 _genesys_queue_data_root = (os.getenv("GENESYS_AD_WEBRTC_QUEUE_DATA_DIR", "") or "").strip()
 if not _genesys_queue_data_root:
@@ -17861,7 +17861,7 @@ def genesys_admin_placeholder(request: Request):
 
           <div id="genesys-ad-webrtc-panel" class="panel genesys-panel" style="display:block; margin-top:0;">
             <h3 style="margin-top:0;">Add Genesys User</h3>
-            <p style="margin:0 0 10px 0; color:#4e6a84; font-size:12px;">Find an employee, add one or two Genesys_User_Role security groups, choose an optional saved Genesys filter, then queue WebRTC creation for 15 minutes from now.</p>
+            <p style="margin:0 0 10px 0; color:#4e6a84; font-size:12px;">Find an employee, add one or two Genesys_User_Role security groups, choose an optional saved Genesys filter, then queue WebRTC creation for 10 minutes from now.</p>
             <div style="padding:10px; border:1px solid #d7e3ee; border-radius:8px; background:#fffdf4;">
               <strong>0. Inspect an example employee (lookup only)</strong>
               <div class="search-filter-row" style="margin-top:8px;">
@@ -17921,6 +17921,22 @@ def genesys_admin_placeholder(request: Request):
                 var exampleStatus = document.getElementById("genesys-ad-example-status");
                 function esc(value) { return String(value || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
                 function setExampleStatus(message) { if (exampleStatus) exampleStatus.textContent = String(message || ""); }
+                async function autoSelectExampleMatches() {
+                  if (!exampleSelected) return;
+                  var data = new FormData(); data.append("target_user", exampleSelected.userid); data.append("user_email", exampleSelected.email); data.append("first_name", exampleSelected.firstname || ""); data.append("last_name", exampleSelected.lastname || "");
+                  try {
+                    var payload = await jsonFetch("/genesys/ad-webrtc/example-lookup", { method: "POST", body: data });
+                    var matchingGroups = (payload.ad_groups || []).map(function (row) { return String(row.name || "").trim(); }).filter(function (name) { return name; });
+                    if (groupSelect.options.length <= 1 || filterSelect.options.length <= 1) { window.setTimeout(autoSelectExampleMatches, 250); return; }
+                    var availableGroups = matchingGroups.filter(function (name) { return Array.prototype.some.call(groupSelect.options, function (option) { return option.value === name; }); });
+                    if (availableGroups.length) groupSelect.value = availableGroups[0];
+                    if (availableGroups.length > 1) groupSelect2.value = availableGroups[1];
+                    var matchingFilter = (payload.saved_filters || []).filter(function (row) { return row.matches; })[0];
+                    var matchingFilterId = matchingFilter ? String(matchingFilter.filter_id || matchingFilter.division_id || "").trim() : "";
+                    if (matchingFilterId && Array.prototype.some.call(filterSelect.options, function (option) { return option.value === matchingFilterId; })) filterSelect.value = matchingFilterId;
+                    if (availableGroups.length || matchingFilterId) employeeStatus.textContent = "Example matches applied to section 2.";
+                  } catch (err) { employeeStatus.textContent = "Example match auto-selection failed: " + err.message; }
+                }
                 async function jsonFetch(url, options) {
                   var response = await fetch(url, options || {});
                   var payload = await response.json();
@@ -17969,7 +17985,7 @@ def genesys_admin_placeholder(request: Request):
                   if (!selected || !groupSelect.value) { employeeStatus.textContent = "Choose an employee and the first AD security group first."; return; }
                   if (secondGroup && secondGroup === groupSelect.value) { employeeStatus.textContent = "Choose two different AD security groups."; return; }
                   var selectedGroups = secondGroup ? groupSelect.value + " and " + secondGroup : groupSelect.value;
-                  if (!window.confirm("Add " + selectedGroups + " to " + (selected.displayname || selected.userid) + " and queue the WebRTC build for 15 minutes from now?")) return;
+                  if (!window.confirm("Add " + selectedGroups + " to " + (selected.displayname || selected.userid) + " and queue the WebRTC build for 10 minutes from now?")) return;
                   queueBtn.disabled = true; employeeStatus.textContent = "Adding AD membership and creating delayed job...";
                   var data = new FormData(); data.append("target_user", selected.userid); data.append("user_id", selected.userid); data.append("user_name", selected.displayname || ((selected.firstname || "") + " " + (selected.lastname || "")).trim()); data.append("first_name", selected.firstname || ""); data.append("last_name", selected.lastname || ""); data.append("user_email", selected.email); data.append("group_name", groupSelect.value); data.append("group_name_2", secondGroup); data.append("filter_id", filterSelect.value);
                   try { var payload = await jsonFetch("/genesys/ad-webrtc/queue", { method: "POST", body: data }); employeeStatus.textContent = "AD membership confirmed. WebRTC build queued."; await refreshQueue(); pollJob(payload.job_id); } catch (err) { employeeStatus.textContent = "Queue failed: " + err.message; queueBtn.disabled = false; }
@@ -17990,6 +18006,7 @@ def genesys_admin_placeholder(request: Request):
                 async function pollJob(jobId) { try { var job = await jsonFetch("/genesys/ad-webrtc/queue/status?job_id=" + encodeURIComponent(jobId)); refreshQueue(); if (job.status === "queued" || job.status === "running") { window.setTimeout(function () { pollJob(jobId); }, 10000); } else { employeeStatus.textContent = job.status === "completed" ? "Genesys WebRTC build and filter application completed. Completion email sent to the submitter." : (job.status === "cancelled" ? "Queued job cancelled." : "Queued Genesys build failed: " + (job.error || "Unknown error.")); queueBtn.disabled = false; } } catch (err) { employeeStatus.textContent = "Job status lookup failed: " + err.message; queueBtn.disabled = false; } }
                 document.getElementById("genesys-ad-employee-search-btn").addEventListener("click", searchEmployees);
                 document.getElementById("genesys-ad-example-search-btn").addEventListener("click", searchExampleEmployees);
+                exampleResults.addEventListener("click", function (event) { if (event.target && event.target.matches("[data-example-index]")) window.setTimeout(autoSelectExampleMatches, 0); });
                 exampleLookupBtn.addEventListener("click", inspectExample);
                 document.getElementById("genesys-ad-group-load-btn").addEventListener("click", loadGroups);
                 document.getElementById("genesys-ad-filter-load-btn").addEventListener("click", loadFilters);
@@ -23653,7 +23670,7 @@ def genesys_ad_webrtc_queue_route(
 
   now_epoch = time.time()
   job_id = str(uuid4())
-  scheduled_epoch = now_epoch + max(900, int(GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS or 900))
+  scheduled_epoch = now_epoch + max(600, int(GENESYS_AD_WEBRTC_QUEUE_DELAY_SECONDS or 600))
   job = {
     "job_id": job_id,
     "status": "queued",
