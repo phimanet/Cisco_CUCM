@@ -28913,10 +28913,10 @@ __ADMIN_CARD__
             var response = await fetch("/repair/unity-ldap-integration/lookup", { method: "POST", body: formData, credentials: "same-origin" });
             var payload = await response.json();
             if (!response.ok || !payload.ok) throw new Error(payload.error || "Employee lookup failed.");
-            var rows = payload.results || [];
-            results.innerHTML = rows.length ? "<table><thead><tr><th>Select</th><th>Name</th><th>Alias</th><th>Extension</th><th>Email</th></tr></thead><tbody>" + rows.map(function (row, index) { return "<tr><td><button type='button' data-ldap-person-index='" + index + "' style='padding:5px 9px;'>Select</button></td><td>" + esc(row.display_name || row.displayname || row.alias) + "</td><td>" + esc(row.alias) + "</td><td>" + esc(row.extension || "-") + "</td><td>" + esc(row.email || "-") + "</td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No Unity Connection users found.</span>";
+            var rows = payload.rows || payload.results || [];
+            results.innerHTML = rows.length ? "<table><thead><tr><th>Select</th><th>Name</th><th>CallManager User ID</th><th>Unity Alias</th><th>Extension</th><th>Email</th></tr></thead><tbody>" + rows.map(function (row, index) { return "<tr><td><button type='button' data-ldap-person-index='" + index + "' style='padding:5px 9px;'>Select</button></td><td>" + esc(row.display_name || row.displayname || row.alias) + "</td><td>" + esc(row.callmanager_userid || "-") + "</td><td>" + esc(row.alias) + "</td><td>" + esc(row.extension || "-") + "</td><td>" + esc(row.email || "-") + "</td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No Unity Connection users matched the CallManager voicemail extension.</span>";
             status.textContent = rows.length + " employee(s) found. Select one to repair.";
-            results.querySelectorAll("[data-ldap-person-index]").forEach(function (button) { button.addEventListener("click", function () { var row = rows[Number(button.getAttribute("data-ldap-person-index"))] || {}; var alias = String(row.alias || "").trim(); aliasInput.value = alias; selected.textContent = alias ? "Selected Unity user: " + (row.display_name || row.displayname || alias) + " | Alias: " + alias : "No employee selected."; selected.style.background = alias ? "#dff3e5" : "#eef4f8"; selected.style.borderColor = alias ? "#2d7a43" : "#b9cede"; repairButton.disabled = !alias; }); });
+            results.querySelectorAll("[data-ldap-person-index]").forEach(function (button) { button.addEventListener("click", function () { var row = rows[Number(button.getAttribute("data-ldap-person-index"))] || {}; var alias = String(row.alias || "").trim(); aliasInput.value = alias; selected.textContent = alias ? "Selected Unity user: " + (row.display_name || row.displayname || alias) + " | CallManager User ID: " + (row.callmanager_userid || "-") + " | Unity Alias: " + alias : "No employee selected."; selected.style.background = alias ? "#dff3e5" : "#eef4f8"; selected.style.borderColor = alias ? "#2d7a43" : "#b9cede"; repairButton.disabled = !alias; }); });
           } catch (error) { status.textContent = "Employee lookup failed: " + error.message; }
         });
       })();
@@ -50919,6 +50919,8 @@ def repair_unity_ldap_integration_lookup_route(
       for user in unity_by_extension.get(extension, []):
         rows.append({
           "alias": str(user.get("Alias", "") or "").strip(),
+          "callmanager_userid": str(person.get("userid", "") or "").strip(),
+          "callmanager_extension": extension,
           "first_name": str(user.get("FirstName", "") or person.get("firstname", "") or "").strip(),
           "last_name": str(user.get("LastName", "") or person.get("lastname", "") or "").strip(),
           "display_name": str(user.get("DisplayName", "") or person.get("displayname", "") or "").strip(),
