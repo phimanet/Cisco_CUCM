@@ -28910,13 +28910,13 @@ __ADMIN_CARD__
           var formData = new FormData(lookupForm);
           status.textContent = "Searching CUCM employees..."; results.innerHTML = ""; repairButton.disabled = true; aliasInput.value = "";
           try {
-            var response = await fetch("/lookup/person", { method: "POST", body: formData, credentials: "same-origin" });
+            var response = await fetch("/repair/unity-ldap-integration/lookup", { method: "POST", body: formData, credentials: "same-origin" });
             var payload = await response.json();
             if (!response.ok || !payload.ok) throw new Error(payload.error || "Employee lookup failed.");
             var rows = payload.results || [];
-            results.innerHTML = rows.length ? "<table><thead><tr><th>Select</th><th>Name</th><th>User ID</th><th>Email</th></tr></thead><tbody>" + rows.map(function (row, index) { return "<tr><td><button type='button' data-ldap-person-index='" + index + "' style='padding:5px 9px;'>Select</button></td><td>" + esc(row.display_name || row.displayname || row.userid) + "</td><td>" + esc(row.userid) + "</td><td>" + esc(row.email || row.mailid) + "</td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No employees found.</span>";
+            results.innerHTML = rows.length ? "<table><thead><tr><th>Select</th><th>Name</th><th>Alias</th><th>Extension</th><th>Email</th></tr></thead><tbody>" + rows.map(function (row, index) { return "<tr><td><button type='button' data-ldap-person-index='" + index + "' style='padding:5px 9px;'>Select</button></td><td>" + esc(row.display_name || row.displayname || row.alias) + "</td><td>" + esc(row.alias) + "</td><td>" + esc(row.extension || "-") + "</td><td>" + esc(row.email || "-") + "</td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No Unity Connection users found.</span>";
             status.textContent = rows.length + " employee(s) found. Select one to repair.";
-            results.querySelectorAll("[data-ldap-person-index]").forEach(function (button) { button.addEventListener("click", function () { var row = rows[Number(button.getAttribute("data-ldap-person-index"))] || {}; var alias = String(row.userid || "").trim(); aliasInput.value = alias; selected.textContent = alias ? "Selected employee: " + (row.display_name || row.displayname || alias) + " | Voicemail username: " + alias : "No employee selected."; selected.style.background = alias ? "#dff3e5" : "#eef4f8"; selected.style.borderColor = alias ? "#2d7a43" : "#b9cede"; repairButton.disabled = !alias; }); });
+            results.querySelectorAll("[data-ldap-person-index]").forEach(function (button) { button.addEventListener("click", function () { var row = rows[Number(button.getAttribute("data-ldap-person-index"))] || {}; var alias = String(row.alias || "").trim(); aliasInput.value = alias; selected.textContent = alias ? "Selected Unity user: " + (row.display_name || row.displayname || alias) + " | Alias: " + alias : "No employee selected."; selected.style.background = alias ? "#dff3e5" : "#eef4f8"; selected.style.borderColor = alias ? "#2d7a43" : "#b9cede"; repairButton.disabled = !alias; }); });
           } catch (error) { status.textContent = "Employee lookup failed: " + error.message; }
         });
       })();
@@ -50864,6 +50864,66 @@ def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pas
   except Exception as exc:
     writer.writerow(["Repair", "Failed", str(exc)])
   return output.getvalue().encode("utf-8"), filename
+
+
+@app.post("/repair/unity-ldap-integration/lookup")
+def repair_unity_ldap_integration_lookup_route(
+  request: Request,
+  first_name: str = Form(""),
+  last_name: str = Form(""),
+  unity_user: str = Form(""),
+  unity_pass: str = Form(""),
+):
+  session = _get_auth_session(request) or {}
+  if not session:
+    return JSONResponse({"ok": False, "error": "Authentication required.", "rows": []}, status_code=401)
+  clean_first = str(first_name or "").strip()
+  clean_last = str(last_name or "").strip()
+  if not clean_first and not clean_last:
+    return JSONResponse({"ok": False, "error": "Enter a first name or last name.", "rows": []}, status_code=400)
+  unity_server = _get_unity_server_for_session(request)
+  resolved_user = str(unity_user or session.get("username", "") or "").strip()
+  resolved_pass = str(unity_pass or session.get("unity_pass", "") or session.get("cucm_pass", "") or "").strip()
+  if not unity_server or not resolved_user or not resolved_pass:
+    return JSONResponse({"ok": False, "error": "Unity credentials unavailable. Log in again.", "rows": []}, status_code=400)
+  clauses = []
+  if clean_first:
+    clauses.append(f"(FirstName contains {clean_first})")
+  if clean_last:
+    clauses.append(f"(LastName contains {clean_last})")
+  query = " AND ".join(clauses)
+  try:
+    response = requests.get(
+      f"https://{unity_server}/vmrest/users",
+      headers={"Accept": "application/json"},
+      params={"query": query, "rowsPerPage": "100"},
+      auth=HTTPBasicAuth(resolved_user, resolved_pass),
+      verify=False,
+      timeout=60,
+    )
+    if response.status_code != 200:
+      return JSONResponse({"ok": False, "error": f"Unity lookup failed HTTP {response.status_code}: {response.text[:300]}", "rows": []}, status_code=400)
+    payload = response.json() if response.text else {}
+    users = payload.get("User", payload.get("Users", [])) if isinstance(payload, dict) else []
+    if isinstance(users, dict):
+      users = [users]
+    rows = []
+    for user in users or []:
+      alias = str(user.get("Alias", "") or "").strip()
+      if not alias:
+        continue
+      rows.append({
+        "alias": alias,
+        "first_name": str(user.get("FirstName", "") or "").strip(),
+        "last_name": str(user.get("LastName", "") or "").strip(),
+        "display_name": str(user.get("DisplayName", "") or "").strip(),
+        "extension": str(user.get("DtmfAccessId", "") or "").strip(),
+        "email": str(user.get("EmailAddress", "") or "").strip(),
+      })
+    rows.sort(key=lambda row: (row["last_name"].lower(), row["first_name"].lower(), row["alias"].lower()))
+    return JSONResponse({"ok": True, "rows": rows})
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": f"Unity lookup failed: {exc}", "rows": []}, status_code=400)
 
 
 @app.post("/repair/unity-ldap-integration")
