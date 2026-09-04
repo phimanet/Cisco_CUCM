@@ -28879,6 +28879,10 @@ __ADMIN_CARD__
 
     <section class="tool-panel" data-panel="ldap-connection-issue">
     <h3>Jabber Voicemail Connection Issue</h3>
+    <figure style="margin:0 0 14px 0; padding:10px; background:#fff; border:1px solid #c8dbee; border-radius:8px; max-width:900px;">
+      <img src="/templates/jabber_voicemail_connection_issue.png" alt="Example Jabber voicemail connection issue showing Contact your administrator" style="display:block; width:100%; max-width:860px; height:auto; border:1px solid #d7e3ee; border-radius:4px;">
+      <figcaption style="margin-top:6px; color:#4e6a84; font-size:12px;">Example issue: Jabber Call Voicemail displays "Contact your administrator."</figcaption>
+    </figure>
     <p>Use this repair when a Unity voicemail box reports a connection or LDAP integration issue. The mailbox is saved as Do Not Integrate with LDAP Directory, then saved back as Integrate with LDAP Directory.</p>
     <form id="ldap-connection-issue-lookup-form" class="secondary-form" action="javascript:void(0)" method="post">
       <input type="hidden" name="unity_user" value="__AUTH_USER__">
@@ -44021,6 +44025,19 @@ def page3_twilio_items(request: Request):
       "Expires": "0",
     },
   )
+
+
+@app.get("/templates/jabber_voicemail_connection_issue.png")
+def jabber_voicemail_connection_issue_image(request: Request):
+  if not _get_auth_session(request):
+    return Response(b"Authentication required.", status_code=401, media_type="text/plain")
+  image_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "jabber_voicemail_connection_issue.png")
+  try:
+    with open(image_path, "rb") as handle:
+      image_data = handle.read()
+  except OSError:
+    return Response(b"Image not found.", status_code=404, media_type="text/plain")
+  return Response(image_data, media_type="image/png", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/sip-call-search", response_class=HTMLResponse)
