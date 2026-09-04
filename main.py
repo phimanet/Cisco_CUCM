@@ -28887,7 +28887,7 @@ __ADMIN_CARD__
       <div class="compact-inline-row"><span>First Name:</span><input name="first_name" placeholder="John"></div><br>
       <div class="action-row"><button id="ldap-connection-issue-search-btn" type="submit">Search Users</button><span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span></div>
     </form>
-    <p id="ldap-connection-issue-status" class="secondary-status">Search by first and last name, then select the person whose voicemail box needs repair.</p>
+    <p id="ldap-connection-issue-status" class="secondary-status">Search CallManager by first and last name, then select the matching Unity voicemail box.</p>
     <div id="ldap-connection-issue-results" style="overflow-x:auto;"></div>
     <form id="ldap-connection-issue-form" class="secondary-form" action="/repair/unity-ldap-integration" method="post" style="margin-top:12px;">
       <input type="hidden" name="unity_user" value="__AUTH_USER__">
@@ -28908,7 +28908,7 @@ __ADMIN_CARD__
         lookupForm.addEventListener("submit", async function (event) {
           event.preventDefault();
           var formData = new FormData(lookupForm);
-          status.textContent = "Searching CUCM employees..."; results.innerHTML = ""; repairButton.disabled = true; aliasInput.value = "";
+            status.textContent = "Searching CallManager, then matching Unity voicemail boxes..."; results.innerHTML = ""; repairButton.disabled = true; aliasInput.value = "";
           try {
             var response = await fetch("/repair/unity-ldap-integration/lookup", { method: "POST", body: formData, credentials: "same-origin" });
             var payload = await response.json();
@@ -50883,20 +50883,16 @@ def repair_unity_ldap_integration_lookup_route(
     return JSONResponse({"ok": False, "error": "Enter a first name or last name.", "rows": []}, status_code=400)
   unity_server = _get_unity_server_for_session(request)
   try:
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
     resolved_user, resolved_pass = _resolve_unity_credentials(request, unity_user, unity_pass)
   except RuntimeError as exc:
     return JSONResponse({"ok": False, "error": str(exc), "rows": []}, status_code=400)
-  clauses = []
-  if clean_first:
-    clauses.append(f"(FirstName contains {clean_first})")
-  if clean_last:
-    clauses.append(f"(LastName contains {clean_last})")
-  query = " AND ".join(clauses)
   try:
+    cucm_people = search_persons_by_name(cucm_host, cucm_user, cucm_pass, clean_last, clean_first)
     response = requests.get(
       f"https://{unity_server}/vmrest/users",
       headers={"Accept": "application/json"},
-      params={"query": query, "rowsPerPage": "100"},
+      params={"rowsPerPage": "1000"},
       auth=HTTPBasicAuth(resolved_user, resolved_pass),
       verify=False,
       timeout=60,
@@ -50907,19 +50903,28 @@ def repair_unity_ldap_integration_lookup_route(
     users = payload.get("User", payload.get("Users", [])) if isinstance(payload, dict) else []
     if isinstance(users, dict):
       users = [users]
-    rows = []
+    unity_by_extension = {}
     for user in users or []:
       alias = str(user.get("Alias", "") or "").strip()
       if not alias:
         continue
-      rows.append({
-        "alias": alias,
-        "first_name": str(user.get("FirstName", "") or "").strip(),
-        "last_name": str(user.get("LastName", "") or "").strip(),
-        "display_name": str(user.get("DisplayName", "") or "").strip(),
-        "extension": str(user.get("DtmfAccessId", "") or "").strip(),
-        "email": str(user.get("EmailAddress", "") or "").strip(),
-      })
+      extension = re.sub(r"\D", "", str(user.get("DtmfAccessId", "") or "").strip())
+      if extension:
+        unity_by_extension.setdefault(extension, []).append(user)
+    rows = []
+    for person in cucm_people or []:
+      extension = re.sub(r"\D", "", str(person.get("voicemail_extension", "") or person.get("primary_extension", "") or "").strip())
+      if not extension:
+        continue
+      for user in unity_by_extension.get(extension, []):
+        rows.append({
+          "alias": str(user.get("Alias", "") or "").strip(),
+          "first_name": str(user.get("FirstName", "") or person.get("firstname", "") or "").strip(),
+          "last_name": str(user.get("LastName", "") or person.get("lastname", "") or "").strip(),
+          "display_name": str(user.get("DisplayName", "") or person.get("displayname", "") or "").strip(),
+          "extension": str(user.get("DtmfAccessId", "") or extension).strip(),
+          "email": str(user.get("EmailAddress", "") or person.get("email", "") or "").strip(),
+        })
     rows.sort(key=lambda row: (row["last_name"].lower(), row["first_name"].lower(), row["alias"].lower()))
     return JSONResponse({"ok": True, "rows": rows})
   except Exception as exc:
