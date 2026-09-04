@@ -27112,6 +27112,7 @@ __ADMIN_CARD__
         <div class="portal-nav">
           <button type="button" class="portal-nav-btn start-here-btn active" data-panel="personlookup">Start Here!<br>Employee Lookup By Name</button>
           <button type="button" class="portal-nav-btn" data-panel="jabber-forwarding-tool">Cisco Jabber Forwarding Tool</button>
+          <button type="button" class="portal-nav-btn" onclick="window.location.href='/genesys-admin?panel=genesys-ad-webrtc-panel'">Add Genesys User</button>
           <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Reverse Lookup</button>
           <button type="button" class="portal-nav-btn" data-panel="precheck">Check for Existing Jabber Configuration</button>
           <button type="button" class="portal-nav-btn" data-panel="build">Build User - Build Cisco Jabber Laptop</button>
@@ -27128,7 +27129,6 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
           <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
           <button type="button" class="portal-nav-btn" data-panel="genesys-ls-user-did-assignment">Genesys LS User DID Assignment</button>
-          <button type="button" class="portal-nav-btn" onclick="window.location.href='/genesys-admin?panel=genesys-ad-webrtc-panel'">Add Genesys User</button>
         </div>
       </aside>
 
