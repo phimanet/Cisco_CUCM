@@ -27122,6 +27122,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="namechange">Employee Name Change-Update Jabber/VM</button>
           <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/change-extension'">Change Extension Number for Jabber</button>
           <button type="button" class="portal-nav-btn" data-panel="pin">Reset Voicemail PIN</button>
+          <button type="button" class="portal-nav-btn" data-panel="ldap-connection-issue">Jabber Voicemail Connection Issue</button>
           <button type="button" class="portal-nav-btn" data-panel="mobiledelete">Remove Jabber Mobile only</button>
           <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM</button>
           <button type="button" class="portal-nav-btn" data-panel="ad">Update AD Telephone/ipPhone Field Only</button>
@@ -28874,6 +28875,22 @@ __ADMIN_CARD__
         <textarea id="reset-pin-preview" readonly></textarea>
       </section>
     </div>
+    </section>
+
+    <section class="tool-panel" data-panel="ldap-connection-issue">
+    <h3>Jabber Voicemail Connection Issue</h3>
+    <p>Use this repair when a Unity voicemail box reports a connection or LDAP integration issue. The mailbox is saved as Do Not Integrate with LDAP Directory, then saved back as Integrate with LDAP Directory.</p>
+    <form id="ldap-connection-issue-form" class="secondary-form" action="/repair/unity-ldap-integration" method="post">
+      <input type="hidden" name="unity_user" value="__AUTH_USER__">
+      <input type="hidden" name="unity_pass" value="">
+      <label>Voicemail Username</label>
+      <input name="voicemail_user" placeholder="john.doe" required>
+      <div class="action-row" style="margin-top:12px;">
+        <button type="submit" style="background:linear-gradient(180deg,#a56a00,#7e4f00);">Repair Jabber Voicemail Connection</button>
+        <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+      </div>
+    </form>
+    <p id="ldap-connection-issue-status" class="secondary-status">Enter a voicemail username, then run the two-save LDAP repair.</p>
     </section>
 
     <section class="tool-panel" data-panel="mobiledelete">
@@ -50763,6 +50780,87 @@ def decommission_user_csf_voicemail_route(
         })
 
     return _render_job_result("Offboard User - Delete all Jabber and Voicemail Box (Option 10)", data, filename)
+
+
+def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pass: str, target_alias: str) -> tuple[bytes, str]:
+  ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+  filename = f"repair_unity_ldap_integration_{(target_alias or '').strip() or 'unknown'}_{ts}.csv"
+  output = io.StringIO()
+  writer = csv.writer(output)
+  writer.writerow(["Step", "Status", "Details"])
+  clean_alias = str(target_alias or "").strip()
+  if not clean_alias:
+    writer.writerow(["Validation", "Failed", "Voicemail username is required."])
+    return output.getvalue().encode("utf-8"), filename
+
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(unity_user, unity_pass)
+  base = f"https://{str(unity_server or '').strip().rstrip('/')}"
+  try:
+    lookup = session.get(
+      f"{base}/vmrest/users",
+      headers={"Accept": "application/json"},
+      params={"query": f"(Alias is {clean_alias})"},
+      timeout=60,
+      verify=False,
+    )
+    if lookup.status_code != 200:
+      raise RuntimeError(f"Unity mailbox lookup failed HTTP {lookup.status_code}: {lookup.text[:300]}")
+    payload = lookup.json() if lookup.text else {}
+    users = payload.get("User", payload.get("Users", [])) if isinstance(payload, dict) else []
+    if isinstance(users, dict):
+      users = [users]
+    mailbox = next((row for row in users if str(row.get("Alias", "")).strip().lower() == clean_alias.lower()), None)
+    if not mailbox:
+      raise RuntimeError(f"Unity mailbox '{clean_alias}' was not found.")
+    object_id = str(mailbox.get("ObjectId", "") or "").strip()
+    if not object_id:
+      raise RuntimeError("Unity mailbox ObjectId was missing.")
+    detail_url = f"{base}/vmrest/users/{object_id}"
+    writer.writerow(["Lookup Mailbox", "Success", f"Alias={clean_alias}; ObjectId={object_id}"])
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    for label, enabled in (("Do Not Integrate with LDAP Directory", False), ("Integrate with LDAP Directory", True)):
+      response = session.put(detail_url, headers=headers, json={"LdapIntegration": enabled}, timeout=60, verify=False)
+      if response.status_code not in {200, 204}:
+        raise RuntimeError(f"{label} save failed HTTP {response.status_code}: {response.text[:300]}")
+      verify = session.get(detail_url, headers={"Accept": "application/json"}, timeout=60, verify=False)
+      verified = verify.json() if verify.status_code == 200 and verify.text else {}
+      writer.writerow(["Save LDAP Integration", "Success", f"Saved '{label}'; verified value={verified.get('LdapIntegration', 'unknown')}"])
+      if not enabled:
+        writer.writerow(["Wait", "Success", "Waiting 2 seconds before restoring LDAP integration."])
+        time.sleep(2)
+  except Exception as exc:
+    writer.writerow(["Repair", "Failed", str(exc)])
+  return output.getvalue().encode("utf-8"), filename
+
+
+@app.post("/repair/unity-ldap-integration")
+def repair_unity_ldap_integration_route(
+  request: Request,
+  voicemail_user: str = Form(...),
+  unity_user: str = Form(""),
+  unity_pass: str = Form(""),
+):
+  session = _get_auth_session(request) or {}
+  if not session:
+    return HTMLResponse("<h3>401 Unauthorized</h3><p>Please log in first.</p>", status_code=401)
+  unity_server = _get_unity_server_for_session(request)
+  resolved_user = str(unity_user or session.get("username", "") or "").strip()
+  resolved_pass = str(unity_pass or session.get("unity_pass", "") or session.get("cucm_pass", "") or "").strip()
+  if not unity_server or not resolved_user or not resolved_pass:
+    return HTMLResponse("<h3>Unity credentials unavailable</h3><p>Log in again so cached Unity credentials are available.</p>", status_code=400)
+  data, filename = _repair_unity_ldap_integration(unity_server, resolved_user, resolved_pass, voicemail_user)
+  _append_audit_event(
+    action="repair_unity_ldap_integration",
+    cucm_host=unity_server,
+    operator=resolved_user,
+    target=str(voicemail_user or "").strip(),
+    output_filename=filename,
+    inline_mode=True,
+  )
+  return _render_job_result("Jabber Voicemail Connection Issue", data, filename, back_url="/menu?panel=ldap-connection-issue")
 
 
 @app.post("/reset/unity-voicemail-pin")
