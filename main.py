@@ -17896,7 +17896,7 @@ def genesys_admin_placeholder(request: Request):
                 <div><label style="display:block; font-size:12px; font-weight:700; margin-bottom:4px;">Saved Genesys filter (optional)</label><select id="genesys-ad-filter-select" style="width:360px;"><option value="">No filter</option></select></div>
                 <button type="button" id="genesys-ad-filter-load-btn" style="background:#385977;">Reload Filters</button>
               </div>
-              <div id="genesys-ad-selected-user" style="margin-top:8px; color:#2c5c8a;">No employee selected.</div>
+              <div id="genesys-ad-selected-user" style="margin-top:8px; padding:8px 10px; color:#4e6a84; background:#eef4f8; border:1px solid #b9cede; border-radius:5px; font-weight:700;">No employee selected.</div>
             </div>
             <div style="padding:10px; margin-top:10px; border:1px solid #d7e3ee; border-radius:8px; background:#f4f9ff;">
               <strong>3. Queue WebRTC build</strong>
@@ -17954,7 +17954,7 @@ def genesys_admin_placeholder(request: Request):
                   employeeResults.innerHTML = rows.length ? "<table><thead><tr><th>Select</th><th>Name</th><th>User ID</th><th>Email</th></tr></thead><tbody>" + rows.map(function (row, index) {
                     return "<tr><td><button type='button' data-employee-index='" + index + "' style='padding:5px 9px;'>Choose</button></td><td>" + esc(row.displayname || ((row.firstname || "") + " " + (row.lastname || "")).trim()) + "</td><td>" + esc(row.userid) + "</td><td>" + esc(row.email) + "</td></tr>";
                   }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No employees found.</span>";
-                  employeeResults.querySelectorAll("[data-employee-index]").forEach(function (button) { button.addEventListener("click", function () { selected = rows[Number(button.getAttribute("data-employee-index"))] || null; selectedUserEl.textContent = selected ? ("Selected: " + (selected.displayname || selected.userid) + " | " + selected.email + " | AD User ID: " + selected.userid) : "No employee selected."; queueBtn.disabled = !selected; }); });
+                  employeeResults.querySelectorAll("[data-employee-index]").forEach(function (button) { button.addEventListener("click", function () { selected = rows[Number(button.getAttribute("data-employee-index"))] || null; selectedUserEl.textContent = selected ? ("Selected employee: " + (selected.displayname || selected.userid) + " | " + selected.email + " | AD User ID: " + selected.userid) : "No employee selected."; selectedUserEl.style.color = selected ? "#174d2b" : "#4e6a84"; selectedUserEl.style.background = selected ? "#dff3e5" : "#eef4f8"; selectedUserEl.style.borderColor = selected ? "#2d7a43" : "#b9cede"; selectedUserEl.style.borderWidth = selected ? "2px" : "1px"; queueBtn.disabled = !selected; }); });
                 }
                 async function loadGroups() {
                   employeeStatus.textContent = "Loading Genesys_User_Role security groups...";
