@@ -28880,17 +28880,47 @@ __ADMIN_CARD__
     <section class="tool-panel" data-panel="ldap-connection-issue">
     <h3>Jabber Voicemail Connection Issue</h3>
     <p>Use this repair when a Unity voicemail box reports a connection or LDAP integration issue. The mailbox is saved as Do Not Integrate with LDAP Directory, then saved back as Integrate with LDAP Directory.</p>
-    <form id="ldap-connection-issue-form" class="secondary-form" action="/repair/unity-ldap-integration" method="post">
+    <form id="ldap-connection-issue-lookup-form" class="secondary-form" action="javascript:void(0)" method="post">
       <input type="hidden" name="unity_user" value="__AUTH_USER__">
       <input type="hidden" name="unity_pass" value="">
-      <label>Voicemail Username</label>
-      <input name="voicemail_user" placeholder="john.doe" required>
-      <div class="action-row" style="margin-top:12px;">
-        <button type="submit" style="background:linear-gradient(180deg,#a56a00,#7e4f00);">Repair Jabber Voicemail Connection</button>
-        <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
-      </div>
+      <div class="compact-inline-row"><span>Last Name:</span><input name="last_name" placeholder="Smith" required></div><br>
+      <div class="compact-inline-row"><span>First Name:</span><input name="first_name" placeholder="John"></div><br>
+      <div class="action-row"><button id="ldap-connection-issue-search-btn" type="submit">Search Users</button><span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span></div>
     </form>
-    <p id="ldap-connection-issue-status" class="secondary-status">Enter a voicemail username, then run the two-save LDAP repair.</p>
+    <p id="ldap-connection-issue-status" class="secondary-status">Search by first and last name, then select the person whose voicemail box needs repair.</p>
+    <div id="ldap-connection-issue-results" style="overflow-x:auto;"></div>
+    <form id="ldap-connection-issue-form" class="secondary-form" action="/repair/unity-ldap-integration" method="post" style="margin-top:12px;">
+      <input type="hidden" name="unity_user" value="__AUTH_USER__">
+      <input type="hidden" name="unity_pass" value="">
+      <input type="hidden" id="ldap-connection-issue-user" name="voicemail_user" value="">
+      <p id="ldap-connection-issue-selected" style="padding:8px 10px; background:#eef4f8; border:1px solid #b9cede; border-radius:5px; font-weight:700;">No employee selected.</p>
+      <div class="action-row"><button id="ldap-connection-issue-repair-btn" type="submit" style="background:linear-gradient(180deg,#a56a00,#7e4f00);" disabled>Repair Jabber Voicemail Connection</button></div>
+    </form>
+    <script>
+      (function () {
+        var lookupForm = document.getElementById("ldap-connection-issue-lookup-form");
+        var results = document.getElementById("ldap-connection-issue-results");
+        var status = document.getElementById("ldap-connection-issue-status");
+        var selected = document.getElementById("ldap-connection-issue-selected");
+        var aliasInput = document.getElementById("ldap-connection-issue-user");
+        var repairButton = document.getElementById("ldap-connection-issue-repair-btn");
+        function esc(value) { return String(value || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;"); }
+        lookupForm.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          var formData = new FormData(lookupForm);
+          status.textContent = "Searching CUCM employees..."; results.innerHTML = ""; repairButton.disabled = true; aliasInput.value = "";
+          try {
+            var response = await fetch("/lookup/person", { method: "POST", body: formData, credentials: "same-origin" });
+            var payload = await response.json();
+            if (!response.ok || !payload.ok) throw new Error(payload.error || "Employee lookup failed.");
+            var rows = payload.results || [];
+            results.innerHTML = rows.length ? "<table><thead><tr><th>Select</th><th>Name</th><th>User ID</th><th>Email</th></tr></thead><tbody>" + rows.map(function (row, index) { return "<tr><td><button type='button' data-ldap-person-index='" + index + "' style='padding:5px 9px;'>Select</button></td><td>" + esc(row.display_name || row.displayname || row.userid) + "</td><td>" + esc(row.userid) + "</td><td>" + esc(row.email || row.mailid) + "</td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No employees found.</span>";
+            status.textContent = rows.length + " employee(s) found. Select one to repair.";
+            results.querySelectorAll("[data-ldap-person-index]").forEach(function (button) { button.addEventListener("click", function () { var row = rows[Number(button.getAttribute("data-ldap-person-index"))] || {}; var alias = String(row.userid || "").trim(); aliasInput.value = alias; selected.textContent = alias ? "Selected employee: " + (row.display_name || row.displayname || alias) + " | Voicemail username: " + alias : "No employee selected."; selected.style.background = alias ? "#dff3e5" : "#eef4f8"; selected.style.borderColor = alias ? "#2d7a43" : "#b9cede"; repairButton.disabled = !alias; }); });
+          } catch (error) { status.textContent = "Employee lookup failed: " + error.message; }
+        });
+      })();
+    </script>
     </section>
 
     <section class="tool-panel" data-panel="mobiledelete">
