@@ -28914,7 +28914,7 @@ __ADMIN_CARD__
             var payload = await response.json();
             if (!response.ok || !payload.ok) throw new Error(payload.error || "Employee lookup failed.");
             var rows = payload.rows || payload.results || [];
-            results.innerHTML = rows.length ? "<table><thead><tr><th>Select</th><th>Name</th><th>CallManager User ID</th><th>Unity Alias</th><th>Extension</th><th>Email</th></tr></thead><tbody>" + rows.map(function (row, index) { return "<tr><td><button type='button' data-ldap-person-index='" + index + "' style='padding:5px 9px;'>Select</button></td><td>" + esc(row.display_name || row.displayname || row.alias) + "</td><td>" + esc(row.callmanager_userid || "-") + "</td><td>" + esc(row.alias) + "</td><td>" + esc(row.extension || "-") + "</td><td>" + esc(row.email || "-") + "</td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No Unity Connection users matched the CallManager voicemail extension.</span>";
+            results.innerHTML = rows.length ? "<table><thead><tr><th>Select</th><th>Name</th><th>CallManager User ID</th><th>Unity Alias</th><th>Extension</th><th>Match</th><th>Email</th></tr></thead><tbody>" + rows.map(function (row, index) { return "<tr><td><button type='button' data-ldap-person-index='" + index + "' style='padding:5px 9px;'>Select</button></td><td>" + esc(row.display_name || row.displayname || row.alias) + "</td><td>" + esc(row.callmanager_userid || "-") + "</td><td>" + esc(row.alias) + "</td><td>" + esc(row.extension || "-") + "</td><td>" + esc(row.matched_by || "-") + "</td><td>" + esc(row.email || "-") + "</td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No Unity Connection users matched the CallManager voicemail extension or alias.</span>";
             status.textContent = rows.length + " employee(s) found. Select one to repair.";
             results.querySelectorAll("[data-ldap-person-index]").forEach(function (button) { button.addEventListener("click", function () { var row = rows[Number(button.getAttribute("data-ldap-person-index"))] || {}; var alias = String(row.alias || "").trim(); aliasInput.value = alias; selected.textContent = alias ? "Selected Unity user: " + (row.display_name || row.displayname || alias) + " | CallManager User ID: " + (row.callmanager_userid || "-") + " | Unity Alias: " + alias : "No employee selected."; selected.style.background = alias ? "#dff3e5" : "#eef4f8"; selected.style.borderColor = alias ? "#2d7a43" : "#b9cede"; repairButton.disabled = !alias; }); });
           } catch (error) { status.textContent = "Employee lookup failed: " + error.message; }
@@ -50904,23 +50904,34 @@ def repair_unity_ldap_integration_lookup_route(
     if isinstance(users, dict):
       users = [users]
     unity_by_extension = {}
+    unity_by_alias = {}
     for user in users or []:
       alias = str(user.get("Alias", "") or "").strip()
       if not alias:
         continue
+      unity_by_alias[alias.lower()] = user
       extension = re.sub(r"\D", "", str(user.get("DtmfAccessId", "") or "").strip())
       if extension:
         unity_by_extension.setdefault(extension, []).append(user)
     rows = []
     for person in cucm_people or []:
       extension = re.sub(r"\D", "", str(person.get("voicemail_extension", "") or person.get("primary_extension", "") or "").strip())
-      if not extension:
-        continue
-      for user in unity_by_extension.get(extension, []):
+      matched_users = [(user, "extension") for user in unity_by_extension.get(extension, [])] if extension else []
+      if not matched_users:
+        userid = str(person.get("userid", "") or "").strip()
+        alias_candidates = [userid]
+        lowered_userid = userid.lower()
+        if lowered_userid.endswith(".adm"):
+          alias_candidates.append(userid[:-4])
+        elif lowered_userid.endswith(".ad"):
+          alias_candidates.append(userid[:-3])
+        matched_users = [(unity_by_alias[candidate.lower()], "alias") for candidate in alias_candidates if candidate and candidate.lower() in unity_by_alias]
+      for user, matched_by in matched_users:
         rows.append({
           "alias": str(user.get("Alias", "") or "").strip(),
           "callmanager_userid": str(person.get("userid", "") or "").strip(),
           "callmanager_extension": extension,
+          "matched_by": matched_by,
           "first_name": str(user.get("FirstName", "") or person.get("firstname", "") or "").strip(),
           "last_name": str(user.get("LastName", "") or person.get("lastname", "") or "").strip(),
           "display_name": str(user.get("DisplayName", "") or person.get("displayname", "") or "").strip(),
