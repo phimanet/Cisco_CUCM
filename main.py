@@ -50915,8 +50915,22 @@ def repair_unity_ldap_integration_lookup_route(
         unity_by_extension.setdefault(extension, []).append(user)
     rows = []
     for person in cucm_people or []:
-      extension = re.sub(r"\D", "", str(person.get("voicemail_extension", "") or person.get("primary_extension", "") or "").strip())
-      matched_users = [(user, "extension") for user in unity_by_extension.get(extension, [])] if extension else []
+      number_candidates = [
+        person.get("voicemail_extension", ""),
+        person.get("primary_extension", ""),
+        person.get("telephone", ""),
+      ]
+      for device in person.get("devices", []) or []:
+        number_candidates.extend(device.get("extensions", []) or [])
+      normalized_candidates = []
+      for candidate in number_candidates:
+        normalized = re.sub(r"\D", "", str(candidate or "").strip())
+        if normalized and normalized not in normalized_candidates:
+          normalized_candidates.append(normalized)
+      extension = normalized_candidates[0] if normalized_candidates else ""
+      matched_users = []
+      for candidate in normalized_candidates:
+        matched_users.extend((user, "extension") for user in unity_by_extension.get(candidate, []))
       if not matched_users:
         userid = str(person.get("userid", "") or "").strip()
         alias_candidates = [userid]
@@ -50926,6 +50940,27 @@ def repair_unity_ldap_integration_lookup_route(
         elif lowered_userid.endswith(".ad"):
           alias_candidates.append(userid[:-3])
         matched_users = [(unity_by_alias[candidate.lower()], "alias") for candidate in alias_candidates if candidate and candidate.lower() in unity_by_alias]
+        if not matched_users:
+          for candidate in alias_candidates:
+            if not candidate:
+              continue
+            alias_response = requests.get(
+              f"https://{unity_server}/vmrest/users",
+              headers={"Accept": "application/json"},
+              params={"query": f"(Alias is {candidate})", "rowsPerPage": "10"},
+              auth=HTTPBasicAuth(resolved_user, resolved_pass),
+              verify=False,
+              timeout=60,
+            )
+            if alias_response.status_code != 200:
+              continue
+            alias_payload = alias_response.json() if alias_response.text else {}
+            alias_users = alias_payload.get("User", alias_payload.get("Users", [])) if isinstance(alias_payload, dict) else []
+            if isinstance(alias_users, dict):
+              alias_users = [alias_users]
+            matched_users = [(user, "alias_query") for user in alias_users if str(user.get("Alias", "") or "").strip().lower() == candidate.lower()]
+            if matched_users:
+              break
       for user, matched_by in matched_users:
         rows.append({
           "alias": str(user.get("Alias", "") or "").strip(),
