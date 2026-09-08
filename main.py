@@ -17836,7 +17836,7 @@ def genesys_admin_placeholder(request: Request):
         <section class="portal-main">
           <div id="genesys-group-user-audit-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Groups and User Cleanup</h3>
-            <p style="color:#4e6a84;font-size:12px;">Reconciliation lookup extracts members from one Genesys group and checks each email against Active Directory. Only an explicit Delete User confirmation can remove an AD-missing Genesys user; the reason is Leave.</p>
+            <p style="color:#4e6a84;font-size:12px;">Reconciliation lookup extracts members from one Genesys group and checks each email against Active Directory. Only an explicit Mark Inactive confirmation can disable an AD-missing Genesys user; the reason is Leave.</p>
             <div class="search-filter-row">
               <select id="genesys-group-user-audit-name" style="width:420px;" aria-label="Genesys group name"><option value="">Load Genesys groups...</option></select>
               <button type="button" id="genesys-group-user-audit-load-btn" style="background:#385977;">Reload Groups</button>
@@ -17869,8 +17869,8 @@ def genesys_admin_placeholder(request: Request):
                     if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
                     var rows = Array.isArray(payload.rows) ? payload.rows : [];
                     summary.innerHTML = "<strong>Group:</strong> " + esc(payload.group_name) + " &nbsp; <strong>Members found:</strong> " + rows.length + " &nbsp; <strong>AD valid:</strong> " + esc(payload.summary.ad_valid) + " &nbsp; <strong>Review candidates:</strong> " + esc(payload.summary.review_candidates);
-                    output.innerHTML = rows.length ? "<table><thead><tr><th>Genesys Name</th><th>Email</th><th>Genesys User ID</th><th>AD Status</th><th>AD Name / User ID</th><th>Review</th><th>Action</th></tr></thead><tbody>" + rows.map(function (row) { var valid = row.ad_status === "valid"; var action = row.review_candidate && row.user_id && row.email ? "<button type='button' data-genesys-delete-user='" + esc(row.user_id) + "' data-genesys-delete-email='" + esc(row.email) + "' style='background:#8a2d2d;padding:5px 9px;'>Delete User</button>" : "-"; return "<tr><td>" + esc(row.name) + "</td><td>" + esc(row.email) + "</td><td>" + esc(row.user_id) + "</td><td style='font-weight:700;color:" + (valid ? "#176b35" : "#9a4b00") + ";'>" + esc(row.ad_status) + "</td><td>" + esc(row.ad_display_name || row.ad_user_id || row.ad_error || "") + "</td><td>" + (row.review_candidate ? "<strong style='color:#9a4b00;'>Candidate</strong>" : "No") + "</td><td>" + action + "</td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No member records were returned.</span>";
-                    output.querySelectorAll("[data-genesys-delete-user]").forEach(function (deleteButton) { deleteButton.addEventListener("click", async function () { var userId = deleteButton.getAttribute("data-genesys-delete-user") || ""; var email = deleteButton.getAttribute("data-genesys-delete-email") || ""; if (!window.confirm("Delete " + email + " from Genesys? Reason: Leave. This is permanent and removes the user from Genesys groups.")) return; deleteButton.disabled = true; deleteButton.textContent = "Deleting..."; try { var deleteData = new FormData(); deleteData.append("user_id", userId); deleteData.append("user_email", email); deleteData.append("reason", "Leave"); var deleteResponse = await fetch("/genesys/users/delete", { method: "POST", body: deleteData, headers: { "Accept": "application/json" } }); var deletePayload = await deleteResponse.json(); if (!deleteResponse.ok || !deletePayload.ok) throw new Error((deletePayload && deletePayload.error) || ("HTTP " + deleteResponse.status)); deleteButton.textContent = "Deleted"; deleteButton.style.background = "#2d7a43"; status.textContent = "Genesys user deleted. Re-run the lookup to refresh group membership."; } catch (err) { deleteButton.disabled = false; deleteButton.textContent = "Delete User"; status.textContent = "Genesys user deletion failed: " + ((err && err.message) || "Unknown error."); } }); });
+                    output.innerHTML = rows.length ? "<table><thead><tr><th>Genesys Name</th><th>Email</th><th>Genesys User ID</th><th>AD Status</th><th>AD Name / User ID</th><th>Review</th><th>Action</th></tr></thead><tbody>" + rows.map(function (row) { var valid = row.ad_status === "valid"; var action = row.review_candidate && row.user_id && row.email ? "<button type='button' data-genesys-inactive-user='" + esc(row.user_id) + "' data-genesys-inactive-email='" + esc(row.email) + "' style='background:#a56a00;padding:5px 9px;'>Mark Inactive</button>" : "-"; return "<tr><td>" + esc(row.name) + "</td><td>" + esc(row.email) + "</td><td>" + esc(row.user_id) + "</td><td style='font-weight:700;color:" + (valid ? "#176b35" : "#9a4b00") + ";'>" + esc(row.ad_status) + "</td><td>" + esc(row.ad_display_name || row.ad_user_id || row.ad_error || "") + "</td><td>" + (row.review_candidate ? "<strong style='color:#9a4b00;'>Candidate</strong>" : "No") + "</td><td>" + action + "</td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No member records were returned.</span>";
+                    output.querySelectorAll("[data-genesys-inactive-user]").forEach(function (inactiveButton) { inactiveButton.addEventListener("click", async function () { var userId = inactiveButton.getAttribute("data-genesys-inactive-user") || ""; var email = inactiveButton.getAttribute("data-genesys-inactive-email") || ""; if (!window.confirm("Mark " + email + " as Inactive in Genesys? Reason: Leave. The user will not be deleted and can be reactivated later.")) return; inactiveButton.disabled = true; inactiveButton.textContent = "Updating..."; try { var inactiveData = new FormData(); inactiveData.append("user_id", userId); inactiveData.append("user_email", email); inactiveData.append("reason", "Leave"); var inactiveResponse = await fetch("/genesys/users/mark-inactive", { method: "POST", body: inactiveData, headers: { "Accept": "application/json" } }); var inactivePayload = await inactiveResponse.json(); if (!inactiveResponse.ok || !inactivePayload.ok) throw new Error((inactivePayload && inactivePayload.error) || ("HTTP " + inactiveResponse.status)); inactiveButton.textContent = "Inactive"; inactiveButton.style.background = "#2d7a43"; status.textContent = "Genesys user marked Inactive. Re-run the lookup to refresh the group status."; } catch (err) { inactiveButton.disabled = false; inactiveButton.textContent = "Mark Inactive"; status.textContent = "Genesys user update failed: " + ((err && err.message) || "Unknown error."); } }); });
                     diagnostics.textContent = JSON.stringify(payload.diagnostics || {}, null, 2);
                     status.textContent = "Read-only check complete. No changes were made.";
                   } catch (err) { status.textContent = "Group audit failed: " + ((err && err.message) || "Unknown error."); }
@@ -23777,8 +23777,8 @@ def genesys_group_user_audit_route(
   })
 
 
-@app.post("/genesys/users/delete")
-def genesys_user_delete_route(
+@app.post("/genesys/users/mark-inactive")
+def genesys_user_mark_inactive_route(
   request: Request,
   user_id: str = Form(""),
   user_email: str = Form(""),
@@ -23792,7 +23792,7 @@ def genesys_user_delete_route(
   clean_email = str(user_email or "").strip().lower()
   clean_reason = str(reason or "Leave").strip() or "Leave"
   if clean_reason.casefold() != "leave":
-    return JSONResponse({"ok": False, "error": "Only the deletion reason 'Leave' is allowed for this workflow."}, status_code=400)
+    return JSONResponse({"ok": False, "error": "Only the reason 'Leave' is allowed for this workflow."}, status_code=400)
   if not clean_user_id or not clean_email or "@" not in clean_email:
     return JSONResponse({"ok": False, "error": "Genesys user ID and email are required."}, status_code=400)
 
@@ -23801,7 +23801,7 @@ def genesys_user_delete_route(
     auth_context={"username": resolved_user, "password": resolved_pass},
   )
   if ad_identity.get("found"):
-    return JSONResponse({"ok": False, "error": f"Deletion blocked: Active Directory still contains {clean_email}."}, status_code=409)
+    return JSONResponse({"ok": False, "error": f"Update blocked: Active Directory still contains {clean_email}."}, status_code=409)
 
   clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
   token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
@@ -23816,24 +23816,29 @@ def genesys_user_delete_route(
     return JSONResponse({"ok": False, "error": f"Genesys user recheck failed: {user_error or 'Unknown error.'}"}, status_code=400)
   genesys_email = str(user_payload.get("email", "") or "").strip().lower()
   if genesys_email and genesys_email != clean_email:
-    return JSONResponse({"ok": False, "error": "Deletion blocked: Genesys user email changed since the audit."}, status_code=409)
+    return JSONResponse({"ok": False, "error": "Update blocked: Genesys user email changed since the audit."}, status_code=409)
 
-  deleted, _, delete_error, status_code = _genesys_send_json(
-    "DELETE", api_base, access_token, f"/api/v2/users/{clean_user_id}", payload=None
+  updated, _, update_error, status_code = _genesys_send_json(
+    "PATCH", api_base, access_token, f"/api/v2/users/{clean_user_id}", payload={"state": "inactive"}
   )
-  if not deleted:
-    return JSONResponse({"ok": False, "error": delete_error or f"Genesys user delete failed (HTTP {status_code})."}, status_code=400)
+  if not updated:
+    return JSONResponse({"ok": False, "error": update_error or f"Genesys user update failed (HTTP {status_code})."}, status_code=400)
+
+  ok_verify, verify_payload, verify_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}")
+  verified_state = str(verify_payload.get("state", "") or "").strip().lower() if ok_verify else ""
+  if not ok_verify or verified_state != "inactive":
+    return JSONResponse({"ok": False, "error": f"Genesys user update was not verified as inactive: {verify_error or ('returned state ' + (verified_state or 'blank'))}"}, status_code=409)
 
   _append_audit_event(
-    action="genesys_user_deleted",
+    action="genesys_user_marked_inactive",
     cucm_host=resolved_host,
     operator=resolved_user,
-    target=f"{clean_user_id};reason={clean_reason}",
+    target=f"{clean_user_id};reason={clean_reason};state=inactive",
     output_filename="",
     inline_mode=True,
     account=clean_email,
   )
-  return JSONResponse({"ok": True, "user_id": clean_user_id, "user_email": clean_email, "reason": clean_reason, "message": "Genesys user deleted and audit event recorded."})
+  return JSONResponse({"ok": True, "user_id": clean_user_id, "user_email": clean_email, "reason": clean_reason, "state": "inactive", "message": "Genesys user marked inactive and audit event recorded."})
 
 
 @app.get("/genesys/ad-webrtc/groups/inspect")
