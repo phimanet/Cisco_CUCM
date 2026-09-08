@@ -17836,7 +17836,7 @@ def genesys_admin_placeholder(request: Request):
         <section class="portal-main">
           <div id="genesys-group-user-audit-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Groups and User Cleanup</h3>
-            <p style="color:#4e6a84;font-size:12px;">Read-only reconciliation. Extracts members from one Genesys group, then checks each member email against Active Directory. No users or memberships are changed.</p>
+            <p style="color:#4e6a84;font-size:12px;">Reconciliation lookup extracts members from one Genesys group and checks each email against Active Directory. Only an explicit Delete User confirmation can remove an AD-missing Genesys user; the reason is Leave.</p>
             <div class="search-filter-row">
               <select id="genesys-group-user-audit-name" style="width:420px;" aria-label="Genesys group name"><option value="">Load Genesys groups...</option></select>
               <button type="button" id="genesys-group-user-audit-load-btn" style="background:#385977;">Reload Groups</button>
@@ -17869,7 +17869,8 @@ def genesys_admin_placeholder(request: Request):
                     if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
                     var rows = Array.isArray(payload.rows) ? payload.rows : [];
                     summary.innerHTML = "<strong>Group:</strong> " + esc(payload.group_name) + " &nbsp; <strong>Members found:</strong> " + rows.length + " &nbsp; <strong>AD valid:</strong> " + esc(payload.summary.ad_valid) + " &nbsp; <strong>Review candidates:</strong> " + esc(payload.summary.review_candidates);
-                    output.innerHTML = rows.length ? "<table><thead><tr><th>Genesys Name</th><th>Email</th><th>Genesys User ID</th><th>AD Status</th><th>AD Name / User ID</th><th>Review</th></tr></thead><tbody>" + rows.map(function (row) { var valid = row.ad_status === "valid"; return "<tr><td>" + esc(row.name) + "</td><td>" + esc(row.email) + "</td><td>" + esc(row.user_id) + "</td><td style='font-weight:700;color:" + (valid ? "#176b35" : "#9a4b00") + ";'>" + esc(row.ad_status) + "</td><td>" + esc(row.ad_display_name || row.ad_user_id || row.ad_error || "") + "</td><td>" + (row.review_candidate ? "<strong style='color:#9a4b00;'>Candidate</strong>" : "No") + "</td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No member records were returned.</span>";
+                    output.innerHTML = rows.length ? "<table><thead><tr><th>Genesys Name</th><th>Email</th><th>Genesys User ID</th><th>AD Status</th><th>AD Name / User ID</th><th>Review</th><th>Action</th></tr></thead><tbody>" + rows.map(function (row) { var valid = row.ad_status === "valid"; var action = row.review_candidate && row.user_id && row.email ? "<button type='button' data-genesys-delete-user='" + esc(row.user_id) + "' data-genesys-delete-email='" + esc(row.email) + "' style='background:#8a2d2d;padding:5px 9px;'>Delete User</button>" : "-"; return "<tr><td>" + esc(row.name) + "</td><td>" + esc(row.email) + "</td><td>" + esc(row.user_id) + "</td><td style='font-weight:700;color:" + (valid ? "#176b35" : "#9a4b00") + ";'>" + esc(row.ad_status) + "</td><td>" + esc(row.ad_display_name || row.ad_user_id || row.ad_error || "") + "</td><td>" + (row.review_candidate ? "<strong style='color:#9a4b00;'>Candidate</strong>" : "No") + "</td><td>" + action + "</td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No member records were returned.</span>";
+                    output.querySelectorAll("[data-genesys-delete-user]").forEach(function (deleteButton) { deleteButton.addEventListener("click", async function () { var userId = deleteButton.getAttribute("data-genesys-delete-user") || ""; var email = deleteButton.getAttribute("data-genesys-delete-email") || ""; if (!window.confirm("Delete " + email + " from Genesys? Reason: Leave. This is permanent and removes the user from Genesys groups.")) return; deleteButton.disabled = true; deleteButton.textContent = "Deleting..."; try { var deleteData = new FormData(); deleteData.append("user_id", userId); deleteData.append("user_email", email); deleteData.append("reason", "Leave"); var deleteResponse = await fetch("/genesys/users/delete", { method: "POST", body: deleteData, headers: { "Accept": "application/json" } }); var deletePayload = await deleteResponse.json(); if (!deleteResponse.ok || !deletePayload.ok) throw new Error((deletePayload && deletePayload.error) || ("HTTP " + deleteResponse.status)); deleteButton.textContent = "Deleted"; deleteButton.style.background = "#2d7a43"; status.textContent = "Genesys user deleted. Re-run the lookup to refresh group membership."; } catch (err) { deleteButton.disabled = false; deleteButton.textContent = "Delete User"; status.textContent = "Genesys user deletion failed: " + ((err && err.message) || "Unknown error."); } }); });
                     diagnostics.textContent = JSON.stringify(payload.diagnostics || {}, null, 2);
                     status.textContent = "Read-only check complete. No changes were made.";
                   } catch (err) { status.textContent = "Group audit failed: " + ((err && err.message) || "Unknown error."); }
@@ -23774,6 +23775,65 @@ def genesys_group_user_audit_route(
       "read_only": True,
     },
   })
+
+
+@app.post("/genesys/users/delete")
+def genesys_user_delete_route(
+  request: Request,
+  user_id: str = Form(""),
+  user_email: str = Form(""),
+  reason: str = Form("Leave"),
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  clean_user_id = str(user_id or "").strip()
+  clean_email = str(user_email or "").strip().lower()
+  clean_reason = str(reason or "Leave").strip() or "Leave"
+  if clean_reason.casefold() != "leave":
+    return JSONResponse({"ok": False, "error": "Only the deletion reason 'Leave' is allowed for this workflow."}, status_code=400)
+  if not clean_user_id or not clean_email or "@" not in clean_email:
+    return JSONResponse({"ok": False, "error": "Genesys user ID and email are required."}, status_code=400)
+
+  ad_identity = lookup_ad_identity_by_email(
+    clean_email,
+    auth_context={"username": resolved_user, "password": resolved_pass},
+  )
+  if ad_identity.get("found"):
+    return JSONResponse({"ok": False, "error": f"Deletion blocked: Active Directory still contains {clean_email}."}, status_code=409)
+
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  region = token_result.get("region", clean_region)
+  access_token = token_result.get("access_token", "")
+  _, _, api_base = _genesys_region_to_urls(region)
+
+  ok_user, user_payload, user_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}")
+  if not ok_user:
+    return JSONResponse({"ok": False, "error": f"Genesys user recheck failed: {user_error or 'Unknown error.'}"}, status_code=400)
+  genesys_email = str(user_payload.get("email", "") or "").strip().lower()
+  if genesys_email and genesys_email != clean_email:
+    return JSONResponse({"ok": False, "error": "Deletion blocked: Genesys user email changed since the audit."}, status_code=409)
+
+  deleted, _, delete_error, status_code = _genesys_send_json(
+    "DELETE", api_base, access_token, f"/api/v2/users/{clean_user_id}", payload=None
+  )
+  if not deleted:
+    return JSONResponse({"ok": False, "error": delete_error or f"Genesys user delete failed (HTTP {status_code})."}, status_code=400)
+
+  _append_audit_event(
+    action="genesys_user_deleted",
+    cucm_host=resolved_host,
+    operator=resolved_user,
+    target=f"{clean_user_id};reason={clean_reason}",
+    output_filename="",
+    inline_mode=True,
+    account=clean_email,
+  )
+  return JSONResponse({"ok": True, "user_id": clean_user_id, "user_email": clean_email, "reason": clean_reason, "message": "Genesys user deleted and audit event recorded."})
 
 
 @app.get("/genesys/ad-webrtc/groups/inspect")
