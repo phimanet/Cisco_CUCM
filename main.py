@@ -2915,19 +2915,18 @@ def _genesys_collect_paged_entities(
   path: str,
   page_size: int,
   max_pages: int,
-  extra_params: dict | None = None,
 ) -> tuple[list[dict], int, str]:
   entities_all = []
   pages_scanned = 0
   for page_number in range(1, max_pages + 1):
-    page_params = {"pageSize": page_size, "pageNumber": page_number}
-    if isinstance(extra_params, dict):
-      page_params.update(extra_params)
     ok_page, payload, err_page = _genesys_get_json(
       api_base,
       access_token,
       path,
-      page_params,
+      {
+        "pageSize": page_size,
+        "pageNumber": page_number,
+      },
     )
     if not ok_page:
       return entities_all, pages_scanned, err_page
@@ -17838,46 +17837,9 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-blocked-caller-panel" onclick="(function(){var id='genesys-blocked-caller-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Block Incoming Calls</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-role-groups-panel" onclick="(function(){var id='genesys-role-groups-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Inspect Genesys Role Groups</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-group-user-audit-panel" onclick="(function(){var id='genesys-group-user-audit-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Groups and User Cleanup</button>
-          <button type="button" class="portal-nav-btn" data-panel-target="genesys-inactive-users-panel" onclick="(function(){var id='genesys-inactive-users-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Inactive Genesys Users</button>
         </aside>
 
         <section class="portal-main">
-          <div id="genesys-inactive-users-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
-            <h3 style="margin-top:0;">Inactive Genesys Users</h3>
-            <p style="color:#4e6a84;font-size:12px;">Lists Genesys users whose state is inactive. Permanent deletion removes the user and their Genesys group memberships and cannot be undone.</p>
-            <div class="search-filter-row">
-              <button type="button" id="genesys-inactive-users-load-btn" style="background:#385977;">Load Inactive Users</button>
-            </div>
-            <p id="genesys-inactive-users-status" style="color:#2c5c8a;min-height:18px;">Ready.</p>
-            <div id="genesys-inactive-users-summary" style="margin:8px 0;padding:8px;background:#f8fcff;border:1px solid #c8dbee;"></div>
-            <div id="genesys-inactive-users-output" style="overflow-x:auto;"></div>
-            <script>
-              (function () {
-                var loadButton = document.getElementById("genesys-inactive-users-load-btn");
-                var status = document.getElementById("genesys-inactive-users-status");
-                var summary = document.getElementById("genesys-inactive-users-summary");
-                var output = document.getElementById("genesys-inactive-users-output");
-                if (!loadButton || loadButton.dataset.bound === "1") return;
-                loadButton.dataset.bound = "1";
-                function esc(value) { return String(value || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;"); }
-                async function loadInactiveUsers() {
-                  loadButton.disabled = true; status.textContent = "Loading inactive Genesys users..."; summary.innerHTML = ""; output.innerHTML = "";
-                  try {
-                    var response = await fetch("/genesys/users/inactive", { method: "GET", headers: { "Accept": "application/json" } });
-                    var payload = await response.json();
-                    if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
-                    var rows = Array.isArray(payload.rows) ? payload.rows : [];
-                    summary.innerHTML = "<strong>Inactive users:</strong> " + rows.length + " &nbsp; <strong>Marked inactive by this portal:</strong> " + esc(payload.portal_marked_count || 0) + " &nbsp; <strong>Pages scanned:</strong> " + esc(payload.pages_scanned);
-                    output.innerHTML = rows.length ? "<table><thead><tr><th>Name</th><th>Email</th><th>Username</th><th>User ID</th><th>State</th><th>Source</th><th>Action</th></tr></thead><tbody>" + rows.map(function (row) { return "<tr><td>" + esc(row.name) + "</td><td>" + esc(row.email) + "</td><td>" + esc(row.username) + "</td><td>" + esc(row.id) + "</td><td style='font-weight:700;color:#9a4b00;'>" + esc(row.state) + "</td><td>" + esc(row.source) + "</td><td><button type='button' data-genesys-permanent-delete='" + esc(row.id) + "' data-genesys-delete-email='" + esc(row.email) + "' style='background:#8a2d2d;padding:5px 9px;'>Delete Permanently</button></td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#4e6a84;'>No inactive Genesys users were returned.</span>";
-                    output.querySelectorAll("[data-genesys-permanent-delete]").forEach(function (deleteButton) { deleteButton.addEventListener("click", async function () { var userId = deleteButton.getAttribute("data-genesys-permanent-delete") || ""; var email = deleteButton.getAttribute("data-genesys-delete-email") || ""; if (!window.confirm("Permanently delete " + (email || userId) + " from Genesys? This cannot be undone.")) return; deleteButton.disabled = true; deleteButton.textContent = "Deleting..."; try { var data = new FormData(); data.append("user_id", userId); data.append("user_email", email); var deleteResponse = await fetch("/genesys/users/delete-inactive", { method: "POST", body: data, headers: { "Accept": "application/json" } }); var deletePayload = await deleteResponse.json(); if (!deleteResponse.ok || !deletePayload.ok) throw new Error((deletePayload && deletePayload.error) || ("HTTP " + deleteResponse.status)); deleteButton.textContent = "Deleted"; deleteButton.style.background = "#2d7a43"; status.textContent = "User permanently deleted. Reload the list to refresh."; } catch (err) { deleteButton.disabled = false; deleteButton.textContent = "Delete Permanently"; status.textContent = "Permanent deletion failed: " + ((err && err.message) || "Unknown error."); } }); });
-                    status.textContent = "Inactive user list loaded.";
-                  } catch (err) { status.textContent = "Inactive user lookup failed: " + ((err && err.message) || "Unknown error."); }
-                  finally { loadButton.disabled = false; }
-                }
-                loadButton.addEventListener("click", loadInactiveUsers);
-              })();
-            </script>
-          </div>
           <div id="genesys-group-user-audit-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Groups and User Cleanup</h3>
             <p style="color:#4e6a84;font-size:12px;">Reconciliation lookup extracts members from one Genesys group and checks each email against Active Directory. Only an explicit Mark Inactive confirmation can disable an AD-missing Genesys user; the reason is Leave.</p>
@@ -23957,129 +23919,6 @@ def genesys_user_mark_inactive_route(
     account=clean_email,
   )
   return JSONResponse({"ok": True, "user_id": clean_user_id, "user_email": clean_email, "reason": clean_reason, "state": "inactive", "message": "Genesys user marked inactive and audit event recorded."})
-
-
-@app.get("/genesys/users/inactive")
-def genesys_inactive_users_route():
-  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
-  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
-  if not token_result.get("ok"):
-    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
-  region = token_result.get("region", clean_region)
-  access_token = token_result.get("access_token", "")
-  _, _, api_base = _genesys_region_to_urls(region)
-  users, pages_scanned, users_error = _genesys_collect_paged_entities(
-    api_base,
-    access_token,
-    "/api/v2/users",
-    page_size=max(25, min(GENESYS_USERS_PAGE_SIZE, 200)),
-    max_pages=200,
-    extra_params={"state": "inactive"},
-  )
-  if users_error:
-    return JSONResponse({"ok": False, "error": f"Inactive user lookup failed: {users_error}"}, status_code=400)
-  rows_by_id = {}
-  for user in users:
-    state = str(user.get("state", "") or "").strip().lower()
-    if state != "inactive":
-      continue
-    user_id = str(user.get("id", "") or "").strip()
-    if not user_id:
-      continue
-    rows_by_id[user_id] = {
-      "id": str(user.get("id", "") or "").strip(),
-      "name": str(user.get("name", "") or user.get("displayName", "") or "").strip(),
-      "email": str(user.get("email", "") or "").strip().lower(),
-      "username": str(user.get("username", "") or "").strip(),
-      "state": state,
-      "source": "Genesys inactive state",
-    }
-
-  # Include users marked inactive by this portal even when the tenant's user
-  # collection does not honor the state query or omits inactive users.
-  marked_ids = {}
-  try:
-    with AUDIT_LOG_LOCK:
-      if os.path.exists(AUDIT_LOG_PATH):
-        with open(AUDIT_LOG_PATH, "r", newline="", encoding="utf-8") as handle:
-          for audit_row in csv.DictReader(handle):
-            if str(audit_row.get("action", "") or "").strip() != "genesys_user_marked_inactive":
-              continue
-            target_parts = str(audit_row.get("target", "") or "").split(";", 1)
-            marked_id = target_parts[0].strip()
-            if marked_id:
-              marked_ids[marked_id] = str(audit_row.get("account", "") or "").strip().lower()
-  except (OSError, csv.Error) as exc:
-    logger.warning("Genesys marked-inactive audit lookup skipped: %s", exc)
-
-  for marked_id, marked_email in marked_ids.items():
-    if marked_id in rows_by_id:
-      rows_by_id[marked_id]["source"] = "Portal marked inactive"
-      continue
-    ok_marked_user, marked_user, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{marked_id}")
-    if not ok_marked_user:
-      continue
-    marked_state = str(marked_user.get("state", "") or "").strip().lower()
-    if marked_state != "inactive":
-      continue
-    rows_by_id[marked_id] = {
-      "id": marked_id,
-      "name": str(marked_user.get("name", "") or marked_user.get("displayName", "") or "").strip(),
-      "email": str(marked_user.get("email", "") or marked_email).strip().lower(),
-      "username": str(marked_user.get("username", "") or "").strip(),
-      "state": marked_state,
-      "source": "Portal marked inactive",
-    }
-
-  rows = list(rows_by_id.values())
-  rows.sort(key=lambda item: (item["name"].lower(), item["email"].lower()))
-  return JSONResponse({"ok": True, "region": region, "rows": rows, "pages_scanned": pages_scanned, "portal_marked_count": sum(1 for row in rows if row.get("source") == "Portal marked inactive")})
-
-
-@app.post("/genesys/users/delete-inactive")
-def genesys_delete_inactive_user_route(
-  request: Request,
-  user_id: str = Form(""),
-  user_email: str = Form(""),
-):
-  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, "", "", "")
-  clean_user_id = str(user_id or "").strip()
-  clean_email = str(user_email or "").strip().lower()
-  if not clean_user_id:
-    return JSONResponse({"ok": False, "error": "Genesys user ID is required."}, status_code=400)
-
-  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
-  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
-  if not token_result.get("ok"):
-    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
-  region = token_result.get("region", clean_region)
-  access_token = token_result.get("access_token", "")
-  _, _, api_base = _genesys_region_to_urls(region)
-  ok_user, user_payload, user_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}")
-  if not ok_user:
-    return JSONResponse({"ok": False, "error": f"Genesys user recheck failed: {user_error or 'Unknown error.'}"}, status_code=400)
-  current_state = str(user_payload.get("state", "") or "").strip().lower()
-  current_email = str(user_payload.get("email", "") or "").strip().lower()
-  if current_state != "inactive":
-    return JSONResponse({"ok": False, "error": f"Deletion blocked: current Genesys state is '{current_state or 'unknown'}', not inactive."}, status_code=409)
-  if clean_email and current_email and clean_email != current_email:
-    return JSONResponse({"ok": False, "error": "Deletion blocked: Genesys user email changed since the list was loaded."}, status_code=409)
-
-  deleted, _, delete_error, status_code = _genesys_send_json(
-    "DELETE", api_base, access_token, f"/api/v2/users/{clean_user_id}", payload=None
-  )
-  if not deleted:
-    return JSONResponse({"ok": False, "error": delete_error or f"Genesys user deletion failed (HTTP {status_code})."}, status_code=400)
-  _append_audit_event(
-    action="genesys_inactive_user_deleted",
-    cucm_host=resolved_host,
-    operator=resolved_user,
-    target=f"{clean_user_id};reason=permanent_delete_inactive",
-    output_filename="",
-    inline_mode=True,
-    account=current_email or clean_email,
-  )
-  return JSONResponse({"ok": True, "user_id": clean_user_id, "user_email": current_email or clean_email, "message": "Inactive Genesys user permanently deleted."})
 
 
 @app.get("/genesys/ad-webrtc/groups/inspect")
