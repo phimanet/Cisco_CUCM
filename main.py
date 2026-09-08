@@ -23682,121 +23682,6 @@ def genesys_group_user_audit_route(
   )
   if group_error:
     return JSONResponse({"ok": False, "error": f"Genesys group list failed: {group_error}"}, status_code=400)
-_GENESYS_GROUP_AUDIT_SCHEDULER_LAST_FIRED: dict[str, str] = {}
-_GENESYS_GROUP_AUDIT_SCHEDULER_LOCK = threading.Lock()
-_GENESYS_GROUP_AUDIT_SCHEDULER_THREAD = None
-
-
-def _run_genesys_group_audit_report(triggered_by: str = "scheduler") -> dict:
-  try:
-    group_response = genesys_groups_list_route()
-    if getattr(group_response, "status_code", 500) != 200:
-      return {"success": False, "error": "Genesys group list failed."}
-    group_payload = json.loads(bytes(group_response.body).decode("utf-8"))
-    groups = group_payload.get("groups", []) if isinstance(group_payload, dict) else []
-    request = Request({
-      "type": "http",
-      "method": "POST",
-      "path": "/genesys/groups/user-audit",
-      "headers": [],
-      "query_string": b"",
-      "scheme": "http",
-      "server": ("localhost", 80),
-      "client": ("localhost", 0),
-      "root_path": "",
-    })
-    candidate_groups = []
-    failures = []
-    for group in groups:
-      group_name = str(group.get("name", "") or "").strip()
-      if not group_name:
-        continue
-      audit_response = genesys_group_user_audit_route(request=request, group_name=group_name)
-      if getattr(audit_response, "status_code", 500) != 200:
-        failures.append(f"{group_name}: HTTP {getattr(audit_response, 'status_code', 500)}")
-        continue
-      audit_payload = json.loads(bytes(audit_response.body).decode("utf-8"))
-      if not audit_payload.get("ok"):
-        failures.append(f"{group_name}: {audit_payload.get('error', 'audit failed')}")
-        continue
-      candidate_count = int((audit_payload.get("summary") or {}).get("review_candidates", 0) or 0)
-      if candidate_count:
-        candidate_groups.append({"group_name": group_name, "candidate_count": candidate_count})
-
-    lines = [
-      "Genesys Group Active Directory Reconciliation",
-      f"Run: {datetime.datetime.now(ZoneInfo('America/Los_Angeles')).strftime('%Y-%m-%d %H:%M %Z')}",
-      "Reason for review: Leave",
-      "",
-    ]
-    if candidate_groups:
-      lines.append("Groups with users eligible for review:")
-      lines.extend(f"- {item['group_name']}: {item['candidate_count']} candidate(s)" for item in candidate_groups)
-    else:
-      lines.append("No groups contain users missing from Active Directory.")
-    if failures:
-      lines.extend(["", "Groups that could not be checked:"])
-      lines.extend(f"- {failure}" for failure in failures)
-
-    subject = f"Genesys Group AD Report - {len(candidate_groups)} group(s) with candidates"
-    _send_smtp_email(
-      sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com",
-      recipients=GENESYS_GROUP_AUDIT_NOTIFY_RECIPIENTS,
-      subject=subject,
-      body="\n".join(lines),
-      cc_recipients=[GENESYS_EMAIL_CC] if GENESYS_EMAIL_CC else [],
-      smtp_port=SMTP_PORT,
-      use_starttls=SMTP_USE_STARTTLS,
-    )
-    _append_audit_event(
-      action="genesys_group_ad_audit_report_sent",
-      cucm_host=PROD_CUCM_HOST,
-      operator=triggered_by,
-      target=f"groups={len(groups)};candidate_groups={len(candidate_groups)};candidate_users={sum(item['candidate_count'] for item in candidate_groups)}",
-      output_filename="",
-      inline_mode=True,
-    )
-    return {"success": True, "groups_checked": len(groups), "candidate_groups": candidate_groups, "failures": failures}
-  except Exception as exc:
-    logger.error("genesys_group_ad_audit_report failed: %s", exc, exc_info=True)
-    return {"success": False, "error": str(exc)}
-
-
-def _genesys_group_audit_scheduler_loop():
-  tz = ZoneInfo("America/Los_Angeles")
-  while True:
-    try:
-      time.sleep(60)
-      now = datetime.datetime.now(tz=tz)
-      if now.weekday() != 0 or now.hour != 2:
-        continue
-      fire_key = now.strftime("%Y-%m-%d")
-      with _GENESYS_GROUP_AUDIT_SCHEDULER_LOCK:
-        if _GENESYS_GROUP_AUDIT_SCHEDULER_LAST_FIRED.get("last") == fire_key:
-          continue
-        _GENESYS_GROUP_AUDIT_SCHEDULER_LAST_FIRED["last"] = fire_key
-      result = _run_genesys_group_audit_report(triggered_by="scheduler")
-      logger.info("genesys_group_ad_audit_report result=%s", result)
-    except Exception as exc:
-      logger.error("genesys_group_audit_scheduler_loop error: %s", exc, exc_info=True)
-
-
-def _start_genesys_group_audit_scheduler():
-  global _GENESYS_GROUP_AUDIT_SCHEDULER_THREAD
-  if not _is_prod_runtime_host_strict():
-    logger.info("genesys_group_ad_audit scheduler disabled on non-PROD runtime host")
-    return
-  if _GENESYS_GROUP_AUDIT_SCHEDULER_THREAD and _GENESYS_GROUP_AUDIT_SCHEDULER_THREAD.is_alive():
-    return
-  _GENESYS_GROUP_AUDIT_SCHEDULER_THREAD = threading.Thread(
-    target=_genesys_group_audit_scheduler_loop,
-    name="genesys-group-ad-audit-scheduler",
-    daemon=True,
-  )
-  _GENESYS_GROUP_AUDIT_SCHEDULER_THREAD.start()
-  logger.info("genesys_group_ad_audit scheduler started for Mondays at 02:00 America/Los_Angeles")
-
-
   matching_groups = [
     row for row in group_entities
     if str(row.get("name", "") or "").strip().casefold() == clean_group_name.casefold()
@@ -23896,6 +23781,80 @@ def _start_genesys_group_audit_scheduler():
       "read_only": True,
     },
   })
+
+
+_GENESYS_GROUP_AUDIT_SCHEDULER_LAST_FIRED: dict[str, str] = {}
+_GENESYS_GROUP_AUDIT_SCHEDULER_LOCK = threading.Lock()
+_GENESYS_GROUP_AUDIT_SCHEDULER_THREAD = None
+
+
+def _run_genesys_group_audit_report(triggered_by: str = "scheduler") -> dict:
+  try:
+    group_response = genesys_groups_list_route()
+    if getattr(group_response, "status_code", 500) != 200:
+      return {"success": False, "error": "Genesys group list failed."}
+    group_payload = json.loads(bytes(group_response.body).decode("utf-8"))
+    groups = group_payload.get("groups", []) if isinstance(group_payload, dict) else []
+    request = Request({"type": "http", "method": "POST", "path": "/genesys/groups/user-audit", "headers": [], "query_string": b"", "scheme": "http", "server": ("localhost", 80), "client": ("localhost", 0), "root_path": ""})
+    candidate_groups = []
+    failures = []
+    for group in groups:
+      group_name = str(group.get("name", "") or "").strip()
+      if not group_name:
+        continue
+      audit_response = genesys_group_user_audit_route(request=request, group_name=group_name)
+      if getattr(audit_response, "status_code", 500) != 200:
+        failures.append(f"{group_name}: HTTP {getattr(audit_response, 'status_code', 500)}")
+        continue
+      audit_payload = json.loads(bytes(audit_response.body).decode("utf-8"))
+      candidate_count = int((audit_payload.get("summary") or {}).get("review_candidates", 0) or 0)
+      if candidate_count:
+        candidate_groups.append({"group_name": group_name, "candidate_count": candidate_count})
+    lines = ["Genesys Group Active Directory Reconciliation", f"Run: {datetime.datetime.now(ZoneInfo('America/Los_Angeles')).strftime('%Y-%m-%d %H:%M %Z')}", "Reason for review: Leave", ""]
+    if candidate_groups:
+      lines.append("Groups with users eligible for review:")
+      lines.extend(f"- {item['group_name']}: {item['candidate_count']} candidate(s)" for item in candidate_groups)
+    else:
+      lines.append("No groups contain users missing from Active Directory.")
+    if failures:
+      lines.extend(["", "Groups that could not be checked:"])
+      lines.extend(f"- {failure}" for failure in failures)
+    _send_smtp_email(sender=SMTP_DEFAULT_FROM or "noreply@amnhealthcare.com", recipients=GENESYS_GROUP_AUDIT_NOTIFY_RECIPIENTS, subject=f"Genesys Group AD Report - {len(candidate_groups)} group(s) with candidates", body="\n".join(lines), cc_recipients=[GENESYS_EMAIL_CC] if GENESYS_EMAIL_CC else [], smtp_port=SMTP_PORT, use_starttls=SMTP_USE_STARTTLS)
+    _append_audit_event(action="genesys_group_ad_audit_report_sent", cucm_host=PROD_CUCM_HOST, operator=triggered_by, target=f"groups={len(groups)};candidate_groups={len(candidate_groups)};candidate_users={sum(item['candidate_count'] for item in candidate_groups)}", output_filename="", inline_mode=True)
+    return {"success": True, "groups_checked": len(groups), "candidate_groups": candidate_groups, "failures": failures}
+  except Exception as exc:
+    logger.error("genesys_group_ad_audit_report failed: %s", exc, exc_info=True)
+    return {"success": False, "error": str(exc)}
+
+
+def _genesys_group_audit_scheduler_loop():
+  tz = ZoneInfo("America/Los_Angeles")
+  while True:
+    try:
+      time.sleep(60)
+      now = datetime.datetime.now(tz=tz)
+      if now.weekday() != 0 or now.hour != 2:
+        continue
+      fire_key = now.strftime("%Y-%m-%d")
+      with _GENESYS_GROUP_AUDIT_SCHEDULER_LOCK:
+        if _GENESYS_GROUP_AUDIT_SCHEDULER_LAST_FIRED.get("last") == fire_key:
+          continue
+        _GENESYS_GROUP_AUDIT_SCHEDULER_LAST_FIRED["last"] = fire_key
+      logger.info("genesys_group_ad_audit_report result=%s", _run_genesys_group_audit_report(triggered_by="scheduler"))
+    except Exception as exc:
+      logger.error("genesys_group_audit_scheduler_loop error: %s", exc, exc_info=True)
+
+
+def _start_genesys_group_audit_scheduler():
+  global _GENESYS_GROUP_AUDIT_SCHEDULER_THREAD
+  if not _is_prod_runtime_host_strict():
+    logger.info("genesys_group_ad_audit scheduler disabled on non-PROD runtime host")
+    return
+  if _GENESYS_GROUP_AUDIT_SCHEDULER_THREAD and _GENESYS_GROUP_AUDIT_SCHEDULER_THREAD.is_alive():
+    return
+  _GENESYS_GROUP_AUDIT_SCHEDULER_THREAD = threading.Thread(target=_genesys_group_audit_scheduler_loop, name="genesys-group-ad-audit-scheduler", daemon=True)
+  _GENESYS_GROUP_AUDIT_SCHEDULER_THREAD.start()
+  logger.info("genesys_group_ad_audit scheduler started for Mondays at 02:00 America/Los_Angeles")
 
 
 @app.post("/genesys/users/mark-inactive")
