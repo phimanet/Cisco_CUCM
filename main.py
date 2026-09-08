@@ -2915,18 +2915,19 @@ def _genesys_collect_paged_entities(
   path: str,
   page_size: int,
   max_pages: int,
+  extra_params: dict | None = None,
 ) -> tuple[list[dict], int, str]:
   entities_all = []
   pages_scanned = 0
   for page_number in range(1, max_pages + 1):
+    page_params = {"pageSize": page_size, "pageNumber": page_number}
+    if isinstance(extra_params, dict):
+      page_params.update(extra_params)
     ok_page, payload, err_page = _genesys_get_json(
       api_base,
       access_token,
       path,
-      {
-        "pageSize": page_size,
-        "pageNumber": page_number,
-      },
+      page_params,
     )
     if not ok_page:
       return entities_all, pages_scanned, err_page
@@ -17866,8 +17867,8 @@ def genesys_admin_placeholder(request: Request):
                     var payload = await response.json();
                     if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
                     var rows = Array.isArray(payload.rows) ? payload.rows : [];
-                    summary.innerHTML = "<strong>Inactive users:</strong> " + rows.length + " &nbsp; <strong>Pages scanned:</strong> " + esc(payload.pages_scanned);
-                    output.innerHTML = rows.length ? "<table><thead><tr><th>Name</th><th>Email</th><th>Username</th><th>User ID</th><th>State</th><th>Action</th></tr></thead><tbody>" + rows.map(function (row) { return "<tr><td>" + esc(row.name) + "</td><td>" + esc(row.email) + "</td><td>" + esc(row.username) + "</td><td>" + esc(row.id) + "</td><td style='font-weight:700;color:#9a4b00;'>" + esc(row.state) + "</td><td><button type='button' data-genesys-permanent-delete='" + esc(row.id) + "' data-genesys-delete-email='" + esc(row.email) + "' style='background:#8a2d2d;padding:5px 9px;'>Delete Permanently</button></td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#4e6a84;'>No inactive Genesys users were returned.</span>";
+                    summary.innerHTML = "<strong>Inactive users:</strong> " + rows.length + " &nbsp; <strong>Marked inactive by this portal:</strong> " + esc(payload.portal_marked_count || 0) + " &nbsp; <strong>Pages scanned:</strong> " + esc(payload.pages_scanned);
+                    output.innerHTML = rows.length ? "<table><thead><tr><th>Name</th><th>Email</th><th>Username</th><th>User ID</th><th>State</th><th>Source</th><th>Action</th></tr></thead><tbody>" + rows.map(function (row) { return "<tr><td>" + esc(row.name) + "</td><td>" + esc(row.email) + "</td><td>" + esc(row.username) + "</td><td>" + esc(row.id) + "</td><td style='font-weight:700;color:#9a4b00;'>" + esc(row.state) + "</td><td>" + esc(row.source) + "</td><td><button type='button' data-genesys-permanent-delete='" + esc(row.id) + "' data-genesys-delete-email='" + esc(row.email) + "' style='background:#8a2d2d;padding:5px 9px;'>Delete Permanently</button></td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#4e6a84;'>No inactive Genesys users were returned.</span>";
                     output.querySelectorAll("[data-genesys-permanent-delete]").forEach(function (deleteButton) { deleteButton.addEventListener("click", async function () { var userId = deleteButton.getAttribute("data-genesys-permanent-delete") || ""; var email = deleteButton.getAttribute("data-genesys-delete-email") || ""; if (!window.confirm("Permanently delete " + (email || userId) + " from Genesys? This cannot be undone.")) return; deleteButton.disabled = true; deleteButton.textContent = "Deleting..."; try { var data = new FormData(); data.append("user_id", userId); data.append("user_email", email); var deleteResponse = await fetch("/genesys/users/delete-inactive", { method: "POST", body: data, headers: { "Accept": "application/json" } }); var deletePayload = await deleteResponse.json(); if (!deleteResponse.ok || !deletePayload.ok) throw new Error((deletePayload && deletePayload.error) || ("HTTP " + deleteResponse.status)); deleteButton.textContent = "Deleted"; deleteButton.style.background = "#2d7a43"; status.textContent = "User permanently deleted. Reload the list to refresh."; } catch (err) { deleteButton.disabled = false; deleteButton.textContent = "Delete Permanently"; status.textContent = "Permanent deletion failed: " + ((err && err.message) || "Unknown error."); } }); });
                     status.textContent = "Inactive user list loaded.";
                   } catch (err) { status.textContent = "Inactive user lookup failed: " + ((err && err.message) || "Unknown error."); }
@@ -23973,23 +23974,66 @@ def genesys_inactive_users_route():
     "/api/v2/users",
     page_size=max(25, min(GENESYS_USERS_PAGE_SIZE, 200)),
     max_pages=200,
+    extra_params={"state": "inactive"},
   )
   if users_error:
     return JSONResponse({"ok": False, "error": f"Inactive user lookup failed: {users_error}"}, status_code=400)
-  rows = []
+  rows_by_id = {}
   for user in users:
     state = str(user.get("state", "") or "").strip().lower()
     if state != "inactive":
       continue
-    rows.append({
+    user_id = str(user.get("id", "") or "").strip()
+    if not user_id:
+      continue
+    rows_by_id[user_id] = {
       "id": str(user.get("id", "") or "").strip(),
       "name": str(user.get("name", "") or user.get("displayName", "") or "").strip(),
       "email": str(user.get("email", "") or "").strip().lower(),
       "username": str(user.get("username", "") or "").strip(),
       "state": state,
-    })
+      "source": "Genesys inactive state",
+    }
+
+  # Include users marked inactive by this portal even when the tenant's user
+  # collection does not honor the state query or omits inactive users.
+  marked_ids = {}
+  try:
+    with AUDIT_LOG_LOCK:
+      if os.path.exists(AUDIT_LOG_PATH):
+        with open(AUDIT_LOG_PATH, "r", newline="", encoding="utf-8") as handle:
+          for audit_row in csv.DictReader(handle):
+            if str(audit_row.get("action", "") or "").strip() != "genesys_user_marked_inactive":
+              continue
+            target_parts = str(audit_row.get("target", "") or "").split(";", 1)
+            marked_id = target_parts[0].strip()
+            if marked_id:
+              marked_ids[marked_id] = str(audit_row.get("account", "") or "").strip().lower()
+  except (OSError, csv.Error) as exc:
+    logger.warning("Genesys marked-inactive audit lookup skipped: %s", exc)
+
+  for marked_id, marked_email in marked_ids.items():
+    if marked_id in rows_by_id:
+      rows_by_id[marked_id]["source"] = "Portal marked inactive"
+      continue
+    ok_marked_user, marked_user, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{marked_id}")
+    if not ok_marked_user:
+      continue
+    marked_state = str(marked_user.get("state", "") or "").strip().lower()
+    if marked_state != "inactive":
+      continue
+    rows_by_id[marked_id] = {
+      "id": marked_id,
+      "name": str(marked_user.get("name", "") or marked_user.get("displayName", "") or "").strip(),
+      "email": str(marked_user.get("email", "") or marked_email).strip().lower(),
+      "username": str(marked_user.get("username", "") or "").strip(),
+      "state": marked_state,
+      "source": "Portal marked inactive",
+    }
+
+  rows = list(rows_by_id.values())
   rows.sort(key=lambda item: (item["name"].lower(), item["email"].lower()))
-  return JSONResponse({"ok": True, "region": region, "rows": rows, "pages_scanned": pages_scanned})
+  return JSONResponse({"ok": True, "region": region, "rows": rows, "pages_scanned": pages_scanned, "portal_marked_count": sum(1 for row in rows if row.get("source") == "Portal marked inactive")})
 
 
 @app.post("/genesys/users/delete-inactive")
