@@ -17838,8 +17838,9 @@ def genesys_admin_placeholder(request: Request):
             <h3 style="margin-top:0;">Groups and User Cleanup</h3>
             <p style="color:#4e6a84;font-size:12px;">Read-only reconciliation. Extracts members from one Genesys group, then checks each member email against Active Directory. No users or memberships are changed.</p>
             <div class="search-filter-row">
-              <input id="genesys-group-user-audit-name" value="Genesys_User_Role_SmartSquare_Agent" style="width:420px;" aria-label="Genesys group name">
-              <button type="button" id="genesys-group-user-audit-btn" style="background:#385977;">Check Group Members</button>
+              <select id="genesys-group-user-audit-name" style="width:420px;" aria-label="Genesys group name"><option value="">Load Genesys groups...</option></select>
+              <button type="button" id="genesys-group-user-audit-load-btn" style="background:#385977;">Reload Groups</button>
+              <button type="button" id="genesys-group-user-audit-btn" style="background:#2d7a43;" disabled>Submit Lookup</button>
             </div>
             <p id="genesys-group-user-audit-status" style="color:#2c5c8a;min-height:18px;">Ready.</p>
             <div id="genesys-group-user-audit-summary" style="margin:8px 0;padding:8px;background:#f8fcff;border:1px solid #c8dbee;"></div>
@@ -17848,16 +17849,18 @@ def genesys_admin_placeholder(request: Request):
             <script>
               (function () {
                 var button = document.getElementById("genesys-group-user-audit-btn");
+                var loadButton = document.getElementById("genesys-group-user-audit-load-btn");
+                var groupSelect = document.getElementById("genesys-group-user-audit-name");
                 var status = document.getElementById("genesys-group-user-audit-status");
                 var summary = document.getElementById("genesys-group-user-audit-summary");
                 var output = document.getElementById("genesys-group-user-audit-output");
                 var diagnostics = document.getElementById("genesys-group-user-audit-diagnostics");
-                if (!button || button.dataset.bound === "1") return;
+                if (!button || !loadButton || !groupSelect || button.dataset.bound === "1") return;
                 button.dataset.bound = "1";
                 function esc(value) { return String(value || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;"); }
                 button.addEventListener("click", async function () {
-                  var groupName = document.getElementById("genesys-group-user-audit-name").value.trim();
-                  if (!groupName) { status.textContent = "Enter a Genesys group name."; return; }
+                  var groupName = groupSelect.value.trim();
+                  if (!groupName) { status.textContent = "Select a Genesys group first."; return; }
                   button.disabled = true; status.textContent = "Reading group members and checking Active Directory..."; summary.innerHTML = ""; output.innerHTML = ""; diagnostics.textContent = "";
                   try {
                     var data = new FormData(); data.append("group_name", groupName);
@@ -17872,6 +17875,24 @@ def genesys_admin_placeholder(request: Request):
                   } catch (err) { status.textContent = "Group audit failed: " + ((err && err.message) || "Unknown error."); }
                   finally { button.disabled = false; }
                 });
+                async function loadGroups() {
+                  loadButton.disabled = true; button.disabled = true; status.textContent = "Loading Genesys groups...";
+                  try {
+                    var response = await fetch("/genesys/groups/list", { method: "GET", headers: { "Accept": "application/json" } });
+                    var payload = await response.json();
+                    if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
+                    var groups = Array.isArray(payload.groups) ? payload.groups : [];
+                    groupSelect.innerHTML = "<option value=''>Select a Genesys group...</option>" + groups.map(function (group) { return "<option value='" + esc(group.name) + "'>" + esc(group.name) + " (" + esc(group.member_count) + " members)</option>"; }).join("");
+                    var preferred = groups.find(function (group) { return String(group.name || "").toLowerCase() === "genesys_user_role_smartsquare_agent"; });
+                    if (preferred) groupSelect.value = preferred.name;
+                    button.disabled = !groupSelect.value;
+                    status.textContent = groups.length + " Genesys role group(s) loaded. Select a group and submit the lookup.";
+                  } catch (err) { groupSelect.innerHTML = "<option value=''>Unable to load groups</option>"; status.textContent = "Group list failed: " + ((err && err.message) || "Unknown error."); }
+                  finally { loadButton.disabled = false; }
+                }
+                groupSelect.addEventListener("change", function () { button.disabled = !groupSelect.value; });
+                loadButton.addEventListener("click", loadGroups);
+                loadGroups();
               })();
             </script>
           </div>
@@ -23596,6 +23617,36 @@ def _genesys_extract_group_member_candidates(payload: dict) -> list[dict]:
 
   visit(payload)
   return candidates
+
+
+@app.get("/genesys/groups/list")
+def genesys_groups_list_route():
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  region = token_result.get("region", clean_region)
+  access_token = token_result.get("access_token", "")
+  _, _, api_base = _genesys_region_to_urls(region)
+  group_entities, pages_scanned, group_error = _genesys_collect_paged_entities(
+    api_base, access_token, "/api/v2/groups", page_size=100, max_pages=20
+  )
+  if group_error:
+    return JSONResponse({"ok": False, "error": f"Genesys group list failed: {group_error}"}, status_code=400)
+  groups = []
+  seen = set()
+  for group in group_entities:
+    name = str(group.get("name", "") or "").strip()
+    if not name.lower().startswith("genesys_user_role") or name.lower() in seen:
+      continue
+    seen.add(name.lower())
+    groups.append({
+      "id": str(group.get("id", "") or "").strip(),
+      "name": name,
+      "member_count": group.get("memberCount", group.get("membersCount", 0)),
+    })
+  groups.sort(key=lambda item: item["name"].lower())
+  return JSONResponse({"ok": True, "region": region, "groups": groups, "pages_scanned": pages_scanned})
 
 
 @app.post("/genesys/groups/user-audit")
