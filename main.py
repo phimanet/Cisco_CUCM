@@ -17830,9 +17830,51 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel" onclick="(function(){var id='genesys-queue-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Info</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-blocked-caller-panel" onclick="(function(){var id='genesys-blocked-caller-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Block Incoming Calls</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-role-groups-panel" onclick="(function(){var id='genesys-role-groups-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Inspect Genesys Role Groups</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-group-user-audit-panel" onclick="(function(){var id='genesys-group-user-audit-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Groups and User Cleanup</button>
         </aside>
 
         <section class="portal-main">
+          <div id="genesys-group-user-audit-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+            <h3 style="margin-top:0;">Groups and User Cleanup</h3>
+            <p style="color:#4e6a84;font-size:12px;">Read-only reconciliation. Extracts members from one Genesys group, then checks each member email against Active Directory. No users or memberships are changed.</p>
+            <div class="search-filter-row">
+              <input id="genesys-group-user-audit-name" value="Genesys_User_Role_SmartSquare_Agent" style="width:420px;" aria-label="Genesys group name">
+              <button type="button" id="genesys-group-user-audit-btn" style="background:#385977;">Check Group Members</button>
+            </div>
+            <p id="genesys-group-user-audit-status" style="color:#2c5c8a;min-height:18px;">Ready.</p>
+            <div id="genesys-group-user-audit-summary" style="margin:8px 0;padding:8px;background:#f8fcff;border:1px solid #c8dbee;"></div>
+            <div id="genesys-group-user-audit-output" style="overflow-x:auto;"></div>
+            <details style="margin-top:10px;"><summary style="cursor:pointer;font-weight:700;color:#2c5c8a;">Read-only diagnostics</summary><pre id="genesys-group-user-audit-diagnostics" style="white-space:pre-wrap;max-height:260px;overflow:auto;background:#f8fcff;border:1px solid #d7e3ee;padding:8px;"></pre></details>
+            <script>
+              (function () {
+                var button = document.getElementById("genesys-group-user-audit-btn");
+                var status = document.getElementById("genesys-group-user-audit-status");
+                var summary = document.getElementById("genesys-group-user-audit-summary");
+                var output = document.getElementById("genesys-group-user-audit-output");
+                var diagnostics = document.getElementById("genesys-group-user-audit-diagnostics");
+                if (!button || button.dataset.bound === "1") return;
+                button.dataset.bound = "1";
+                function esc(value) { return String(value || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;"); }
+                button.addEventListener("click", async function () {
+                  var groupName = document.getElementById("genesys-group-user-audit-name").value.trim();
+                  if (!groupName) { status.textContent = "Enter a Genesys group name."; return; }
+                  button.disabled = true; status.textContent = "Reading group members and checking Active Directory..."; summary.innerHTML = ""; output.innerHTML = ""; diagnostics.textContent = "";
+                  try {
+                    var data = new FormData(); data.append("group_name", groupName);
+                    var response = await fetch("/genesys/groups/user-audit", { method: "POST", body: data, headers: { "Accept": "application/json" } });
+                    var payload = await response.json();
+                    if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
+                    var rows = Array.isArray(payload.rows) ? payload.rows : [];
+                    summary.innerHTML = "<strong>Group:</strong> " + esc(payload.group_name) + " &nbsp; <strong>Members found:</strong> " + rows.length + " &nbsp; <strong>AD valid:</strong> " + esc(payload.summary.ad_valid) + " &nbsp; <strong>Review candidates:</strong> " + esc(payload.summary.review_candidates);
+                    output.innerHTML = rows.length ? "<table><thead><tr><th>Genesys Name</th><th>Email</th><th>Genesys User ID</th><th>AD Status</th><th>AD Name / User ID</th><th>Review</th></tr></thead><tbody>" + rows.map(function (row) { var valid = row.ad_status === "valid"; return "<tr><td>" + esc(row.name) + "</td><td>" + esc(row.email) + "</td><td>" + esc(row.user_id) + "</td><td style='font-weight:700;color:" + (valid ? "#176b35" : "#9a4b00") + ";'>" + esc(row.ad_status) + "</td><td>" + esc(row.ad_display_name || row.ad_user_id || row.ad_error || "") + "</td><td>" + (row.review_candidate ? "<strong style='color:#9a4b00;'>Candidate</strong>" : "No") + "</td></tr>"; }).join("") + "</tbody></table>" : "<span style='color:#8a2d2d;'>No member records were returned.</span>";
+                    diagnostics.textContent = JSON.stringify(payload.diagnostics || {}, null, 2);
+                    status.textContent = "Read-only check complete. No changes were made.";
+                  } catch (err) { status.textContent = "Group audit failed: " + ((err && err.message) || "Unknown error."); }
+                  finally { button.disabled = false; }
+                });
+              })();
+            </script>
+          </div>
           <div id="genesys-role-groups-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Inspect Genesys Role Groups</h3>
             <p style="color:#4e6a84;font-size:12px;">Read-only diagnostic. Lists groups beginning with Genesys_User_Role and displays the group detail contents returned by Genesys. No membership changes are made.</p>
@@ -23500,6 +23542,187 @@ def genesys_ad_webrtc_groups_route(
     })
   clean_rows.sort(key=lambda row: row["name"].lower())
   return JSONResponse({"ok": True, "prefix": "Genesys_User_Role", "groups": clean_rows})
+
+
+def _genesys_extract_group_member_candidates(payload: dict) -> list[dict]:
+  candidates = []
+  visited = set()
+
+  def visit(value, depth=0):
+    if depth > 8:
+      return
+    if isinstance(value, list):
+      for item in value:
+        visit(item, depth + 1)
+      return
+    if not isinstance(value, dict):
+      return
+
+    user_obj = value.get("user") if isinstance(value.get("user"), dict) else {}
+    user_id = str(
+      value.get("id", "")
+      or value.get("userId", "")
+      or value.get("memberId", "")
+      or value.get("value", "")
+      or user_obj.get("id", "")
+      or ""
+    ).strip()
+    email = str(
+      value.get("email", "")
+      or value.get("userName", "")
+      or value.get("username", "")
+      or user_obj.get("email", "")
+      or user_obj.get("userName", "")
+      or ""
+    ).strip().lower()
+    name = str(
+      value.get("name", "")
+      or value.get("display", "")
+      or value.get("displayName", "")
+      or user_obj.get("name", "")
+      or user_obj.get("displayName", "")
+      or ""
+    ).strip()
+    if email or (user_id and name):
+      key = (email or user_id.lower(), name.lower())
+      if key not in visited:
+        visited.add(key)
+        candidates.append({"user_id": user_id, "email": email, "name": name})
+
+    for key in ("members", "entities", "Resources", "resources", "users", "value"):
+      nested = value.get(key)
+      if isinstance(nested, (dict, list)):
+        visit(nested, depth + 1)
+
+  visit(payload)
+  return candidates
+
+
+@app.post("/genesys/groups/user-audit")
+def genesys_group_user_audit_route(
+  request: Request,
+  group_name: str = Form(""),
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  clean_group_name = str(group_name or "").strip()
+  if not clean_group_name:
+    return JSONResponse({"ok": False, "error": "Genesys group name is required."}, status_code=400)
+
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  region = token_result.get("region", clean_region)
+  access_token = token_result.get("access_token", "")
+  _, _, api_base = _genesys_region_to_urls(region)
+
+  group_entities, group_pages, group_error = _genesys_collect_paged_entities(
+    api_base, access_token, "/api/v2/groups", page_size=100, max_pages=20
+  )
+  if group_error:
+    return JSONResponse({"ok": False, "error": f"Genesys group list failed: {group_error}"}, status_code=400)
+  matching_groups = [
+    row for row in group_entities
+    if str(row.get("name", "") or "").strip().casefold() == clean_group_name.casefold()
+    and str(row.get("id", "") or "").strip()
+  ]
+  if not matching_groups:
+    return JSONResponse({"ok": False, "error": f"Genesys group '{clean_group_name}' was not found."}, status_code=404)
+
+  group = matching_groups[0]
+  group_id = str(group.get("id", "") or "").strip()
+  ok_detail, detail_payload, detail_error = _genesys_get_json(api_base, access_token, f"/api/v2/groups/{group_id}")
+  if not ok_detail:
+    return JSONResponse({"ok": False, "error": f"Genesys group detail lookup failed: {detail_error or 'Unknown error.'}"}, status_code=400)
+
+  member_candidates = _genesys_extract_group_member_candidates(detail_payload)
+  probes = [{"path": f"/api/v2/groups/{group_id}", "ok": True, "candidate_count": len(member_candidates)}]
+  for member_path in [
+    f"/api/v2/groups/{group_id}/members",
+    f"/api/v2/scim/groups/{group_id}",
+    f"/api/v2/scim/v2/groups/{group_id}",
+  ]:
+    probe = {"path": member_path, "ok": False, "pages_scanned": 0, "candidate_count": 0}
+    for page_number in range(1, 51):
+      ok_members, members_payload, members_error = _genesys_get_json(
+        api_base,
+        access_token,
+        member_path,
+        params={"pageSize": 100, "pageNumber": page_number},
+      )
+      if not ok_members:
+        probe["error"] = members_error
+        break
+      probe["ok"] = True
+      probe["pages_scanned"] = page_number
+      discovered = _genesys_extract_group_member_candidates(members_payload)
+      probe["candidate_count"] += len(discovered)
+      member_candidates.extend(discovered)
+      entities = members_payload.get("entities", []) if isinstance(members_payload, dict) else []
+      resources = members_payload.get("Resources", members_payload.get("resources", [])) if isinstance(members_payload, dict) else []
+      page_items = entities if isinstance(entities, list) else resources if isinstance(resources, list) else []
+      page_count = int(members_payload.get("pageCount", 0) or 0) if isinstance(members_payload, dict) else 0
+      next_uri = str(members_payload.get("nextUri", "") or members_payload.get("next_uri", "")).strip() if isinstance(members_payload, dict) else ""
+      if not next_uri and not (page_count and page_number < page_count) and len(page_items) < 100:
+        break
+    probes.append(probe)
+
+  deduped = []
+  seen = set()
+  for candidate in member_candidates:
+    key = str(candidate.get("email", "") or candidate.get("user_id", "") or candidate.get("name", "")).strip().lower()
+    if not key or key in seen:
+      continue
+    seen.add(key)
+    deduped.append(candidate)
+
+  rows = []
+  ad_context = {"username": resolved_user, "password": resolved_pass}
+  for candidate in deduped:
+    user_id = str(candidate.get("user_id", "") or "").strip()
+    email = str(candidate.get("email", "") or "").strip().lower()
+    name = str(candidate.get("name", "") or "").strip()
+    user_payload = {}
+    if user_id and (not email or not name):
+      ok_user, user_payload, _ = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}")
+      if ok_user:
+        email = email or str(user_payload.get("email", "") or "").strip().lower()
+        name = name or str(user_payload.get("name", "") or user_payload.get("displayName", "") or "").strip()
+
+    ad_identity = lookup_ad_identity_by_email(email, auth_context=ad_context) if email else {"found": False, "error": "No email returned by Genesys."}
+    ad_found = bool(ad_identity.get("found"))
+    rows.append({
+      "user_id": user_id,
+      "name": name,
+      "email": email,
+      "ad_status": "valid" if ad_found else "not_found",
+      "ad_display_name": str(ad_identity.get("displayName", "") or "").strip(),
+      "ad_user_id": str(ad_identity.get("samAccountName", "") or "").strip(),
+      "ad_error": str(ad_identity.get("error", "") or "").strip(),
+      "review_candidate": not ad_found,
+    })
+  rows.sort(key=lambda item: (str(item.get("name", "") or "").lower(), str(item.get("email", "") or "").lower()))
+  return JSONResponse({
+    "ok": True,
+    "region": region,
+    "group_name": clean_group_name,
+    "group_id": group_id,
+    "member_count_reported": group.get("memberCount", group.get("membersCount", 0)),
+    "rows": rows,
+    "summary": {
+      "members_found": len(rows),
+      "ad_valid": sum(1 for row in rows if row.get("ad_status") == "valid"),
+      "review_candidates": sum(1 for row in rows if row.get("review_candidate")),
+    },
+    "diagnostics": {
+      "group_pages_scanned": group_pages,
+      "member_probes": probes,
+      "read_only": True,
+    },
+  })
 
 
 @app.get("/genesys/ad-webrtc/groups/inspect")
