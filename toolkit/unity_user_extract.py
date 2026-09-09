@@ -109,11 +109,15 @@ def _extract_um_account_list(payload):
 
 
 def _um_service_name(account):
-    return _first_value(account, ("ServiceName", "serviceName", "UnifiedMessagingService", "unifiedMessagingService", "UMService", "umService", "Name", "name"))
+    return _first_value(account, ("ServiceName", "serviceName", "UnifiedMessagingService", "unifiedMessagingService", "UMService", "umService", "Service", "service", "Name", "name"))
 
 
 def _um_account_alias(account):
     return _first_value(account, ("Alias", "alias", "UserAlias", "userAlias"))
+
+
+def _um_account_user_id(account):
+    return _first_value(account, ("UserObjectId", "userObjectId", "UserObjectID", "userObjectID", "ObjectId", "objectId", "UserId", "userId"))
 
 
 def _load_um_service_map(unity_server, unity_user, unity_pass):
@@ -141,8 +145,11 @@ def _load_um_service_map(unity_server, unity_user, unity_pass):
         for account in accounts:
             service = _um_service_name(account)
             alias = _um_account_alias(account)
+            user_id = _um_account_user_id(account)
             if alias and service:
                 service_map[alias.lower()] = service
+            if user_id and service:
+                service_map[f"id:{user_id.lower()}"] = service
         return service_map
     return service_map
 
@@ -186,13 +193,14 @@ def extract_unity_users(unity_server, unity_user, unity_pass, max_users=MAX_USER
             raise RuntimeError(f"Unity returned no user records. Response shape: {shape}")
         for user in page_users:
             alias = _first_value(user, ("Alias", "alias"))
+            object_id = _first_value(user, ("ObjectId", "objectId", "ObjectID", "objectID"))
             rows.append({
                 "alias": alias,
                 "first_name": _first_value(user, ("FirstName", "firstName", "Firstname")),
                 "last_name": _first_value(user, ("LastName", "lastName", "Lastname")),
                 "email": _first_value(user, ("EmailAddress", "emailAddress", "Email", "email")),
                 "extension": _first_value(user, ("DtmfAccessId", "dtmfAccessId", "Extension", "extension")),
-                "unified_messaging": service_map.get(alias.lower(), _unified_messaging_value(user)) if alias else _unified_messaging_value(user),
+                "unified_messaging": service_map.get(f"id:{object_id.lower()}", service_map.get(alias.lower(), _unified_messaging_value(user))) if object_id or alias else _unified_messaging_value(user),
             })
         if progress_callback:
             progress_callback(len(rows), page_number + 1)
