@@ -90,7 +90,7 @@ def extract_unity_users(unity_server, unity_user, unity_pass, max_users=MAX_USER
     while len(rows) < safe_max_users:
         response = requests.get(
             _unity_url(clean_server, "/vmrest/users"),
-            params={"rowsperpage": min(ROWS_PER_PAGE, safe_max_users - len(rows)), "pageNumber": page_number},
+            params={"rowsPerPage": min(ROWS_PER_PAGE, safe_max_users - len(rows)), "pageNumber": page_number},
             auth=HTTPBasicAuth(str(unity_user).strip(), unity_pass),
             headers={"Accept": "application/json"},
             verify=False,
