@@ -74,6 +74,7 @@ from toolkit.ad_phone_fields import (
   lookup_ad_identity_by_email,
   lookup_ad_identities_by_full_name,
 )
+from toolkit.unity_user_extract import extract_unity_users
 from toolkit.transunion_sdpr import (
   integration_status as transunion_integration_status,
   list_caller_profiles as transunion_list_caller_profiles,
@@ -38050,6 +38051,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unityldapsync">Trigger Unity LDAP Sync</button>
+            <button type="button" class="portal-nav-btn" data-panel="unity-user-extract">Unity Connection User Extract</button>
             <button type="button" class="portal-nav-btn" data-panel="ad-group-membership">Check Unifed Messaging Security Group</button>
             <button type="button" class="portal-nav-btn" data-panel="ad-group-identifiers">Security Group Identifier (Read-Only)</button>
             <button type="button" class="portal-nav-btn" data-panel="sep-sms-report">SMS Separation Email Process</button>
@@ -38313,6 +38315,58 @@ def menu_admin_page(request: Request):
 
           <button type="submit">Run Unity LDAP Sync</button>
         </form>
+      </section>
+      <section class="panel tool-panel" data-panel="unity-user-extract">
+        <h3>Unity Connection User Extract</h3>
+        <p>Read-only extract of Unity Connection users with first name, last name, email, extension, and Unified Messaging status.</p>
+        <form id="unity-user-extract-form">
+          <input type="hidden" name="unity_user" value="">
+          <input type="hidden" name="unity_pass" value="">
+          <button type="submit">Extract Unity Connection Users</button>
+          <button type="button" id="unity-user-extract-csv" style="background:#2d7a43;">Download CSV</button>
+        </form>
+        <p id="unity-user-extract-status" style="color:#2c5c8a;min-height:18px;"></p>
+        <div id="unity-user-extract-results" style="overflow-x:auto;"></div>
+        <script>
+          (function () {
+            var form = document.getElementById("unity-user-extract-form");
+            var status = document.getElementById("unity-user-extract-status");
+            var results = document.getElementById("unity-user-extract-results");
+            if (!form || form.dataset.bound === "1") return;
+            form.dataset.bound = "1";
+            form.addEventListener("submit", function (event) {
+              event.preventDefault();
+              status.textContent = "Reading Unity Connection users...";
+              results.innerHTML = "";
+              fetch("/admin/unity-user-extract", { method: "POST", body: new FormData(form), credentials: "same-origin" })
+                .then(function (response) { return response.json().then(function (data) { return { response: response, data: data }; }); })
+                .then(function (item) {
+                  var data = item.data || {};
+                  if (!item.response.ok || !data.ok) throw new Error(data.error || "Unity user extract failed.");
+                  var rows = data.rows || [];
+                  status.textContent = "Extracted " + rows.length + " Unity Connection users from " + (data.unity_server || "Unity") + ".";
+                  if (!rows.length) { results.innerHTML = "<p>No Unity Connection users were returned.</p>"; return; }
+                  var html = "<table><thead><tr><th>Alias</th><th>First Name</th><th>Last Name</th><th>Email</th><th>Extension</th><th>Unified Messaging</th></tr></thead><tbody>";
+                  rows.forEach(function (row) {
+                    html += "<tr><td>" + escapeHtml(row.alias) + "</td><td>" + escapeHtml(row.first_name) + "</td><td>" + escapeHtml(row.last_name) + "</td><td>" + escapeHtml(row.email) + "</td><td>" + escapeHtml(row.extension) + "</td><td>" + escapeHtml(row.unified_messaging) + "</td></tr>";
+                  });
+                  results.innerHTML = html + "</tbody></table>";
+                })
+                .catch(function (error) { status.textContent = error.message; status.style.color = "#b42318"; });
+            });
+            document.getElementById("unity-user-extract-csv").addEventListener("click", function () {
+              var formData = new FormData(form);
+              formData.append("download_csv", "1");
+              fetch("/admin/unity-user-extract", { method: "POST", body: formData, credentials: "same-origin" })
+                .then(function (response) { if (!response.ok) return response.json().then(function (data) { throw new Error(data.error || "CSV download failed."); }); return response.blob(); })
+                .then(function (blob) { var link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = "unity_connection_users.csv"; link.click(); URL.revokeObjectURL(link.href); })
+                .catch(function (error) { status.textContent = error.message; status.style.color = "#b42318"; });
+            });
+            function escapeHtml(value) {
+              return String(value == null ? "" : value).replace(/[&<>\"']/g, function (character) { return ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[character]; });
+            }
+          })();
+        </script>
       </section>
 
       <section class="panel tool-panel" data-panel="ad-group-identifiers">
@@ -51511,6 +51565,7 @@ def reset_unity_voicemail_pin_route(
     request: Request,
     unity_user: str = Form(""),
     unity_pass: str = Form(""),
+    download_csv: str = Form(""),
     voicemail_user: str = Form(...),
     new_voicemail_pin: str = Form(...),
     confirm_voicemail_pin: str = Form(...),
@@ -51777,6 +51832,43 @@ def admin_unity_ldap_sync_route(
     })
 
   return _render_job_result("Unity LDAP Sync", data, filename, back_url="/page2")
+
+
+@app.post("/admin/unity-user-extract")
+def admin_unity_user_extract_route(
+    request: Request,
+    unity_user: str = Form(""),
+    unity_pass: str = Form(""),
+):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not operator:
+    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Not authorized."}, status_code=403)
+  try:
+    resolved_user, resolved_pass = _resolve_unity_credentials(request, unity_user, unity_pass)
+    unity_server = _get_runtime_unity_host(_get_unity_server_for_session(request))
+    rows = extract_unity_users(unity_server, resolved_user, resolved_pass)
+    if download_csv == "1":
+      csv_data = io.StringIO()
+      writer = csv.writer(csv_data)
+      writer.writerow(["Alias", "First Name", "Last Name", "Email", "Extension", "Unified Messaging"])
+      for row in rows:
+        writer.writerow([row.get("alias", ""), row.get("first_name", ""), row.get("last_name", ""), row.get("email", ""), row.get("extension", ""), row.get("unified_messaging", "")])
+      return Response(csv_data.getvalue().encode("utf-8-sig"), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=unity_connection_users.csv"})
+    _append_audit_event(
+      action="admin_unity_user_extract",
+      cucm_host=str(session.get("cucm_host", "") or ""),
+      operator=operator,
+      target=unity_server,
+      output_filename="",
+      inline_mode=True,
+    )
+    return JSONResponse({"ok": True, "unity_server": unity_server, "count": len(rows), "rows": rows})
+  except Exception as exc:
+    logger.exception("Unity Connection user extract failed")
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
 
 @app.get("/admin/separation-sms-report/config")
