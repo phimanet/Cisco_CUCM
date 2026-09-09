@@ -38429,7 +38429,7 @@ def menu_admin_page(request: Request):
                       if (job.status === "completed") {
                         var rows = job.rows || [];
                         status.textContent = "Completed: " + rows.length + " Unity Connection users extracted.";
-                        var html = "<table><thead><tr><th>Alias</th><th>First Name</th><th>Last Name</th><th>Email</th><th>Extension</th><th>Unified Messaging</th></tr></thead><tbody>";
+                        var html = "<table><thead><tr><th>Alias</th><th>First Name</th><th>Last Name</th><th>Email</th><th>Extension</th><th>Unified Messaging Account</th></tr></thead><tbody>";
                         rows.forEach(function (row) {
                           var cell = function (value) { var element = document.createElement("span"); element.textContent = value == null ? "" : value; return element.innerHTML; };
                           html += "<tr><td>" + cell(row.alias) + "</td><td>" + cell(row.first_name) + "</td><td>" + cell(row.last_name) + "</td><td>" + cell(row.email) + "</td><td>" + cell(row.extension) + "</td><td>" + cell(row.unified_messaging) + "</td></tr>";
@@ -52002,7 +52002,7 @@ def admin_unity_user_extract_download_route(request: Request, job_id: str = ""):
     return Response("Unity extract is not completed.", media_type="text/plain", status_code=409)
   csv_data = io.StringIO()
   writer = csv.writer(csv_data)
-  writer.writerow(["Alias", "First Name", "Last Name", "Email", "Extension", "Unified Messaging"])
+  writer.writerow(["Alias", "First Name", "Last Name", "Email", "Extension", "Unified Messaging Account"])
   for row in job.get("rows", []):
     writer.writerow([row.get("alias", ""), row.get("first_name", ""), row.get("last_name", ""), row.get("email", ""), row.get("extension", ""), row.get("unified_messaging", "")])
   return Response(csv_data.getvalue().encode("utf-8-sig"), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=unity_connection_users_{job_id}.csv"})

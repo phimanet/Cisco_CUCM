@@ -41,11 +41,24 @@ def _unified_messaging_value(record):
         "IsUnifiedMessagingEnabled",
         "HasUnifiedMessaging",
         "UnifiedMessagingAccount",
+        "UnifiedMessagingAccounts",
     )
     for name in candidates:
         if name not in record:
             continue
         value = record.get(name)
+        if isinstance(value, dict):
+            value = _first_value(value, ("Name", "name", "DisplayName", "displayName", "ServiceName", "serviceName")) or value
+        elif isinstance(value, list):
+            names = []
+            for item in value:
+                if isinstance(item, dict):
+                    item_name = _first_value(item, ("Name", "name", "DisplayName", "displayName", "ServiceName", "serviceName"))
+                    if item_name:
+                        names.append(item_name)
+                elif _as_text(item):
+                    names.append(_as_text(item))
+            value = ", ".join(names) if names else value
         if isinstance(value, bool):
             return "Yes" if value else "No"
         text = _as_text(value).lower()
