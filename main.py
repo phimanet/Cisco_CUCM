@@ -214,13 +214,13 @@ def _unity_user_extract_update(job_id, **changes):
     return dict(job)
 
 
-def _unity_user_extract_worker(job_id, unity_server, unity_user, unity_pass):
+def _unity_user_extract_worker(job_id, unity_server, unity_user, unity_pass, max_users=0):
   _unity_user_extract_update(job_id, status="running", started_at=_audit_now().strftime(AUDIT_TIMESTAMP_FORMAT), progress="Starting Unity Connection pagination...")
   try:
     def progress(count, page):
       _unity_user_extract_update(job_id, progress=f"Read {count} user(s) across {page} page(s)...", rows_read=count, pages_read=page)
 
-    rows = extract_unity_users(unity_server, unity_user, unity_pass, progress_callback=progress)
+    rows = extract_unity_users(unity_server, unity_user, unity_pass, max_users=(max_users or 100000), progress_callback=progress)
     _unity_user_extract_update(job_id, status="completed", rows=rows, count=len(rows), progress=f"Completed: {len(rows)} user(s) extracted.", completed_at=_audit_now().strftime(AUDIT_TIMESTAMP_FORMAT))
   except Exception as exc:
     logger.exception("Unity Connection background extract failed")
@@ -38401,6 +38401,7 @@ def menu_admin_page(request: Request):
         <form id="unity-user-extract-form" onsubmit="return false;">
           <input type="hidden" name="unity_user" value="">
           <input type="hidden" name="unity_pass" value="">
+          <label style="display:inline-flex;align-items:center;gap:6px;margin-right:8px;">Maximum users <input name="max_users" value="20" inputmode="numeric" style="width:80px;"></label>
           <button type="button" id="unity-user-extract-run" onclick="if (window.runUnityUserExtract) { window.runUnityUserExtract(event); } else { document.getElementById('unity-user-extract-status').textContent = 'Extract handler is unavailable. Refresh the page and try again.'; document.getElementById('unity-user-extract-status').style.color = '#b42318'; }">Extract Unity Connection Users</button>
           <button type="button" id="unity-user-extract-csv" style="background:#2d7a43;">Download CSV</button>
         </form>
@@ -51928,6 +51929,7 @@ def admin_unity_user_extract_route(
     unity_user: str = Form(""),
     unity_pass: str = Form(""),
   download_csv: str = Form(""),
+    max_users: str = Form("20"),
 ):
   session = _get_auth_session(request) or {}
   operator = str(session.get("username", "") or "").strip()
@@ -51952,11 +51954,13 @@ def admin_unity_user_extract_route(
       "rows_read": 0,
       "pages_read": 0,
       "operator": operator,
+      "max_users": max(0, int(max_users or "20")),
     }
     with UNITY_USER_EXTRACT_LOCK:
       UNITY_USER_EXTRACT_JOBS[job_id] = job
       _unity_user_extract_persist_locked()
-    UNITY_USER_EXTRACT_WORKER.submit(_unity_user_extract_worker, job_id, unity_server, resolved_user, resolved_pass)
+    requested_max_users = int(job.get("max_users", 20) or 0)
+    UNITY_USER_EXTRACT_WORKER.submit(_unity_user_extract_worker, job_id, unity_server, resolved_user, resolved_pass, requested_max_users)
     _append_audit_event(
       action="admin_unity_user_extract_queued",
       cucm_host=str(session.get("cucm_host", "") or ""),
