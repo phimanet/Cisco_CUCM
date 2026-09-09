@@ -90,6 +90,63 @@ def _extract_user_list(payload):
     return []
 
 
+def _extract_um_account_list(payload):
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if not isinstance(payload, dict):
+        return []
+    for key, value in payload.items():
+        if str(key).lower() in {"unifiedmessagingaccount", "unifiedmessagingaccounts", "account", "accounts"}:
+            found = _extract_um_account_list(value)
+            if found:
+                return found
+    for value in payload.values():
+        if isinstance(value, (dict, list)):
+            found = _extract_um_account_list(value)
+            if found:
+                return found
+    return []
+
+
+def _um_service_name(account):
+    return _first_value(account, ("ServiceName", "serviceName", "UnifiedMessagingService", "unifiedMessagingService", "UMService", "umService", "Name", "name"))
+
+
+def _um_account_alias(account):
+    return _first_value(account, ("Alias", "alias", "UserAlias", "userAlias"))
+
+
+def _load_um_service_map(unity_server, unity_user, unity_pass):
+    service_map = {}
+    for path in ("/vmrest/unifiedMessagingAccounts", "/vmrest/unifiedmessagingaccounts"):
+        try:
+            response = requests.get(
+                _unity_url(unity_server, path),
+                params={"rowsPerPage": ROWS_PER_PAGE, "pageNumber": 0},
+                auth=HTTPBasicAuth(str(unity_user).strip(), unity_pass),
+                headers={"Accept": "application/json"},
+                verify=False,
+                timeout=120,
+            )
+        except requests.RequestException:
+            continue
+        if response.status_code == 404:
+            continue
+        if response.status_code != 200:
+            raise RuntimeError(f"Unity Unified Messaging Accounts lookup failed with HTTP {response.status_code}: {(response.text or '')[:500]}")
+        try:
+            accounts = _extract_um_account_list(response.json())
+        except ValueError as exc:
+            raise RuntimeError("Unity Unified Messaging Accounts returned invalid JSON") from exc
+        for account in accounts:
+            service = _um_service_name(account)
+            alias = _um_account_alias(account)
+            if alias and service:
+                service_map[alias.lower()] = service
+        return service_map
+    return service_map
+
+
 def extract_unity_users(unity_server, unity_user, unity_pass, max_users=MAX_USERS, progress_callback=None):
     clean_server = str(unity_server or "").strip()
     if not clean_server:
@@ -97,6 +154,7 @@ def extract_unity_users(unity_server, unity_user, unity_pass, max_users=MAX_USER
     if not str(unity_user or "").strip() or not unity_pass:
         raise ValueError("Unity credentials are required")
     safe_max_users = max(1, min(int(max_users or MAX_USERS), MAX_USERS))
+    service_map = _load_um_service_map(clean_server, unity_user, unity_pass)
     rows = []
     page_number = 0
     first_page_retry_done = False
@@ -127,13 +185,14 @@ def extract_unity_users(unity_server, unity_user, unity_pass, max_users=MAX_USER
                 shape = type(payload).__name__
             raise RuntimeError(f"Unity returned no user records. Response shape: {shape}")
         for user in page_users:
+            alias = _first_value(user, ("Alias", "alias"))
             rows.append({
-                "alias": _first_value(user, ("Alias", "alias")),
+                "alias": alias,
                 "first_name": _first_value(user, ("FirstName", "firstName", "Firstname")),
                 "last_name": _first_value(user, ("LastName", "lastName", "Lastname")),
                 "email": _first_value(user, ("EmailAddress", "emailAddress", "Email", "email")),
                 "extension": _first_value(user, ("DtmfAccessId", "dtmfAccessId", "Extension", "extension")),
-                "unified_messaging": _unified_messaging_value(user),
+                "unified_messaging": service_map.get(alias.lower(), _unified_messaging_value(user)) if alias else _unified_messaging_value(user),
             })
         if progress_callback:
             progress_callback(len(rows), page_number + 1)
