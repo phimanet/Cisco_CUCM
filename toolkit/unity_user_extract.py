@@ -58,18 +58,22 @@ def _unified_messaging_value(record):
 
 
 def _extract_user_list(payload):
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
     if not isinstance(payload, dict):
         return []
-    users = payload.get("User")
-    if isinstance(users, dict):
-        return [users]
-    if isinstance(users, list):
-        return [item for item in users if isinstance(item, dict)]
-    users = payload.get("users")
-    if isinstance(users, dict):
-        return [users]
-    if isinstance(users, list):
-        return [item for item in users if isinstance(item, dict)]
+    if any(key in payload for key in ("Alias", "alias", "FirstName", "firstName", "DtmfAccessId", "dtmfAccessId")):
+        return [payload]
+    for key, value in payload.items():
+        if str(key).lower() in {"user", "users", "userlist", "userlistitems"}:
+            found = _extract_user_list(value)
+            if found:
+                return found
+    for value in payload.values():
+        if isinstance(value, (dict, list)):
+            found = _extract_user_list(value)
+            if found:
+                return found
     return []
 
 
