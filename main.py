@@ -38319,13 +38319,13 @@ def menu_admin_page(request: Request):
       <section class="panel tool-panel" data-panel="unity-user-extract">
         <h3>Unity Connection User Extract</h3>
         <p>Read-only extract of Unity Connection users with first name, last name, email, extension, and Unified Messaging status.</p>
-        <form id="unity-user-extract-form">
+        <form id="unity-user-extract-form" onsubmit="return false;">
           <input type="hidden" name="unity_user" value="">
           <input type="hidden" name="unity_pass" value="">
-          <button type="submit">Extract Unity Connection Users</button>
+          <button type="button" id="unity-user-extract-run" onclick="if (window.runUnityUserExtract) { window.runUnityUserExtract(event); } else { document.getElementById('unity-user-extract-status').textContent = 'Extract handler is unavailable. Refresh the page and try again.'; document.getElementById('unity-user-extract-status').style.color = '#b42318'; }">Extract Unity Connection Users</button>
           <button type="button" id="unity-user-extract-csv" style="background:#2d7a43;">Download CSV</button>
         </form>
-        <p id="unity-user-extract-status" style="color:#2c5c8a;min-height:18px;"></p>
+        <p id="unity-user-extract-status" style="color:#2c5c8a;min-height:18px;">Ready. Click Extract Unity Connection Users.</p>
         <div id="unity-user-extract-results" style="overflow-x:auto;"></div>
         <script>
           (function () {
@@ -38334,7 +38334,7 @@ def menu_admin_page(request: Request):
             var results = document.getElementById("unity-user-extract-results");
             if (!form || form.dataset.bound === "1") return;
             form.dataset.bound = "1";
-            form.addEventListener("submit", function (event) {
+            window.runUnityUserExtract = function (event) {
               event.preventDefault();
               status.textContent = "Reading Unity Connection users...";
               results.innerHTML = "";
@@ -38353,7 +38353,8 @@ def menu_admin_page(request: Request):
                   results.innerHTML = html + "</tbody></table>";
                 })
                 .catch(function (error) { status.textContent = error.message; status.style.color = "#b42318"; });
-            });
+              return false;
+            };
             document.getElementById("unity-user-extract-csv").addEventListener("click", function () {
               var formData = new FormData(form);
               formData.append("download_csv", "1");
