@@ -97,6 +97,13 @@ if _FERNET_AVAILABLE:
 
 app = FastAPI(title="Cisco Voice Server Automation Site - Restricted Access")
 JOB_OUTPUTS = {}
+UNITY_USER_EXTRACT_JOBS = {}
+UNITY_USER_EXTRACT_LOCK = threading.Lock()
+UNITY_USER_EXTRACT_WORKER = None
+UNITY_USER_EXTRACT_DATA_ROOT = (os.getenv("UNITY_USER_EXTRACT_DATA_ROOT", "") or "").strip() or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "unity_user_extract")
+UNITY_USER_EXTRACT_QUEUE_PATH = os.path.join(UNITY_USER_EXTRACT_DATA_ROOT, "jobs.json")
+UNITY_USER_EXTRACT_HISTORY_PATH = os.path.join(UNITY_USER_EXTRACT_DATA_ROOT, "history.json")
+UNITY_USER_EXTRACT_HISTORY_LIMIT = max(20, int((os.getenv("UNITY_USER_EXTRACT_HISTORY_LIMIT", "20") or "20").strip()))
 VERASMART_QUEUE_RUNS = {}
 VERASMART_QUEUE_LOCK = threading.Lock()
 VERASMART_QUEUE_MAX_RUNS = 50
@@ -152,6 +159,78 @@ def _app_startup_tasks():
 
 def _startup_background_services():
   _greenlight_load_state()
+  _unity_user_extract_load_state()
+  _unity_user_extract_start_worker()
+
+
+def _unity_user_extract_write_json(path, payload):
+  os.makedirs(os.path.dirname(path), exist_ok=True)
+  temp_path = path + ".tmp"
+  with open(temp_path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, ensure_ascii=True)
+  os.replace(temp_path, path)
+
+
+def _unity_user_extract_persist_locked():
+  jobs = {job_id: job for job_id, job in UNITY_USER_EXTRACT_JOBS.items() if str(job.get("status", "")) in {"queued", "running"}}
+  _unity_user_extract_write_json(UNITY_USER_EXTRACT_QUEUE_PATH, jobs)
+  history = [job for job in UNITY_USER_EXTRACT_JOBS.values() if str(job.get("status", "")) in {"completed", "failed", "interrupted"}]
+  history.sort(key=lambda job: str(job.get("updated_at", "") or ""), reverse=True)
+  _unity_user_extract_write_json(UNITY_USER_EXTRACT_HISTORY_PATH, history[:UNITY_USER_EXTRACT_HISTORY_LIMIT])
+
+
+def _unity_user_extract_load_state():
+  try:
+    with open(UNITY_USER_EXTRACT_HISTORY_PATH, "r", encoding="utf-8") as handle:
+      history = json.load(handle)
+  except (FileNotFoundError, json.JSONDecodeError, OSError):
+    history = []
+  try:
+    with open(UNITY_USER_EXTRACT_QUEUE_PATH, "r", encoding="utf-8") as handle:
+      queued = json.load(handle)
+  except (FileNotFoundError, json.JSONDecodeError, OSError):
+    queued = {}
+  with UNITY_USER_EXTRACT_LOCK:
+    for job in history if isinstance(history, list) else []:
+      if isinstance(job, dict) and job.get("job_id"):
+        UNITY_USER_EXTRACT_JOBS[job["job_id"]] = job
+    for job_id, job in queued.items() if isinstance(queued, dict) else []:
+      if isinstance(job, dict):
+        job["status"] = "interrupted"
+        job["error"] = "Service restarted before this job completed."
+        job["updated_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+        UNITY_USER_EXTRACT_JOBS[job_id] = job
+    _unity_user_extract_persist_locked()
+
+
+def _unity_user_extract_update(job_id, **changes):
+  with UNITY_USER_EXTRACT_LOCK:
+    job = UNITY_USER_EXTRACT_JOBS.get(job_id)
+    if not job:
+      return None
+    job.update(changes)
+    job["updated_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+    _unity_user_extract_persist_locked()
+    return dict(job)
+
+
+def _unity_user_extract_worker(job_id, unity_server, unity_user, unity_pass):
+  _unity_user_extract_update(job_id, status="running", started_at=_audit_now().strftime(AUDIT_TIMESTAMP_FORMAT), progress="Starting Unity Connection pagination...")
+  try:
+    def progress(count, page):
+      _unity_user_extract_update(job_id, progress=f"Read {count} user(s) across {page} page(s)...", rows_read=count, pages_read=page)
+
+    rows = extract_unity_users(unity_server, unity_user, unity_pass, progress_callback=progress)
+    _unity_user_extract_update(job_id, status="completed", rows=rows, count=len(rows), progress=f"Completed: {len(rows)} user(s) extracted.", completed_at=_audit_now().strftime(AUDIT_TIMESTAMP_FORMAT))
+  except Exception as exc:
+    logger.exception("Unity Connection background extract failed")
+    _unity_user_extract_update(job_id, status="failed", error=str(exc), progress="Unity Connection extract failed.")
+
+
+def _unity_user_extract_start_worker():
+  global UNITY_USER_EXTRACT_WORKER
+  if UNITY_USER_EXTRACT_WORKER is None:
+    UNITY_USER_EXTRACT_WORKER = concurrent.futures.ThreadPoolExecutor(max_workers=2)
   _load_genesys_ad_webrtc_queue()
   _start_genesys_ad_webrtc_queue_worker()
   _start_genesys_group_audit_scheduler()
@@ -38337,28 +38416,42 @@ def menu_admin_page(request: Request):
             status.style.color = "#2c5c8a";
             results.innerHTML = "";
             fetch("/admin/unity-user-extract", { method: "POST", body: new FormData(form), credentials: "same-origin" })
-              .then(function (response) { return response.json().then(function (data) { return { response: response, data: data }; }); })
-              .then(function (item) {
-                var data = item.data || {};
-                if (!item.response.ok || !data.ok) throw new Error(data.error || "Unity user extract failed.");
-                var rows = data.rows || [];
-                status.textContent = "Extracted " + rows.length + " Unity Connection users from " + (data.unity_server || "Unity") + ".";
-                if (!rows.length) { results.innerHTML = "<p>No Unity Connection users were returned.</p>"; return; }
-                var html = "<table><thead><tr><th>Alias</th><th>First Name</th><th>Last Name</th><th>Email</th><th>Extension</th><th>Unified Messaging</th></tr></thead><tbody>";
-                rows.forEach(function (row) {
-                  var cell = function (value) { var element = document.createElement("span"); element.textContent = value == null ? "" : value; return element.innerHTML; };
-                  html += "<tr><td>" + cell(row.alias) + "</td><td>" + cell(row.first_name) + "</td><td>" + cell(row.last_name) + "</td><td>" + cell(row.email) + "</td><td>" + cell(row.extension) + "</td><td>" + cell(row.unified_messaging) + "</td></tr>";
-                });
-                results.innerHTML = html + "</tbody></table>";
+              .then(function (response) { return response.json().then(function (data) { if (!response.ok || !data.ok) throw new Error(data.error || "Unity user extract failed."); return data; }); })
+              .then(function (data) {
+                window.unityUserExtractJobId = data.job_id;
+                status.textContent = "Job " + data.job_id + " queued. Reading in background...";
+                var poll = function () {
+                  fetch("/admin/unity-user-extract/status?job_id=" + encodeURIComponent(data.job_id), { credentials: "same-origin" })
+                    .then(function (response) { return response.json(); })
+                    .then(function (job) {
+                      status.textContent = job.progress || ("Job status: " + job.status);
+                      if (job.status === "completed") {
+                        var rows = job.rows || [];
+                        status.textContent = "Completed: " + rows.length + " Unity Connection users extracted.";
+                        var html = "<table><thead><tr><th>Alias</th><th>First Name</th><th>Last Name</th><th>Email</th><th>Extension</th><th>Unified Messaging</th></tr></thead><tbody>";
+                        rows.forEach(function (row) {
+                          var cell = function (value) { var element = document.createElement("span"); element.textContent = value == null ? "" : value; return element.innerHTML; };
+                          html += "<tr><td>" + cell(row.alias) + "</td><td>" + cell(row.first_name) + "</td><td>" + cell(row.last_name) + "</td><td>" + cell(row.email) + "</td><td>" + cell(row.extension) + "</td><td>" + cell(row.unified_messaging) + "</td></tr>";
+                        });
+                        results.innerHTML = rows.length ? html + "</tbody></table>" : "<p>No Unity Connection users were returned.</p>";
+                      } else if (job.status === "queued" || job.status === "running") {
+                        window.setTimeout(poll, 1500);
+                      } else {
+                        throw new Error(job.error || "Unity user extract failed.");
+                      }
+                    })
+                    .catch(function (error) { status.textContent = error.message; status.style.color = "#b42318"; });
+                };
+                poll();
               })
               .catch(function (error) { status.textContent = error.message; status.style.color = "#b42318"; });
             return false;
           };
           document.getElementById("unity-user-extract-csv").onclick = function () {
-            var formData = new FormData(document.getElementById("unity-user-extract-form"));
-            formData.append("download_csv", "1");
-            fetch("/admin/unity-user-extract", { method: "POST", body: formData, credentials: "same-origin" })
-              .then(function (response) { if (!response.ok) return response.json().then(function (data) { throw new Error(data.error || "CSV download failed."); }); return response.blob(); })
+            var jobId = window.unityUserExtractJobId || "";
+            if (!jobId) { var status = document.getElementById("unity-user-extract-status"); status.textContent = "Run an extract before downloading CSV."; status.style.color = "#b42318"; return; }
+            fetch("/admin/unity-user-extract/download?job_id=" + encodeURIComponent(jobId), { credentials: "same-origin" })
+              .then(function (response) { if (!response.ok) throw new Error("CSV download failed."); return response.blob(); })
               .then(function (blob) { var link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = "unity_connection_users.csv"; link.click(); URL.revokeObjectURL(link.href); })
               .catch(function (error) { var status = document.getElementById("unity-user-extract-status"); status.textContent = error.message; status.style.color = "#b42318"; });
           };
@@ -51845,26 +51938,70 @@ def admin_unity_user_extract_route(
   try:
     resolved_user, resolved_pass = _resolve_unity_credentials(request, unity_user, unity_pass)
     unity_server = _get_runtime_unity_host(_get_unity_server_for_session(request))
-    rows = extract_unity_users(unity_server, resolved_user, resolved_pass)
     if download_csv == "1":
-      csv_data = io.StringIO()
-      writer = csv.writer(csv_data)
-      writer.writerow(["Alias", "First Name", "Last Name", "Email", "Extension", "Unified Messaging"])
-      for row in rows:
-        writer.writerow([row.get("alias", ""), row.get("first_name", ""), row.get("last_name", ""), row.get("email", ""), row.get("extension", ""), row.get("unified_messaging", "")])
-      return Response(csv_data.getvalue().encode("utf-8-sig"), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=unity_connection_users.csv"})
+      return JSONResponse({"ok": False, "error": "Start an extract before downloading CSV."}, status_code=409)
+    _unity_user_extract_start_worker()
+    job_id = str(uuid4())
+    job = {
+      "job_id": job_id,
+      "status": "queued",
+      "created_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+      "updated_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+      "unity_server": unity_server,
+      "progress": "Queued for background extraction...",
+      "rows_read": 0,
+      "pages_read": 0,
+      "operator": operator,
+    }
+    with UNITY_USER_EXTRACT_LOCK:
+      UNITY_USER_EXTRACT_JOBS[job_id] = job
+      _unity_user_extract_persist_locked()
+    UNITY_USER_EXTRACT_WORKER.submit(_unity_user_extract_worker, job_id, unity_server, resolved_user, resolved_pass)
     _append_audit_event(
-      action="admin_unity_user_extract",
+      action="admin_unity_user_extract_queued",
       cucm_host=str(session.get("cucm_host", "") or ""),
       operator=operator,
       target=unity_server,
       output_filename="",
       inline_mode=True,
     )
-    return JSONResponse({"ok": True, "unity_server": unity_server, "count": len(rows), "rows": rows})
+    return JSONResponse({"ok": True, "job_id": job_id, "status": "queued", "unity_server": unity_server})
   except Exception as exc:
     logger.exception("Unity Connection user extract failed")
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@app.get("/admin/unity-user-extract/status")
+def admin_unity_user_extract_status_route(request: Request, job_id: str = ""):
+  guard = _transunion_admin_guard(request)
+  if guard:
+    return guard
+  with UNITY_USER_EXTRACT_LOCK:
+    job = dict(UNITY_USER_EXTRACT_JOBS.get(job_id, {}))
+  if not job:
+    return JSONResponse({"ok": False, "error": "Unity extract job not found."}, status_code=404)
+  if str(job.get("status")) == "completed":
+    return JSONResponse({"ok": True, **{key: value for key, value in job.items() if key != "rows"}, "rows": job.get("rows", [])})
+  return JSONResponse({"ok": True, **job})
+
+
+@app.get("/admin/unity-user-extract/download")
+def admin_unity_user_extract_download_route(request: Request, job_id: str = ""):
+  guard = _transunion_admin_guard(request)
+  if guard:
+    return guard
+  with UNITY_USER_EXTRACT_LOCK:
+    job = dict(UNITY_USER_EXTRACT_JOBS.get(job_id, {}))
+  if not job:
+    return Response("Unity extract job not found.", media_type="text/plain", status_code=404)
+  if str(job.get("status")) != "completed":
+    return Response("Unity extract is not completed.", media_type="text/plain", status_code=409)
+  csv_data = io.StringIO()
+  writer = csv.writer(csv_data)
+  writer.writerow(["Alias", "First Name", "Last Name", "Email", "Extension", "Unified Messaging"])
+  for row in job.get("rows", []):
+    writer.writerow([row.get("alias", ""), row.get("first_name", ""), row.get("last_name", ""), row.get("email", ""), row.get("extension", ""), row.get("unified_messaging", "")])
+  return Response(csv_data.getvalue().encode("utf-8-sig"), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=unity_connection_users_{job_id}.csv"})
 
 
 @app.get("/admin/separation-sms-report/config")

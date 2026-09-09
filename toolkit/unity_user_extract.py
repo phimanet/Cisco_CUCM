@@ -1,4 +1,5 @@
 import os
+import time
 
 import requests
 import urllib3
@@ -6,7 +7,8 @@ from requests.auth import HTTPBasicAuth
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-MAX_USERS = 5000
+MAX_USERS = 100000
+ROWS_PER_PAGE = 2000
 
 
 def _unity_url(unity_server, path):
@@ -71,37 +73,45 @@ def _extract_user_list(payload):
     return []
 
 
-def extract_unity_users(unity_server, unity_user, unity_pass, max_users=MAX_USERS):
+def extract_unity_users(unity_server, unity_user, unity_pass, max_users=MAX_USERS, progress_callback=None):
     clean_server = str(unity_server or "").strip()
     if not clean_server:
         raise ValueError("Unity server is required")
     if not str(unity_user or "").strip() or not unity_pass:
         raise ValueError("Unity credentials are required")
     safe_max_users = max(1, min(int(max_users or MAX_USERS), MAX_USERS))
-    response = requests.get(
-        _unity_url(clean_server, "/vmrest/users"),
-        params={"limit": safe_max_users},
-        auth=HTTPBasicAuth(str(unity_user).strip(), unity_pass),
-        headers={"Accept": "application/json"},
-        verify=False,
-        timeout=120,
-    )
-    if response.status_code != 200:
-        raise RuntimeError(f"Unity user extract failed with HTTP {response.status_code}: {(response.text or '')[:500]}")
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise RuntimeError("Unity user extract returned invalid JSON") from exc
-
     rows = []
-    for user in _extract_user_list(payload)[:safe_max_users]:
-        rows.append({
-            "alias": _first_value(user, ("Alias", "alias")),
-            "first_name": _first_value(user, ("FirstName", "firstName", "Firstname")),
-            "last_name": _first_value(user, ("LastName", "lastName", "Lastname")),
-            "email": _first_value(user, ("EmailAddress", "emailAddress", "Email", "email")),
-            "extension": _first_value(user, ("DtmfAccessId", "dtmfAccessId", "Extension", "extension")),
-            "unified_messaging": _unified_messaging_value(user),
-        })
+    page_number = 0
+    while len(rows) < safe_max_users:
+        response = requests.get(
+            _unity_url(clean_server, "/vmrest/users"),
+            params={"rowsperpage": min(ROWS_PER_PAGE, safe_max_users - len(rows)), "pageNumber": page_number},
+            auth=HTTPBasicAuth(str(unity_user).strip(), unity_pass),
+            headers={"Accept": "application/json"},
+            verify=False,
+            timeout=120,
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"Unity user extract failed with HTTP {response.status_code}: {(response.text or '')[:500]}")
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise RuntimeError("Unity user extract returned invalid JSON") from exc
+        page_users = _extract_user_list(payload)
+        for user in page_users:
+            rows.append({
+                "alias": _first_value(user, ("Alias", "alias")),
+                "first_name": _first_value(user, ("FirstName", "firstName", "Firstname")),
+                "last_name": _first_value(user, ("LastName", "lastName", "Lastname")),
+                "email": _first_value(user, ("EmailAddress", "emailAddress", "Email", "email")),
+                "extension": _first_value(user, ("DtmfAccessId", "dtmfAccessId", "Extension", "extension")),
+                "unified_messaging": _unified_messaging_value(user),
+            })
+        if progress_callback:
+            progress_callback(len(rows), page_number + 1)
+        if len(page_users) < min(ROWS_PER_PAGE, safe_max_users - len(rows) + len(page_users)):
+            break
+        page_number += 1
+        time.sleep(0.05)
     rows.sort(key=lambda row: (row["last_name"].lower(), row["first_name"].lower(), row["extension"]))
     return rows
