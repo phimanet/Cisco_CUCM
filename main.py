@@ -74,6 +74,12 @@ from toolkit.ad_phone_fields import (
   lookup_ad_identity_by_email,
   lookup_ad_identities_by_full_name,
 )
+from toolkit.transunion_sdpr import (
+  integration_status as transunion_integration_status,
+  list_caller_profiles as transunion_list_caller_profiles,
+  create_caller_profile as transunion_create_caller_profile,
+  list_tn_assets as transunion_list_tn_assets,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46406,6 +46412,64 @@ def debug_jabber_reg_route(
       results["axl_sql"] = {"error": str(exc)}
 
   return JSONResponse(results)
+
+
+def _transunion_admin_guard(request: Request):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not operator:
+    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Not authorized for TransUnion UAT."}, status_code=403)
+  return None
+
+
+@app.get("/api/trucontact/status")
+def transunion_status_route(request: Request):
+  guard = _transunion_admin_guard(request)
+  if guard:
+    return guard
+  result = transunion_integration_status()
+  return JSONResponse(result, status_code=200 if result.get("ok") else 503)
+
+
+@app.get("/api/trucontact/caller-profiles")
+def transunion_caller_profiles_route(request: Request, limit: int = 100, offset: int = 0):
+  guard = _transunion_admin_guard(request)
+  if guard:
+    return guard
+  result = transunion_list_caller_profiles(limit=limit, offset=offset)
+  return JSONResponse(result, status_code=200 if result.get("ok") else 502)
+
+
+@app.post("/api/trucontact/caller-profiles")
+def transunion_create_caller_profile_route(
+  request: Request,
+  caller_name: str = Form(""),
+  services: str = Form("CNO"),
+  branded_caller_name: str = Form(""),
+  name: str = Form(""),
+):
+  guard = _transunion_admin_guard(request)
+  if guard:
+    return guard
+  service_values = [value.strip() for value in str(services or "").split(",") if value.strip()]
+  result = transunion_create_caller_profile(
+    caller_name=caller_name,
+    services=service_values,
+    branded_caller_name=branded_caller_name,
+    name=name,
+  )
+  return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+
+
+@app.get("/api/trucontact/tn-assets")
+def transunion_tn_assets_route(request: Request, number: str = "", caller_profile: str = "", limit: int = 100, offset: int = 0):
+  guard = _transunion_admin_guard(request)
+  if guard:
+    return guard
+  result = transunion_list_tn_assets(number=number, caller_profile=caller_profile, limit=limit, offset=offset)
+  return JSONResponse(result, status_code=200 if result.get("ok") else 502)
 
 
 @app.get("/healthz")
