@@ -86,6 +86,7 @@ def extract_unity_users(unity_server, unity_user, unity_pass, max_users=MAX_USER
     safe_max_users = max(1, min(int(max_users or MAX_USERS), MAX_USERS))
     rows = []
     page_number = 0
+    first_page_retry_done = False
     while len(rows) < safe_max_users:
         response = requests.get(
             _unity_url(clean_server, "/vmrest/users"),
@@ -102,6 +103,16 @@ def extract_unity_users(unity_server, unity_user, unity_pass, max_users=MAX_USER
         except ValueError as exc:
             raise RuntimeError("Unity user extract returned invalid JSON") from exc
         page_users = _extract_user_list(payload)
+        if not page_users and page_number == 0 and not first_page_retry_done:
+            first_page_retry_done = True
+            page_number = 1
+            continue
+        if not page_users and page_number == 1 and first_page_retry_done and not rows:
+            if isinstance(payload, dict):
+                shape = ", ".join(sorted(str(key) for key in payload.keys())[:20]) or "no top-level keys"
+            else:
+                shape = type(payload).__name__
+            raise RuntimeError(f"Unity returned no user records. Response shape: {shape}")
         for user in page_users:
             rows.append({
                 "alias": _first_value(user, ("Alias", "alias")),
