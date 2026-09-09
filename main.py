@@ -38328,45 +38328,40 @@ def menu_admin_page(request: Request):
         <p id="unity-user-extract-status" style="color:#2c5c8a;min-height:18px;">Ready. Click Extract Unity Connection Users.</p>
         <div id="unity-user-extract-results" style="overflow-x:auto;"></div>
         <script>
-          (function () {
+          window.runUnityUserExtract = function (event) {
+            if (event) event.preventDefault();
             var form = document.getElementById("unity-user-extract-form");
             var status = document.getElementById("unity-user-extract-status");
             var results = document.getElementById("unity-user-extract-results");
-            if (!form || form.dataset.bound === "1") return;
-            form.dataset.bound = "1";
-            window.runUnityUserExtract = function (event) {
-              event.preventDefault();
-              status.textContent = "Reading Unity Connection users...";
-              results.innerHTML = "";
-              fetch("/admin/unity-user-extract", { method: "POST", body: new FormData(form), credentials: "same-origin" })
-                .then(function (response) { return response.json().then(function (data) { return { response: response, data: data }; }); })
-                .then(function (item) {
-                  var data = item.data || {};
-                  if (!item.response.ok || !data.ok) throw new Error(data.error || "Unity user extract failed.");
-                  var rows = data.rows || [];
-                  status.textContent = "Extracted " + rows.length + " Unity Connection users from " + (data.unity_server || "Unity") + ".";
-                  if (!rows.length) { results.innerHTML = "<p>No Unity Connection users were returned.</p>"; return; }
-                  var html = "<table><thead><tr><th>Alias</th><th>First Name</th><th>Last Name</th><th>Email</th><th>Extension</th><th>Unified Messaging</th></tr></thead><tbody>";
-                  rows.forEach(function (row) {
-                    html += "<tr><td>" + escapeHtml(row.alias) + "</td><td>" + escapeHtml(row.first_name) + "</td><td>" + escapeHtml(row.last_name) + "</td><td>" + escapeHtml(row.email) + "</td><td>" + escapeHtml(row.extension) + "</td><td>" + escapeHtml(row.unified_messaging) + "</td></tr>";
-                  });
-                  results.innerHTML = html + "</tbody></table>";
-                })
-                .catch(function (error) { status.textContent = error.message; status.style.color = "#b42318"; });
-              return false;
-            };
-            document.getElementById("unity-user-extract-csv").addEventListener("click", function () {
-              var formData = new FormData(form);
-              formData.append("download_csv", "1");
-              fetch("/admin/unity-user-extract", { method: "POST", body: formData, credentials: "same-origin" })
-                .then(function (response) { if (!response.ok) return response.json().then(function (data) { throw new Error(data.error || "CSV download failed."); }); return response.blob(); })
-                .then(function (blob) { var link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = "unity_connection_users.csv"; link.click(); URL.revokeObjectURL(link.href); })
-                .catch(function (error) { status.textContent = error.message; status.style.color = "#b42318"; });
-            });
-            function escapeHtml(value) {
-              return String(value == null ? "" : value).replace(/[&<>\"']/g, function (character) { return ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[character]; });
-            }
-          })();
+            status.textContent = "Reading Unity Connection users...";
+            status.style.color = "#2c5c8a";
+            results.innerHTML = "";
+            fetch("/admin/unity-user-extract", { method: "POST", body: new FormData(form), credentials: "same-origin" })
+              .then(function (response) { return response.json().then(function (data) { return { response: response, data: data }; }); })
+              .then(function (item) {
+                var data = item.data || {};
+                if (!item.response.ok || !data.ok) throw new Error(data.error || "Unity user extract failed.");
+                var rows = data.rows || [];
+                status.textContent = "Extracted " + rows.length + " Unity Connection users from " + (data.unity_server || "Unity") + ".";
+                if (!rows.length) { results.innerHTML = "<p>No Unity Connection users were returned.</p>"; return; }
+                var html = "<table><thead><tr><th>Alias</th><th>First Name</th><th>Last Name</th><th>Email</th><th>Extension</th><th>Unified Messaging</th></tr></thead><tbody>";
+                rows.forEach(function (row) {
+                  var cell = function (value) { var element = document.createElement("span"); element.textContent = value == null ? "" : value; return element.innerHTML; };
+                  html += "<tr><td>" + cell(row.alias) + "</td><td>" + cell(row.first_name) + "</td><td>" + cell(row.last_name) + "</td><td>" + cell(row.email) + "</td><td>" + cell(row.extension) + "</td><td>" + cell(row.unified_messaging) + "</td></tr>";
+                });
+                results.innerHTML = html + "</tbody></table>";
+              })
+              .catch(function (error) { status.textContent = error.message; status.style.color = "#b42318"; });
+            return false;
+          };
+          document.getElementById("unity-user-extract-csv").onclick = function () {
+            var formData = new FormData(document.getElementById("unity-user-extract-form"));
+            formData.append("download_csv", "1");
+            fetch("/admin/unity-user-extract", { method: "POST", body: formData, credentials: "same-origin" })
+              .then(function (response) { if (!response.ok) return response.json().then(function (data) { throw new Error(data.error || "CSV download failed."); }); return response.blob(); })
+              .then(function (blob) { var link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = "unity_connection_users.csv"; link.click(); URL.revokeObjectURL(link.href); })
+              .catch(function (error) { var status = document.getElementById("unity-user-extract-status"); status.textContent = error.message; status.style.color = "#b42318"; });
+          };
         </script>
       </section>
 
