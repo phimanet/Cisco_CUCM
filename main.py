@@ -55,7 +55,7 @@ from toolkit.add_secondary_devices import (
 from toolkit.called_name_change import run_called_name_change
 from toolkit.edit_line_group_members import edit_line_group_members, search_line_groups, get_line_group_members
 from toolkit.extract_rpo_phones import extract_rpo_phones
-from toolkit.person_lookup import search_persons_by_name, lookup_person_email_by_userid
+from toolkit.person_lookup import search_persons_by_name, search_persons_with_telephone, lookup_person_email_by_userid
 from toolkit.extension_lookup import lookup_extension_owner, check_user_devices
 from toolkit.translation_pattern_lookup import (
   lookup_translation_patterns,
@@ -18018,18 +18018,16 @@ def genesys_admin_placeholder(request: Request):
         <section class="portal-main">
           <div id="genesys-external-contact-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">External Contact Creation/Removal</h3>
-            <p style="color:#4e6a84;font-size:12px;">Search CUCM, select one user, and create a Genesys External Contact with first name, last name, work email, and a 10-digit Work Phone in the CiscoVoiceUser division.</p>
+            <p style="color:#4e6a84;font-size:12px;">Load all CUCM users with a populated Telephone field. Add or remove their Genesys External Contact in the CiscoVoiceUser division.</p>
             <form id="genesys-external-contact-search-form" onsubmit="return false;">
               <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
               <input type="hidden" name="cucm_user" value="__AUTH_USER__">
               <input type="hidden" name="cucm_pass" value="">
               <div class="search-filter-row">
-                <input name="last_name" placeholder="Last Name *" required>
-                <input name="first_name" placeholder="First Name (optional)">
-                <button type="button" id="genesys-external-contact-search-btn">Search CUCM</button>
+                <button type="button" id="genesys-external-contact-search-btn">Load CUCM Users with Telephone</button>
               </div>
             </form>
-            <p id="genesys-external-contact-status" style="color:#2c5c8a;min-height:18px;">Ready. Search for one CUCM user.</p>
+            <p id="genesys-external-contact-status" style="color:#2c5c8a;min-height:18px;">Ready. Load users who have a CUCM Telephone number.</p>
             <div id="genesys-external-contact-results" style="overflow-x:auto;"></div>
             <div id="genesys-external-contact-preview" style="display:none;margin-top:10px;padding:10px;border:1px solid #c8dbee;background:#f8fcff;">
               <strong>Creation Preview</strong>
@@ -18095,11 +18093,11 @@ def genesys_admin_placeholder(request: Request):
                   fetch("/genesys/external-contacts/cucm-preview", { method:"POST", body:new FormData(form), credentials:"same-origin" })
                     .then(function(response){ return response.json().then(function(data){ if(!response.ok || !data.ok) throw new Error(data.error || "CUCM search failed."); return data; }); })
                     .then(function(data){
-                      var rows = data.rows || []; status.textContent = rows.length + " CUCM result(s). Select one user.";
-                      var html = "<table><thead><tr><th>Select</th><th>First Name</th><th>Last Name</th><th>User ID</th><th>Email</th><th>10-digit Work Phone</th><th>CiscoVoiceUser Contact</th></tr></thead><tbody>";
-                      rows.forEach(function(row,index){ var existing = row.already_in_ciscovoiceuser ? "Already exists" + (row.genesys_contact_id ? " ("+esc(row.genesys_contact_id)+")" : "") : "Not found"; html += "<tr><td><button type='button' data-contact-row='"+index+"'>Select</button></td><td>"+esc(row.first_name)+"</td><td>"+esc(row.last_name)+"</td><td>"+esc(row.user_id)+"</td><td>"+esc(row.email)+"</td><td>"+esc(row.phone || "Not available")+"</td><td>"+existing+"</td></tr>"; });
+                      var rows = data.rows || []; status.textContent = rows.length + " CUCM user(s) with a Telephone number loaded.";
+                      var html = "<table><thead><tr><th>Name</th><th>User ID</th><th>Email</th><th>CUCM Telephone</th><th>CiscoVoiceUser Contact</th><th>Action</th></tr></thead><tbody>";
+                      rows.forEach(function(row,index){ var existing = row.already_in_ciscovoiceuser ? "Already exists" + (row.genesys_contact_id ? " ("+esc(row.genesys_contact_id)+")" : "") : "Not found"; var action = row.already_in_ciscovoiceuser ? "Remove" : "Add"; var actionStyle = row.already_in_ciscovoiceuser ? "background:#9f2f24;" : "background:#2d7a43;"; html += "<tr><td>"+esc((row.first_name || "")+" "+(row.last_name || "")) + "</td><td>"+esc(row.user_id)+"</td><td>"+esc(row.email || "Missing")+"</td><td>"+esc(row.phone || "Not available")+"</td><td>"+existing+"</td><td><button type='button' data-contact-action='"+index+"' data-action='"+action.toLowerCase()+"' style='"+actionStyle+"'>"+action+"</button></td></tr>"; });
                       results.innerHTML = rows.length ? html + "</tbody></table>" : "<p>No CUCM users found.</p>";
-                      Array.prototype.forEach.call(results.querySelectorAll("[data-contact-row]"), function(button){ button.onclick=function(){ selected=rows[Number(button.getAttribute("data-contact-row"))]; var existingText = selected.already_in_ciscovoiceuser ? "Already exists in CiscoVoiceUser" + (selected.genesys_contact_id ? " (ID: "+esc(selected.genesys_contact_id)+")" : "") : "No existing CiscoVoiceUser contact found"; previewText.innerHTML="First Name: <strong>"+esc(selected.first_name)+"</strong><br>Last Name: <strong>"+esc(selected.last_name)+"</strong><br>Work Email: <strong>"+esc(selected.email || "Missing")+"</strong><br>Work Phone: <strong>"+esc(selected.phone || "Missing")+"</strong><br>Division: <strong>CiscoVoiceUser</strong><br>Contact Check: <strong>"+existingText+"</strong>"; document.getElementById("genesys-external-contact-create-btn").disabled = !!selected.already_in_ciscovoiceuser; document.getElementById("genesys-external-contact-create-btn").textContent = selected.already_in_ciscovoiceuser ? "Already Exists - Creation Blocked" : "Create External Contact"; preview.style.display="block"; status.textContent=selected.already_in_ciscovoiceuser ? "Creation blocked: this person is already in CiscoVoiceUser." : (selected.phone && selected.email ? "Preview ready. Confirm creation." : "Selected user must have a valid email and 10-digit phone."); }; });
+                      Array.prototype.forEach.call(results.querySelectorAll("[data-contact-action]"), function(button){ button.onclick=function(){ selected=rows[Number(button.getAttribute("data-contact-action"))]; var action=button.getAttribute("data-action"); if(action === "remove"){ var id=String(selected.genesys_contact_id || "").trim(); if(!id){ status.style.color="#b42318"; status.textContent="No CiscoVoiceUser contact ID was returned for this row."; return; } if(!window.confirm("Remove this CiscoVoiceUser external contact?")) return; var data=new FormData(); data.append("contact_id",id); status.style.color="#2c5c8a"; status.textContent="Verifying division and removing contact..."; fetch("/genesys/external-contacts/remove",{method:"POST",body:data,credentials:"same-origin"}).then(function(response){return response.json().then(function(body){if(!response.ok||!body.ok)throw new Error(body.error||"Removal failed.");return body;});}).then(function(){status.style.color="#146c2e";status.textContent="External Contact removed.";document.getElementById("genesys-external-contact-search-btn").click();}).catch(function(error){status.style.color="#b42318";status.textContent=error.message;}); return; } var existingText = "No existing CiscoVoiceUser contact found"; previewText.innerHTML="First Name: <strong>"+esc(selected.first_name)+"</strong><br>Last Name: <strong>"+esc(selected.last_name)+"</strong><br>Work Email: <strong>"+esc(selected.email || "Missing")+"</strong><br>Work Phone: <strong>"+esc(selected.phone || "Missing")+"</strong><br>Division: <strong>CiscoVoiceUser</strong><br>Contact Check: <strong>"+existingText+"</strong>"; document.getElementById("genesys-external-contact-create-btn").disabled = false; document.getElementById("genesys-external-contact-create-btn").textContent = "Create External Contact"; preview.style.display="block"; status.textContent=selected.email ? "Ready to add this Telephone-qualified user." : "A CUCM email is required by Genesys before adding."; }; });
                     }).catch(function(error){ status.style.color="#b42318"; status.textContent=error.message; });
                 };
                 document.getElementById("genesys-external-contact-create-btn").onclick = function () {
@@ -23695,17 +23693,13 @@ def genesys_extract_users_route(
 @app.post("/genesys/external-contacts/cucm-preview")
 def genesys_external_contact_cucm_preview_route(
   request: Request,
-  last_name: str = Form(""),
-  first_name: str = Form(""),
   cucm_host: str = Form(""),
   cucm_user: str = Form(""),
   cucm_pass: str = Form(""),
 ):
   resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-  if not str(last_name or "").strip():
-    return JSONResponse({"ok": False, "error": "Last name is required."}, status_code=400)
   try:
-    people = search_persons_by_name(resolved_host, resolved_user, resolved_pass, last_name, first_name)
+    people = search_persons_with_telephone(resolved_host, resolved_user, resolved_pass)
   except Exception as exc:
     return JSONResponse({"ok": False, "error": f"CUCM lookup failed: {exc}"}, status_code=400)
   token_result = _genesys_get_queue_access_token(GENESYS_CLOUD_REGION)

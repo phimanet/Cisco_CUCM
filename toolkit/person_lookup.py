@@ -401,3 +401,49 @@ def search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_nam
         results.append(u)
 
     return results
+
+
+def search_persons_with_telephone(cucm_host, cucm_user, cucm_pass):
+    """Return all CUCM end users whose Telephone field is populated."""
+    session = requests.Session()
+    session.trust_env = False
+    session.verify = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+    sql = (
+        "SELECT u.userid AS userid, u.firstname AS firstname, u.lastname AS lastname, "
+        "u.displayname AS displayname, u.title AS title, u.mailid AS mailid, "
+        "u.telephonenumber AS telephonenumber "
+        "FROM enduser u "
+        "WHERE u.telephonenumber IS NOT NULL AND u.telephonenumber <> '' "
+        "ORDER BY u.lastname, u.firstname, u.userid"
+    )
+    try:
+        resp = _axl_post(session, cucm_host, _soap_execute_sql(sql))
+        root = ET.fromstring(resp)
+    except Exception:
+        return []
+
+    results = []
+    seen = set()
+    for elem in root.iter():
+        if _strip_ns(elem.tag) != "row":
+            continue
+        row = {_strip_ns(child.tag): (child.text or "").strip() for child in list(elem)}
+        userid = row.get("userid", "").strip()
+        telephone = row.get("telephonenumber", "").strip()
+        if not userid or not telephone or userid in seen:
+            continue
+        seen.add(userid)
+        results.append({
+            "userid": userid,
+            "first_name": row.get("firstname", ""),
+            "last_name": row.get("lastname", ""),
+            "display_name": row.get("displayname", ""),
+            "title": row.get("title", ""),
+            "email": row.get("mailid", ""),
+            "telephone": telephone,
+            "primary_extension": "",
+            "translated_number": "",
+            "devices": [],
+        })
+    return results
