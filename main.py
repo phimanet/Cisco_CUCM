@@ -18028,6 +18028,7 @@ def genesys_admin_placeholder(request: Request):
               </div>
             </form>
             <p id="genesys-external-contact-status" style="color:#2c5c8a;min-height:18px;">Ready. Load users who have a CUCM Telephone number.</p>
+            <div id="genesys-external-contact-count" style="display:none;margin:8px 0;padding:8px 10px;border:1px solid #b8d8c0;background:#f1fbf3;color:#146c2e;font-weight:700;"></div>
             <div id="genesys-external-contact-results" style="overflow-x:auto;"></div>
             <div id="genesys-external-contact-preview" style="display:none;margin-top:10px;padding:10px;border:1px solid #c8dbee;background:#f8fcff;">
               <strong>Creation Preview</strong>
@@ -18056,6 +18057,7 @@ def genesys_admin_placeholder(request: Request):
                 var preview = document.getElementById("genesys-external-contact-preview");
                 var previewText = document.getElementById("genesys-external-contact-preview-text");
                 var listOutput = document.getElementById("genesys-external-contact-list-output");
+                var countOutput = document.getElementById("genesys-external-contact-count");
                 function esc(value) { var element = document.createElement("span"); element.textContent = value == null ? "" : value; return element.innerHTML; }
                 function renderContactList(rows) {
                   if (!rows.length) { listOutput.innerHTML = "<p>No CiscoVoiceUser external contacts found.</p>"; return; }
@@ -18089,11 +18091,11 @@ def genesys_admin_placeholder(request: Request):
                     .catch(function(error){ listOutput.innerHTML = "<p>Unable to list contacts.</p>"; status.style.color="#b42318"; status.textContent=error.message; });
                 };
                 document.getElementById("genesys-external-contact-search-btn").onclick = function () {
-                  selected = null; preview.style.display = "none"; results.innerHTML = ""; status.style.color = "#2c5c8a"; status.textContent = "Searching CUCM...";
+                  selected = null; preview.style.display = "none"; results.innerHTML = ""; countOutput.style.display = "none"; status.style.color = "#2c5c8a"; status.textContent = "Loading all CUCM users with Telephone...";
                   fetch("/genesys/external-contacts/cucm-preview", { method:"POST", body:new FormData(form), credentials:"same-origin" })
                     .then(function(response){ return response.json().then(function(data){ if(!response.ok || !data.ok) throw new Error(data.error || "CUCM search failed."); return data; }); })
                     .then(function(data){
-                      var rows = data.rows || []; status.textContent = rows.length + " CUCM user(s) with a Telephone number loaded.";
+                      var rows = data.rows || []; var eligibleCount = Number(data.eligible_user_count || rows.length); countOutput.textContent = "Eligible CUCM users with Telephone numbers: " + eligibleCount; countOutput.style.display = "block"; status.textContent = eligibleCount + " CUCM user(s) with a Telephone number loaded.";
                       var html = "<table><thead><tr><th>Name</th><th>User ID</th><th>Email</th><th>CUCM Telephone</th><th>CiscoVoiceUser Contact</th><th>Action</th></tr></thead><tbody>";
                       rows.forEach(function(row,index){ var existing = row.already_in_ciscovoiceuser ? "Already exists" + (row.genesys_contact_id ? " ("+esc(row.genesys_contact_id)+")" : "") : "Not found"; var action = row.already_in_ciscovoiceuser ? "Remove" : "Add"; var actionStyle = row.already_in_ciscovoiceuser ? "background:#9f2f24;" : "background:#2d7a43;"; html += "<tr><td>"+esc((row.first_name || "")+" "+(row.last_name || "")) + "</td><td>"+esc(row.user_id)+"</td><td>"+esc(row.email || "Missing")+"</td><td>"+esc(row.phone || "Not available")+"</td><td>"+existing+"</td><td><button type='button' data-contact-action='"+index+"' data-action='"+action.toLowerCase()+"' style='"+actionStyle+"'>"+action+"</button></td></tr>"; });
                       results.innerHTML = rows.length ? html + "</tbody></table>" : "<p>No CUCM users found.</p>";
@@ -23732,7 +23734,7 @@ def genesys_external_contact_cucm_preview_route(
       "genesys_contact_id": str(existing_contact.get("id", "") or "").strip(),
       "genesys_contact_name": str(existing_contact.get("name", "") or "").strip(),
     })
-  return JSONResponse({"ok": True, "division_name": "CiscoVoiceUser", "rows": rows})
+  return JSONResponse({"ok": True, "division_name": "CiscoVoiceUser", "eligible_user_count": len(rows), "rows": rows})
 
 
 @app.post("/genesys/external-contacts/create")
