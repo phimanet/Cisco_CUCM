@@ -18123,7 +18123,7 @@ def genesys_admin_placeholder(request: Request):
                   fetch("/genesys/external-contacts/cucm-preview", { method:"POST", body:new FormData(form), credentials:"same-origin" })
                     .then(function(response){ return response.json().then(function(data){ if(!response.ok || !data.ok) throw new Error(data.error || "CUCM search failed."); return data; }); })
                     .then(function(data){
-                      var rows = (data.rows || []).filter(function(row){ var telephone = String((row && (row.phone || row.telephone)) || "").trim(); return telephone && !/not\s+available/i.test(telephone) && !/^(n\/a|na|none|null|-)$/i.test(telephone) && telephone.replace(/\D/g, "").length >= 7; }); var eligibleCount = rows.length; countOutput.textContent = "Eligible CUCM users with Telephone numbers: " + eligibleCount; countOutput.style.display = "block"; status.textContent = eligibleCount + " CUCM user(s) with a Telephone number loaded.";
+                      var rows = (data.rows || []).filter(function(row){ var telephone = String((row && (row.phone || row.telephone)) || "").trim(); var email = String((row && row.email) || "").trim(); return telephone && email && !/not\s+available/i.test(telephone) && !/^(n\/a|na|none|null|-)$/i.test(telephone) && telephone.replace(/\D/g, "").length >= 7; }); var eligibleCount = rows.length; countOutput.textContent = "Eligible CUCM users with Telephone and email: " + eligibleCount; countOutput.style.display = "block"; status.textContent = eligibleCount + " CUCM user(s) with Telephone and email loaded.";
                       var html = "<table><thead><tr><th>Name</th><th>User ID</th><th>Email</th><th>CUCM Telephone</th><th>CiscoVoiceUser Contact</th><th>Action</th></tr></thead><tbody>";
                       rows.forEach(function(row,index){ var existing = row.already_in_ciscovoiceuser ? "Already exists" + (row.genesys_contact_id ? " ("+esc(row.genesys_contact_id)+")" : "") : "Not found"; var action = row.already_in_ciscovoiceuser ? "Remove" : "Add"; var actionStyle = row.already_in_ciscovoiceuser ? "background:#9f2f24;" : "background:#2d7a43;"; html += "<tr><td>"+esc((row.first_name || "")+" "+(row.last_name || "")) + "</td><td>"+esc(row.user_id)+"</td><td>"+esc(row.email || "Missing")+"</td><td>"+esc(row.phone || "Not available")+"</td><td>"+existing+"</td><td><button type='button' data-contact-action='"+index+"' data-action='"+action.toLowerCase()+"' style='"+actionStyle+"'>"+action+"</button></td></tr>"; });
                       results.innerHTML = rows.length ? html + "</tbody></table>" : "<p>No CUCM users found.</p>";
@@ -23735,6 +23735,7 @@ def genesys_external_contact_cucm_preview_route(
   people = [
     person for person in (people or [])
     if len(re.sub(r"\D", "", str(person.get("telephone", "") or ""))) >= 7
+    and str(person.get("email", "") or "").strip()
     and "not available" not in str(person.get("telephone", "") or "").strip().lower()
     and str(person.get("telephone", "") or "").strip().lower() not in {"n/a", "na", "none", "null", "-"}
   ]

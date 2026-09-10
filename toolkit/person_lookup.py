@@ -416,6 +416,7 @@ def search_persons_with_telephone(cucm_host, cucm_user, cucm_pass):
         "u.telephonenumber AS telephonenumber "
         "FROM enduser u "
         "WHERE u.telephonenumber IS NOT NULL AND TRIM(u.telephonenumber) <> '' "
+        "AND u.mailid IS NOT NULL AND TRIM(u.mailid) <> '' "
         "AND LOWER(TRIM(u.telephonenumber)) NOT LIKE '%not available%' "
         "AND LOWER(TRIM(u.telephonenumber)) NOT IN ('n/a', 'na', 'none', 'null', '-') "
         "ORDER BY u.lastname, u.firstname, u.userid"
@@ -434,8 +435,9 @@ def search_persons_with_telephone(cucm_host, cucm_user, cucm_pass):
         row = {_strip_ns(child.tag): (child.text or "").strip() for child in list(elem)}
         userid = row.get("userid", "").strip()
         telephone = row.get("telephonenumber", "").strip()
+        email = row.get("mailid", "").strip()
         telephone_digits = re.sub(r"\D", "", telephone)
-        if not userid or not telephone or len(telephone_digits) < 7 or userid in seen:
+        if not userid or not telephone or not email or len(telephone_digits) < 7 or userid in seen:
             continue
         seen.add(userid)
         results.append({
@@ -444,7 +446,7 @@ def search_persons_with_telephone(cucm_host, cucm_user, cucm_pass):
             "last_name": row.get("lastname", ""),
             "display_name": row.get("displayname", ""),
             "title": row.get("title", ""),
-            "email": row.get("mailid", ""),
+            "email": email,
             "telephone": telephone,
             "primary_extension": "",
             "translated_number": "",
