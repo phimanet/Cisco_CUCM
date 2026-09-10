@@ -12,6 +12,7 @@ import subprocess
 import shutil
 import tempfile
 import concurrent.futures
+import queue
 import zipfile
 from collections import Counter
 import smtplib
@@ -100,6 +101,10 @@ JOB_OUTPUTS = {}
 UNITY_USER_EXTRACT_JOBS = {}
 UNITY_USER_EXTRACT_LOCK = threading.Lock()
 UNITY_USER_EXTRACT_WORKER = None
+GENESYS_EXTERNAL_CONTACT_LOAD_JOBS = {}
+GENESYS_EXTERNAL_CONTACT_LOAD_LOCK = threading.Lock()
+GENESYS_EXTERNAL_CONTACT_LOAD_QUEUE = queue.Queue()
+GENESYS_EXTERNAL_CONTACT_LOAD_WORKER_STARTED = False
 UNITY_USER_EXTRACT_DATA_ROOT = (os.getenv("UNITY_USER_EXTRACT_DATA_ROOT", "") or "").strip() or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "unity_user_extract")
 UNITY_USER_EXTRACT_QUEUE_PATH = os.path.join(UNITY_USER_EXTRACT_DATA_ROOT, "jobs.json")
 UNITY_USER_EXTRACT_HISTORY_PATH = os.path.join(UNITY_USER_EXTRACT_DATA_ROOT, "history.json")
@@ -161,6 +166,74 @@ def _startup_background_services():
   _greenlight_load_state()
   _unity_user_extract_load_state()
   _unity_user_extract_start_worker()
+  _start_genesys_external_contact_load_worker()
+
+
+def _genesys_external_contact_load_update(job_id: str, **changes):
+  with GENESYS_EXTERNAL_CONTACT_LOAD_LOCK:
+    job = GENESYS_EXTERNAL_CONTACT_LOAD_JOBS.get(str(job_id or "").strip())
+    if not job:
+      return None
+    job.update(changes)
+    job["updated_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+    return dict(job)
+
+
+def _run_genesys_external_contact_load(job_id: str):
+  job = GENESYS_EXTERNAL_CONTACT_LOAD_JOBS.get(job_id) or {}
+  _genesys_external_contact_load_update(job_id, status="running", started_at=_audit_now().strftime(AUDIT_TIMESTAMP_FORMAT))
+  try:
+    token_result = _genesys_get_queue_access_token(GENESYS_CLOUD_REGION)
+    if not token_result.get("ok"):
+      raise RuntimeError(token_result.get("error", "Genesys authentication failed."))
+    access_token = str(token_result.get("access_token", "") or "")
+    _, _, api_base = _genesys_region_to_urls(str(token_result.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION))
+    division, division_error = _genesys_find_division_by_name(api_base, access_token, "CiscoVoiceUser")
+    if division_error:
+      raise RuntimeError(division_error)
+    division_id = str(division.get("id", "") or "").strip()
+    row = dict(job.get("row", {}) or {})
+    first_name = str(row.get("first_name", "") or "").strip()
+    last_name = str(row.get("last_name", "") or "").strip()
+    email = str(row.get("email", "") or "").strip()
+    phone = re.sub(r"\D", "", str(row.get("phone", "") or ""))
+    if len(phone) == 11 and phone.startswith("1"):
+      phone = phone[1:]
+    if len(phone) != 10 or not email:
+      raise RuntimeError("CUCM Telephone and email are required for Genesys loading.")
+    contacts_result = _genesys_list_external_contacts_in_division(api_base, access_token, "CiscoVoiceUser", division_id)
+    if not contacts_result.get("ok"):
+      raise RuntimeError(contacts_result.get("error", "Unable to verify CiscoVoiceUser contacts."))
+    existing = _genesys_external_contact_match(contacts_result.get("rows", []), first_name, last_name, email)
+    if existing:
+      _genesys_external_contact_load_update(job_id, status="skipped", contact_id=str(existing.get("id", "") or "").strip(), result="Already in CiscoVoiceUser.")
+      return
+    ok, body, error = _genesys_create_external_contact(api_base, access_token, division_id, {**row, "phone": phone})
+    if not ok:
+      raise RuntimeError(error or "Genesys External Contact creation failed.")
+    contact_id = str(body.get("id", "") or "").strip()
+    _genesys_external_contact_load_update(job_id, status="completed", contact_id=contact_id, result="External Contact created.")
+    _append_audit_event(action="genesys_external_contact_created", cucm_host=str(job.get("cucm_host", "") or ""), operator=str(job.get("operator", "") or ""), target=f"user_id={row.get('user_id', '')};contact_id={contact_id};division=CiscoVoiceUser;queued=true", output_filename="", inline_mode=True)
+  except Exception as exc:
+    logger.exception("Queued Genesys External Contact load failed")
+    _genesys_external_contact_load_update(job_id, status="failed", error=str(exc))
+
+
+def _genesys_external_contact_load_worker():
+  while True:
+    job_id = GENESYS_EXTERNAL_CONTACT_LOAD_QUEUE.get()
+    try:
+      _run_genesys_external_contact_load(job_id)
+    finally:
+      GENESYS_EXTERNAL_CONTACT_LOAD_QUEUE.task_done()
+
+
+def _start_genesys_external_contact_load_worker():
+  global GENESYS_EXTERNAL_CONTACT_LOAD_WORKER_STARTED
+  if GENESYS_EXTERNAL_CONTACT_LOAD_WORKER_STARTED:
+    return
+  GENESYS_EXTERNAL_CONTACT_LOAD_WORKER_STARTED = True
+  threading.Thread(target=_genesys_external_contact_load_worker, name="genesys-external-contact-loader", daemon=True).start()
 
 
 def _unity_user_extract_write_json(path, payload):
@@ -18142,6 +18215,35 @@ def genesys_admin_placeholder(request: Request):
                 };
               })();
             </script>
+            <script>
+              (function () {
+                var status = document.getElementById("genesys-external-contact-status");
+                if (!status || typeof MutationObserver === "undefined") return;
+                var updating = false;
+                var observer = new MutationObserver(function () {
+                  if (updating) return;
+                  var match = String(status.textContent || "").match(/External Contact created\. Contact ID: ([a-f0-9]{32})/i);
+                  if (!match) return;
+                  var jobId = match[1];
+                  updating = true;
+                  status.textContent = "External Contact queued. Job ID: " + jobId;
+                  updating = false;
+                  var poll = window.setInterval(function () {
+                    fetch("/genesys/external-contacts/create-queued/" + encodeURIComponent(jobId), { credentials:"same-origin" })
+                      .then(function (response) { return response.json(); })
+                      .then(function (job) {
+                        if (!job || ["completed", "skipped", "failed"].indexOf(job.status) < 0) return;
+                        window.clearInterval(poll);
+                        if (job.status === "completed") status.textContent = "External Contact created. Contact ID: " + (job.contact_id || "unknown");
+                        else if (job.status === "skipped") status.textContent = "Load skipped: " + (job.result || "already in CiscoVoiceUser.");
+                        else status.textContent = "External Contact load failed: " + (job.error || "unknown error");
+                      })
+                      .catch(function () { window.clearInterval(poll); });
+                  }, 2000);
+                });
+                observer.observe(status, { childList:true, characterData:true, subtree:true });
+              })();
+            </script>
           </div>
           <div id="genesys-group-user-audit-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Groups and User Cleanup</h3>
@@ -23791,6 +23893,19 @@ def genesys_external_contact_create_route(
   clean_email = str(email or "").strip()
   if not clean_email or "@" not in clean_email:
     return JSONResponse({"ok": False, "error": "A valid CUCM work email is required."}, status_code=400)
+  job_id = uuid4().hex
+  queued_job = {
+    "job_id": job_id,
+    "status": "queued",
+    "queued_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+    "operator": operator,
+    "cucm_host": str(session.get("cucm_host", "") or ""),
+    "row": {"first_name": first_name, "last_name": last_name, "email": clean_email, "phone": digits, "user_id": user_id},
+  }
+  with GENESYS_EXTERNAL_CONTACT_LOAD_LOCK:
+    GENESYS_EXTERNAL_CONTACT_LOAD_JOBS[job_id] = queued_job
+  GENESYS_EXTERNAL_CONTACT_LOAD_QUEUE.put(job_id)
+  return JSONResponse({"ok": True, "queued": True, "job_id": job_id, "status": "queued", "contact": {"id": job_id}, "message": "External Contact load queued for background processing."})
   token_result = _genesys_get_queue_access_token(GENESYS_CLOUD_REGION)
   if not token_result.get("ok"):
     return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys authentication failed.")}, status_code=400)
@@ -23820,6 +23935,46 @@ def genesys_external_contact_create_route(
   contact_id = str(body.get("id", "") or "").strip()
   _append_audit_event(action="genesys_external_contact_created", cucm_host=str(session.get("cucm_host", "") or ""), operator=operator, target=f"user_id={user_id};contact_id={contact_id};phone={digits};division=CiscoVoiceUser", output_filename="", inline_mode=True)
   return JSONResponse({"ok": True, "region": clean_region, "contact": body, "division": division, "submitted": payload})
+
+
+@app.post("/genesys/external-contacts/create-queued")
+async def genesys_external_contact_create_queued_route(request: Request):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not operator or not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Admin authorization required."}, status_code=403)
+  try:
+    body = await request.json()
+  except Exception:
+    body = {}
+  row = body.get("row", {}) if isinstance(body, dict) else {}
+  if not isinstance(row, dict):
+    return JSONResponse({"ok": False, "error": "A user row is required."}, status_code=400)
+  phone = re.sub(r"\D", "", str(row.get("phone", "") or ""))
+  if len(phone) == 11 and phone.startswith("1"):
+    phone = phone[1:]
+  if len(phone) != 10 or not str(row.get("email", "") or "").strip():
+    return JSONResponse({"ok": False, "error": "A valid CUCM Telephone and email are required."}, status_code=400)
+  job_id = uuid4().hex
+  job = {"job_id": job_id, "status": "queued", "queued_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT), "operator": operator, "cucm_host": str(session.get("cucm_host", "") or ""), "row": {**row, "phone": phone}}
+  with GENESYS_EXTERNAL_CONTACT_LOAD_LOCK:
+    GENESYS_EXTERNAL_CONTACT_LOAD_JOBS[job_id] = job
+  GENESYS_EXTERNAL_CONTACT_LOAD_QUEUE.put(job_id)
+  return JSONResponse({"ok": True, "queued": True, "job_id": job_id, "status": "queued"})
+
+
+@app.get("/genesys/external-contacts/create-queued/{job_id}")
+def genesys_external_contact_create_queued_status_route(request: Request, job_id: str):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not operator or not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Admin authorization required."}, status_code=403)
+  with GENESYS_EXTERNAL_CONTACT_LOAD_LOCK:
+    job = dict(GENESYS_EXTERNAL_CONTACT_LOAD_JOBS.get(str(job_id or "").strip()) or {})
+  if not job:
+    return JSONResponse({"ok": False, "error": "Queued load job was not found."}, status_code=404)
+  job.pop("row", None)
+  return JSONResponse({"ok": True, **job})
 
 
 @app.get("/genesys/external-contacts/list")
