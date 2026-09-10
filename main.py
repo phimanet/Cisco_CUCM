@@ -23704,6 +23704,12 @@ def genesys_external_contact_cucm_preview_route(
     people = search_persons_with_telephone(resolved_host, resolved_user, resolved_pass)
   except Exception as exc:
     return JSONResponse({"ok": False, "error": f"CUCM lookup failed: {exc}"}, status_code=400)
+  people = [
+    person for person in (people or [])
+    if len(re.sub(r"\D", "", str(person.get("telephone", "") or ""))) >= 7
+    and "not available" not in str(person.get("telephone", "") or "").strip().lower()
+    and str(person.get("telephone", "") or "").strip().lower() not in {"n/a", "na", "none", "null", "-"}
+  ]
   token_result = _genesys_get_queue_access_token(GENESYS_CLOUD_REGION)
   if not token_result.get("ok"):
     return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys authentication failed."), "rows": []}, status_code=400)
