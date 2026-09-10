@@ -107,6 +107,12 @@ Priority keys:
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
 
+### 2026-09-10 (Genesys External Contact Creation/Removal — implementation complete, controlled test pending)
+- Added isolated Genesys Admin panel to search CUCM users and preview one External Contact before creation.
+- Creates only first name, last name, CUCM work email, and normalized 10-digit Work Phone; assigns the Genesys `CiscoVoiceUser` division.
+- Removal requires a Genesys contact ID and is blocked unless the contact resolves to the `CiscoVoiceUser` division by ID or exact name.
+- Controlled test identity: CUCM user `Madeline.Tiaokhiao`; create one contact, verify Genesys fields/division, then remove it.
+
 ### 2026-09-03 (Genesys AD role-group delayed WebRTC workflow — implementation complete, LAB validation pending)
 - Added Genesys menu item for CUCM employee lookup, selectable `Genesys_User_Role*` AD security groups, optional saved Genesys division filter, and queued WebRTC build submission.
 - Added server-side AD prefix lookup with PowerShell/ldap3/ldapsearch fallback, multi-group parsing, and server-side group-prefix enforcement.

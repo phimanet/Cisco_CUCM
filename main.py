@@ -3101,6 +3101,42 @@ def _genesys_list_users_in_division_by_name(
   }
 
 
+def _genesys_find_division_by_name(api_base: str, access_token: str, division_name: str) -> tuple[dict, str]:
+  target = " ".join(str(division_name or "").strip().lower().split())
+  divisions, _pages_scanned, error = _genesys_collect_paged_entities(api_base, access_token, "/api/v2/authorization/divisions", 100, 100)
+  if error:
+    return {}, error
+  for division in divisions:
+    if " ".join(str(division.get("name", "") or "").strip().lower().split()) == target:
+      return division, ""
+  return {}, f"Genesys division '{division_name}' was not found."
+
+
+def _genesys_external_contact_phone(person: dict) -> str:
+  candidates = [
+    person.get("translated_number", ""),
+    person.get("telephone", ""),
+    person.get("primary_extension", ""),
+  ]
+  for candidate in candidates:
+    digits = re.sub(r"\D", "", str(candidate or ""))
+    if len(digits) == 11 and digits.startswith("1"):
+      digits = digits[1:]
+    if len(digits) == 10:
+      return digits
+  return ""
+
+
+def _genesys_external_contact_payload(first_name: str, last_name: str, phone: str, email: str, division_id: str) -> dict:
+  return {
+    "firstName": str(first_name or "").strip(),
+    "lastName": str(last_name or "").strip(),
+    "workPhone": {"display": str(phone or "").strip(), "acceptsSMS": False},
+    "workEmail": str(email or "").strip(),
+    "division": {"id": str(division_id or "").strip()},
+  }
+
+
 def _genesys_get_user_queues_paged(api_base: str, access_token: str, user_id: str) -> tuple[list[dict], str, int]:
   clean_user_id = str(user_id or "").strip()
   if not clean_user_id:
@@ -17923,9 +17959,70 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-blocked-caller-panel" onclick="(function(){var id='genesys-blocked-caller-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Block Incoming Calls</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-role-groups-panel" onclick="(function(){var id='genesys-role-groups-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Inspect Genesys Role Groups</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-group-user-audit-panel" onclick="(function(){var id='genesys-group-user-audit-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Groups and User Cleanup</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-external-contact-panel" onclick="(function(){var id='genesys-external-contact-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">External Contact Creation/Removal</button>
         </aside>
 
         <section class="portal-main">
+          <div id="genesys-external-contact-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+            <h3 style="margin-top:0;">External Contact Creation/Removal</h3>
+            <p style="color:#4e6a84;font-size:12px;">Search CUCM, select one user, and create a Genesys External Contact with first name, last name, work email, and a 10-digit Work Phone in the CiscoVoiceUser division.</p>
+            <form id="genesys-external-contact-search-form" onsubmit="return false;">
+              <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+              <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+              <input type="hidden" name="cucm_pass" value="">
+              <div class="search-filter-row">
+                <input name="last_name" placeholder="Last Name *" required>
+                <input name="first_name" placeholder="First Name (optional)">
+                <button type="button" id="genesys-external-contact-search-btn">Search CUCM</button>
+              </div>
+            </form>
+            <p id="genesys-external-contact-status" style="color:#2c5c8a;min-height:18px;">Ready. Search for one CUCM user.</p>
+            <div id="genesys-external-contact-results" style="overflow-x:auto;"></div>
+            <div id="genesys-external-contact-preview" style="display:none;margin-top:10px;padding:10px;border:1px solid #c8dbee;background:#f8fcff;">
+              <strong>Creation Preview</strong>
+              <div id="genesys-external-contact-preview-text" style="margin:8px 0;"></div>
+              <button type="button" id="genesys-external-contact-create-btn" style="background:#2d7a43;">Create External Contact</button>
+            </div>
+            <hr style="margin:18px 0;border:0;border-top:1px solid #c8dbee;">
+            <h4>Remove CiscoVoiceUser External Contact</h4>
+            <div class="search-filter-row">
+              <input id="genesys-external-contact-remove-id" placeholder="Genesys Contact ID" style="min-width:320px;">
+              <button type="button" id="genesys-external-contact-remove-btn" style="background:#9f2f24;">Remove Contact</button>
+            </div>
+            <p style="color:#4e6a84;font-size:12px;">Removal is blocked unless Genesys confirms the contact is in the CiscoVoiceUser division.</p>
+            <script>
+              (function () {
+                var selected = null;
+                var form = document.getElementById("genesys-external-contact-search-form");
+                var status = document.getElementById("genesys-external-contact-status");
+                var results = document.getElementById("genesys-external-contact-results");
+                var preview = document.getElementById("genesys-external-contact-preview");
+                var previewText = document.getElementById("genesys-external-contact-preview-text");
+                function esc(value) { var element = document.createElement("span"); element.textContent = value == null ? "" : value; return element.innerHTML; }
+                document.getElementById("genesys-external-contact-search-btn").onclick = function () {
+                  selected = null; preview.style.display = "none"; results.innerHTML = ""; status.style.color = "#2c5c8a"; status.textContent = "Searching CUCM...";
+                  fetch("/genesys/external-contacts/cucm-preview", { method:"POST", body:new FormData(form), credentials:"same-origin" })
+                    .then(function(response){ return response.json().then(function(data){ if(!response.ok || !data.ok) throw new Error(data.error || "CUCM search failed."); return data; }); })
+                    .then(function(data){
+                      var rows = data.rows || []; status.textContent = rows.length + " CUCM result(s). Select one user.";
+                      var html = "<table><thead><tr><th>Select</th><th>First Name</th><th>Last Name</th><th>User ID</th><th>Email</th><th>10-digit Work Phone</th></tr></thead><tbody>";
+                      rows.forEach(function(row,index){ html += "<tr><td><button type='button' data-contact-row='"+index+"'>Select</button></td><td>"+esc(row.first_name)+"</td><td>"+esc(row.last_name)+"</td><td>"+esc(row.user_id)+"</td><td>"+esc(row.email)+"</td><td>"+esc(row.phone || "Not available")+"</td></tr>"; });
+                      results.innerHTML = rows.length ? html + "</tbody></table>" : "<p>No CUCM users found.</p>";
+                      Array.prototype.forEach.call(results.querySelectorAll("[data-contact-row]"), function(button){ button.onclick=function(){ selected=rows[Number(button.getAttribute("data-contact-row"))]; previewText.innerHTML="First Name: <strong>"+esc(selected.first_name)+"</strong><br>Last Name: <strong>"+esc(selected.last_name)+"</strong><br>Work Email: <strong>"+esc(selected.email || "Missing")+"</strong><br>Work Phone: <strong>"+esc(selected.phone || "Missing")+"</strong><br>Division: <strong>CiscoVoiceUser</strong>"; preview.style.display="block"; status.textContent=selected.phone && selected.email ? "Preview ready. Confirm creation." : "Selected user must have a valid email and 10-digit phone."; }; });
+                    }).catch(function(error){ status.style.color="#b42318"; status.textContent=error.message; });
+                };
+                document.getElementById("genesys-external-contact-create-btn").onclick = function () {
+                  if (!selected || !selected.phone || !selected.email) { status.style.color="#b42318"; status.textContent="Select a CUCM user with a valid email and 10-digit phone."; return; }
+                  var data=new FormData(); data.append("first_name",selected.first_name); data.append("last_name",selected.last_name); data.append("email",selected.email); data.append("phone",selected.phone); data.append("user_id",selected.user_id); status.style.color="#2c5c8a"; status.textContent="Creating Genesys External Contact...";
+                  fetch("/genesys/external-contacts/create",{method:"POST",body:data,credentials:"same-origin"}).then(function(response){return response.json().then(function(body){if(!response.ok||!body.ok)throw new Error(body.error||"Creation failed.");return body;});}).then(function(body){var id=String((body.contact||{}).id||"");document.getElementById("genesys-external-contact-remove-id").value=id;status.style.color="#146c2e";status.textContent="External Contact created. Contact ID: "+id;}).catch(function(error){status.style.color="#b42318";status.textContent=error.message;});
+                };
+                document.getElementById("genesys-external-contact-remove-btn").onclick = function () {
+                  var id=document.getElementById("genesys-external-contact-remove-id").value.trim(); if(!id){status.style.color="#b42318";status.textContent="Enter a Genesys Contact ID.";return;} if(!window.confirm("Remove this CiscoVoiceUser external contact?"))return; var data=new FormData();data.append("contact_id",id);status.style.color="#2c5c8a";status.textContent="Verifying division and removing contact...";
+                  fetch("/genesys/external-contacts/remove",{method:"POST",body:data,credentials:"same-origin"}).then(function(response){return response.json().then(function(body){if(!response.ok||!body.ok)throw new Error(body.error||"Removal failed.");return body;});}).then(function(){status.style.color="#146c2e";status.textContent="External Contact removed.";document.getElementById("genesys-external-contact-remove-id").value="";preview.style.display="none";}).catch(function(error){status.style.color="#b42318";status.textContent=error.message;});
+                };
+              })();
+            </script>
+          </div>
           <div id="genesys-group-user-audit-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Groups and User Cleanup</h3>
             <p style="color:#4e6a84;font-size:12px;">Reconciliation lookup extracts members from one Genesys group and checks each email against Active Directory. Only an explicit Mark Inactive confirmation can disable an AD-missing Genesys user; the reason is Leave.</p>
@@ -23501,6 +23598,103 @@ def genesys_extract_users_route(
     "raw_download_url": f"/download/job-output/{raw_job_id}",
     "raw_filename": raw_filename,
   })
+
+
+@app.post("/genesys/external-contacts/cucm-preview")
+def genesys_external_contact_cucm_preview_route(
+  request: Request,
+  last_name: str = Form(""),
+  first_name: str = Form(""),
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  if not str(last_name or "").strip():
+    return JSONResponse({"ok": False, "error": "Last name is required."}, status_code=400)
+  try:
+    people = search_persons_by_name(resolved_host, resolved_user, resolved_pass, last_name, first_name)
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": f"CUCM lookup failed: {exc}"}, status_code=400)
+  rows = []
+  for person in people or []:
+    rows.append({
+      "user_id": str(person.get("userid", "") or "").strip(),
+      "first_name": str(person.get("first_name", "") or person.get("firstname", "") or "").strip(),
+      "last_name": str(person.get("last_name", "") or person.get("lastname", "") or "").strip(),
+      "email": str(person.get("email", "") or person.get("mailid", "") or "").strip(),
+      "phone": _genesys_external_contact_phone(person),
+    })
+  return JSONResponse({"ok": True, "division_name": "CiscoVoiceUser", "rows": rows})
+
+
+@app.post("/genesys/external-contacts/create")
+def genesys_external_contact_create_route(
+  request: Request,
+  first_name: str = Form(""),
+  last_name: str = Form(""),
+  email: str = Form(""),
+  phone: str = Form(""),
+  user_id: str = Form(""),
+):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not operator or not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Admin authorization required."}, status_code=403)
+  digits = re.sub(r"\D", "", str(phone or ""))
+  if len(digits) != 10:
+    return JSONResponse({"ok": False, "error": "Work Phone must be exactly 10 digits."}, status_code=400)
+  clean_email = str(email or "").strip()
+  if not clean_email or "@" not in clean_email:
+    return JSONResponse({"ok": False, "error": "A valid CUCM work email is required."}, status_code=400)
+  token_result = _genesys_get_queue_access_token(GENESYS_CLOUD_REGION)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys authentication failed.")}, status_code=400)
+  access_token = str(token_result.get("access_token", "") or "")
+  clean_region, _, api_base = _genesys_region_to_urls(str(token_result.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION))
+  division, division_error = _genesys_find_division_by_name(api_base, access_token, "CiscoVoiceUser")
+  if division_error:
+    return JSONResponse({"ok": False, "error": division_error}, status_code=400)
+  payload = _genesys_external_contact_payload(first_name, last_name, digits, clean_email, str(division.get("id", "") or ""))
+  ok, body, error, status_code = _genesys_send_json("POST", api_base, access_token, "/api/v2/externalcontacts/contacts", payload=payload)
+  if not ok:
+    return JSONResponse({"ok": False, "error": error, "details": body}, status_code=status_code or 400)
+  contact_id = str(body.get("id", "") or "").strip()
+  _append_audit_event(action="genesys_external_contact_created", cucm_host=str(session.get("cucm_host", "") or ""), operator=operator, target=f"user_id={user_id};contact_id={contact_id};phone={digits};division=CiscoVoiceUser", output_filename="", inline_mode=True)
+  return JSONResponse({"ok": True, "region": clean_region, "contact": body, "division": division, "submitted": payload})
+
+
+@app.post("/genesys/external-contacts/remove")
+def genesys_external_contact_remove_route(request: Request, contact_id: str = Form("")):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not operator or not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Admin authorization required."}, status_code=403)
+  clean_contact_id = str(contact_id or "").strip()
+  if not clean_contact_id:
+    return JSONResponse({"ok": False, "error": "Contact ID is required."}, status_code=400)
+  token_result = _genesys_get_queue_access_token(GENESYS_CLOUD_REGION)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys authentication failed.")}, status_code=400)
+  access_token = str(token_result.get("access_token", "") or "")
+  _, _, api_base = _genesys_region_to_urls(str(token_result.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION))
+  target_division, division_error = _genesys_find_division_by_name(api_base, access_token, "CiscoVoiceUser")
+  if division_error:
+    return JSONResponse({"ok": False, "error": division_error}, status_code=400)
+  ok_contact, contact, contact_error = _genesys_get_json(api_base, access_token, f"/api/v2/externalcontacts/contacts/{quote(clean_contact_id, safe='')}")
+  if not ok_contact:
+    return JSONResponse({"ok": False, "error": contact_error}, status_code=404)
+  division = contact.get("division") if isinstance(contact.get("division"), dict) else {}
+  contact_division_id = str(division.get("id", "") or "").strip()
+  target_division_id = str(target_division.get("id", "") or "").strip()
+  contact_division_name = str(division.get("name", "") or "").strip().lower()
+  if contact_division_name != "ciscovoiceuser" and (not contact_division_id or contact_division_id != target_division_id):
+    return JSONResponse({"ok": False, "error": "Removal blocked: contact is not in the CiscoVoiceUser division."}, status_code=409)
+  ok, body, error, status_code = _genesys_send_json("DELETE", api_base, access_token, f"/api/v2/externalcontacts/contacts/{quote(clean_contact_id, safe='')}")
+  if not ok:
+    return JSONResponse({"ok": False, "error": error, "details": body}, status_code=status_code or 400)
+  _append_audit_event(action="genesys_external_contact_removed", cucm_host=str(session.get("cucm_host", "") or ""), operator=operator, target=f"contact_id={clean_contact_id};division=CiscoVoiceUser", output_filename="", inline_mode=True)
+  return JSONResponse({"ok": True, "contact_id": clean_contact_id})
 
 
 @app.post("/genesys/ad-webrtc/employee-lookup")
