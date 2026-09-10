@@ -1,4 +1,5 @@
 import requests
+import re
 import urllib3
 import xml.etree.ElementTree as ET
 from requests.auth import HTTPBasicAuth
@@ -414,7 +415,9 @@ def search_persons_with_telephone(cucm_host, cucm_user, cucm_pass):
         "u.displayname AS displayname, u.title AS title, u.mailid AS mailid, "
         "u.telephonenumber AS telephonenumber "
         "FROM enduser u "
-        "WHERE u.telephonenumber IS NOT NULL AND u.telephonenumber <> '' "
+        "WHERE u.telephonenumber IS NOT NULL AND TRIM(u.telephonenumber) <> '' "
+        "AND LOWER(TRIM(u.telephonenumber)) NOT LIKE '%not available%' "
+        "AND LOWER(TRIM(u.telephonenumber)) NOT IN ('n/a', 'na', 'none', 'null', '-') "
         "ORDER BY u.lastname, u.firstname, u.userid"
     )
     try:
@@ -431,7 +434,8 @@ def search_persons_with_telephone(cucm_host, cucm_user, cucm_pass):
         row = {_strip_ns(child.tag): (child.text or "").strip() for child in list(elem)}
         userid = row.get("userid", "").strip()
         telephone = row.get("telephonenumber", "").strip()
-        if not userid or not telephone or userid in seen:
+        telephone_digits = re.sub(r"\D", "", telephone)
+        if not userid or not telephone or len(telephone_digits) < 7 or userid in seen:
             continue
         seen.add(userid)
         results.append({
