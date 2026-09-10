@@ -3112,6 +3112,39 @@ def _genesys_find_division_by_name(api_base: str, access_token: str, division_na
   return {}, f"Genesys division '{division_name}' was not found."
 
 
+def _genesys_list_external_contacts_in_division(api_base: str, access_token: str, division_name: str, division_id: str = "") -> dict:
+  target_name = " ".join(str(division_name or "").strip().lower().split())
+  target_id = str(division_id or "").strip()
+  contacts_all, pages_scanned, error = _genesys_collect_paged_entities(api_base, access_token, "/api/v2/externalcontacts/contacts", 100, 50)
+  if error:
+    return {"ok": False, "error": error, "rows": []}
+
+  rows = []
+  for contact in contacts_all:
+    if not isinstance(contact, dict):
+      continue
+    division_obj = contact.get("division") if isinstance(contact.get("division"), dict) else {}
+    division_name_here = " ".join(str(division_obj.get("name", "") or "").strip().lower().split())
+    division_id_here = str(division_obj.get("id", "") or "").strip()
+    if target_name and division_name_here != target_name and (not target_id or division_id_here != target_id):
+      continue
+    if target_name and division_name_here != target_name and target_id and division_id_here == target_id:
+      pass
+    rows.append({
+      "id": str(contact.get("id", "") or "").strip(),
+      "first_name": str(contact.get("firstName", "") or "").strip(),
+      "last_name": str(contact.get("lastName", "") or "").strip(),
+      "name": str(contact.get("name", "") or "").strip() or " ".join([part for part in [contact.get("firstName", ""), contact.get("lastName", "")] if part]).strip(),
+      "email": str(contact.get("workEmail", "") or contact.get("email", "") or "").strip(),
+      "phone": str((contact.get("workPhone") or {}).get("display", "") or "").strip(),
+      "division_name": str(division_obj.get("name", "") or "").strip(),
+      "division_id": division_id_here,
+    })
+
+  rows.sort(key=lambda item: ((item.get("name") or "").lower(), (item.get("email") or "").lower(), (item.get("id") or "").lower()))
+  return {"ok": True, "division_name": division_name, "pages_scanned": pages_scanned, "rows": rows}
+
+
 def _genesys_external_contact_phone(person: dict) -> str:
   candidates = [
     person.get("translated_number", ""),
@@ -17984,6 +18017,12 @@ def genesys_admin_placeholder(request: Request):
               <button type="button" id="genesys-external-contact-create-btn" style="background:#2d7a43;">Create External Contact</button>
             </div>
             <hr style="margin:18px 0;border:0;border-top:1px solid #c8dbee;">
+            <h4>List CiscoVoiceUser External Contacts</h4>
+            <div class="search-filter-row">
+              <button type="button" id="genesys-external-contact-list-btn" style="background:#385977;">List CiscoVoiceUser Contacts</button>
+            </div>
+            <div id="genesys-external-contact-list-output" style="overflow-x:auto;margin-top:10px;"></div>
+            <hr style="margin:18px 0;border:0;border-top:1px solid #c8dbee;">
             <h4>Remove CiscoVoiceUser External Contact</h4>
             <div class="search-filter-row">
               <input id="genesys-external-contact-remove-id" placeholder="Genesys Contact ID" style="min-width:320px;">
@@ -17998,7 +18037,39 @@ def genesys_admin_placeholder(request: Request):
                 var results = document.getElementById("genesys-external-contact-results");
                 var preview = document.getElementById("genesys-external-contact-preview");
                 var previewText = document.getElementById("genesys-external-contact-preview-text");
+                var listOutput = document.getElementById("genesys-external-contact-list-output");
                 function esc(value) { var element = document.createElement("span"); element.textContent = value == null ? "" : value; return element.innerHTML; }
+                function renderContactList(rows) {
+                  if (!rows.length) { listOutput.innerHTML = "<p>No CiscoVoiceUser external contacts found.</p>"; return; }
+                  var html = "<table><thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Phone</th><th>Division</th><th>Action</th></tr></thead><tbody>";
+                  rows.forEach(function(row){
+                    html += "<tr><td>"+esc(row.id)+"</td><td>"+esc(row.name || row.first_name + " " + row.last_name)+"</td><td>"+esc(row.email || "")+"</td><td>"+esc(row.phone || "")+"</td><td>"+esc(row.division_name || "CiscoVoiceUser")+"</td><td><button type='button' data-delete-contact='"+esc(row.id)+"'>Delete</button></td></tr>";
+                  });
+                  listOutput.innerHTML = html + "</tbody></table>";
+                  Array.prototype.forEach.call(listOutput.querySelectorAll("[data-delete-contact]"), function(button){
+                    button.onclick = function () {
+                      var id = String(button.getAttribute("data-delete-contact") || "").trim();
+                      if (!id) return;
+                      if (!window.confirm("Delete this CiscoVoiceUser external contact?")) return;
+                      var data = new FormData(); data.append("contact_id", id);
+                      status.style.color = "#2c5c8a"; status.textContent = "Verifying division and deleting contact...";
+                      fetch("/genesys/external-contacts/remove", { method:"POST", body:data, credentials:"same-origin" })
+                        .then(function(response){ return response.json().then(function(body){ if(!response.ok || !body.ok) throw new Error(body.error || "Delete failed."); return body; }); })
+                        .then(function(){ status.style.color="#146c2e"; status.textContent="External Contact removed."; document.getElementById("genesys-external-contact-remove-id").value = id; document.getElementById("genesys-external-contact-list-btn").click(); })
+                        .catch(function(error){ status.style.color="#b42318"; status.textContent=error.message; });
+                    };
+                  });
+                }
+                document.getElementById("genesys-external-contact-list-btn").onclick = function () {
+                  status.style.color = "#2c5c8a"; status.textContent = "Loading CiscoVoiceUser contacts...";
+                  fetch("/genesys/external-contacts/list", { credentials:"same-origin" })
+                    .then(function(response){ return response.json().then(function(data){ if(!response.ok || !data.ok) throw new Error(data.error || "List load failed."); return data; }); })
+                    .then(function(data){
+                      renderContactList(data.rows || []);
+                      status.textContent = (data.rows || []).length + " CiscoVoiceUser external contact(s) listed.";
+                    })
+                    .catch(function(error){ listOutput.innerHTML = "<p>Unable to list contacts.</p>"; status.style.color="#b42318"; status.textContent=error.message; });
+                };
                 document.getElementById("genesys-external-contact-search-btn").onclick = function () {
                   selected = null; preview.style.display = "none"; results.innerHTML = ""; status.style.color = "#2c5c8a"; status.textContent = "Searching CUCM...";
                   fetch("/genesys/external-contacts/cucm-preview", { method:"POST", body:new FormData(form), credentials:"same-origin" })
@@ -18014,11 +18085,11 @@ def genesys_admin_placeholder(request: Request):
                 document.getElementById("genesys-external-contact-create-btn").onclick = function () {
                   if (!selected || !selected.phone || !selected.email) { status.style.color="#b42318"; status.textContent="Select a CUCM user with a valid email and 10-digit phone."; return; }
                   var data=new FormData(); data.append("first_name",selected.first_name); data.append("last_name",selected.last_name); data.append("email",selected.email); data.append("phone",selected.phone); data.append("user_id",selected.user_id); status.style.color="#2c5c8a"; status.textContent="Creating Genesys External Contact...";
-                  fetch("/genesys/external-contacts/create",{method:"POST",body:data,credentials:"same-origin"}).then(function(response){return response.json().then(function(body){if(!response.ok||!body.ok)throw new Error(body.error||"Creation failed.");return body;});}).then(function(body){var id=String((body.contact||{}).id||"");document.getElementById("genesys-external-contact-remove-id").value=id;status.style.color="#146c2e";status.textContent="External Contact created. Contact ID: "+id;}).catch(function(error){status.style.color="#b42318";status.textContent=error.message;});
+                  fetch("/genesys/external-contacts/create",{method:"POST",body:data,credentials:"same-origin"}).then(function(response){return response.json().then(function(body){if(!response.ok||!body.ok)throw new Error(body.error||"Creation failed.");return body;});}).then(function(body){var id=String((body.contact||{}).id||"");document.getElementById("genesys-external-contact-remove-id").value=id;status.style.color="#146c2e";status.textContent="External Contact created. Contact ID: "+id; document.getElementById("genesys-external-contact-list-btn").click();}).catch(function(error){status.style.color="#b42318";status.textContent=error.message;});
                 };
                 document.getElementById("genesys-external-contact-remove-btn").onclick = function () {
                   var id=document.getElementById("genesys-external-contact-remove-id").value.trim(); if(!id){status.style.color="#b42318";status.textContent="Enter a Genesys Contact ID.";return;} if(!window.confirm("Remove this CiscoVoiceUser external contact?"))return; var data=new FormData();data.append("contact_id",id);status.style.color="#2c5c8a";status.textContent="Verifying division and removing contact...";
-                  fetch("/genesys/external-contacts/remove",{method:"POST",body:data,credentials:"same-origin"}).then(function(response){return response.json().then(function(body){if(!response.ok||!body.ok)throw new Error(body.error||"Removal failed.");return body;});}).then(function(){status.style.color="#146c2e";status.textContent="External Contact removed.";document.getElementById("genesys-external-contact-remove-id").value="";preview.style.display="none";}).catch(function(error){status.style.color="#b42318";status.textContent=error.message;});
+                  fetch("/genesys/external-contacts/remove",{method:"POST",body:data,credentials:"same-origin"}).then(function(response){return response.json().then(function(body){if(!response.ok||!body.ok)throw new Error(body.error||"Removal failed.");return body;});}).then(function(){status.style.color="#146c2e";status.textContent="External Contact removed.";document.getElementById("genesys-external-contact-remove-id").value="";preview.style.display="none";document.getElementById("genesys-external-contact-list-btn").click();}).catch(function(error){status.style.color="#b42318";status.textContent=error.message;});
                 };
               })();
             </script>
@@ -23662,6 +23733,29 @@ def genesys_external_contact_create_route(
   contact_id = str(body.get("id", "") or "").strip()
   _append_audit_event(action="genesys_external_contact_created", cucm_host=str(session.get("cucm_host", "") or ""), operator=operator, target=f"user_id={user_id};contact_id={contact_id};phone={digits};division=CiscoVoiceUser", output_filename="", inline_mode=True)
   return JSONResponse({"ok": True, "region": clean_region, "contact": body, "division": division, "submitted": payload})
+
+
+@app.get("/genesys/external-contacts/list")
+def genesys_external_contact_list_route(request: Request):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not operator or not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Admin authorization required.", "rows": []}, status_code=403)
+
+  token_result = _genesys_get_queue_access_token(GENESYS_CLOUD_REGION)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys authentication failed."), "rows": []}, status_code=400)
+
+  access_token = str(token_result.get("access_token", "") or "")
+  _, _, api_base = _genesys_region_to_urls(str(token_result.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION))
+  target_division, division_error = _genesys_find_division_by_name(api_base, access_token, "CiscoVoiceUser")
+  if division_error:
+    return JSONResponse({"ok": False, "error": division_error, "rows": []}, status_code=400)
+
+  result = _genesys_list_external_contacts_in_division(api_base, access_token, "CiscoVoiceUser", str(target_division.get("id", "") or ""))
+  if not result.get("ok"):
+    return JSONResponse({"ok": False, "error": result.get("error", "Unable to list external contacts."), "rows": []}, status_code=400)
+  return JSONResponse({"ok": True, "division_name": "CiscoVoiceUser", "rows": result.get("rows", [])})
 
 
 @app.post("/genesys/external-contacts/remove")
