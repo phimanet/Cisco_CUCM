@@ -18116,6 +18116,7 @@ def genesys_admin_placeholder(request: Request):
               <input type="hidden" name="cucm_pass" value="">
               <div class="search-filter-row">
                 <button type="button" id="genesys-external-contact-search-btn">Load CUCM Users with Telephone</button>
+                <button type="button" id="genesys-external-contact-load-all-btn" style="display:none;background:#146c2e;">Load All Found to Genesys External Contacts</button>
               </div>
             </form>
             <p id="genesys-external-contact-status" style="color:#2c5c8a;min-height:18px;">Ready. Load users who have a CUCM Telephone number.</p>
@@ -18145,6 +18146,7 @@ def genesys_admin_placeholder(request: Request):
             <script>
               (function () {
                 var selected = null;
+                var loadedRows = [];
                 var form = document.getElementById("genesys-external-contact-search-form");
                 var status = document.getElementById("genesys-external-contact-status");
                 var results = document.getElementById("genesys-external-contact-results");
@@ -18201,6 +18203,30 @@ def genesys_admin_placeholder(request: Request):
                     })
                     .catch(function(error){ reconcileOutput.innerHTML="<p>Unable to reconcile contacts.</p>"; status.style.color="#b42318"; status.textContent=error.message; });
                 };
+                document.getElementById("genesys-external-contact-load-all-btn").onclick = function () {
+                  var button = document.getElementById("genesys-external-contact-load-all-btn");
+                  var candidates = loadedRows.filter(function(row){ return !row.already_in_ciscovoiceuser && row.email && row.phone; });
+                  if (!candidates.length) { status.textContent="No unmatched eligible CUCM users are available to load."; return; }
+                  if (!window.confirm("Queue " + candidates.length + " eligible CUCM users for Genesys External Contact loading, one at a time?")) return;
+                  button.disabled = true;
+                  var index = 0;
+                  function processNext() {
+                    if (index >= candidates.length) { button.disabled = false; status.style.color="#146c2e"; status.textContent="Initial Genesys load complete: " + candidates.length + " user(s) processed."; document.getElementById("genesys-external-contact-search-btn").click(); return; }
+                    var row = candidates[index];
+                    status.style.color="#2c5c8a"; status.textContent="Queueing Genesys load " + (index + 1) + " of " + candidates.length + ": " + (row.first_name || "") + " " + (row.last_name || "");
+                    fetch("/genesys/external-contacts/create-queued", { method:"POST", credentials:"same-origin", headers:{"Content-Type":"application/json"}, body:JSON.stringify({row:row}) })
+                      .then(function(response){ return response.json().then(function(data){ if(!response.ok || !data.ok) throw new Error(data.error || "Unable to queue contact."); return data; }); })
+                      .then(function(data){
+                        function waitForJob() {
+                          return fetch("/genesys/external-contacts/create-queued/" + encodeURIComponent(data.job_id), { credentials:"same-origin" }).then(function(response){ return response.json(); }).then(function(job){ if(["completed","skipped","failed"].indexOf(job.status) >= 0) return job; return new Promise(function(resolve){ window.setTimeout(function(){ waitForJob().then(resolve); }, 1000); }); });
+                        }
+                        return waitForJob();
+                      })
+                      .then(function(job){ index += 1; if(job.status === "failed") status.textContent="Load failed for " + (row.first_name || "") + " " + (row.last_name || "") + ": " + (job.error || "unknown error"); processNext(); })
+                      .catch(function(error){ button.disabled = false; status.style.color="#b42318"; status.textContent=error.message; });
+                  }
+                  processNext();
+                };
                 document.getElementById("genesys-external-contact-remove-all-btn").onclick = function () {
                   if (!window.confirm("This will permanently remove every External Contact in the CiscoVoiceUser division. Continue?")) return;
                   if (window.prompt("Type DELETE to confirm removal of all CiscoVoiceUser contacts:") !== "DELETE") { status.style.color="#b42318"; status.textContent="Bulk removal cancelled. No contacts were changed."; return; }
@@ -18215,7 +18241,7 @@ def genesys_admin_placeholder(request: Request):
                   fetch("/genesys/external-contacts/cucm-preview", { method:"POST", body:new FormData(form), credentials:"same-origin" })
                     .then(function(response){ return response.json().then(function(data){ if(!response.ok || !data.ok) throw new Error(data.error || "CUCM search failed."); return data; }); })
                     .then(function(data){
-                      var rows = (data.rows || []).filter(function(row){ var telephone = String((row && (row.phone || row.telephone)) || "").trim(); var email = String((row && row.email) || "").trim(); return telephone && email && !/not\s+available/i.test(telephone) && !/^(n\/a|na|none|null|-)$/i.test(telephone) && telephone.replace(/\D/g, "").length >= 7; }); var eligibleCount = rows.length; countOutput.textContent = "Eligible CUCM users with Telephone and email: " + eligibleCount; countOutput.style.display = "block"; status.textContent = eligibleCount + " CUCM user(s) with Telephone and email loaded.";
+                      var rows = (data.rows || []).filter(function(row){ var telephone = String((row && (row.phone || row.telephone)) || "").trim(); var email = String((row && row.email) || "").trim(); return telephone && email && !/not\s+available/i.test(telephone) && !/^(n\/a|na|none|null|-)$/i.test(telephone) && telephone.replace(/\D/g, "").length >= 7; }); loadedRows = rows; var eligibleCount = rows.length; countOutput.textContent = "Eligible CUCM users with Telephone and email: " + eligibleCount; countOutput.style.display = "block"; status.textContent = eligibleCount + " CUCM user(s) with Telephone and email loaded."; document.getElementById("genesys-external-contact-load-all-btn").style.display = rows.some(function(row){ return !row.already_in_ciscovoiceuser; }) ? "inline-block" : "none";
                       var html = "<table><thead><tr><th>Name</th><th>User ID</th><th>Email</th><th>CUCM Telephone</th><th>CiscoVoiceUser Contact</th><th>Action</th></tr></thead><tbody>";
                       rows.forEach(function(row,index){ var existing = row.already_in_ciscovoiceuser ? "Already exists" + (row.genesys_contact_id ? " ("+esc(row.genesys_contact_id)+")" : "") : "Not found"; var action = row.already_in_ciscovoiceuser ? "Remove" : "Load to Genesys External Contact"; var actionStyle = row.already_in_ciscovoiceuser ? "background:#9f2f24;" : "background:#2d7a43;"; html += "<tr><td>"+esc((row.first_name || "")+" "+(row.last_name || "")) + "</td><td>"+esc(row.user_id)+"</td><td>"+esc(row.email || "Missing")+"</td><td>"+esc(row.phone || "Not available")+"</td><td>"+existing+"</td><td><button type='button' data-contact-action='"+index+"' data-action='"+action.toLowerCase()+"' style='"+actionStyle+"'>"+action+"</button></td></tr>"; });
                       results.innerHTML = rows.length ? html + "</tbody></table>" : "<p>No CUCM users found.</p>";
