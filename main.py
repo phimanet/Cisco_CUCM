@@ -3170,6 +3170,26 @@ def _genesys_external_contact_payload(first_name: str, last_name: str, phone: st
   }
 
 
+def _genesys_external_contact_match(contacts: list[dict], first_name: str, last_name: str, email: str) -> dict:
+  clean_email = str(email or "").strip().lower()
+  clean_first = str(first_name or "").strip().lower()
+  clean_last = str(last_name or "").strip().lower()
+  for contact in contacts or []:
+    if not isinstance(contact, dict):
+      continue
+    contact_email = str(contact.get("email", "") or "").strip().lower()
+    if clean_email and contact_email == clean_email:
+      return contact
+  if clean_first and clean_last:
+    for contact in contacts or []:
+      if not isinstance(contact, dict):
+        continue
+      if (str(contact.get("first_name", "") or "").strip().lower() == clean_first
+          and str(contact.get("last_name", "") or "").strip().lower() == clean_last):
+        return contact
+  return {}
+
+
 def _genesys_get_user_queues_paged(api_base: str, access_token: str, user_id: str) -> tuple[list[dict], str, int]:
   clean_user_id = str(user_id or "").strip()
   if not clean_user_id:
@@ -18076,14 +18096,15 @@ def genesys_admin_placeholder(request: Request):
                     .then(function(response){ return response.json().then(function(data){ if(!response.ok || !data.ok) throw new Error(data.error || "CUCM search failed."); return data; }); })
                     .then(function(data){
                       var rows = data.rows || []; status.textContent = rows.length + " CUCM result(s). Select one user.";
-                      var html = "<table><thead><tr><th>Select</th><th>First Name</th><th>Last Name</th><th>User ID</th><th>Email</th><th>10-digit Work Phone</th></tr></thead><tbody>";
-                      rows.forEach(function(row,index){ html += "<tr><td><button type='button' data-contact-row='"+index+"'>Select</button></td><td>"+esc(row.first_name)+"</td><td>"+esc(row.last_name)+"</td><td>"+esc(row.user_id)+"</td><td>"+esc(row.email)+"</td><td>"+esc(row.phone || "Not available")+"</td></tr>"; });
+                      var html = "<table><thead><tr><th>Select</th><th>First Name</th><th>Last Name</th><th>User ID</th><th>Email</th><th>10-digit Work Phone</th><th>CiscoVoiceUser Contact</th></tr></thead><tbody>";
+                      rows.forEach(function(row,index){ var existing = row.already_in_ciscovoiceuser ? "Already exists" + (row.genesys_contact_id ? " ("+esc(row.genesys_contact_id)+")" : "") : "Not found"; html += "<tr><td><button type='button' data-contact-row='"+index+"'>Select</button></td><td>"+esc(row.first_name)+"</td><td>"+esc(row.last_name)+"</td><td>"+esc(row.user_id)+"</td><td>"+esc(row.email)+"</td><td>"+esc(row.phone || "Not available")+"</td><td>"+existing+"</td></tr>"; });
                       results.innerHTML = rows.length ? html + "</tbody></table>" : "<p>No CUCM users found.</p>";
-                      Array.prototype.forEach.call(results.querySelectorAll("[data-contact-row]"), function(button){ button.onclick=function(){ selected=rows[Number(button.getAttribute("data-contact-row"))]; previewText.innerHTML="First Name: <strong>"+esc(selected.first_name)+"</strong><br>Last Name: <strong>"+esc(selected.last_name)+"</strong><br>Work Email: <strong>"+esc(selected.email || "Missing")+"</strong><br>Work Phone: <strong>"+esc(selected.phone || "Missing")+"</strong><br>Division: <strong>CiscoVoiceUser</strong>"; preview.style.display="block"; status.textContent=selected.phone && selected.email ? "Preview ready. Confirm creation." : "Selected user must have a valid email and 10-digit phone."; }; });
+                      Array.prototype.forEach.call(results.querySelectorAll("[data-contact-row]"), function(button){ button.onclick=function(){ selected=rows[Number(button.getAttribute("data-contact-row"))]; var existingText = selected.already_in_ciscovoiceuser ? "Already exists in CiscoVoiceUser" + (selected.genesys_contact_id ? " (ID: "+esc(selected.genesys_contact_id)+")" : "") : "No existing CiscoVoiceUser contact found"; previewText.innerHTML="First Name: <strong>"+esc(selected.first_name)+"</strong><br>Last Name: <strong>"+esc(selected.last_name)+"</strong><br>Work Email: <strong>"+esc(selected.email || "Missing")+"</strong><br>Work Phone: <strong>"+esc(selected.phone || "Missing")+"</strong><br>Division: <strong>CiscoVoiceUser</strong><br>Contact Check: <strong>"+existingText+"</strong>"; document.getElementById("genesys-external-contact-create-btn").disabled = !!selected.already_in_ciscovoiceuser; document.getElementById("genesys-external-contact-create-btn").textContent = selected.already_in_ciscovoiceuser ? "Already Exists - Creation Blocked" : "Create External Contact"; preview.style.display="block"; status.textContent=selected.already_in_ciscovoiceuser ? "Creation blocked: this person is already in CiscoVoiceUser." : (selected.phone && selected.email ? "Preview ready. Confirm creation." : "Selected user must have a valid email and 10-digit phone."); }; });
                     }).catch(function(error){ status.style.color="#b42318"; status.textContent=error.message; });
                 };
                 document.getElementById("genesys-external-contact-create-btn").onclick = function () {
                   if (!selected || !selected.phone || !selected.email) { status.style.color="#b42318"; status.textContent="Select a CUCM user with a valid email and 10-digit phone."; return; }
+                  if (selected.already_in_ciscovoiceuser) { status.style.color="#b42318"; status.textContent="Creation blocked: this person is already in CiscoVoiceUser."; return; }
                   var data=new FormData(); data.append("first_name",selected.first_name); data.append("last_name",selected.last_name); data.append("email",selected.email); data.append("phone",selected.phone); data.append("user_id",selected.user_id); status.style.color="#2c5c8a"; status.textContent="Creating Genesys External Contact...";
                   fetch("/genesys/external-contacts/create",{method:"POST",body:data,credentials:"same-origin"}).then(function(response){return response.json().then(function(body){if(!response.ok||!body.ok)throw new Error(body.error||"Creation failed.");return body;});}).then(function(body){var id=String((body.contact||{}).id||"");document.getElementById("genesys-external-contact-remove-id").value=id;status.style.color="#146c2e";status.textContent="External Contact created. Contact ID: "+id; document.getElementById("genesys-external-contact-list-btn").click();}).catch(function(error){status.style.color="#b42318";status.textContent=error.message;});
                 };
@@ -23687,14 +23708,35 @@ def genesys_external_contact_cucm_preview_route(
     people = search_persons_by_name(resolved_host, resolved_user, resolved_pass, last_name, first_name)
   except Exception as exc:
     return JSONResponse({"ok": False, "error": f"CUCM lookup failed: {exc}"}, status_code=400)
+  token_result = _genesys_get_queue_access_token(GENESYS_CLOUD_REGION)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys authentication failed."), "rows": []}, status_code=400)
+  access_token = str(token_result.get("access_token", "") or "")
+  _, _, api_base = _genesys_region_to_urls(str(token_result.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION))
+  target_division, division_error = _genesys_find_division_by_name(api_base, access_token, "CiscoVoiceUser")
+  if division_error:
+    return JSONResponse({"ok": False, "error": division_error, "rows": []}, status_code=400)
+  contacts_result = _genesys_list_external_contacts_in_division(
+    api_base, access_token, "CiscoVoiceUser", str(target_division.get("id", "") or "")
+  )
+  if not contacts_result.get("ok"):
+    return JSONResponse({"ok": False, "error": contacts_result.get("error", "Unable to check CiscoVoiceUser contacts."), "rows": []}, status_code=400)
+  contacts = contacts_result.get("rows", [])
   rows = []
   for person in people or []:
+    first_name = str(person.get("first_name", "") or person.get("firstname", "") or "").strip()
+    last_name_value = str(person.get("last_name", "") or person.get("lastname", "") or "").strip()
+    email = str(person.get("email", "") or person.get("mailid", "") or "").strip()
+    existing_contact = _genesys_external_contact_match(contacts, first_name, last_name_value, email)
     rows.append({
       "user_id": str(person.get("userid", "") or "").strip(),
-      "first_name": str(person.get("first_name", "") or person.get("firstname", "") or "").strip(),
-      "last_name": str(person.get("last_name", "") or person.get("lastname", "") or "").strip(),
-      "email": str(person.get("email", "") or person.get("mailid", "") or "").strip(),
+      "first_name": first_name,
+      "last_name": last_name_value,
+      "email": email,
       "phone": _genesys_external_contact_phone(person),
+      "already_in_ciscovoiceuser": bool(existing_contact),
+      "genesys_contact_id": str(existing_contact.get("id", "") or "").strip(),
+      "genesys_contact_name": str(existing_contact.get("name", "") or "").strip(),
     })
   return JSONResponse({"ok": True, "division_name": "CiscoVoiceUser", "rows": rows})
 
@@ -23726,6 +23768,20 @@ def genesys_external_contact_create_route(
   division, division_error = _genesys_find_division_by_name(api_base, access_token, "CiscoVoiceUser")
   if division_error:
     return JSONResponse({"ok": False, "error": division_error}, status_code=400)
+  contacts_result = _genesys_list_external_contacts_in_division(
+    api_base, access_token, "CiscoVoiceUser", str(division.get("id", "") or "")
+  )
+  if not contacts_result.get("ok"):
+    return JSONResponse({"ok": False, "error": contacts_result.get("error", "Unable to verify existing CiscoVoiceUser contacts.")}, status_code=400)
+  existing_contact = _genesys_external_contact_match(contacts_result.get("rows", []), first_name, last_name, clean_email)
+  if existing_contact:
+    existing_id = str(existing_contact.get("id", "") or "").strip()
+    return JSONResponse({
+      "ok": False,
+      "already_exists": True,
+      "contact_id": existing_id,
+      "error": f"External Contact already exists in CiscoVoiceUser division{f' (ID: {existing_id})' if existing_id else ''}.",
+    }, status_code=409)
   payload = _genesys_external_contact_payload(first_name, last_name, digits, clean_email, str(division.get("id", "") or ""))
   ok, body, error, status_code = _genesys_send_json("POST", api_base, access_token, "/api/v2/externalcontacts/contacts", payload=payload)
   if not ok:
