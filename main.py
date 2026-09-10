@@ -56,7 +56,7 @@ from toolkit.add_secondary_devices import (
 from toolkit.called_name_change import run_called_name_change
 from toolkit.edit_line_group_members import edit_line_group_members, search_line_groups, get_line_group_members
 from toolkit.extract_rpo_phones import extract_rpo_phones
-from toolkit.person_lookup import search_persons_by_name, search_persons_with_telephone, lookup_person_email_by_userid
+from toolkit.person_lookup import search_persons_by_name, search_persons_with_telephone, search_all_persons, lookup_person_email_by_userid
 from toolkit.extension_lookup import lookup_extension_owner, check_user_devices
 from toolkit.translation_pattern_lookup import (
   lookup_translation_patterns,
@@ -18131,8 +18131,10 @@ def genesys_admin_placeholder(request: Request):
             <div class="search-filter-row">
               <button type="button" id="genesys-external-contact-list-btn" style="background:#385977;">List CiscoVoiceUser Contacts</button>
               <button type="button" id="genesys-external-contact-remove-all-btn" style="background:#9f2f24;">Remove All CiscoVoiceUser Contacts</button>
+              <button type="button" id="genesys-external-contact-reconcile-btn" style="background:#7a5a13;">Check CiscoVoiceUser Contacts Against CUCM</button>
             </div>
             <div id="genesys-external-contact-list-output" style="overflow-x:auto;margin-top:10px;"></div>
+            <div id="genesys-external-contact-reconcile-output" style="overflow-x:auto;margin-top:10px;"></div>
             <hr style="margin:18px 0;border:0;border-top:1px solid #c8dbee;">
             <h4>Remove CiscoVoiceUser External Contact</h4>
             <div class="search-filter-row">
@@ -18181,6 +18183,23 @@ def genesys_admin_placeholder(request: Request):
                       status.textContent = (data.rows || []).length + " CiscoVoiceUser external contact(s) listed.";
                     })
                     .catch(function(error){ listOutput.innerHTML = "<p>Unable to list contacts.</p>"; status.style.color="#b42318"; status.textContent=error.message; });
+                };
+                document.getElementById("genesys-external-contact-reconcile-btn").onclick = function () {
+                  var reconcileOutput = document.getElementById("genesys-external-contact-reconcile-output");
+                  status.style.color="#2c5c8a"; status.textContent="Checking CiscoVoiceUser contacts against CUCM users...";
+                  fetch("/genesys/external-contacts/reconcile-cucm", { method:"POST", body:new FormData(form), credentials:"same-origin" })
+                    .then(function(response){ return response.json().then(function(data){ if(!response.ok || !data.ok) throw new Error(data.error || "Reconciliation failed."); return data; }); })
+                    .then(function(data){
+                      var rows = data.rows || [];
+                      var html = "<p>CUCM users scanned: <strong>"+esc(data.cucm_users_scanned || 0)+"</strong>. CiscoVoiceUser contacts: <strong>"+esc(data.contact_count || 0)+"</strong>. Deletion candidates: <strong>"+esc(data.deletion_candidates || 0)+"</strong>.</p>";
+                      if (!rows.length) { reconcileOutput.innerHTML = html + "<p>No CiscoVoiceUser contacts found.</p>"; status.textContent="Reconciliation complete."; return; }
+                      html += "<table><thead><tr><th>Name</th><th>Email</th><th>Contact ID</th><th>CUCM Match</th><th>Eligibility</th><th>Action</th></tr></thead><tbody>";
+                      rows.forEach(function(row){ var candidate = !!row.eligible_for_deletion; html += "<tr><td>"+esc(row.name || ((row.first_name || "")+" "+(row.last_name || "")))+"</td><td>"+esc(row.email || "")+"</td><td>"+esc(row.id || "")+"</td><td>"+(row.valid_cucm_user ? esc(row.cucm_user_id || "Valid CUCM user")+" ("+esc(row.cucm_match_method || "match")+")" : "Not found")+"</td><td>"+(candidate ? "Eligible for deletion" : "Keep")+"</td><td>"+(candidate ? "<button type='button' data-reconcile-delete='"+esc(row.id)+"' style='background:#9f2f24;'>Delete</button>" : "")+"</td></tr>"; });
+                      reconcileOutput.innerHTML = html + "</tbody></table>";
+                      status.textContent="Reconciliation complete: "+(data.deletion_candidates || 0)+" deletion candidate(s).";
+                      Array.prototype.forEach.call(reconcileOutput.querySelectorAll("[data-reconcile-delete]"), function(button){ button.onclick=function(){ var id=button.getAttribute("data-reconcile-delete"); if(!window.confirm("Delete this unmatched CiscoVoiceUser contact?")) return; var payload=new FormData(); payload.append("contact_id",id); status.textContent="Verifying division and deleting contact..."; fetch("/genesys/external-contacts/remove",{method:"POST",body:payload,credentials:"same-origin"}).then(function(response){return response.json().then(function(body){if(!response.ok||!body.ok)throw new Error(body.error||"Delete failed.");return body;});}).then(function(){status.style.color="#146c2e";status.textContent="Contact deleted. Run the CUCM check again to refresh candidates.";button.disabled=true;button.textContent="Deleted";}).catch(function(error){status.style.color="#b42318";status.textContent=error.message;}); }; });
+                    })
+                    .catch(function(error){ reconcileOutput.innerHTML="<p>Unable to reconcile contacts.</p>"; status.style.color="#b42318"; status.textContent=error.message; });
                 };
                 document.getElementById("genesys-external-contact-remove-all-btn").onclick = function () {
                   if (!window.confirm("This will permanently remove every External Contact in the CiscoVoiceUser division. Continue?")) return;
@@ -23998,6 +24017,72 @@ def genesys_external_contact_list_route(request: Request):
   if not result.get("ok"):
     return JSONResponse({"ok": False, "error": result.get("error", "Unable to list external contacts."), "rows": []}, status_code=400)
   return JSONResponse({"ok": True, "division_name": "CiscoVoiceUser", "rows": result.get("rows", [])})
+
+
+@app.post("/genesys/external-contacts/reconcile-cucm")
+def genesys_external_contact_reconcile_cucm_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not operator or not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Admin authorization required.", "rows": []}, status_code=403)
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  try:
+    cucm_users = search_all_persons(resolved_host, resolved_user, resolved_pass)
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": f"CUCM reconciliation lookup failed: {exc}", "rows": []}, status_code=400)
+  email_index = {}
+  name_index = {}
+  for user in cucm_users or []:
+    email_key = str(user.get("email", "") or "").strip().lower()
+    name_key = " ".join([str(user.get("first_name", "") or "").strip().lower(), str(user.get("last_name", "") or "").strip().lower()]).strip()
+    if email_key:
+      email_index[email_key] = user
+    if name_key:
+      name_index[name_key] = user
+
+  token_result = _genesys_get_queue_access_token(GENESYS_CLOUD_REGION)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys authentication failed."), "rows": []}, status_code=400)
+  access_token = str(token_result.get("access_token", "") or "")
+  _, _, api_base = _genesys_region_to_urls(str(token_result.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION))
+  division, division_error = _genesys_find_division_by_name(api_base, access_token, "CiscoVoiceUser")
+  if division_error:
+    return JSONResponse({"ok": False, "error": division_error, "rows": []}, status_code=400)
+  result = _genesys_list_external_contacts_in_division(api_base, access_token, "CiscoVoiceUser", str(division.get("id", "") or ""))
+  if not result.get("ok"):
+    return JSONResponse({"ok": False, "error": result.get("error", "Unable to list CiscoVoiceUser contacts."), "rows": []}, status_code=400)
+
+  rows = []
+  for contact in result.get("rows", []):
+    email = str(contact.get("email", "") or "").strip().lower()
+    first_name = str(contact.get("first_name", "") or "").strip().lower()
+    last_name = str(contact.get("last_name", "") or "").strip().lower()
+    name_key = " ".join([first_name, last_name]).strip()
+    matched_user = email_index.get(email) if email else None
+    match_method = "email" if matched_user else ""
+    if not matched_user and name_key:
+      matched_user = name_index.get(name_key)
+      match_method = "name" if matched_user else ""
+    rows.append({
+      **contact,
+      "valid_cucm_user": bool(matched_user),
+      "eligible_for_deletion": not bool(matched_user),
+      "cucm_user_id": str((matched_user or {}).get("userid", "") or "").strip(),
+      "cucm_match_method": match_method,
+    })
+  return JSONResponse({
+    "ok": True,
+    "division_name": "CiscoVoiceUser",
+    "cucm_users_scanned": len(cucm_users or []),
+    "contact_count": len(rows),
+    "deletion_candidates": sum(1 for row in rows if row.get("eligible_for_deletion")),
+    "rows": rows,
+  })
 
 
 @app.post("/genesys/external-contacts/remove-all")

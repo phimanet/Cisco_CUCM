@@ -453,3 +453,41 @@ def search_persons_with_telephone(cucm_host, cucm_user, cucm_pass):
             "devices": [],
         })
     return results
+
+
+def search_all_persons(cucm_host, cucm_user, cucm_pass):
+    """Return all CUCM end users needed for cross-system reconciliation."""
+    session = requests.Session()
+    session.trust_env = False
+    session.verify = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+    sql = (
+        "SELECT u.userid AS userid, u.firstname AS firstname, u.lastname AS lastname, "
+        "u.displayname AS displayname, u.mailid AS mailid, u.telephonenumber AS telephonenumber "
+        "FROM enduser u ORDER BY u.lastname, u.firstname, u.userid"
+    )
+    try:
+        resp = _axl_post(session, cucm_host, _soap_execute_sql(sql))
+        root = ET.fromstring(resp)
+    except Exception:
+        return []
+
+    results = []
+    seen = set()
+    for elem in root.iter():
+        if _strip_ns(elem.tag) != "row":
+            continue
+        row = {_strip_ns(child.tag): (child.text or "").strip() for child in list(elem)}
+        userid = row.get("userid", "").strip()
+        if not userid or userid in seen:
+            continue
+        seen.add(userid)
+        results.append({
+            "userid": userid,
+            "first_name": row.get("firstname", ""),
+            "last_name": row.get("lastname", ""),
+            "display_name": row.get("displayname", ""),
+            "email": row.get("mailid", ""),
+            "telephone": row.get("telephonenumber", ""),
+        })
+    return results
