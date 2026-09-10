@@ -3190,6 +3190,24 @@ def _genesys_external_contact_match(contacts: list[dict], first_name: str, last_
   return {}
 
 
+def _genesys_create_external_contact(api_base: str, access_token: str, division_id: str, row: dict) -> tuple[bool, dict, str]:
+  first_name = str(row.get("first_name", "") or "").strip()
+  last_name = str(row.get("last_name", "") or "").strip()
+  email = str(row.get("email", "") or "").strip()
+  phone = re.sub(r"\D", "", str(row.get("phone", "") or ""))
+  if len(phone) == 11 and phone.startswith("1"):
+    phone = phone[1:]
+  if len(phone) != 10:
+    return False, {}, "CUCM Telephone is not a valid 10-digit number."
+  if not email or "@" not in email:
+    return False, {}, "CUCM Mail ID/email is missing or invalid."
+  payload = _genesys_external_contact_payload(first_name, last_name, phone, email, division_id)
+  ok, body, error, _status_code = _genesys_send_json(
+    "POST", api_base, access_token, "/api/v2/externalcontacts/contacts", payload=payload
+  )
+  return ok, body if isinstance(body, dict) else {}, error
+
+
 def _genesys_get_user_queues_paged(api_base: str, access_token: str, user_id: str) -> tuple[list[dict], str, int]:
   clean_user_id = str(user_id or "").strip()
   if not clean_user_id:
@@ -18039,6 +18057,7 @@ def genesys_admin_placeholder(request: Request):
             <h4>List CiscoVoiceUser External Contacts</h4>
             <div class="search-filter-row">
               <button type="button" id="genesys-external-contact-list-btn" style="background:#385977;">List CiscoVoiceUser Contacts</button>
+              <button type="button" id="genesys-external-contact-remove-all-btn" style="background:#9f2f24;">Remove All CiscoVoiceUser Contacts</button>
             </div>
             <div id="genesys-external-contact-list-output" style="overflow-x:auto;margin-top:10px;"></div>
             <hr style="margin:18px 0;border:0;border-top:1px solid #c8dbee;">
@@ -18089,6 +18108,15 @@ def genesys_admin_placeholder(request: Request):
                       status.textContent = (data.rows || []).length + " CiscoVoiceUser external contact(s) listed.";
                     })
                     .catch(function(error){ listOutput.innerHTML = "<p>Unable to list contacts.</p>"; status.style.color="#b42318"; status.textContent=error.message; });
+                };
+                document.getElementById("genesys-external-contact-remove-all-btn").onclick = function () {
+                  if (!window.confirm("This will permanently remove every External Contact in the CiscoVoiceUser division. Continue?")) return;
+                  if (window.prompt("Type DELETE to confirm removal of all CiscoVoiceUser contacts:") !== "DELETE") { status.style.color="#b42318"; status.textContent="Bulk removal cancelled. No contacts were changed."; return; }
+                  status.style.color="#2c5c8a"; status.textContent="Removing all CiscoVoiceUser contacts...";
+                  fetch("/genesys/external-contacts/remove-all", { method:"POST", credentials:"same-origin" })
+                    .then(function(response){ return response.json().then(function(data){ if(!response.ok || !data.ok) throw new Error(data.error || "Bulk removal failed."); return data; }); })
+                    .then(function(data){ status.style.color = data.failed_count ? "#b42318" : "#146c2e"; status.textContent = "CiscoVoiceUser removal complete: " + data.deleted_count + " deleted, " + data.failed_count + " failed."; listOutput.innerHTML = data.failed_count ? "<p>Some contacts could not be removed. Review the operation result and retry after resolving failures.</p>" : "<p>No CiscoVoiceUser external contacts remain.</p>"; })
+                    .catch(function(error){ status.style.color="#b42318"; status.textContent=error.message; });
                 };
                 document.getElementById("genesys-external-contact-search-btn").onclick = function () {
                   selected = null; preview.style.display = "none"; results.innerHTML = ""; countOutput.style.display = "none"; status.style.color = "#2c5c8a"; status.textContent = "Loading all CUCM users with Telephone...";
@@ -23814,6 +23842,73 @@ def genesys_external_contact_list_route(request: Request):
   if not result.get("ok"):
     return JSONResponse({"ok": False, "error": result.get("error", "Unable to list external contacts."), "rows": []}, status_code=400)
   return JSONResponse({"ok": True, "division_name": "CiscoVoiceUser", "rows": result.get("rows", [])})
+
+
+@app.post("/genesys/external-contacts/remove-all")
+async def genesys_external_contact_remove_all_route(request: Request):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not operator or not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Admin authorization required."}, status_code=403)
+  token_result = _genesys_get_queue_access_token(GENESYS_CLOUD_REGION)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys authentication failed.")}, status_code=400)
+  access_token = str(token_result.get("access_token", "") or "")
+  clean_region, _, api_base = _genesys_region_to_urls(str(token_result.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION))
+  target_division, division_error = _genesys_find_division_by_name(api_base, access_token, "CiscoVoiceUser")
+  if division_error:
+    return JSONResponse({"ok": False, "error": division_error}, status_code=400)
+  target_division_id = str(target_division.get("id", "") or "").strip()
+  result = _genesys_list_external_contacts_in_division(api_base, access_token, "CiscoVoiceUser", target_division_id)
+  if not result.get("ok"):
+    return JSONResponse({"ok": False, "error": result.get("error", "Unable to list CiscoVoiceUser contacts.")}, status_code=400)
+
+  contacts = []
+  for row in result.get("rows", []):
+    contact_id = str(row.get("id", "") or "").strip()
+    row_division_id = str(row.get("division_id", "") or "").strip()
+    row_division_name = str(row.get("division_name", "") or "").strip().lower()
+    if contact_id and (row_division_id == target_division_id or row_division_name == "ciscovoiceuser"):
+      contacts.append(row)
+
+  deleted = []
+  failures = []
+  def remove_one(row: dict) -> tuple[dict, bool, str]:
+    contact_id = str(row.get("id", "") or "").strip()
+    ok, _body, error, _status_code = _genesys_send_json(
+      "DELETE", api_base, access_token, f"/api/v2/externalcontacts/contacts/{quote(contact_id, safe='')}"
+    )
+    return row, ok, error
+
+  with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    futures = [executor.submit(remove_one, row) for row in contacts]
+    for future in concurrent.futures.as_completed(futures):
+      row, ok, error = future.result()
+      contact_id = str(row.get("id", "") or "").strip()
+      name = str(row.get("name", "") or "").strip()
+      if ok:
+        deleted.append({"id": contact_id, "name": name})
+      else:
+        failures.append({"id": contact_id, "name": name, "reason": error or "Removal failed."})
+
+  _append_audit_event(
+    action="genesys_external_contacts_bulk_removed",
+    cucm_host=str(session.get("cucm_host", "") or ""),
+    operator=operator,
+    target=f"deleted={len(deleted)};failed={len(failures)};division=CiscoVoiceUser",
+    output_filename="",
+    inline_mode=True,
+  )
+  return JSONResponse({
+    "ok": True,
+    "region": clean_region,
+    "division_name": "CiscoVoiceUser",
+    "found_count": len(contacts),
+    "deleted_count": len(deleted),
+    "failed_count": len(failures),
+    "deleted": deleted,
+    "failures": failures,
+  })
 
 
 @app.post("/genesys/external-contacts/remove")
