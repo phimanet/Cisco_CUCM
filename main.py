@@ -105,6 +105,9 @@ GENESYS_EXTERNAL_CONTACT_LOAD_JOBS = {}
 GENESYS_EXTERNAL_CONTACT_LOAD_LOCK = threading.Lock()
 GENESYS_EXTERNAL_CONTACT_LOAD_QUEUE = queue.Queue()
 GENESYS_EXTERNAL_CONTACT_LOAD_WORKER_STARTED = False
+FORWARDED_CSF_LIST_JOBS = {}
+FORWARDED_CSF_LIST_LOCK = threading.Lock()
+FORWARDED_CSF_LIST_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 UNITY_USER_EXTRACT_DATA_ROOT = (os.getenv("UNITY_USER_EXTRACT_DATA_ROOT", "") or "").strip() or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "unity_user_extract")
 UNITY_USER_EXTRACT_QUEUE_PATH = os.path.join(UNITY_USER_EXTRACT_DATA_ROOT, "jobs.json")
 UNITY_USER_EXTRACT_HISTORY_PATH = os.path.join(UNITY_USER_EXTRACT_DATA_ROOT, "history.json")
@@ -31778,6 +31781,20 @@ __ADMIN_CARD__
             let payload;
             try { payload = JSON.parse(responseText); }
             catch (parseError) { throw new Error("HTTP " + resp.status + " returned non-JSON response: " + responseText.slice(0, 240)); }
+            if (payload.ok && payload.queued && payload.job_id) {
+              statusEl.textContent = "Forwarded CSF lookup queued. Loading CUCM line forwarding details...";
+              while (true) {
+                await new Promise(function(resolve) { window.setTimeout(resolve, 2000); });
+                const jobResp = await fetch("/jabber-forwarding/forwarded-csf-list/" + encodeURIComponent(payload.job_id), { credentials:"same-origin" });
+                const jobText = await jobResp.text();
+                let jobPayload;
+                try { jobPayload = JSON.parse(jobText); }
+                catch (parseError) { throw new Error("HTTP " + jobResp.status + " returned non-JSON response: " + jobText.slice(0, 240)); }
+                if (jobPayload.status === "running") statusEl.textContent = "Loading CUCM line forwarding details...";
+                if (jobPayload.status === "completed") { payload = jobPayload; break; }
+                if (jobPayload.status === "failed") throw new Error(jobPayload.error || "Forwarded CSF lookup failed.");
+              }
+            }
             if (!resp.ok || !payload.ok) throw new Error(payload.error || "Forwarded CSF lookup failed.");
             const rows = payload.results || [];
             statusEl.textContent = "Found " + rows.length + " forwarded CSF number(s).";
@@ -50554,6 +50571,25 @@ def _jabber_forwarding_list_forwarded_csf_lines(session: requests.Session, cucm_
   return rows
 
 
+def _run_forwarded_csf_list_job(job_id: str, cucm_host: str, cucm_user: str, cucm_pass: str):
+  with FORWARDED_CSF_LIST_LOCK:
+    job = FORWARDED_CSF_LIST_JOBS.get(job_id)
+    if job:
+      job["status"] = "running"
+  try:
+    session = requests.Session()
+    session.verify = False
+    session.trust_env = False
+    session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+    rows = _jabber_forwarding_list_forwarded_csf_lines(session, cucm_host)
+    with FORWARDED_CSF_LIST_LOCK:
+      FORWARDED_CSF_LIST_JOBS[job_id] = {"status": "completed", "count": len(rows), "results": rows}
+  except Exception as exc:
+    logger.exception("Forwarded CSF background lookup failed")
+    with FORWARDED_CSF_LIST_LOCK:
+      FORWARDED_CSF_LIST_JOBS[job_id] = {"status": "failed", "error": str(exc), "results": []}
+
+
 @app.post("/jabber-forwarding/lookup")
 def jabber_forwarding_lookup_route(
   request: Request,
@@ -50641,15 +50677,23 @@ def jabber_forwarding_forwarded_csf_list_route(
   try:
     resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
     _update_cached_credentials(request, cucm_host=resolved_host, cucm_user=resolved_user)
-    session = requests.Session()
-    session.verify = False
-    session.trust_env = False
-    session.auth = HTTPBasicAuth(resolved_user, resolved_pass)
-    rows = _jabber_forwarding_list_forwarded_csf_lines(session, resolved_host)
+    job_id = uuid4().hex
+    with FORWARDED_CSF_LIST_LOCK:
+      FORWARDED_CSF_LIST_JOBS[job_id] = {"status": "queued", "count": 0, "results": []}
+    FORWARDED_CSF_LIST_EXECUTOR.submit(_run_forwarded_csf_list_job, job_id, resolved_host, resolved_user, resolved_pass)
+    return JSONResponse({"ok": True, "queued": True, "job_id": job_id, "status": "queued"})
   except Exception as exc:
     logger.exception("Forwarded CSF lookup failed")
     return JSONResponse({"ok": False, "error": f"Forwarded CSF lookup failed: {exc}", "results": []}, status_code=500)
-  return JSONResponse({"ok": True, "count": len(rows), "results": rows})
+
+
+@app.get("/jabber-forwarding/forwarded-csf-list/{job_id}")
+def jabber_forwarding_forwarded_csf_list_status_route(request: Request, job_id: str):
+  with FORWARDED_CSF_LIST_LOCK:
+    job = dict(FORWARDED_CSF_LIST_JOBS.get(str(job_id or "").strip()) or {})
+  if not job:
+    return JSONResponse({"ok": False, "error": "Forwarded CSF job was not found."}, status_code=404)
+  return JSONResponse({"ok": True, **job})
 
 
 @app.post("/jabber-forwarding/update")
