@@ -29395,7 +29395,7 @@ __ADMIN_CARD__
     <h3>Build Cisco Jabber Laptop and Voicemail - New Hire or New Jabber Laptop/VM Add</h3>
     <p>Authentication note: Uses cached login credentials from your current session for Unity voicemail and Active Directory actions.</p>
     <div id="jabber-pool-banner" style="margin:10px 0 16px 0;padding:12px 14px;border:2px solid #2563a6;border-radius:8px;background:#f4f9ff;">
-      <strong style="color:#123f70;">Current Directory Number Pool Availability</strong>
+      <strong style="color:#123f70;">Available Directory Numbers</strong>
       <div style="margin-top:7px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
         <div id="jabber-pool-banner-body" style="color:#4e6a84;font-size:13px;flex:1;">Loading current pool snapshot...</div>
         <button type="button" id="jabber-pool-refresh-btn" style="background:#2563a6;color:#fff;border:0;border-radius:5px;padding:7px 11px;font-weight:700;cursor:pointer;">Refresh Now</button>
@@ -29448,7 +29448,7 @@ __ADMIN_CARD__
           const rows = snapshot.results || [];
           if (!rows.length) { body.textContent = "No pool snapshot is available yet. Refreshing from CUCM..."; return; }
           let html = '<div style="display:flex;gap:10px;flex-wrap:wrap;">';
-          rows.forEach(function (row) { html += '<span style="display:inline-block;padding:7px 10px;border:1px solid #c8dbee;border-radius:5px;background:#fff;"><strong>' + escapePool(row.label) + ':</strong> ' + escapePool(row.available) + ' available / ' + escapePool(row.total) + ' total</span>'; });
+          rows.forEach(function (row) { html += '<span style="display:inline-block;padding:7px 10px;border:1px solid #c8dbee;border-radius:5px;background:#fff;"><strong>' + escapePool(row.label) + ':</strong> ' + escapePool(row.available) + ' available</span>'; });
           html += '</div><div style="margin-top:7px;font-size:12px;color:#6b7280;">Last updated: ' + escapePool(snapshot.updated_at || "not yet") + ' Pacific</div>';
           if (snapshot.error) html += '<div style="margin-top:4px;color:#9a3412;font-size:12px;">Partial refresh note: ' + escapePool(snapshot.error) + '</div>';
           body.innerHTML = html;
