@@ -50504,7 +50504,7 @@ def _jabber_forwarding_list_forwarded_csf_lines(session: requests.Session, cucm_
     "JOIN devicenumplanmap dm ON dm.fkdevice = d.pkid "
     "JOIN numplan n ON n.pkid = dm.fknumplan "
     "LEFT JOIN routepartition rp ON rp.pkid = n.fkroutepartition "
-    "WHERE d.name LIKE 'CSF%' AND n.cfallforward IS NOT NULL AND TRIM(n.cfallforward) <> '' "
+    "WHERE d.name LIKE 'CSF%' AND n.cfallforward IS NOT NULL AND n.cfallforward <> '' "
     "ORDER BY u.lastname, u.firstname, n.dnorpattern"
   )
   soap = f'''<?xml version="1.0" encoding="utf-8"?>
