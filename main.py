@@ -29396,7 +29396,10 @@ __ADMIN_CARD__
     <p>Authentication note: Uses cached login credentials from your current session for Unity voicemail and Active Directory actions.</p>
     <div id="jabber-pool-banner" style="margin:10px 0 16px 0;padding:12px 14px;border:2px solid #2563a6;border-radius:8px;background:#f4f9ff;">
       <strong style="color:#123f70;">Current Directory Number Pool Availability</strong>
-      <div id="jabber-pool-banner-body" style="margin-top:7px;color:#4e6a84;font-size:13px;">Loading current pool snapshot...</div>
+      <div style="margin-top:7px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+        <div id="jabber-pool-banner-body" style="color:#4e6a84;font-size:13px;flex:1;">Loading current pool snapshot...</div>
+        <button type="button" id="jabber-pool-refresh-btn" style="background:#2563a6;color:#fff;border:0;border-radius:5px;padding:7px 11px;font-weight:700;cursor:pointer;">Refresh Now</button>
+      </div>
     </div>
 
     <div class="build-user-layout">
@@ -29436,7 +29439,8 @@ __ADMIN_CARD__
     <script>
       (function () {
         const body = document.getElementById("jabber-pool-banner-body");
-        if (!body) return;
+        const refreshButton = document.getElementById("jabber-pool-refresh-btn");
+        if (!body || !refreshButton) return;
         function escapePool(value) { const node = document.createElement("span"); node.textContent = value == null ? "" : value; return node.innerHTML; }
         function renderPool(snapshot) {
           if (snapshot.status === "refreshing") { body.textContent = "Refreshing pool counts from CUCM..."; return; }
@@ -29458,6 +29462,17 @@ __ADMIN_CARD__
             if (payload.status === "refreshing" || payload.status === "not_loaded") window.setTimeout(loadPool, 3000);
           } catch (error) { body.textContent = "Pool availability unavailable: " + error.message; }
         }
+        refreshButton.addEventListener("click", async function () {
+          refreshButton.disabled = true;
+          body.textContent = "Starting CUCM pool refresh...";
+          try {
+            const response = await fetch("/jabber/pool-availability/refresh", { method:"POST", credentials:"same-origin" });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) throw new Error(payload.error || "Pool refresh request failed.");
+            await loadPool();
+          } catch (error) { body.textContent = "Pool refresh unavailable: " + error.message; }
+          finally { refreshButton.disabled = false; }
+        });
         loadPool();
       })();
     </script>
@@ -50735,6 +50750,15 @@ def jabber_pool_availability_route(request: Request):
   if snapshot.get("status") in {"not_loaded", "failed"}:
     _request_jabber_pool_refresh()
   return JSONResponse({"ok": True, **snapshot})
+
+
+@app.post("/jabber/pool-availability/refresh")
+def jabber_pool_availability_refresh_route(request: Request):
+  session = _get_auth_session(request) or {}
+  if not session:
+    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
+  _request_jabber_pool_refresh()
+  return JSONResponse({"ok": True, "status": "refreshing", "message": "Pool refresh started."})
 
 
 @app.post("/jabber-forwarding/lookup")
