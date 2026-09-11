@@ -31739,14 +31739,18 @@ __ADMIN_CARD__
 
       <div class="action-row">
         <button type="submit">Search User</button>
-        <button type="button" id="jabber-forwarding-list-csf-btn" style="background:#7a5a13;">List Forwarded CSF Numbers</button>
         <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
       </div>
     </form>
 
     <p id="jabber-forwarding-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter name and click Search User.</p>
     <div id="jabber-forwarding-results" style="overflow-x:auto;"></div>
-    <div id="jabber-forwarding-csf-results" style="overflow-x:auto; margin-top:14px;"></div>
+    <div id="jabber-forwarding-csf-section" style="margin-top:22px;padding:14px;border:2px solid #c48a16;border-radius:8px;background:#fffaf0;">
+      <h4 style="margin:0 0 6px 0;color:#7a5a13;">Forwarded CSF Directory Numbers</h4>
+      <p style="margin:0 0 10px 0;color:#4e6a84;font-size:12px;">List only Directory Numbers attached to CSF devices that currently have Forward All enabled. Review the owner, extension, and destination, then remove forwarding when needed.</p>
+      <button type="button" id="jabber-forwarding-list-csf-btn" style="background:#7a5a13;">List Forwarded CSF Numbers</button>
+      <div id="jabber-forwarding-csf-results" style="overflow-x:auto; margin-top:12px;"></div>
+    </div>
 
     <script>
       (function () {
