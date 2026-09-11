@@ -35,6 +35,7 @@ except Exception:
   _FERNET_AVAILABLE = False
 from fastapi import FastAPI, Form, UploadFile, File, Query, Request
 from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse
+
 from html import escape, unescape
 from requests.auth import HTTPBasicAuth
 from urllib.parse import urljoin, quote
@@ -108,6 +109,11 @@ GENESYS_EXTERNAL_CONTACT_LOAD_WORKER_STARTED = False
 FORWARDED_CSF_LIST_JOBS = {}
 FORWARDED_CSF_LIST_LOCK = threading.Lock()
 FORWARDED_CSF_LIST_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+JABBER_POOL_SNAPSHOT = {"status": "not_loaded", "updated_at": "", "results": [], "error": ""}
+JABBER_POOL_SNAPSHOT_LOCK = threading.Lock()
+JABBER_POOL_REFRESH_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+JABBER_POOL_REFRESH_RUNNING = False
+JABBER_POOL_SCHEDULER_STARTED = False
 UNITY_USER_EXTRACT_DATA_ROOT = (os.getenv("UNITY_USER_EXTRACT_DATA_ROOT", "") or "").strip() or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "unity_user_extract")
 UNITY_USER_EXTRACT_QUEUE_PATH = os.path.join(UNITY_USER_EXTRACT_DATA_ROOT, "jobs.json")
 UNITY_USER_EXTRACT_HISTORY_PATH = os.path.join(UNITY_USER_EXTRACT_DATA_ROOT, "history.json")
@@ -171,6 +177,7 @@ def _startup_background_services():
   _unity_user_extract_start_worker()
   _start_genesys_external_contact_load_worker()
   _start_genesys_cucm_sync_scheduler()
+  _start_jabber_pool_scheduler()
 
 
 def _genesys_external_contact_load_update(job_id: str, **changes):
@@ -10375,6 +10382,79 @@ def _axl_list_dns_by_prefix(cucm_host: str, cucm_user: str, cucm_pass: str, pref
       pass
   
   return {"total": total, "available": available, "in_use": total - available}
+
+
+def _refresh_jabber_pool_snapshot():
+  global JABBER_POOL_REFRESH_RUNNING
+  with JABBER_POOL_SNAPSHOT_LOCK:
+    if JABBER_POOL_REFRESH_RUNNING:
+      return
+    JABBER_POOL_REFRESH_RUNNING = True
+    JABBER_POOL_SNAPSHOT["status"] = "refreshing"
+  try:
+    cfg = _get_dn_report_settings()
+    cucm_host = cfg.get("cucm_host", "")
+    cucm_user = cfg.get("cucm_user", "")
+    cucm_pass = cfg.get("cucm_pass", "")
+    if not cucm_host or not cucm_user or not cucm_pass:
+      raise RuntimeError("CUCM credentials are not configured for pool availability.")
+    dn_map = _get_dn_mapping()
+    results = []
+    errors = []
+    def load_pool(item):
+      key, (prefix, label) = item
+      return key, prefix, label, _axl_list_dns_by_prefix(cucm_host, cucm_user, cucm_pass, prefix)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+      futures = [executor.submit(load_pool, item) for item in dn_map.items()]
+      for future in concurrent.futures.as_completed(futures):
+        try:
+          key, prefix, label, counts = future.result()
+          results.append({"key": key, "prefix": prefix, "label": label, **counts})
+        except Exception as exc:
+          errors.append(str(exc))
+    order = {"General FTE": 0, "Recruiter": 1, "Strike": 2}
+    results.sort(key=lambda row: order.get(row.get("label", ""), 99))
+    updated_at = datetime.datetime.now(ZoneInfo("America/Los_Angeles")).strftime(AUDIT_TIMESTAMP_FORMAT)
+    with JABBER_POOL_SNAPSHOT_LOCK:
+      JABBER_POOL_SNAPSHOT.update({"status": "ready", "updated_at": updated_at, "results": results, "error": "; ".join(errors)})
+  except Exception as exc:
+    logger.exception("Jabber pool snapshot refresh failed")
+    with JABBER_POOL_SNAPSHOT_LOCK:
+      JABBER_POOL_SNAPSHOT.update({"status": "failed", "error": str(exc)})
+  finally:
+    with JABBER_POOL_SNAPSHOT_LOCK:
+      JABBER_POOL_REFRESH_RUNNING = False
+
+
+def _request_jabber_pool_refresh():
+  with JABBER_POOL_SNAPSHOT_LOCK:
+    if JABBER_POOL_REFRESH_RUNNING:
+      return
+  JABBER_POOL_REFRESH_EXECUTOR.submit(_refresh_jabber_pool_snapshot)
+
+
+def _jabber_pool_scheduler_loop():
+  tz = ZoneInfo("America/Los_Angeles")
+  refresh_hours = {6, 9, 12, 15, 17}
+  last_fired = ""
+  while True:
+    try:
+      now = datetime.datetime.now(tz)
+      fire_key = f"{now.date().isoformat()}:{now.hour}"
+      if now.hour in refresh_hours and now.minute == 0 and last_fired != fire_key:
+        last_fired = fire_key
+        _request_jabber_pool_refresh()
+    except Exception:
+      logger.exception("Jabber pool scheduler failed")
+    time.sleep(30)
+
+
+def _start_jabber_pool_scheduler():
+  global JABBER_POOL_SCHEDULER_STARTED
+  if JABBER_POOL_SCHEDULER_STARTED or not _is_prod_runtime_host_strict():
+    return
+  JABBER_POOL_SCHEDULER_STARTED = True
+  threading.Thread(target=_jabber_pool_scheduler_loop, name="jabber-pool-scheduler", daemon=True).start()
 
 
 def _dn_report_build_html(results: list[dict], run_at: str, cucm_host: str, low_threshold: int) -> str:
@@ -29314,6 +29394,10 @@ __ADMIN_CARD__
 
     <h3>Build Cisco Jabber Laptop and Voicemail - New Hire or New Jabber Laptop/VM Add</h3>
     <p>Authentication note: Uses cached login credentials from your current session for Unity voicemail and Active Directory actions.</p>
+    <div id="jabber-pool-banner" style="margin:10px 0 16px 0;padding:12px 14px;border:2px solid #2563a6;border-radius:8px;background:#f4f9ff;">
+      <strong style="color:#123f70;">Current Directory Number Pool Availability</strong>
+      <div id="jabber-pool-banner-body" style="margin-top:7px;color:#4e6a84;font-size:13px;">Loading current pool snapshot...</div>
+    </div>
 
     <div class="build-user-layout">
       <form id="build-user-form" class="target-user-form build-user-form" action="javascript:void(0)" method="post" onsubmit="return false;">
@@ -29348,6 +29432,35 @@ __ADMIN_CARD__
         <textarea id="build-user-preview" readonly></textarea>
       </section>
     </div>
+
+    <script>
+      (function () {
+        const body = document.getElementById("jabber-pool-banner-body");
+        if (!body) return;
+        function escapePool(value) { const node = document.createElement("span"); node.textContent = value == null ? "" : value; return node.innerHTML; }
+        function renderPool(snapshot) {
+          if (snapshot.status === "refreshing") { body.textContent = "Refreshing pool counts from CUCM..."; return; }
+          if (snapshot.status === "failed") { body.textContent = "Pool availability unavailable: " + (snapshot.error || "Unknown error."); return; }
+          const rows = snapshot.results || [];
+          if (!rows.length) { body.textContent = "No pool snapshot is available yet. Refreshing from CUCM..."; return; }
+          let html = '<div style="display:flex;gap:10px;flex-wrap:wrap;">';
+          rows.forEach(function (row) { html += '<span style="display:inline-block;padding:7px 10px;border:1px solid #c8dbee;border-radius:5px;background:#fff;"><strong>' + escapePool(row.label) + ':</strong> ' + escapePool(row.available) + ' available / ' + escapePool(row.total) + ' total</span>'; });
+          html += '</div><div style="margin-top:7px;font-size:12px;color:#6b7280;">Last updated: ' + escapePool(snapshot.updated_at || "not yet") + ' Pacific</div>';
+          if (snapshot.error) html += '<div style="margin-top:4px;color:#9a3412;font-size:12px;">Partial refresh note: ' + escapePool(snapshot.error) + '</div>';
+          body.innerHTML = html;
+        }
+        async function loadPool() {
+          try {
+            const response = await fetch("/jabber/pool-availability", { credentials:"same-origin" });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) throw new Error(payload.error || "Pool availability request failed.");
+            renderPool(payload);
+            if (payload.status === "refreshing" || payload.status === "not_loaded") window.setTimeout(loadPool, 3000);
+          } catch (error) { body.textContent = "Pool availability unavailable: " + error.message; }
+        }
+        loadPool();
+      })();
+    </script>
 
     <script>
       (function () {
@@ -50609,6 +50722,19 @@ def _run_forwarded_csf_list_job(job_id: str, cucm_host: str, cucm_user: str, cuc
     logger.exception("Forwarded CSF background lookup failed")
     with FORWARDED_CSF_LIST_LOCK:
       FORWARDED_CSF_LIST_JOBS[job_id] = {"status": "failed", "error": str(exc), "results": []}
+
+
+@app.get("/jabber/pool-availability")
+def jabber_pool_availability_route(request: Request):
+  session = _get_auth_session(request) or {}
+  if not session:
+    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
+  with JABBER_POOL_SNAPSHOT_LOCK:
+    snapshot = dict(JABBER_POOL_SNAPSHOT)
+    snapshot["results"] = [dict(row) for row in snapshot.get("results", [])]
+  if snapshot.get("status") in {"not_loaded", "failed"}:
+    _request_jabber_pool_refresh()
+  return JSONResponse({"ok": True, **snapshot})
 
 
 @app.post("/jabber-forwarding/lookup")
