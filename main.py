@@ -167,6 +167,7 @@ def _startup_background_services():
   _unity_user_extract_load_state()
   _unity_user_extract_start_worker()
   _start_genesys_external_contact_load_worker()
+  _start_genesys_cucm_sync_scheduler()
 
 
 def _genesys_external_contact_load_update(job_id: str, **changes):
@@ -234,6 +235,134 @@ def _start_genesys_external_contact_load_worker():
     return
   GENESYS_EXTERNAL_CONTACT_LOAD_WORKER_STARTED = True
   threading.Thread(target=_genesys_external_contact_load_worker, name="genesys-external-contact-loader", daemon=True).start()
+
+
+def _get_genesys_cucm_sync_settings() -> dict:
+  settings = _load_settings()
+  enabled_raw = str(settings.get("genesys_cucm_sync_enabled", "false") or "").strip().lower()
+  dn_settings = _get_dn_report_settings()
+  return {
+    "enabled": enabled_raw in {"1", "true", "yes", "on"},
+    "cucm_host": str(dn_settings.get("cucm_host", "") or "").strip(),
+    "cucm_user": str(dn_settings.get("cucm_user", "") or "").strip(),
+    "cucm_pass": str(dn_settings.get("cucm_pass", "") or "").strip(),
+    "last_run": str(settings.get("genesys_cucm_sync_last_run", "") or "").strip(),
+    "last_result": str(settings.get("genesys_cucm_sync_last_result", "") or "").strip(),
+  }
+
+
+def _run_genesys_cucm_contact_sync(phase: str = "full", triggered_by: str = "scheduler") -> dict:
+  cfg = _get_genesys_cucm_sync_settings()
+  if not cfg["cucm_host"] or not cfg["cucm_user"] or not cfg["cucm_pass"]:
+    raise RuntimeError("CUCM sync credentials are not configured. Configure the DN report CUCM credentials in Settings.")
+  cucm_users = search_all_persons(cfg["cucm_host"], cfg["cucm_user"], cfg["cucm_pass"])
+  cucm_by_email = {}
+  cucm_by_name = {}
+  for user in cucm_users or []:
+    email = str(user.get("email", "") or "").strip().lower()
+    first_name = str(user.get("first_name", "") or "").strip().lower()
+    last_name = str(user.get("last_name", "") or "").strip().lower()
+    if email:
+      cucm_by_email[email] = user
+    if first_name or last_name:
+      cucm_by_name[" ".join([first_name, last_name]).strip()] = user
+
+  token_result = _genesys_get_queue_access_token(GENESYS_CLOUD_REGION)
+  if not token_result.get("ok"):
+    raise RuntimeError(token_result.get("error", "Genesys authentication failed."))
+  access_token = str(token_result.get("access_token", "") or "")
+  clean_region, _, api_base = _genesys_region_to_urls(str(token_result.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION))
+  division, division_error = _genesys_find_division_by_name(api_base, access_token, "CiscoVoiceUser")
+  if division_error:
+    raise RuntimeError(division_error)
+  division_id = str(division.get("id", "") or "").strip()
+  contacts_result = _genesys_list_external_contacts_in_division(api_base, access_token, "CiscoVoiceUser", division_id)
+  if not contacts_result.get("ok"):
+    raise RuntimeError(contacts_result.get("error", "Unable to list CiscoVoiceUser contacts."))
+  contacts = contacts_result.get("rows", [])
+  created = 0
+  skipped = 0
+  deleted = 0
+  failures = []
+
+  if phase in {"create", "full"}:
+    existing_keys = set()
+    for contact in contacts:
+      email = str(contact.get("email", "") or "").strip().lower()
+      name = " ".join([str(contact.get("first_name", "") or "").strip().lower(), str(contact.get("last_name", "") or "").strip().lower()]).strip()
+      if email:
+        existing_keys.add(("email", email))
+      if name:
+        existing_keys.add(("name", name))
+    for user in cucm_users or []:
+      phone = re.sub(r"\D", "", str(user.get("telephone", "") or ""))
+      email = str(user.get("email", "") or "").strip()
+      first_name = str(user.get("first_name", "") or "").strip()
+      last_name = str(user.get("last_name", "") or "").strip()
+      name_key = " ".join([first_name.lower(), last_name.lower()]).strip()
+      if len(phone) == 11 and phone.startswith("1"):
+        phone = phone[1:]
+      if len(phone) != 10 or not email or "@" not in email:
+        continue
+      if (("email", email.lower()) in existing_keys or ("name", name_key) in existing_keys):
+        skipped += 1
+        continue
+      ok, body, error = _genesys_create_external_contact(api_base, access_token, division_id, {"first_name": first_name, "last_name": last_name, "email": email, "phone": phone, "user_id": user.get("userid", "")})
+      if ok:
+        created += 1
+        existing_keys.add(("email", email.lower()))
+        existing_keys.add(("name", name_key))
+      else:
+        failures.append(f"create {user.get('userid', '')}: {error or 'failed'}")
+
+  if phase in {"delete", "full"}:
+    for contact in contacts:
+      email = str(contact.get("email", "") or "").strip().lower()
+      name_key = " ".join([str(contact.get("first_name", "") or "").strip().lower(), str(contact.get("last_name", "") or "").strip().lower()]).strip()
+      if email in cucm_by_email or name_key in cucm_by_name:
+        continue
+      contact_id = str(contact.get("id", "") or "").strip()
+      if not contact_id:
+        continue
+      ok, _body, error, _status_code = _genesys_send_json("DELETE", api_base, access_token, f"/api/v2/externalcontacts/contacts/{quote(contact_id, safe='')}")
+      if ok:
+        deleted += 1
+      else:
+        failures.append(f"delete {contact_id}: {error or 'failed'}")
+
+  result = {"phase": phase, "region": clean_region, "cucm_users_scanned": len(cucm_users or []), "contacts_scanned": len(contacts), "created": created, "skipped": skipped, "deleted": deleted, "failures": failures, "triggered_by": triggered_by}
+  settings = _load_settings()
+  settings["genesys_cucm_sync_last_run"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+  settings["genesys_cucm_sync_last_result"] = json.dumps(result, ensure_ascii=True)
+  _save_settings(settings)
+  return result
+
+
+def _genesys_cucm_sync_scheduler_loop():
+  tz = ZoneInfo("America/Los_Angeles")
+  last_fired = {"create": "", "delete": ""}
+  while True:
+    try:
+      now = datetime.datetime.now(tz)
+      cfg = _get_genesys_cucm_sync_settings()
+      if cfg["enabled"] and now.weekday() == 5:
+        phase = "create" if now.hour == 2 else "delete" if now.hour == 4 else ""
+        fire_key = f"{phase}:{now.date().isoformat()}"
+        if phase and now.minute == 0 and last_fired.get(phase) != fire_key:
+          last_fired[phase] = fire_key
+          try:
+            _run_genesys_cucm_contact_sync(phase=phase, triggered_by="scheduler")
+          except Exception as exc:
+            logger.exception("Genesys CUCM sync %s phase failed: %s", phase, exc)
+    except Exception:
+      logger.exception("Genesys CUCM sync scheduler loop failed")
+    time.sleep(30)
+
+
+def _start_genesys_cucm_sync_scheduler():
+  if not _is_prod_runtime_host_strict():
+    return
+  threading.Thread(target=_genesys_cucm_sync_scheduler_loop, name="genesys-cucm-sync-scheduler", daemon=True).start()
 
 
 def _unity_user_extract_write_json(path, payload):
@@ -781,6 +910,9 @@ DEFAULT_SETTINGS = {
   "ls_did_report_cucm_host": "",
   "ls_did_report_cucm_user": "ucmappadmin",
   "ls_did_report_cucm_pass": "abi3rto!",
+  "genesys_cucm_sync_enabled": "false",
+  "genesys_cucm_sync_last_run": "",
+  "genesys_cucm_sync_last_result": "",
   "sip_call_search_enabled": "true",
   "sip_call_search_udp_port": "1024",
   "sip_call_search_retention_days": "14",
@@ -18110,6 +18242,16 @@ def genesys_admin_placeholder(request: Request):
           <div id="genesys-external-contact-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">External Contact Creation/Removal</h3>
             <p style="color:#4e6a84;font-size:12px;">Load all CUCM users with a populated Telephone field. Add or remove their Genesys External Contact in the CiscoVoiceUser division.</p>
+            <div id="genesys-cucm-sync-panel" style="margin:10px 0 14px 0;padding:12px;border:2px solid #146c2e;background:#f1fbf3;">
+              <strong>Cisco CUCM Jabber/Teams User Sync to Genesys External Contact</strong>
+              <div style="margin-top:6px;color:#4e6a84;font-size:12px;">Saturday 2:00 AM Pacific: add eligible CUCM users missing from CiscoVoiceUser. Saturday 4:00 AM Pacific: remove CiscoVoiceUser contacts no longer found in CUCM. The setting survives service and server restart.</div>
+              <div style="margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <label style="margin:0;"><input type="checkbox" id="genesys-cucm-sync-enabled"> Enable automatic sync</label>
+                <button type="button" id="genesys-cucm-sync-save-btn" style="background:#146c2e;">Save Sync Setting</button>
+                <button type="button" id="genesys-cucm-sync-run-btn" style="background:#7a5a13;">Run Sync Now</button>
+              </div>
+              <div id="genesys-cucm-sync-state" style="margin-top:6px;color:#4e6a84;font-size:12px;">Loading sync setting...</div>
+            </div>
             <form id="genesys-external-contact-search-form" onsubmit="return false;">
               <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
               <input type="hidden" name="cucm_user" value="__AUTH_USER__">
@@ -18154,7 +18296,12 @@ def genesys_admin_placeholder(request: Request):
                 var previewText = document.getElementById("genesys-external-contact-preview-text");
                 var listOutput = document.getElementById("genesys-external-contact-list-output");
                 var countOutput = document.getElementById("genesys-external-contact-count");
+                var syncEnabled = document.getElementById("genesys-cucm-sync-enabled");
+                var syncState = document.getElementById("genesys-cucm-sync-state");
                 function esc(value) { var element = document.createElement("span"); element.textContent = value == null ? "" : value; return element.innerHTML; }
+                fetch("/genesys/external-contacts/sync-settings", { credentials:"same-origin" }).then(function(response){ return response.json(); }).then(function(data){ if(data.ok){ syncEnabled.checked=!!data.enabled; syncState.textContent=(data.enabled ? "Enabled" : "Disabled")+". "+data.schedule+(data.last_run ? " Last run: "+data.last_run : ""); } }).catch(function(){ syncState.textContent="Unable to load sync setting."; });
+                document.getElementById("genesys-cucm-sync-save-btn").onclick = function(){ syncState.textContent="Saving..."; fetch("/genesys/external-contacts/sync-settings",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:!!syncEnabled.checked})}).then(function(response){return response.json();}).then(function(data){if(!data.ok)throw new Error(data.error||"Save failed.");syncState.textContent=(data.enabled?"Enabled":"Disabled")+". Setting saved and will survive restart.";}).catch(function(error){syncState.textContent=error.message;}); };
+                document.getElementById("genesys-cucm-sync-run-btn").onclick = function(){ if(!window.confirm("Run the combined CUCM-to-Genesys sync now?"))return; syncState.textContent="Running sync..."; fetch("/genesys/external-contacts/sync-run",{method:"POST",credentials:"same-origin"}).then(function(response){return response.json();}).then(function(data){if(!data.ok)throw new Error(data.error||"Sync failed.");var r=data.result||{};syncState.textContent="Manual sync complete. Created: "+(r.created||0)+", deleted: "+(r.deleted||0)+", skipped: "+(r.skipped||0)+", failures: "+((r.failures||[]).length);}).catch(function(error){syncState.textContent=error.message;}); };
                 function renderContactList(rows) {
                   if (!rows.length) { listOutput.innerHTML = "<p>No CiscoVoiceUser external contacts found.</p>"; return; }
                   var html = "<table><thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Phone</th><th>Division</th><th>Action</th></tr></thead><tbody>";
@@ -24043,6 +24190,43 @@ def genesys_external_contact_list_route(request: Request):
   if not result.get("ok"):
     return JSONResponse({"ok": False, "error": result.get("error", "Unable to list external contacts."), "rows": []}, status_code=400)
   return JSONResponse({"ok": True, "division_name": "CiscoVoiceUser", "rows": result.get("rows", [])})
+
+
+@app.get("/genesys/external-contacts/sync-settings")
+def genesys_external_contact_sync_settings_route(request: Request):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", "") or "").strip()):
+    return JSONResponse({"ok": False, "error": "Admin authorization required."}, status_code=403)
+  cfg = _get_genesys_cucm_sync_settings()
+  return JSONResponse({"ok": True, "enabled": cfg["enabled"], "schedule": "Saturday 2:00 AM PST create/update; Saturday 4:00 AM PST reconcile/delete", "last_run": cfg["last_run"], "last_result": cfg["last_result"]})
+
+
+@app.post("/genesys/external-contacts/sync-settings")
+async def genesys_external_contact_sync_settings_save_route(request: Request):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", "") or "").strip()):
+    return JSONResponse({"ok": False, "error": "Admin authorization required."}, status_code=403)
+  try:
+    body = await request.json()
+  except Exception:
+    body = {}
+  enabled = bool(body.get("enabled", False)) if isinstance(body, dict) else False
+  settings = _load_settings()
+  settings["genesys_cucm_sync_enabled"] = "true" if enabled else "false"
+  if not _save_settings(settings):
+    return JSONResponse({"ok": False, "error": "Failed to save sync setting."}, status_code=500)
+  return JSONResponse({"ok": True, "enabled": enabled, "message": "Cisco CUCM Jabber/Teams User Sync setting saved."})
+
+
+@app.post("/genesys/external-contacts/sync-run")
+def genesys_external_contact_sync_run_route(request: Request):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", "") or "").strip()):
+    return JSONResponse({"ok": False, "error": "Admin authorization required."}, status_code=403)
+  try:
+    return JSONResponse({"ok": True, "result": _run_genesys_cucm_contact_sync(phase="full", triggered_by="manual")})
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
 
 @app.post("/genesys/external-contacts/reconcile-cucm")
