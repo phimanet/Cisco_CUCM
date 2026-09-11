@@ -31739,22 +31739,74 @@ __ADMIN_CARD__
 
       <div class="action-row">
         <button type="submit">Search User</button>
+        <button type="button" id="jabber-forwarding-list-csf-btn" style="background:#7a5a13;">List Forwarded CSF Numbers</button>
         <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
       </div>
     </form>
 
     <p id="jabber-forwarding-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter name and click Search User.</p>
     <div id="jabber-forwarding-results" style="overflow-x:auto;"></div>
+    <div id="jabber-forwarding-csf-results" style="overflow-x:auto; margin-top:14px;"></div>
 
     <script>
       (function () {
         const form = document.getElementById("jabber-forwarding-lookup-form");
         const statusEl = document.getElementById("jabber-forwarding-status");
         const resultsEl = document.getElementById("jabber-forwarding-results");
+        const csfResultsEl = document.getElementById("jabber-forwarding-csf-results");
+        const listCsfBtn = document.getElementById("jabber-forwarding-list-csf-btn");
 
-        if (!form || !statusEl || !resultsEl) {
+        if (!form || !statusEl || !resultsEl || !csfResultsEl || !listCsfBtn) {
           return;
         }
+
+        async function loadForwardedCsfLines() {
+          statusEl.textContent = "Loading forwarded CSF directory numbers...";
+          csfResultsEl.innerHTML = "";
+          try {
+            const resp = await fetch("/jabber-forwarding/forwarded-csf-list", {
+              method: "POST",
+              body: new FormData(form),
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+            });
+            const payload = await resp.json();
+            if (!resp.ok || !payload.ok) throw new Error(payload.error || "Forwarded CSF lookup failed.");
+            const rows = payload.results || [];
+            statusEl.textContent = "Found " + rows.length + " forwarded CSF number(s).";
+            if (!rows.length) { csfResultsEl.innerHTML = "<p>No forwarded CSF directory numbers found.</p>"; return; }
+            let html = '<h4>Forwarded CSF Directory Numbers</h4><table style="width:100%; border-collapse:collapse; font-size:13px;"><thead><tr style="background:#005eb8;color:#fff;">';
+            html += '<th style="padding:8px 10px;text-align:left;">Owner</th><th style="padding:8px 10px;text-align:left;">User ID</th><th style="padding:8px 10px;text-align:left;">CSF Device</th><th style="padding:8px 10px;text-align:left;">Extension</th><th style="padding:8px 10px;text-align:left;">Forwarded To</th><th style="padding:8px 10px;text-align:left;">Action</th></tr></thead><tbody>';
+            rows.forEach(function(row, index) {
+              const bg = index % 2 === 0 ? "#f7fbff" : "#ffffff";
+              html += '<tr style="background:' + bg + ';border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px;">' + escapeHtml(row.owner || "-") + '</td>';
+              html += '<td style="padding:7px 10px;font-family:Consolas,monospace;">' + escapeHtml(row.userid || "-") + '</td>';
+              html += '<td style="padding:7px 10px;font-family:Consolas,monospace;">' + escapeHtml(row.device_name || "-") + '</td>';
+              html += '<td style="padding:7px 10px;font-family:Consolas,monospace;">' + escapeHtml(row.extension || "-") + '</td>';
+              html += '<td style="padding:7px 10px;font-family:Consolas,monospace;">' + escapeHtml(row.forward_destination || "-") + '</td>';
+              html += '<td style="padding:7px 10px;"><button type="button" data-csf-remove="' + index + '" style="background:#7a1020;color:#fff;border:none;border-radius:6px;padding:5px 9px;font-weight:700;cursor:pointer;">Remove Forward</button></td></tr>';
+            });
+            csfResultsEl.innerHTML = html + '</tbody></table>';
+            csfResultsEl.querySelectorAll('button[data-csf-remove]').forEach(function(btn) {
+              btn.addEventListener("click", async function() {
+                const row = rows[Number(btn.getAttribute("data-csf-remove"))];
+                if (!row || !window.confirm("Remove Forward All from " + (row.owner || row.userid) + " extension " + row.extension + "?")) return;
+                const fd = new FormData(form);
+                fd.append("action", "remove"); fd.append("userid", row.userid || ""); fd.append("pattern", row.extension || ""); fd.append("route_partition", row.route_partition || ""); fd.append("forward_to", "");
+                btn.disabled = true; statusEl.textContent = "Removing forwarding from " + (row.extension || "directory number") + "...";
+                try {
+                  const updateResp = await fetch("/jabber-forwarding/update", { method:"POST", body:fd, credentials:"same-origin", headers:{"Accept":"application/json","X-Requested-With":"XMLHttpRequest"} });
+                  const updatePayload = await updateResp.json();
+                  if (!updateResp.ok || !updatePayload.ok) throw new Error(updatePayload.error || "Forward removal failed.");
+                  btn.textContent = "Removed"; statusEl.textContent = "Forwarding removed from " + row.extension + ".";
+                } catch (err) { btn.disabled = false; statusEl.textContent = "Forward removal failed: " + ((err && err.message) || "Unknown error."); }
+              });
+            });
+          } catch (err) { statusEl.textContent = "Forwarded CSF lookup failed: " + ((err && err.message) || "Unknown error."); }
+        }
+
+        listCsfBtn.addEventListener("click", loadForwardedCsfLines);
 
         function escapeHtml(value) {
           return String(value == null ? "" : value)
@@ -50437,6 +50489,48 @@ def _jabber_forwarding_update_forward_all(session: requests.Session, cucm_host: 
   _jabber_forwarding_axl_post(session, cucm_host, soap_update_line, "updateLine")
 
 
+def _jabber_forwarding_list_forwarded_csf_lines(session: requests.Session, cucm_host: str) -> list[dict]:
+  sql = (
+    "SELECT u.userid AS userid, u.displayname AS displayname, u.firstname AS firstname, "
+    "u.lastname AS lastname, d.name AS device_name, n.dnorpattern AS extension, "
+    "rp.name AS route_partition, n.cfallforward AS forward_destination "
+    "FROM enduser u "
+    "JOIN enduserdevicemap edm ON edm.fkenduser = u.pkid "
+    "JOIN device d ON d.pkid = edm.fkdevice "
+    "JOIN devicenumplanmap dm ON dm.fkdevice = d.pkid "
+    "JOIN numplan n ON n.pkid = dm.fknumplan "
+    "LEFT JOIN routepartition rp ON rp.pkid = n.fkroutepartition "
+    "WHERE d.name LIKE 'CSF%' AND n.cfallforward IS NOT NULL AND TRIM(n.cfallforward) <> '' "
+    "ORDER BY u.lastname, u.firstname, n.dnorpattern"
+  )
+  soap = f'''<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/><soapenv:Body><axl:executeSQLQuery><sql>{xml_escape(sql)}</sql></axl:executeSQLQuery></soapenv:Body>
+</soapenv:Envelope>'''
+  root = _jabber_forwarding_axl_post(session, cucm_host, soap, "executeSQLQuery")
+  rows = []
+  for elem in root.iter():
+    if _axl_local_name(elem.tag) != "row":
+      continue
+    values = {}
+    for child in list(elem):
+      values[_axl_local_name(child.tag).lower()] = (child.text or "").strip()
+    destination = values.get("forward_destination", "").strip()
+    if not destination:
+      continue
+    first_name = values.get("firstname", "").strip()
+    last_name = values.get("lastname", "").strip()
+    rows.append({
+      "userid": values.get("userid", "").strip(),
+      "owner": values.get("displayname", "").strip() or " ".join([first_name, last_name]).strip(),
+      "device_name": values.get("device_name", "").strip(),
+      "extension": values.get("extension", "").strip(),
+      "route_partition": values.get("route_partition", "").strip(),
+      "forward_destination": destination,
+    })
+  return rows
+
+
 @app.post("/jabber-forwarding/lookup")
 def jabber_forwarding_lookup_route(
   request: Request,
@@ -50512,6 +50606,26 @@ def jabber_forwarding_lookup_route(
     "results": rows,
     "query": {"last_name": clean_last, "first_name": clean_first},
   })
+
+
+@app.post("/jabber-forwarding/forwarded-csf-list")
+def jabber_forwarding_forwarded_csf_list_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=resolved_host, cucm_user=resolved_user)
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(resolved_user, resolved_pass)
+  try:
+    rows = _jabber_forwarding_list_forwarded_csf_lines(session, resolved_host)
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": f"Forwarded CSF lookup failed: {exc}", "results": []}, status_code=400)
+  return JSONResponse({"ok": True, "count": len(rows), "results": rows})
 
 
 @app.post("/jabber-forwarding/update")
