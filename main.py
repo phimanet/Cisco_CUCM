@@ -50497,14 +50497,14 @@ def _jabber_forwarding_list_forwarded_csf_lines(session: requests.Session, cucm_
   sql = (
     "SELECT u.userid AS userid, u.displayname AS displayname, u.firstname AS firstname, "
     "u.lastname AS lastname, d.name AS device_name, n.dnorpattern AS extension, "
-    "rp.name AS route_partition, n.cfallforward AS forward_destination "
+    "rp.name AS route_partition "
     "FROM enduser u "
     "JOIN enduserdevicemap edm ON edm.fkenduser = u.pkid "
     "JOIN device d ON d.pkid = edm.fkdevice "
     "JOIN devicenumplanmap dm ON dm.fkdevice = d.pkid "
     "JOIN numplan n ON n.pkid = dm.fknumplan "
     "LEFT JOIN routepartition rp ON rp.pkid = n.fkroutepartition "
-    "WHERE d.name LIKE 'CSF%' AND n.cfallforward IS NOT NULL AND n.cfallforward <> '' "
+    "WHERE d.name LIKE 'CSF%' "
     "ORDER BY u.lastname, u.firstname, n.dnorpattern"
   )
   soap = f'''<?xml version="1.0" encoding="utf-8"?>
@@ -50512,26 +50512,42 @@ def _jabber_forwarding_list_forwarded_csf_lines(session: requests.Session, cucm_
   <soapenv:Header/><soapenv:Body><axl:executeSQLQuery><sql>{xml_escape(sql)}</sql></axl:executeSQLQuery></soapenv:Body>
 </soapenv:Envelope>'''
   root = _jabber_forwarding_axl_post(session, cucm_host, soap, "executeSQLQuery")
-  rows = []
+  candidates = []
   for elem in root.iter():
     if _axl_local_name(elem.tag) != "row":
       continue
     values = {}
     for child in list(elem):
       values[_axl_local_name(child.tag).lower()] = (child.text or "").strip()
-    destination = values.get("forward_destination", "").strip()
-    if not destination:
-      continue
     first_name = values.get("firstname", "").strip()
     last_name = values.get("lastname", "").strip()
-    rows.append({
+    candidates.append({
       "userid": values.get("userid", "").strip(),
       "owner": values.get("displayname", "").strip() or " ".join([first_name, last_name]).strip(),
       "device_name": values.get("device_name", "").strip(),
       "extension": values.get("extension", "").strip(),
       "route_partition": values.get("route_partition", "").strip(),
-      "forward_destination": destination,
     })
+
+  def resolve_forward(row: dict) -> dict | None:
+    destination = _jabber_forwarding_get_forward_all_destination(
+      session, cucm_host, row.get("extension", ""), row.get("route_partition", "")
+    )
+    if not destination:
+      return None
+    return {**row, "forward_destination": destination}
+
+  rows = []
+  with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+    futures = [executor.submit(resolve_forward, row) for row in candidates if row.get("extension") and row.get("route_partition")]
+    for future in concurrent.futures.as_completed(futures):
+      try:
+        row = future.result()
+      except Exception:
+        row = None
+      if row:
+        rows.append(row)
+  rows.sort(key=lambda item: ((item.get("owner") or "").lower(), item.get("extension") or ""))
   return rows
 
 
