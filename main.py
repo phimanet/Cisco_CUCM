@@ -31774,7 +31774,10 @@ __ADMIN_CARD__
               credentials: "same-origin",
               headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
             });
-            const payload = await resp.json();
+            const responseText = await resp.text();
+            let payload;
+            try { payload = JSON.parse(responseText); }
+            catch (parseError) { throw new Error("HTTP " + resp.status + " returned non-JSON response: " + responseText.slice(0, 240)); }
             if (!resp.ok || !payload.ok) throw new Error(payload.error || "Forwarded CSF lookup failed.");
             const rows = payload.results || [];
             statusEl.textContent = "Found " + rows.length + " forwarded CSF number(s).";
@@ -50635,16 +50638,17 @@ def jabber_forwarding_forwarded_csf_list_route(
   cucm_user: str = Form(""),
   cucm_pass: str = Form(""),
 ):
-  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-  _update_cached_credentials(request, cucm_host=resolved_host, cucm_user=resolved_user)
-  session = requests.Session()
-  session.verify = False
-  session.trust_env = False
-  session.auth = HTTPBasicAuth(resolved_user, resolved_pass)
   try:
+    resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=resolved_host, cucm_user=resolved_user)
+    session = requests.Session()
+    session.verify = False
+    session.trust_env = False
+    session.auth = HTTPBasicAuth(resolved_user, resolved_pass)
     rows = _jabber_forwarding_list_forwarded_csf_lines(session, resolved_host)
   except Exception as exc:
-    return JSONResponse({"ok": False, "error": f"Forwarded CSF lookup failed: {exc}", "results": []}, status_code=400)
+    logger.exception("Forwarded CSF lookup failed")
+    return JSONResponse({"ok": False, "error": f"Forwarded CSF lookup failed: {exc}", "results": []}, status_code=500)
   return JSONResponse({"ok": True, "count": len(rows), "results": rows})
 
 
