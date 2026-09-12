@@ -107,11 +107,6 @@ Priority keys:
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
 
-### 2026-09-12 (Page 1 Task Agent Phase 1)
-- Added Page 1 **Task Agent - Quick Launcher** panel that routes operators to approved existing workflows from one place.
-- Phase 1 auto-runs read-only Person Lookup, Extension Reverse Lookup, and Jabber configuration check; write workflows are opened and prefilled for operator review before execution.
-- Genesys Add User path opens the existing Genesys Admin Add User panel without changing Genesys execution logic.
-
 ### 2026-09-10 (Genesys External Contact Creation/Removal — implementation complete, controlled test pending)
 - Added isolated Genesys Admin panel to search CUCM users and preview one External Contact before creation.
 - Creates only first name, last name, CUCM work email, and normalized 10-digit Work Phone; assigns the Genesys `CiscoVoiceUser` division.
