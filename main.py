@@ -720,6 +720,20 @@ AUDIT_LOG_PATH = os.path.join(
   "logs",
   "audit_trail.csv",
 )
+AI_AGENT_HISTORY_LOCK = threading.Lock()
+AI_AGENT_HISTORY_PATH = os.path.join(
+  os.path.dirname(os.path.abspath(__file__)),
+  "logs",
+  "ai_agent_history.jsonl",
+)
+AI_AGENT_HISTORY_LIMIT = max(100, int((os.getenv("AI_AGENT_HISTORY_LIMIT", "1000") or "1000").strip()))
+AI_AGENT_MODEL_ENABLED = (os.getenv("AI_AGENT_MODEL_ENABLED", "true") or "true").strip().lower() in {
+  "1", "true", "yes", "on",
+}
+AZURE_OPENAI_ENDPOINT = (os.getenv("AZURE_OPENAI_ENDPOINT", "") or "").strip().rstrip("/")
+AZURE_OPENAI_DEPLOYMENT = (os.getenv("AZURE_OPENAI_DEPLOYMENT", "") or "").strip()
+AZURE_OPENAI_API_VERSION = (os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21") or "2024-10-21").strip()
+AZURE_OPENAI_API_KEY = (os.getenv("AZURE_OPENAI_API_KEY", "") or "").strip()
 TWILIO_SMS_HOSTING_AUDIT_LOCK = threading.Lock()
 TWILIO_SMS_HOSTING_AUDIT_FIELDS = [
   "timestamp",
@@ -8362,6 +8376,220 @@ def _resolve_unity_credentials(request: Request, unity_user: str, unity_pass: st
     raise RuntimeError("Missing Unity credentials. Enter Unity admin username/password for this action.")
 
   return resolved_user, resolved_pass
+
+
+def _ai_agent_model_configured() -> bool:
+  return bool(
+    AI_AGENT_MODEL_ENABLED
+    and AZURE_OPENAI_ENDPOINT
+    and AZURE_OPENAI_DEPLOYMENT
+    and AZURE_OPENAI_API_KEY
+  )
+
+
+def _ai_agent_append_history(event: dict):
+  row = dict(event or {})
+  row.setdefault("timestamp", _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT))
+  try:
+    with AI_AGENT_HISTORY_LOCK:
+      os.makedirs(os.path.dirname(AI_AGENT_HISTORY_PATH), exist_ok=True)
+      with open(AI_AGENT_HISTORY_PATH, "a", encoding="utf-8") as handle:
+        handle.write(json.dumps(row, ensure_ascii=True, default=str) + "\n")
+
+      try:
+        with open(AI_AGENT_HISTORY_PATH, "r", encoding="utf-8") as handle:
+          lines = handle.readlines()
+        if len(lines) > AI_AGENT_HISTORY_LIMIT:
+          with open(AI_AGENT_HISTORY_PATH, "w", encoding="utf-8") as handle:
+            handle.writelines(lines[-AI_AGENT_HISTORY_LIMIT:])
+      except OSError:
+        pass
+  except OSError as exc:
+    logger.warning("AI agent history append skipped: %s", exc)
+
+
+def _ai_agent_clean_text(value: str, max_len: int = 500) -> str:
+  text = " ".join(str(value or "").strip().split())
+  return text[:max_len]
+
+
+def _ai_agent_split_name(value: str) -> dict:
+  clean = _ai_agent_clean_text(value, 120)
+  if not clean:
+    return {"first_name": "", "last_name": ""}
+  if "," in clean:
+    parts = [part.strip() for part in clean.split(",")]
+    return {"last_name": parts[0], "first_name": " ".join(parts[1:]).strip()}
+  pieces = clean.split()
+  if len(pieces) >= 2:
+    return {"first_name": pieces[0], "last_name": " ".join(pieces[1:])}
+  return {"first_name": "", "last_name": clean}
+
+
+def _ai_agent_local_parse(message: str) -> dict:
+  clean = _ai_agent_clean_text(message, 500)
+  lowered = clean.lower()
+  digits = re.sub(r"\D+", "", clean)
+
+  if not clean:
+    return {"intent": "unsupported", "target": "", "reason": "Empty request."}
+
+  if any(word in lowered for word in ["extension", "dn", "number", "phone"]) and len(digits) >= 4:
+    return {"intent": "extension_lookup", "target": digits, "pattern": digits}
+  if clean.isdigit() and len(clean) >= 4:
+    return {"intent": "extension_lookup", "target": clean, "pattern": clean}
+
+  if any(word in lowered for word in ["jabber", "device", "built", "configuration", "config", "status"]):
+    match = re.search(r"\b([A-Za-z][A-Za-z0-9._-]{2,80})(?:@[^\s]+)?\b", clean)
+    skipped = {"check", "show", "find", "lookup", "jabber", "device", "status", "configuration", "config", "for", "is", "built"}
+    if match:
+      candidates = [m.group(1) for m in re.finditer(r"\b([A-Za-z][A-Za-z0-9._-]{2,80})(?:@[^\s]+)?\b", clean)]
+      for candidate in candidates:
+        if candidate.lower() not in skipped:
+          user_id = candidate.split("@", 1)[0]
+          return {"intent": "jabber_status", "target": user_id, "user_id": user_id}
+
+  email_match = re.search(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b", clean)
+  if email_match:
+    local_part = email_match.group(0).split("@", 1)[0].replace(".", " ").replace("_", " ")
+    name = _ai_agent_split_name(local_part)
+    return {"intent": "person_lookup", "target": email_match.group(0), **name}
+
+  cleaned_name = re.sub(r"\b(find|lookup|search|person|user|employee|for|please|show|me)\b", " ", clean, flags=re.IGNORECASE)
+  name = _ai_agent_split_name(cleaned_name)
+  if name.get("last_name"):
+    return {"intent": "person_lookup", "target": cleaned_name.strip() or clean, **name}
+
+  return {"intent": "unsupported", "target": clean, "reason": "No supported read-only intent was found."}
+
+
+def _ai_agent_parse_with_model(message: str) -> tuple[dict, str]:
+  if not _ai_agent_model_configured():
+    return _ai_agent_local_parse(message), "local"
+
+  system_prompt = (
+    "You classify requests for an internal Cisco voice operations portal. "
+    "Return only JSON with keys: intent, target, first_name, last_name, pattern, user_id, reason. "
+    "Allowed read-only intents are person_lookup, extension_lookup, jabber_status, unsupported. "
+    "Never choose write actions. If a request asks to build, delete, reset, update, add, remove, or change anything, return unsupported."
+  )
+  payload = {
+    "messages": [
+      {"role": "system", "content": system_prompt},
+      {"role": "user", "content": _ai_agent_clean_text(message, 500)},
+    ],
+    "temperature": 0,
+    "max_tokens": 220,
+    "response_format": {"type": "json_object"},
+  }
+  url = (
+    f"{AZURE_OPENAI_ENDPOINT}/openai/deployments/"
+    f"{quote(AZURE_OPENAI_DEPLOYMENT, safe='')}/chat/completions"
+  )
+
+  try:
+    response = requests.post(
+      url,
+      params={"api-version": AZURE_OPENAI_API_VERSION},
+      headers={"api-key": AZURE_OPENAI_API_KEY, "Content-Type": "application/json"},
+      json=payload,
+      timeout=15,
+    )
+    if response.status_code >= 400:
+      logger.warning("AI agent model classification failed HTTP %s: %s", response.status_code, response.text[:300])
+      return _ai_agent_local_parse(message), "local-after-model-error"
+    data = response.json()
+    content = str(data.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
+    parsed = json.loads(content)
+    if not isinstance(parsed, dict):
+      return _ai_agent_local_parse(message), "local-after-model-parse-error"
+    parsed["intent"] = str(parsed.get("intent", "unsupported") or "unsupported").strip()
+    return parsed, "azure-openai"
+  except Exception as exc:
+    logger.warning("AI agent model classification fallback used: %s", exc)
+    return _ai_agent_local_parse(message), "local-after-model-exception"
+
+
+def _ai_agent_summarize_person_rows(rows: list[dict]) -> list[dict]:
+  summarized = []
+  for row in rows[:10]:
+    devices = []
+    for device in row.get("devices", []) or []:
+      if not isinstance(device, dict):
+        continue
+      devices.append({
+        "name": str(device.get("name", "") or "").strip(),
+        "extensions": device.get("extensions", []) or [],
+        "registration_status": str(device.get("registration_status", "") or "").strip(),
+      })
+    summarized.append({
+      "userid": str(row.get("userid", "") or "").strip(),
+      "display_name": str(row.get("display_name", "") or "").strip(),
+      "first_name": str(row.get("first_name", "") or "").strip(),
+      "last_name": str(row.get("last_name", "") or "").strip(),
+      "email": str(row.get("email", "") or "").strip(),
+      "telephone": str(row.get("telephone", "") or "").strip(),
+      "primary_extension": str(row.get("primary_extension", "") or "").strip(),
+      "translated_number": str(row.get("translated_number", "") or "").strip(),
+      "devices": devices,
+    })
+  return summarized
+
+
+def _ai_agent_execute_readonly(intent: dict, cucm_host: str, cucm_user: str, cucm_pass: str) -> dict:
+  task = str(intent.get("intent", "") or "").strip().lower()
+  if task == "person_lookup":
+    last_name = _ai_agent_clean_text(intent.get("last_name", ""), 80)
+    first_name = _ai_agent_clean_text(intent.get("first_name", ""), 80)
+    if not last_name:
+      name = _ai_agent_split_name(str(intent.get("target", "") or ""))
+      last_name = name.get("last_name", "")
+      first_name = first_name or name.get("first_name", "")
+    if not last_name:
+      raise RuntimeError("I need a last name for Person Lookup.")
+    rows = search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_name)
+    return {
+      "task": "Person Lookup",
+      "summary": f"Found {len(rows)} CUCM user(s) for {first_name + ' ' if first_name else ''}{last_name}.",
+      "count": len(rows),
+      "results": _ai_agent_summarize_person_rows(rows),
+    }
+
+  if task == "extension_lookup":
+    pattern = _ai_agent_clean_text(intent.get("pattern", "") or intent.get("target", ""), 40)
+    pattern = re.sub(r"[^0-9%_*Xx]", "", pattern)
+    if not pattern:
+      raise RuntimeError("I need an extension or DN pattern for Extension Lookup.")
+    result = lookup_extension_owner(cucm_host, cucm_user, cucm_pass, pattern, include_line_groups=True)
+    matches = result.get("matches", []) or []
+    return {
+      "task": "Extension Reverse Lookup",
+      "summary": f"Found {len(matches)} result(s) for {pattern}.",
+      "count": len(matches),
+      "results": matches[:10],
+    }
+
+  if task == "jabber_status":
+    user_id = _ai_agent_clean_text(intent.get("user_id", "") or intent.get("target", ""), 100)
+    if "@" in user_id:
+      user_id = user_id.split("@", 1)[0]
+    if not user_id:
+      raise RuntimeError("I need a user ID for Jabber status.")
+    result = check_user_devices(cucm_host, cucm_user, cucm_pass, user_id)
+    return {
+      "task": "Jabber Configuration Check",
+      "summary": f"Checked Jabber configuration for {user_id}.",
+      "count": len(result.get("devices", []) or []),
+      "results": result,
+    }
+
+  reason = _ai_agent_clean_text(intent.get("reason", ""), 200) or "This Phase 1 agent only supports read-only CUCM lookup tasks."
+  return {
+    "task": "Unsupported Request",
+    "summary": reason,
+    "count": 0,
+    "results": [],
+  }
 
 
 def _validate_cucm_login(cucm_host: str, cucm_user: str, cucm_pass: str):
@@ -28594,6 +28822,7 @@ __ADMIN_CARD__
         <h4>Operations Menu</h4>
         <div class="portal-nav">
           <button type="button" class="portal-nav-btn start-here-btn active" data-panel="personlookup">Start Here!<br>Employee Lookup By Name</button>
+          <button type="button" class="portal-nav-btn" data-panel="aiagent">AI Agent - Read Only</button>
           <button type="button" class="portal-nav-btn" data-panel="jabber-forwarding-tool">Cisco Jabber Forwarding Tool</button>
           <button type="button" class="portal-nav-btn" onclick="window.location.href='/genesys-admin?panel=genesys-ad-webrtc-panel'">Add Genesys User</button>
           <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Reverse Lookup</button>
@@ -28889,6 +29118,118 @@ __ADMIN_CARD__
         }
       })();
     </script>
+
+    <section class="tool-panel" data-panel="aiagent">
+
+    <h3>AI Agent - Read Only</h3>
+    <p>Ask a CUCM lookup question in plain language. Phase 1 is read-only and supports Person Lookup, Extension Reverse Lookup, and Jabber configuration checks.</p>
+
+    <div class="jabber-check-layout" style="display:block;">
+      <form id="ai-agent-form" class="jabber-check-form">
+        <div class="search-filter-row" style="align-items:flex-start;">
+          <textarea id="ai-agent-message" name="message" placeholder="Examples: Find Shane Carr | Who has extension 2481234? | Check Jabber status for john.doe" required style="min-height:74px;min-width:min(620px,100%);flex:1;border:1px solid #a9c3d8;border-radius:6px;padding:10px;font-size:14px;"></textarea>
+          <button id="ai-agent-send" type="submit">Ask Agent</button>
+          <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+        </div>
+      </form>
+
+      <section class="jabber-check-output" aria-live="polite" style="margin-top:12px;">
+        <h4>Agent Response</h4>
+        <p id="ai-agent-status" class="jabber-check-status">Enter a request and click Ask Agent.</p>
+        <div id="ai-agent-results" style="overflow-x:auto;"></div>
+        <textarea id="ai-agent-debug" readonly style="display:none;margin-top:10px;width:100%;min-height:180px;font-family:Consolas,monospace;font-size:12px;"></textarea>
+      </section>
+    </div>
+
+    <script>
+      (function () {
+        const form = document.getElementById("ai-agent-form");
+        const messageEl = document.getElementById("ai-agent-message");
+        const sendBtn = document.getElementById("ai-agent-send");
+        const statusEl = document.getElementById("ai-agent-status");
+        const resultsEl = document.getElementById("ai-agent-results");
+        const debugEl = document.getElementById("ai-agent-debug");
+
+        if (!form || !messageEl || !sendBtn || !statusEl || !resultsEl) return;
+
+        function escapeHtml(value) {
+          return String(value == null ? "" : value)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        function renderList(items) {
+          if (!Array.isArray(items) || !items.length) return "<p>No result rows returned.</p>";
+          return "<pre style='white-space:pre-wrap;background:#f7fbff;border:1px solid #c8dbee;border-radius:6px;padding:10px;max-height:420px;overflow:auto;'>" + escapeHtml(JSON.stringify(items, null, 2)) + "</pre>";
+        }
+
+        function renderAgentResponse(payload) {
+          const result = payload.result || {};
+          const intent = payload.intent || {};
+          const task = result.task || "AI Agent";
+          const summary = result.summary || "Completed.";
+          const source = payload.intent_source || "local";
+          const modelText = payload.model_configured ? "Azure OpenAI" : "local parser";
+          let html = "";
+          html += "<div style='border:1px solid #c8dbee;border-radius:8px;background:#ffffff;padding:12px 14px;margin-bottom:10px;'>";
+          html += "<div style='display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px;'>";
+          html += "<strong style='color:#123f70;'>" + escapeHtml(task) + "</strong>";
+          html += "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#e8f3ff;color:#005eb8;font-size:12px;font-weight:700;'>Read-only</span>";
+          html += "<span style='display:inline-block;padding:2px 8px;border-radius:999px;background:#eef7ed;color:#237741;font-size:12px;font-weight:700;'>" + escapeHtml(modelText) + "</span>";
+          html += "</div>";
+          html += "<p style='margin:0;color:#243b53;'>" + escapeHtml(summary) + "</p>";
+          html += "<p style='margin:8px 0 0 0;color:#4e6a84;font-size:12px;'>Intent: " + escapeHtml(intent.intent || "unknown") + " | Source: " + escapeHtml(source) + " | Request ID: " + escapeHtml(payload.request_id || "") + "</p>";
+          html += "</div>";
+          html += renderList(result.results);
+          resultsEl.innerHTML = html;
+          if (debugEl) {
+            debugEl.style.display = "block";
+            debugEl.value = JSON.stringify(payload, null, 2);
+          }
+        }
+
+        form.addEventListener("submit", async function (event) {
+          event.preventDefault();
+          const message = String(messageEl.value || "").trim();
+          if (!message) {
+            statusEl.textContent = "Enter a request first.";
+            return;
+          }
+
+          sendBtn.disabled = true;
+          statusEl.textContent = "Agent is checking the approved read-only tools...";
+          resultsEl.innerHTML = "";
+          if (debugEl) {
+            debugEl.style.display = "none";
+            debugEl.value = "";
+          }
+
+          try {
+            const response = await fetch("/ai-agent/message", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/json", "Accept": "application/json" },
+              body: JSON.stringify({ message: message }),
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "AI Agent request failed.");
+            }
+            statusEl.textContent = "Completed read-only agent request.";
+            renderAgentResponse(payload);
+          } catch (err) {
+            statusEl.textContent = "AI Agent failed: " + ((err && err.message) || "Unknown error.");
+          } finally {
+            sendBtn.disabled = false;
+          }
+        });
+      })();
+    </script>
+
+    </section>
 
     <section class="tool-panel active" data-panel="personlookup">
 
@@ -48385,6 +48726,89 @@ def check_user_devices_route(
         raise RuntimeError("target_user is required.")
     result = check_user_devices(cucm_host, cucm_user, cucm_pass, clean_target)
     return JSONResponse({"ok": True, **result})
+
+
+@app.post("/ai-agent/message")
+async def ai_agent_message_route(request: Request):
+  session = _get_auth_session(request)
+  if not session:
+    return JSONResponse({"ok": False, "error": "Authentication required."}, status_code=401)
+
+  try:
+    body = await request.json()
+  except Exception:
+    body = {}
+
+  message = _ai_agent_clean_text(str((body or {}).get("message", "") or ""), 500)
+  operator = str(session.get("username", "") or "").strip()
+  request_id = str(uuid4())
+  if not message:
+    return JSONResponse({"ok": False, "error": "Message is required."}, status_code=400)
+
+  try:
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
+    intent, intent_source = _ai_agent_parse_with_model(message)
+    intent_name = str(intent.get("intent", "unsupported") or "unsupported").strip().lower()
+    allowed = {"person_lookup", "extension_lookup", "jabber_status", "unsupported"}
+    if intent_name not in allowed:
+      intent = {
+        "intent": "unsupported",
+        "target": _ai_agent_clean_text(intent.get("target", message), 200),
+        "reason": "The model returned an action outside the Phase 1 read-only allow-list.",
+      }
+      intent_name = "unsupported"
+
+    result = _ai_agent_execute_readonly(intent, cucm_host, cucm_user, cucm_pass)
+    response_payload = {
+      "ok": True,
+      "request_id": request_id,
+      "mode": "read-only",
+      "intent_source": intent_source,
+      "model_configured": _ai_agent_model_configured(),
+      "intent": intent,
+      "result": result,
+    }
+
+    _ai_agent_append_history({
+      "request_id": request_id,
+      "operator": operator,
+      "cucm_host": cucm_host,
+      "message": message,
+      "intent": intent,
+      "intent_source": intent_source,
+      "result_summary": result.get("summary", ""),
+      "ok": True,
+    })
+    try:
+      _append_audit_event(
+        action="ai_agent_readonly_query",
+        cucm_host=cucm_host,
+        operator=operator or cucm_user,
+        target=f"intent={intent_name};target={_ai_agent_clean_text(intent.get('target', ''), 120)}",
+        output_filename="inline_ai_agent_response",
+        inline_mode=True,
+      )
+    except Exception:
+      pass
+    return JSONResponse(response_payload)
+  except RuntimeError as exc:
+    _ai_agent_append_history({
+      "request_id": request_id,
+      "operator": operator,
+      "message": message,
+      "ok": False,
+      "error": str(exc),
+    })
+    return JSONResponse({"ok": False, "request_id": request_id, "error": str(exc)}, status_code=400)
+  except Exception as exc:
+    _ai_agent_append_history({
+      "request_id": request_id,
+      "operator": operator,
+      "message": message,
+      "ok": False,
+      "error": str(exc),
+    })
+    return JSONResponse({"ok": False, "request_id": request_id, "error": f"AI agent failed: {exc}"}, status_code=500)
 
 
 @app.post("/lookup/extension")

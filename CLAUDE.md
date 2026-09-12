@@ -107,6 +107,12 @@ Priority keys:
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
 
+### 2026-09-12 (Page 1 AI Agent Phase 1)
+- Added Page 1 **AI Agent - Read Only** chat panel for natural-language CUCM lookup questions.
+- Added `/ai-agent/message` backend route with strict read-only allow-list: Person Lookup, Extension Reverse Lookup, and Jabber configuration check only.
+- Agent uses Azure OpenAI classification when `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, and `AZURE_OPENAI_API_KEY` are configured; otherwise falls back to a deterministic local parser.
+- Agent responses and errors are persisted to `logs/ai_agent_history.jsonl`; each successful read-only request also writes an audit event.
+
 ### 2026-09-10 (Genesys External Contact Creation/Removal — implementation complete, controlled test pending)
 - Added isolated Genesys Admin panel to search CUCM users and preview one External Contact before creation.
 - Creates only first name, last name, CUCM work email, and normalized 10-digit Work Phone; assigns the Genesys `CiscoVoiceUser` division.
