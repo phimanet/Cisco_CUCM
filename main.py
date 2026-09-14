@@ -74,7 +74,7 @@ from toolkit.ad_phone_fields import (
   manage_ad_group_membership,
   lookup_ad_groups_by_prefix,
   lookup_ad_identity_by_email,
-  lookup_ad_identities_by_full_name,
+  lookup_ad_identities_by_email,
 )
 from toolkit.unity_user_extract import extract_unity_users
 from toolkit.transunion_sdpr import (
@@ -39558,7 +39558,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="hunt-list-members">Hunt List Members (Search Line Groups)</button>
             <button type="button" class="portal-nav-btn" data-panel="linegroup-admin">Update Hunt List Line Group</button>
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
-            <button type="button" class="portal-nav-btn" data-panel="ad-user-lookups">Active Directory User Lookups</button>
+            <button type="button" class="portal-nav-btn" data-panel="ad-user-lookups">Active Directory Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/opentext-admin'">OpenText Admin</button>
@@ -40569,10 +40569,10 @@ def menu_admin_page(request: Request):
       </section>
 
       <section class="panel tool-panel" data-panel="ad-user-lookups">
-        <h3>Active Directory User Lookups</h3>
-        <p>Paste one full name per line. This is an LDAP-only lookup and returns Username, First Name, Last Name, Email Address, and ipPhone.</p>
+        <h3>Active Directory Lookup</h3>
+        <p>Paste one or more email addresses, separated by a new line, comma, or semicolon. This read-only tool queries LDAP only.</p>
         <form id="ad-user-lookups-form">
-          <textarea id="ad-user-lookups-names" name="names_text" rows="12" placeholder="Marina Balderian&#10;Jay Bryan Cataluna&#10;Ma. Zobel Magalona" required></textarea>
+          <textarea id="ad-user-lookups-emails" name="emails_text" rows="12" placeholder="john.doe@amnhealthcare.com&#10;jane.smith@amnhealthcare.com" required></textarea>
           <br><br><button type="submit">Run Active Directory Lookup</button>
         </form>
         <p id="ad-user-lookups-status" style="color:#2c5c8a;min-height:18px;margin-top:12px;"></p>
@@ -50048,26 +50048,34 @@ async def bulk_lookup_person_route(
 
 
 @app.post("/admin/ad-user-lookups")
-def ad_user_lookups_route(request: Request, names_text: str = Form("")):
+def ad_user_lookups_route(request: Request, emails_text: str = Form("")):
     session = _get_auth_session(request) or {}
     if not _is_admin_user(str(session.get("username", "") or "").strip()):
-      return JSONResponse({"ok": False, "error": "Not authorized for Active Directory User Lookups."}, status_code=403)
+      return JSONResponse({"ok": False, "error": "Not authorized for Active Directory Lookup."}, status_code=403)
 
-    names = []
+    emails = []
     seen = set()
-    for line in str(names_text or "").splitlines():
-      name = " ".join(line.split())
-      if name and name.lower() not in seen:
-        seen.add(name.lower())
-        names.append(name)
-    if not names:
-      return JSONResponse({"ok": False, "error": "Paste at least one full name, one per line."}, status_code=422)
-    if len(names) > 200:
-      return JSONResponse({"ok": False, "error": "Limit each lookup to 200 names."}, status_code=422)
+    invalid_emails = []
+    for value in re.split(r"[\s,;]+", str(emails_text or "")):
+      email = value.strip().lower()
+      if not email:
+        continue
+      if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        invalid_emails.append(email)
+        continue
+      if email not in seen:
+        seen.add(email)
+        emails.append(email)
+    if invalid_emails:
+      return JSONResponse({"ok": False, "error": f"Invalid email address: {invalid_emails[0]}"}, status_code=422)
+    if not emails:
+      return JSONResponse({"ok": False, "error": "Paste at least one email address."}, status_code=422)
+    if len(emails) > 200:
+      return JSONResponse({"ok": False, "error": "Limit each lookup to 200 email addresses."}, status_code=422)
 
     _, ad_username, ad_password = _resolve_cucm_credentials(request, "", "", "")
-    result = lookup_ad_identities_by_full_name(
-      names,
+    result = lookup_ad_identities_by_email(
+      emails,
       {"username": ad_username, "password": ad_password},
     )
     if not result.get("ok"):
@@ -50075,14 +50083,14 @@ def ad_user_lookups_route(request: Request, names_text: str = Form("")):
 
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Input Name", "Status", "Username", "First Name", "Last Name", "Email Address", "ipPhone"])
+    writer.writerow(["Email", "First Name", "Last Name", "User Logon Name"])
     found_count = 0
     for row in result.get("results", []):
       found = bool(row.get("found"))
       found_count += int(found)
       writer.writerow([
-        row.get("input_name", ""), "FOUND" if found else "NOT_FOUND", row.get("samAccountName", ""),
-        row.get("firstName", ""), row.get("lastName", ""), row.get("mail", ""), row.get("ipPhone", ""),
+        row.get("mail", "") or row.get("input_email", ""),
+        row.get("firstName", ""), row.get("lastName", ""), row.get("samAccountName", ""),
       ])
 
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -50090,11 +50098,11 @@ def ad_user_lookups_route(request: Request, names_text: str = Form("")):
     job_output = _prepare_job_output(output.getvalue().encode("utf-8"), filename)
     _append_audit_event(
       action="active_directory_user_lookups", cucm_host="", operator=str(session.get("username", "") or ""),
-      target=f"names={len(names)};found={found_count}", output_filename=filename, inline_mode=True,
+      target=f"emails={len(emails)};found={found_count}", output_filename=filename, inline_mode=True,
     )
     return JSONResponse({
       "ok": True,
-      "summary": {"input_names": len(names), "found": found_count, "not_found": len(names) - found_count},
+      "summary": {"input_emails": len(emails), "found": found_count, "not_found": len(emails) - found_count},
       "filename": filename, "output_text": output.getvalue(), "download_url": f"/download/job-output/{job_output['job_id']}",
     })
 

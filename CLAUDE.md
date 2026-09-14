@@ -107,6 +107,11 @@ Priority keys:
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
 
+### 2026-09-14 (Page 2 Active Directory Lookup)
+- Updated the isolated Page 2 Active Directory Lookup to accept one or more email addresses separated by new lines, commas, or semicolons.
+- Lookup is read-only and LDAP-only; it matches exact `mail`, `userPrincipalName`, or SMTP proxy addresses in one batched ldap3 query when available.
+- Results show Email, First Name, Last Name, and User Logon Name, with a downloadable CSV containing the same four columns.
+
 ### 2026-09-12 (Page 1 AI Agent Phase 1)
 - Added Page 1 **AI Agent - Read Only** chat panel for natural-language CUCM lookup questions.
 - Added `/ai-agent/message` backend route with strict read-only allow-list: Person Lookup, Extension Reverse Lookup, and Jabber configuration check only.

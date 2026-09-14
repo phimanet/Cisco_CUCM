@@ -2305,18 +2305,18 @@ def lookup_ad_identity_by_email(email, auth_context=None):
     return result
 
 
-def lookup_ad_identities_by_full_name(full_names, auth_context=None):
-    """Resolve exact AD display names in one LDAP query."""
-    clean_names = []
+def lookup_ad_identities_by_email(emails, auth_context=None):
+    """Resolve exact AD email addresses in one LDAP query."""
+    clean_emails = []
     seen = set()
-    for value in full_names or []:
-        name = " ".join(str(value or "").split())
-        key = name.lower()
-        if name and key not in seen:
+    for value in emails or []:
+        email = _normalize_email_value(value)
+        key = email.lower()
+        if email and key not in seen:
             seen.add(key)
-            clean_names.append(name)
+            clean_emails.append(email)
 
-    if not clean_names:
+    if not clean_emails:
         return {"ok": True, "results": [], "source": "ldap"}
     config, config_error = _resolve_ldap_config()
     if config_error:
@@ -2325,19 +2325,20 @@ def lookup_ad_identities_by_full_name(full_names, auth_context=None):
     if bind_error:
         return {"ok": False, "error": bind_error}
     bind_password = str(os.getenv("AD_LDAP_BIND_PASSWORD") or str((auth_context or {}).get("password") or ""))
-    attributes = ["sAMAccountName", "givenName", "sn", "displayName", "mail", "ipPhone"]
+    attributes = ["sAMAccountName", "givenName", "sn", "displayName", "mail", "userPrincipalName", "proxyAddresses"]
 
     if not LDAP3_AVAILABLE:
         ldapsearch_bind_user = _resolve_ldapsearch_bind_user(auth_context, config)
         if not ldapsearch_bind_user or not bind_password:
             return {"ok": False, "error": "LDAP bind credentials are required for ldapsearch fallback"}
         results = []
-        for name in clean_names:
+        for email in clean_emails:
+            escaped_email = _escape_ldap_filter_value(email)
             attrs, lookup_error = _run_ldapsearch_query(
                 config,
                 ldapsearch_bind_user,
                 bind_password,
-                f"(&(objectClass=user)(displayName={_escape_ldap_filter_value(name)}))",
+                f"(&(objectClass=user)(|(mail={escaped_email})(userPrincipalName={escaped_email})(proxyAddresses=smtp:{escaped_email})))",
                 attributes,
             )
             attrs = attrs or {}
@@ -2345,16 +2346,19 @@ def lookup_ad_identities_by_full_name(full_names, auth_context=None):
                 return {"ok": False, "error": lookup_error}
             sam = _first_attr_value(attrs, ["sAMAccountName", "samAccountName"])
             results.append({
-                "found": bool(sam), "input_name": name, "samAccountName": sam,
+                "found": bool(sam), "input_email": email, "samAccountName": sam,
                 "firstName": _first_attr_value(attrs, ["givenName"]), "lastName": _first_attr_value(attrs, ["sn"]),
-                "mail": _first_attr_value(attrs, ["mail"]), "ipPhone": _first_attr_value(attrs, ["ipPhone"]),
+                "mail": _first_attr_value(attrs, ["mail"]) or email,
             })
         return {"ok": True, "results": results, "source": "ldapsearch"}
 
     try:
         server = Server(config["server"], port=config["port"], use_ssl=config["use_ssl"], get_info=ALL, connect_timeout=20)
         conn = Connection(server, user=bind_user, password=bind_password, authentication=bind_auth, auto_bind=True, receive_timeout=30)
-        clauses = "".join(f"(displayName={_escape_ldap_filter_value(name)})" for name in clean_names)
+        clauses = "".join(
+            f"(mail={_escape_ldap_filter_value(email)})(userPrincipalName={_escape_ldap_filter_value(email)})(proxyAddresses=smtp:{_escape_ldap_filter_value(email)})"
+            for email in clean_emails
+        )
         conn.search(
             search_base=config["base_dn"],
             search_filter=f"(&(objectClass=user)(|{clauses}))",
@@ -2362,33 +2366,40 @@ def lookup_ad_identities_by_full_name(full_names, auth_context=None):
             attributes=attributes,
         )
     except Exception as exc:
-        return {"ok": False, "error": f"AD full-name lookup failed: {exc}"}
+        return {"ok": False, "error": f"AD email lookup failed: {exc}"}
 
-    by_name = {}
+    by_email = {}
     for entry in conn.entries:
         def _val(attribute):
             return str(getattr(getattr(entry, attribute, None), "value", "") or "").strip()
-        display_name = _val("displayName")
-        if display_name:
-            by_name[display_name.lower()] = {
-                "found": bool(_val("sAMAccountName")), "input_name": display_name,
-                "samAccountName": _val("sAMAccountName"), "firstName": _val("givenName"),
-                "lastName": _val("sn"), "mail": _val("mail"), "ipPhone": _val("ipPhone"),
-            }
+        mail = _val("mail")
+        identity = {
+            "found": bool(_val("sAMAccountName")), "input_email": mail,
+            "samAccountName": _val("sAMAccountName"), "firstName": _val("givenName"),
+            "lastName": _val("sn"), "mail": mail,
+        }
+        aliases = [mail, _val("userPrincipalName")]
+        aliases.extend(
+            str(value or "").split(":", 1)[-1]
+            for value in (getattr(getattr(entry, "proxyAddresses", None), "values", []) or [])
+            if str(value or "").lower().startswith("smtp:")
+        )
+        for alias in aliases:
+            if alias:
+                by_email[alias.lower()] = identity
     try:
         conn.unbind()
     except Exception:
         pass
 
     results = []
-    for name in clean_names:
-        row = dict(by_name.get(name.lower()) or {})
+    for email in clean_emails:
+        row = dict(by_email.get(email.lower()) or {})
         row.setdefault("found", False)
-        row["input_name"] = name
+        row["input_email"] = email
         row.setdefault("samAccountName", "")
         row.setdefault("firstName", "")
         row.setdefault("lastName", "")
-        row.setdefault("mail", "")
-        row.setdefault("ipPhone", "")
+        row.setdefault("mail", email)
         results.append(row)
     return {"ok": True, "results": results, "source": "ldap"}
