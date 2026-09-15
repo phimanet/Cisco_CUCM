@@ -53423,9 +53423,13 @@ def lookup_sms_number_look_route(
       clean_first = (first_name or "").strip()
 
       def _build_platform_row(display_name: str, extension: str, telephone: str) -> dict:
-        twilio_default = _lookup_twilio_number_by_phone(telephone, account="default")
-        twilio_sfdc = _lookup_twilio_number_by_phone(telephone, account="salesforce")
-        aerialink = _lookup_aerialink_account_code_by_phone(telephone)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+          twilio_default_future = executor.submit(_lookup_twilio_number_by_phone, telephone, "default")
+          twilio_sfdc_future = executor.submit(_lookup_twilio_number_by_phone, telephone, "salesforce")
+          aerialink_future = executor.submit(_lookup_aerialink_account_code_by_phone, telephone)
+          twilio_default = twilio_default_future.result()
+          twilio_sfdc = twilio_sfdc_future.result()
+          aerialink = aerialink_future.result()
 
         found_in = []
         if twilio_default.get("found") or twilio_sfdc.get("found"):
@@ -53851,6 +53855,12 @@ def repair_unity_ldap_integration_lookup_route(
     return JSONResponse({"ok": False, "error": str(exc), "rows": []}, status_code=400)
   try:
     cucm_people = search_persons_by_name(cucm_host, cucm_user, cucm_pass, clean_last, clean_first)
+    lookup_deadline = time.monotonic() + 20
+    for attempt_url, attempt_params in attempts:
+      remaining_seconds = lookup_deadline - time.monotonic()
+      if remaining_seconds <= 0:
+        request_errors.append("Aerialink lookup time budget exhausted")
+        break
     response = requests.get(
       f"https://{unity_server}/vmrest/users",
       headers={"Accept": "application/json"},
@@ -53992,6 +54002,7 @@ def reset_unity_voicemail_pin_route(
         unity_pass=unity_pass,
         target_alias=voicemail_user,
         new_pin=new_voicemail_pin,
+        timeout=max(1, min(5, int(remaining_seconds))),
       )
 
     email_status = ""
