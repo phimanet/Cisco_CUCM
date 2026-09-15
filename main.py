@@ -142,7 +142,7 @@ PERFMON_CALLMANAGER_CACHE_LOCK = threading.Lock()
 TWILIO_INCOMING_PHONE_NUMBER_CACHE = {}
 TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK = threading.Lock()
 TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS = 5 * 60
-TWILIO_ACCOUNT_LIST_CACHE = {"cached_at": 0.0, "accounts": []}
+TWILIO_ACCOUNT_LIST_CACHE = {}
 TWILIO_ACCOUNT_LIST_CACHE_LOCK = threading.Lock()
 TWILIO_ACCOUNT_LIST_CACHE_TTL_SECONDS = 5 * 60
 TWILIO_MESSAGING_SERVICE_CACHE = {}
@@ -12111,32 +12111,92 @@ def _list_twilio_incoming_phone_numbers(
     return {"ok": False, "status": f"Lookup error: {exc}", "numbers": []}
 
 
-def _list_twilio_accounts(force_refresh: bool = False) -> dict:
-  if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
-    return {"ok": False, "status": "Twilio parent account is not configured", "accounts": []}
+def _twilio_inventory_configured_roots() -> tuple[list[dict], list[dict]]:
+  roots_by_sid = {}
+  errors = []
+
+  def add_root(key: str, name: str, sid: str, auth_token: str, source: str):
+    clean_sid = str(sid or "").strip()
+    clean_token = str(auth_token or "").strip()
+    if not clean_sid and not clean_token:
+      return
+    if not clean_sid or not clean_token:
+      errors.append({
+        "account_name": str(name or key).strip() or key,
+        "account_sid": clean_sid,
+        "error": f"Incomplete credentials for {key}: SID and AUTH_TOKEN are both required",
+      })
+      return
+    roots_by_sid[clean_sid] = {
+      "key": key,
+      "name": str(name or clean_sid).strip() or clean_sid,
+      "sid": clean_sid,
+      "auth_token": clean_token,
+      "source": source,
+    }
+
+  add_root("AMN_HEALTHCARE", TWILIO_PARENT_ACCOUNT_NAME, TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, "legacy-parent")
+  add_root("AMNONE_PROD", TWILIO_SUBACCOUNT_NAME, TWILIO_SUBACCOUNT_SID, TWILIO_SUBACCOUNT_AUTH_TOKEN, "legacy-amnone")
+  add_root(
+    "SALESFORCE_PROD",
+    TWILIO_SALESFORCE_SUBACCOUNT_NAME,
+    TWILIO_SALESFORCE_SUBACCOUNT_SID,
+    TWILIO_SALESFORCE_AUTH_TOKEN,
+    "legacy-salesforce",
+  )
+
+  registry = {}
+  pattern = re.compile(r"^TWILIO_INVENTORY_([A-Z0-9_]+)_(NAME|SID|AUTH_TOKEN)$")
+  for variable_name, value in os.environ.items():
+    match = pattern.match(variable_name)
+    if match:
+      registry.setdefault(match.group(1), {})[match.group(2)] = str(value or "").strip()
+
+  for key in sorted(registry):
+    values = registry[key]
+    add_root(
+      key,
+      values.get("NAME", key.replace("_", " ").title()),
+      values.get("SID", ""),
+      values.get("AUTH_TOKEN", ""),
+      "dynamic-registry",
+    )
+
+  return sorted(roots_by_sid.values(), key=lambda root: (root["name"].lower(), root["sid"])), errors
+
+
+def _list_twilio_accounts(root: dict, force_refresh: bool = False) -> dict:
+  root_sid = str(root.get("sid", "") or "").strip()
+  root_token = str(root.get("auth_token", "") or "").strip()
+  root_name = str(root.get("name", "") or root_sid).strip()
+  if not root_sid or not root_token:
+    return {"ok": False, "status": "Twilio root SID/token is not configured", "accounts": []}
 
   now = time.time()
   with TWILIO_ACCOUNT_LIST_CACHE_LOCK:
-    cached_at = float(TWILIO_ACCOUNT_LIST_CACHE.get("cached_at", 0) or 0)
+    cache_entry = TWILIO_ACCOUNT_LIST_CACHE.get(root_sid, {})
+    cached_at = float(cache_entry.get("cached_at", 0) or 0)
     if (not force_refresh) and cached_at and now - cached_at < TWILIO_ACCOUNT_LIST_CACHE_TTL_SECONDS:
-      return {"ok": True, "status": "OK", "accounts": list(TWILIO_ACCOUNT_LIST_CACHE.get("accounts", []) or [])}
+      return {"ok": True, "status": "OK", "accounts": list(cache_entry.get("accounts", []) or [])}
 
   accounts_by_sid = {
-    TWILIO_ACCOUNT_SID: {
-      "sid": TWILIO_ACCOUNT_SID,
-      "friendly_name": TWILIO_PARENT_ACCOUNT_NAME,
+    root_sid: {
+      "sid": root_sid,
+      "friendly_name": root_name,
       "status": "active",
-      "account_type": "Parent",
+      "account_type": "Root Account",
+      "root_account_name": root_name,
+      "root_account_sid": root_sid,
     }
   }
   try:
     next_url = "https://api.twilio.com/2010-04-01/Accounts.json"
-    next_params = {"PageSize": 100}
+    next_params = {"PageSize": 1000}
     while next_url:
       response = requests.get(
         next_url,
         params=next_params,
-        auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+        auth=(root_sid, root_token),
         timeout=30,
       )
       if response.status_code != 200:
@@ -12150,7 +12210,9 @@ def _list_twilio_accounts(force_refresh: bool = False) -> dict:
           "sid": sid,
           "friendly_name": str(account.get("friendly_name", "") or "").strip() or sid,
           "status": str(account.get("status", "") or "").strip() or "unknown",
-          "account_type": "Parent" if sid == TWILIO_ACCOUNT_SID else "Subaccount",
+          "account_type": "Root Account" if sid == root_sid else "Subaccount",
+          "root_account_name": root_name,
+          "root_account_sid": root_sid,
         }
       next_uri = str(payload.get("next_page_uri", "") or "").strip()
       next_url = f"https://api.twilio.com{next_uri}" if next_uri.startswith("/") else (next_uri or None)
@@ -12160,33 +12222,62 @@ def _list_twilio_accounts(force_refresh: bool = False) -> dict:
 
   accounts = sorted(
     accounts_by_sid.values(),
-    key=lambda account: (0 if account["account_type"] == "Parent" else 1, account["friendly_name"].lower(), account["sid"]),
+    key=lambda account: (0 if account["account_type"] == "Root Account" else 1, account["friendly_name"].lower(), account["sid"]),
   )
   with TWILIO_ACCOUNT_LIST_CACHE_LOCK:
-    TWILIO_ACCOUNT_LIST_CACHE["cached_at"] = now
-    TWILIO_ACCOUNT_LIST_CACHE["accounts"] = list(accounts)
+    TWILIO_ACCOUNT_LIST_CACHE[root_sid] = {"cached_at": now, "accounts": list(accounts)}
   return {"ok": True, "status": "OK", "accounts": accounts}
 
 
 def _twilio_all_account_number_inventory(force_refresh: bool = False) -> dict:
-  account_result = _list_twilio_accounts(force_refresh=force_refresh)
-  if not account_result.get("ok"):
-    raise RuntimeError(str(account_result.get("status") or "Twilio account lookup failed"))
+  roots, failures = _twilio_inventory_configured_roots()
+  if not roots:
+    raise RuntimeError("No complete Twilio inventory root credentials are configured")
 
-  accounts = list(account_result.get("accounts", []) or [])
+  root_by_sid = {root["sid"]: root for root in roots}
+  account_contexts = {}
   rows = []
-  failures = []
+
+  def discover_root(root):
+    return root, _list_twilio_accounts(root, force_refresh=force_refresh)
+
+  with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(6, len(roots)))) as executor:
+    futures = [executor.submit(discover_root, root) for root in roots]
+    for future in concurrent.futures.as_completed(futures):
+      root, result = future.result()
+      if not result.get("ok"):
+        failures.append({
+          "account_name": root["name"],
+          "account_sid": root["sid"],
+          "error": result.get("status", "Twilio account discovery failed"),
+        })
+        continue
+      for account in result.get("accounts", []) or []:
+        account_sid = str(account.get("sid", "") or "").strip()
+        if not account_sid:
+          continue
+        credential_root = root_by_sid.get(account_sid, root)
+        context = dict(account)
+        if credential_root["sid"] == account_sid:
+          context["friendly_name"] = credential_root["name"]
+          context["account_type"] = "Root Account"
+          context["root_account_name"] = credential_root["name"]
+          context["root_account_sid"] = credential_root["sid"]
+        context["auth_sid"] = credential_root["sid"]
+        context["auth_token"] = credential_root["auth_token"]
+        account_contexts[account_sid] = context
 
   def load_account(account):
     result = _list_twilio_incoming_phone_numbers(
       str(account.get("sid", "") or ""),
-      TWILIO_AUTH_TOKEN,
+      str(account.get("auth_token", "") or ""),
       force_refresh=force_refresh,
-      auth_account_sid=TWILIO_ACCOUNT_SID,
+      auth_account_sid=str(account.get("auth_sid", "") or ""),
     )
     return account, result
 
-  max_workers = max(1, min(6, len(accounts)))
+  accounts = list(account_contexts.values())
+  max_workers = max(1, min(8, len(accounts)))
   with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
     futures = [executor.submit(load_account, account) for account in accounts]
     for future in concurrent.futures.as_completed(futures):
@@ -12210,11 +12301,17 @@ def _twilio_all_account_number_inventory(force_refresh: bool = False) -> dict:
           "account_sid": str(account.get("sid", "") or "").strip(),
           "account_type": str(account.get("account_type", "") or "").strip(),
           "account_status": str(account.get("status", "") or "").strip(),
+          "root_account_name": str(account.get("root_account_name", "") or "").strip(),
+          "root_account_sid": str(account.get("root_account_sid", "") or "").strip(),
         })
 
-  rows.sort(key=lambda row: (row["account_name"].lower(), row["phone_number"], row["phone_sid"]))
+  rows.sort(key=lambda row: (row["root_account_name"].lower(), row["account_name"].lower(), row["phone_number"], row["phone_sid"]))
   return {
-    "accounts": accounts,
+    "roots": [{key: value for key, value in root.items() if key != "auth_token"} for root in roots],
+    "accounts": [
+      {key: value for key, value in account.items() if key not in {"auth_sid", "auth_token"}}
+      for account in accounts
+    ],
     "rows": rows,
     "failures": sorted(failures, key=lambda item: (item["account_name"].lower(), item["account_sid"])),
   }
@@ -12242,7 +12339,12 @@ def twilio_all_accounts_number_inventory_route(request: Request, force_refresh: 
     )
     return JSONResponse({
       "ok": True,
-      "summary": {"accounts": account_count, "numbers": number_count, "failures": failure_count},
+      "summary": {
+        "roots": len(inventory.get("roots", []) or []),
+        "accounts": account_count,
+        "numbers": number_count,
+        "failures": failure_count,
+      },
       **inventory,
     })
   except Exception as exc:
@@ -44955,7 +45057,7 @@ def page3_twilio_items(request: Request):
         <section class="tool-panel" data-panel="twilio-all-account-inventory">
           <div class="panel">
             <h3>Twilio All Accounts Number Inventory</h3>
-            <p>Read-only inventory of Twilio Incoming Phone Numbers across the configured parent account and every accessible subaccount.</p>
+            <p>Read-only live inventory of Twilio Incoming Phone Numbers (<strong>PN resources</strong>) across every configured root account and its accessible subaccounts. Twilio Hosted Numbers (HN resources) require the separate Console CSV export.</p>
             <div class="search-filter-row">
               <input id="twilio-inventory-filter" placeholder="Filter by number or account name" style="min-width:280px;">
               <button type="button" id="twilio-inventory-load">Load Inventory</button>
@@ -45271,7 +45373,7 @@ def page3_twilio_items(request: Request):
             const query = String(filterEl.value || "").trim().toLowerCase();
             if (!query) return inventoryRows;
             return inventoryRows.filter(function (row) {
-              return [row.phone_number, row.friendly_name, row.account_name, row.account_sid, row.phone_sid]
+              return [row.phone_number, row.friendly_name, row.root_account_name, row.root_account_sid, row.account_name, row.account_sid, row.phone_sid]
                 .some(function (value) { return String(value || "").toLowerCase().includes(query); });
             });
           }
@@ -45282,7 +45384,7 @@ def page3_twilio_items(request: Request):
               return;
             }
             let html = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="background:#005eb8;color:#fff;">';
-            ["Phone Number", "Friendly Name", "Account", "Account Type", "Account Status", "Account SID", "Phone SID", "Capabilities"].forEach(function (heading) {
+            ["Phone Number", "Friendly Name", "Root Account", "Owning Account", "Account Type", "Account Status", "Account SID", "Phone SID", "Capabilities"].forEach(function (heading) {
               html += '<th style="padding:8px 10px;text-align:left;white-space:nowrap;">' + escapeHtml(heading) + '</th>';
             });
             html += "</tr></thead><tbody>";
@@ -45290,6 +45392,7 @@ def page3_twilio_items(request: Request):
               html += '<tr style="background:' + (index % 2 ? "#fff" : "#f7fbff") + ';border-bottom:1px solid #c8dbee;">';
               html += '<td style="padding:7px 10px;font-family:Consolas,monospace;font-weight:700;">' + escapeHtml(row.phone_number || "-") + "</td>";
               html += '<td style="padding:7px 10px;">' + escapeHtml(row.friendly_name || "-") + "</td>";
+              html += '<td style="padding:7px 10px;">' + escapeHtml(row.root_account_name || "-") + "</td>";
               html += '<td style="padding:7px 10px;font-weight:700;">' + escapeHtml(row.account_name || "-") + "</td>";
               html += '<td style="padding:7px 10px;">' + escapeHtml(row.account_type || "-") + "</td>";
               html += '<td style="padding:7px 10px;">' + escapeHtml(row.account_status || "-") + "</td>";
@@ -45314,7 +45417,7 @@ def page3_twilio_items(request: Request):
               if (!response.ok || !payload.ok) throw new Error(payload.error || "Twilio inventory failed.");
               inventoryRows = payload.rows || [];
               const summary = payload.summary || {};
-              statusEl.textContent = "Accounts: " + String(summary.accounts || 0) + " | Numbers: " + String(summary.numbers || 0) + " | Account failures: " + String(summary.failures || 0);
+              statusEl.textContent = "Configured roots: " + String(summary.roots || 0) + " | Accounts/subaccounts: " + String(summary.accounts || 0) + " | Live PN numbers: " + String(summary.numbers || 0) + " | Account failures: " + String(summary.failures || 0);
               const failures = payload.failures || [];
               if (failures.length) {
                 failuresEl.innerHTML = '<div style="padding:9px 11px;border:1px solid #d7a4a4;background:#fff5f5;color:#8a1c1c;border-radius:6px;"><strong>Accounts not read:</strong> ' + failures.map(function (item) {
@@ -45337,10 +45440,10 @@ def page3_twilio_items(request: Request):
           downloadBtn.addEventListener("click", function () {
             const rows = filteredRows();
             if (!rows.length) return;
-            const headers = ["Phone Number", "Friendly Name", "Account", "Account Type", "Account Status", "Account SID", "Phone SID", "Capabilities"];
+            const headers = ["Phone Number", "Friendly Name", "Root Account", "Root Account SID", "Owning Account", "Account Type", "Account Status", "Account SID", "Phone SID", "Capabilities"];
             const lines = [headers.map(csvCell).join(",")];
             rows.forEach(function (row) {
-              lines.push([row.phone_number, row.friendly_name, row.account_name, row.account_type, row.account_status, row.account_sid, row.phone_sid, row.capabilities].map(csvCell).join(","));
+              lines.push([row.phone_number, row.friendly_name, row.root_account_name, row.root_account_sid, row.account_name, row.account_type, row.account_status, row.account_sid, row.phone_sid, row.capabilities].map(csvCell).join(","));
             });
             const blob = new Blob([lines.join("\\r\\n") + "\\r\\n"], {type:"text/csv;charset=utf-8"});
             const url = URL.createObjectURL(blob);

@@ -114,6 +114,9 @@ Priority keys:
 - Partial account failures remain visible without discarding numbers successfully loaded from other accounts.
 - Fixed Page 3 navigation binding by preserving escaped CR/LF sequences in the embedded CSV JavaScript instead of rendering invalid literal line breaks.
 - Confirmed credential mapping: `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` are the AMN Healthcare parent pair; `TWILIO_SUBACCOUNT_SID` + `TWILIO_SUBACCOUNT_AUTH_TOKEN` are the AMNOne pair; Salesforce retains its dedicated SID/token pair.
+- Added dynamic root-account registry using `TWILIO_INVENTORY_<KEY>_NAME`, `_SID`, and `_AUTH_TOKEN`; adding a future root requires `.env` configuration and restart only, while child subaccounts are discovered automatically.
+- Explicitly configured roots override duplicate child discovery by SID, failures remain isolated per root/account, and credentials are removed from browser responses.
+- Live API rows are labeled as Incoming Phone Number (`PN`) inventory; Hosted Number (`HN`) records remain available only through Twilio Console CSV because the tenant returns `20404` for Hosted Number Orders API access.
 
 ### 2026-09-15 (Page 2 CUCM Route Plan Report)
 - Added an isolated, read-only Page 2 **CUCM Route Plan Report** for number/dial-string analysis.
