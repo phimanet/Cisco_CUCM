@@ -12335,32 +12335,10 @@ def _lookup_twilio_number_direct(phone_number: str, account: str = "default") ->
   if not roots:
     return None
 
-  account_contexts = {}
   root_by_sid = {str(root.get("sid", "") or "").strip(): root for root in roots}
 
   def discover_root(root):
     return root, _list_twilio_accounts(root)
-
-  with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(6, len(roots)))) as executor:
-    futures = [executor.submit(discover_root, root) for root in roots]
-    for future in concurrent.futures.as_completed(futures):
-      root, result = future.result()
-      if not result.get("ok"):
-        continue
-      for account_context in result.get("accounts", []) or []:
-        account_sid = str(account_context.get("sid", "") or "").strip()
-        if not account_sid:
-          continue
-        credential_root = root_by_sid.get(account_sid, root)
-        context = dict(account_context)
-        if account_sid == str(credential_root.get("sid", "") or "").strip():
-          context["friendly_name"] = str(credential_root.get("name", "") or account_sid).strip()
-          context["account_type"] = "Root Account"
-          context["root_account_name"] = context["friendly_name"]
-          context["root_account_sid"] = account_sid
-        context["auth_sid"] = str(credential_root.get("sid", "") or "").strip()
-        context["auth_token"] = str(credential_root.get("auth_token", "") or "").strip()
-        account_contexts[account_sid] = context
 
   def query_account(context):
     account_sid = str(context.get("sid", "") or "").strip()
@@ -12384,23 +12362,41 @@ def _lookup_twilio_number_direct(phone_number: str, account: str = "default") ->
     except Exception:
       return context, None
 
-  contexts = list(account_contexts.values())
-  with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(12, len(contexts)))) as executor:
-    futures = [executor.submit(query_account, context) for context in contexts]
-    for future in concurrent.futures.as_completed(futures):
-      context, number_item = future.result()
-      if not isinstance(number_item, dict):
+  def build_context(root, account_context):
+    account_sid = str(account_context.get("sid", "") or "").strip()
+    credential_root = root_by_sid.get(account_sid, root)
+    context = dict(account_context)
+    if account_sid == str(credential_root.get("sid", "") or "").strip():
+      context["friendly_name"] = str(credential_root.get("name", "") or account_sid).strip()
+      context["account_type"] = "Root Account"
+      context["root_account_name"] = context["friendly_name"]
+      context["root_account_sid"] = account_sid
+    context["auth_sid"] = str(credential_root.get("sid", "") or "").strip()
+    context["auth_token"] = str(credential_root.get("auth_token", "") or "").strip()
+    return context
+
+  with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(6, len(roots)))) as root_executor:
+    root_futures = [root_executor.submit(discover_root, root) for root in roots]
+    for root_future in concurrent.futures.as_completed(root_futures):
+      root, result = root_future.result()
+      if not result.get("ok"):
         continue
-      return {
-        "enabled": True,
-        "found": True,
-        "phone_number": str(number_item.get("phone_number", "") or e164).strip(),
-        "sid": str(number_item.get("sid", "") or "").strip(),
-        "lookup_account_name": str(context.get("friendly_name", "") or context.get("sid", "") or "Twilio").strip(),
-        "lookup_account_sid": str(context.get("sid", "") or "").strip(),
-        "lookup_auth_token": str(context.get("auth_token", "") or "").strip(),
-        "status": "Found by direct lookup",
-      }
+      contexts = [build_context(root, account_context) for account_context in result.get("accounts", []) or []]
+      with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(12, len(contexts)))) as account_executor:
+        account_futures = [account_executor.submit(query_account, context) for context in contexts]
+        for account_future in concurrent.futures.as_completed(account_futures):
+          context, number_item = account_future.result()
+          if isinstance(number_item, dict):
+            return {
+              "enabled": True,
+              "found": True,
+              "phone_number": str(number_item.get("phone_number", "") or e164).strip(),
+              "sid": str(number_item.get("sid", "") or "").strip(),
+              "lookup_account_name": str(context.get("friendly_name", "") or context.get("sid", "") or "Twilio").strip(),
+              "lookup_account_sid": str(context.get("sid", "") or "").strip(),
+              "lookup_auth_token": str(context.get("auth_token", "") or "").strip(),
+              "status": "Found by direct lookup",
+            }
 
   return None
 
