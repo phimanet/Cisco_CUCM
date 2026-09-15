@@ -12917,6 +12917,35 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
       "status": "Twilio credentials not configured",
     }
 
+  roots, _ = _twilio_inventory_configured_roots()
+  root_name_by_sid = {str(root.get("sid", "") or "").strip(): str(root.get("name", "") or root.get("sid", "") or "Twilio").strip() for root in roots if str(root.get("sid", "") or "").strip()}
+  phone_number_digits = "".join(ch for ch in e164 if ch.isdigit())
+  candidates = {e164, phone_number_digits}
+  if len(phone_number_digits) == 11 and phone_number_digits.startswith("1"):
+    candidates.add(phone_number_digits[1:])
+    candidates.add(f"+{phone_number_digits[1:]}")
+
+  with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
+    for cache_sid, cache_entry in list(TWILIO_INCOMING_PHONE_NUMBER_CACHE.items()):
+      if not isinstance(cache_entry, dict):
+        continue
+      for number_item in list(cache_entry.get("numbers", []) or []):
+        if not isinstance(number_item, dict):
+          continue
+        candidate = str(number_item.get("phone_number", "") or "").strip()
+        candidate_digits = "".join(ch for ch in candidate if ch.isdigit())
+        if candidate in candidates or candidate_digits in candidates:
+          return {
+            "enabled": True,
+            "found": True,
+            "phone_number": candidate or e164,
+            "sid": str(number_item.get("sid", "") or "").strip(),
+            "lookup_account_name": root_name_by_sid.get(str(cache_sid or ""), "Twilio"),
+            "lookup_account_sid": str(cache_sid or "").strip(),
+            "lookup_auth_token": "",
+            "status": "Found in cached inventory",
+          }
+
   # Determine primary account SID/token for this lookup context.
   if account == "salesforce":
     lookup_sid = _resolve_twilio_salesforce_account_sid()
