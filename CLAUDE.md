@@ -107,6 +107,12 @@ Priority keys:
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
 
+### 2026-09-15 (Page 2 CUCM Route Plan Report)
+- Added an isolated, read-only Page 2 **CUCM Route Plan Report** for number/dial-string analysis.
+- Uses batched AXL `executeSQLQuery` against `numplan` and locally evaluates exact plus CUCM wildcard patterns (`X`, ranges, `!`, `?`, `@`, pre-dot, and escaped `+`).
+- Results keep duplicate patterns in different partitions/types visible and show match reason, partition, object type, description, called-party transform mask, callable state, associated devices, and line groups.
+- Added in-page CSV export with the same report columns and a compatibility fallback when optional CUCM type/line-group metadata joins are unavailable.
+
 ### 2026-09-14 (Page 2 Active Directory Lookup)
 - Updated the isolated Page 2 Active Directory Lookup to accept one or more email addresses separated by new lines, commas, or semicolons.
 - Lookup is read-only and LDAP-only; it matches exact `mail`, `userPrincipalName`, or SMTP proxy addresses in one batched ldap3 query when available.

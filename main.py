@@ -64,6 +64,7 @@ from toolkit.translation_pattern_lookup import (
   build_translation_pattern_template,
   get_translation_pattern_full,
 )
+from toolkit.route_plan_report import lookup_route_plan
 from toolkit.create_teams_telephony_user import create_teams_telephony_user
 from toolkit.remove_teams_telephony_user import (
   lookup_teams_telephony_removal_candidate,
@@ -39546,6 +39547,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="exportdn">Export Directory Numbers</button>
             <button type="button" class="portal-nav-btn" data-panel="delete-unassigned-dn">Delete Directory Number from CUCM</button>
             <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
+            <button type="button" class="portal-nav-btn" data-panel="route-plan-report">CUCM Route Plan Report</button>
             <button type="button" class="portal-nav-btn" data-panel="translookup">Translation Pattern Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="transtemplate">Translation Pattern Template</button>
             <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
@@ -39805,6 +39807,105 @@ def menu_admin_page(request: Request):
 
           <button type="submit">Export End Users</button>
         </form>
+      </section>
+
+      <section class="panel tool-panel" data-panel="route-plan-report">
+        <h3>CUCM Route Plan Report</h3>
+        <p>Enter a phone number or dial string to find every exact or wildcard CUCM route-plan pattern that can match it. This report is read-only.</p>
+        <form id="admin-route-plan-form">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <div class="compact-inline-row">
+            <span>Number or Dial String:</span>
+            <input name="number" placeholder="8585236648" required style="min-width:260px;">
+            <button type="submit">Find Route Plan Matches</button>
+            <button type="button" id="admin-route-plan-download" disabled style="background:linear-gradient(180deg,#2f855a,#256b47);">Download CSV</button>
+          </div>
+        </form>
+        <p id="admin-route-plan-status" style="color:#2c5c8a;min-height:18px;margin-top:12px;">Enter a number to inspect its CUCM route-plan matches.</p>
+        <div id="admin-route-plan-results" style="overflow-x:auto;"></div>
+        <script>
+          (function () {
+            var form = document.getElementById("admin-route-plan-form");
+            var statusEl = document.getElementById("admin-route-plan-status");
+            var resultsEl = document.getElementById("admin-route-plan-results");
+            var downloadBtn = document.getElementById("admin-route-plan-download");
+            var reportRows = [];
+            if (!form || !statusEl || !resultsEl || !downloadBtn) return;
+
+            function escapeHtml(value) {
+              return String(value == null ? "" : value).replace(/[&<>"']/g, function (character) {
+                return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[character];
+              });
+            }
+            function csvCell(value) {
+              var text = String(value == null ? "" : value);
+              return /[",\r\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+            }
+            function downloadCsv() {
+              if (!reportRows.length) return;
+              var headers = ["Match", "Pattern or URI", "Partition", "Type", "Description", "Called Party Transform Mask", "Callable", "Route Detail"];
+              var lines = [headers.map(csvCell).join(",")];
+              reportRows.forEach(function (row) {
+                var routeDetails = (row.devices || []).map(function (name) { return "Device: " + name; })
+                  .concat((row.line_groups || []).map(function (name) { return "Line Group: " + name; }));
+                lines.push([
+                  row.match, row.pattern, row.route_partition, row.type, row.description,
+                  row.called_party_transform_mask, row.is_callable, routeDetails.join(" | ")
+                ].map(csvCell).join(","));
+              });
+              var blob = new Blob([lines.join("\r\n") + "\r\n"], {type:"text/csv;charset=utf-8"});
+              var url = URL.createObjectURL(blob);
+              var link = document.createElement("a");
+              link.href = url;
+              link.download = "cucm_route_plan_report.csv";
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              URL.revokeObjectURL(url);
+            }
+            downloadBtn.addEventListener("click", downloadCsv);
+            form.addEventListener("submit", function (event) {
+              event.preventDefault();
+              statusEl.textContent = "Searching the CUCM route plan...";
+              resultsEl.innerHTML = "";
+              reportRows = [];
+              downloadBtn.disabled = true;
+              fetch("/admin/route-plan-report", {method:"POST", body:new FormData(form), credentials:"same-origin"})
+                .then(function (response) { return response.json().then(function (payload) { if (!response.ok || !payload.ok) throw new Error(payload.error || "Route plan lookup failed."); return payload; }); })
+                .then(function (payload) {
+                  reportRows = payload.results || [];
+                  var fallbackNote = payload.extended_details_fallback ? " Basic detail mode is active; optional type/line-group metadata was unavailable." : "";
+                  statusEl.textContent = (reportRows.length
+                    ? "Found " + String(payload.total_matches || reportRows.length) + " matching route-plan object(s) for " + String(payload.query || "") + "."
+                    : "No exact or wildcard route-plan patterns matched " + String(payload.query || "") + ".") + fallbackNote;
+                  downloadBtn.disabled = !reportRows.length;
+                  if (!reportRows.length) return;
+                  var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="background:#005eb8;color:#fff;">';
+                  ["Match", "Pattern or URI", "Partition", "Type", "Description", "Called Party Transform Mask", "Callable", "Route Detail"].forEach(function (heading) {
+                    html += '<th style="padding:8px;text-align:left;white-space:nowrap;">' + escapeHtml(heading) + '</th>';
+                  });
+                  html += "</tr></thead><tbody>";
+                  reportRows.forEach(function (row, index) {
+                    var routeDetails = (row.devices || []).map(function (name) { return "Device: " + name; })
+                      .concat((row.line_groups || []).map(function (name) { return "Line Group: " + name; }));
+                    html += '<tr style="background:' + (index % 2 ? "#fff" : "#f7fbff") + ';border-bottom:1px solid #c8dbee;">';
+                    html += '<td style="padding:7px 8px;font-weight:700;">' + escapeHtml(row.match) + "</td>";
+                    html += '<td style="padding:7px 8px;font-family:Consolas,monospace;font-weight:700;color:#002f6c;">' + escapeHtml(row.pattern) + "</td>";
+                    html += '<td style="padding:7px 8px;">' + escapeHtml(row.route_partition) + "</td>";
+                    html += '<td style="padding:7px 8px;">' + escapeHtml(row.type) + "</td>";
+                    html += '<td style="padding:7px 8px;">' + escapeHtml(row.description || "-") + "</td>";
+                    html += '<td style="padding:7px 8px;font-family:Consolas,monospace;">' + escapeHtml(row.called_party_transform_mask || "-") + "</td>";
+                    html += '<td style="padding:7px 8px;">' + escapeHtml(row.is_callable || "-") + "</td>";
+                    html += '<td style="padding:7px 8px;">' + escapeHtml(routeDetails.join(" | ") || "-") + "</td></tr>";
+                  });
+                  resultsEl.innerHTML = html + "</tbody></table>";
+                })
+                .catch(function (error) { statusEl.textContent = "CUCM Route Plan Report failed: " + error.message; });
+            });
+          })();
+        </script>
       </section>
 
       <section class="panel tool-panel" data-panel="ldapsync">
@@ -48849,6 +48950,36 @@ def lookup_translation_pattern_route(
 
     results = lookup_translation_patterns(cucm_host, cucm_user, cucm_pass, clean_pattern)
     return JSONResponse({"ok": True, "query": clean_pattern, "results": results})
+
+
+@app.post("/admin/route-plan-report")
+def route_plan_report_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    number: str = Form(""),
+):
+    session = _get_auth_session(request) or {}
+    operator = str(session.get("username", "") or "").strip()
+    if not _is_admin_user(operator):
+      return JSONResponse({"ok": False, "error": "Not authorized for CUCM Route Plan Report."}, status_code=403)
+    try:
+      cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+      _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+      report = lookup_route_plan(cucm_host, cucm_user, cucm_pass, number)
+      _append_audit_event(
+        action="cucm_route_plan_report",
+        cucm_host=cucm_host,
+        operator=operator,
+        target=f"number={report['query']};matches={report['total_matches']}",
+        inline_mode=True,
+      )
+      return JSONResponse({"ok": True, **report})
+    except ValueError as exc:
+      return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+    except Exception as exc:
+      return JSONResponse({"ok": False, "error": f"CUCM route-plan lookup failed: {exc}"}, status_code=502)
 
 
 def _axl_post_raw_text(session: requests.Session, cucm_host: str, soap_xml: str, op_name: str) -> str:
