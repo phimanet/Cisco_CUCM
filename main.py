@@ -145,6 +145,9 @@ TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS = 5 * 60
 TWILIO_ACCOUNT_LIST_CACHE = {}
 TWILIO_ACCOUNT_LIST_CACHE_LOCK = threading.Lock()
 TWILIO_ACCOUNT_LIST_CACHE_TTL_SECONDS = 5 * 60
+TWILIO_DIRECT_LOOKUP_CACHE = {}
+TWILIO_DIRECT_LOOKUP_CACHE_LOCK = threading.Lock()
+TWILIO_DIRECT_LOOKUP_CACHE_TTL_SECONDS = 5 * 60
 TWILIO_MESSAGING_SERVICE_CACHE = {}
 TWILIO_MESSAGING_SERVICE_CACHE_LOCK = threading.Lock()
 TWILIO_MESSAGING_SERVICE_CACHE_TTL_SECONDS = 5 * 60
@@ -12331,9 +12334,25 @@ def _lookup_twilio_number_direct(phone_number: str, account: str = "default") ->
   if not e164:
     return None
 
+  cache_key = (account, e164)
+  now = time.time()
+  with TWILIO_DIRECT_LOOKUP_CACHE_LOCK:
+    cached_result = TWILIO_DIRECT_LOOKUP_CACHE.get(cache_key)
+    if isinstance(cached_result, dict) and now - float(cached_result.get("cached_at", 0) or 0) < TWILIO_DIRECT_LOOKUP_CACHE_TTL_SECONDS:
+      return cached_result.get("result")
+
   roots, _ = _twilio_inventory_configured_roots()
   if not roots:
     return None
+
+  if account == "salesforce":
+    allowed_sids = {
+      str(TWILIO_SALESFORCE_SUBACCOUNT_SID or "").strip(),
+      str(TWILIO_ACCOUNT_SID or "").strip(),
+    }
+    roots = [root for root in roots if str(root.get("sid", "") or "").strip() in allowed_sids]
+    if not roots:
+      return None
 
   root_by_sid = {str(root.get("sid", "") or "").strip(): root for root in roots}
 
@@ -12387,7 +12406,7 @@ def _lookup_twilio_number_direct(phone_number: str, account: str = "default") ->
         for account_future in concurrent.futures.as_completed(account_futures):
           context, number_item = account_future.result()
           if isinstance(number_item, dict):
-            return {
+            result = {
               "enabled": True,
               "found": True,
               "phone_number": str(number_item.get("phone_number", "") or e164).strip(),
@@ -12397,7 +12416,12 @@ def _lookup_twilio_number_direct(phone_number: str, account: str = "default") ->
               "lookup_auth_token": str(context.get("auth_token", "") or "").strip(),
               "status": "Found by direct lookup",
             }
+            with TWILIO_DIRECT_LOOKUP_CACHE_LOCK:
+              TWILIO_DIRECT_LOOKUP_CACHE[cache_key] = {"cached_at": time.time(), "result": result}
+            return result
 
+  with TWILIO_DIRECT_LOOKUP_CACHE_LOCK:
+    TWILIO_DIRECT_LOOKUP_CACHE[cache_key] = {"cached_at": time.time(), "result": None}
   return None
 
 
