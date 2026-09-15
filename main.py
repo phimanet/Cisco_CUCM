@@ -12005,6 +12005,11 @@ def _twilio_registry_lookup_accounts(account: str = "default") -> list[tuple[str
     seen.add(sid)
     candidates.append((sid, token, name))
 
+  if account == "salesforce":
+    add_candidate(TWILIO_SALESFORCE_SUBACCOUNT_SID, TWILIO_SALESFORCE_AUTH_TOKEN, TWILIO_SALESFORCE_SUBACCOUNT_NAME or "Salesforce subaccount")
+  else:
+    add_candidate(TWILIO_SUBACCOUNT_SID, TWILIO_SUBACCOUNT_AUTH_TOKEN, TWILIO_SUBACCOUNT_NAME or "AMNOne subaccount")
+
   for root in roots:
     name = str(root.get("name", "") or "").strip()
     sid = str(root.get("sid", "") or "").strip()
@@ -12022,13 +12027,6 @@ def _twilio_registry_lookup_accounts(account: str = "default") -> list[tuple[str
 
   if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_ACCOUNT_SID not in seen:
     add_candidate(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PARENT_ACCOUNT_NAME or "Parent account")
-
-  if account == "salesforce":
-    if TWILIO_SALESFORCE_SUBACCOUNT_SID and TWILIO_SALESFORCE_AUTH_TOKEN and TWILIO_SALESFORCE_SUBACCOUNT_SID not in seen:
-      add_candidate(TWILIO_SALESFORCE_SUBACCOUNT_SID, TWILIO_SALESFORCE_AUTH_TOKEN, TWILIO_SALESFORCE_SUBACCOUNT_NAME or "Salesforce subaccount")
-  else:
-    if TWILIO_SUBACCOUNT_SID and TWILIO_SUBACCOUNT_AUTH_TOKEN and TWILIO_SUBACCOUNT_SID not in seen:
-      add_candidate(TWILIO_SUBACCOUNT_SID, TWILIO_SUBACCOUNT_AUTH_TOKEN, TWILIO_SUBACCOUNT_NAME or "AMNOne subaccount")
 
   return candidates
 
