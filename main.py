@@ -53295,10 +53295,8 @@ def lookup_sms_number_look_route(
         aerialink = _lookup_aerialink_account_code_by_phone(telephone)
 
         found_in = []
-        if twilio_default.get("found"):
-          found_in.append("Twilio - AMIEWeb")
-        if twilio_sfdc.get("found"):
-          found_in.append("Twilio - Salesforce")
+        if twilio_default.get("found") or twilio_sfdc.get("found"):
+          found_in.append("Twilio")
         if aerialink.get("provisioned"):
           found_in.append("Aerialink Classic")
 
