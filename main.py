@@ -45589,6 +45589,7 @@ def page3_twilio_items(request: Request):
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">SMS Number</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Configured In</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Owning Account</th>';
             html += '</tr></thead><tbody>';
 
@@ -45599,6 +45600,7 @@ def page3_twilio_items(request: Request):
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.extension || "-") + '</td>';
               html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + (row.sms_number || "-") + '</td>';
               html += '<td style="padding:7px 10px;">' + (row.configured_in || "Not Found") + '</td>';
+              html += '<td style="padding:7px 10px;">' + (row.owning_account || "Not Found") + '</td>';
               html += '</tr>';
             });
 
@@ -53300,6 +53302,14 @@ def lookup_sms_number_look_route(
         if aerialink.get("provisioned"):
           found_in.append("Aerialink Classic")
 
+        owning_account = "Not Found"
+        if twilio_default.get("found"):
+          owning_account = str(twilio_default.get("lookup_account_name") or twilio_default.get("lookup_account_sid") or "Twilio").strip() or "Twilio"
+        elif twilio_sfdc.get("found"):
+          owning_account = str(twilio_sfdc.get("lookup_account_name") or twilio_sfdc.get("lookup_account_sid") or "Twilio").strip() or "Twilio"
+        elif aerialink.get("provisioned"):
+          owning_account = "Aerialink Classic"
+
         sms_number = (
           (twilio_default.get("phone_number") or "").strip()
           or (twilio_sfdc.get("phone_number") or "").strip()
@@ -53313,6 +53323,7 @@ def lookup_sms_number_look_route(
           "extension": extension or "-",
           "sms_number": sms_number or "-",
           "configured_in": ", ".join(found_in) if found_in else "Not Found",
+          "owning_account": owning_account,
         }
 
       results = []
