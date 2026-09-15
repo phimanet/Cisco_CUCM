@@ -11981,63 +11981,73 @@ def _normalize_phone_to_e164(phone_number: str) -> str:
   return f"+{digits}" if not raw.startswith("+") else raw
 
 
+def _twilio_registry_lookup_accounts(account: str = "default") -> list[tuple[str, str, str]]:
+  """Return a registry-aware account order for Twilio number lookups.
+
+  This includes all configured ENV roots plus the legacy parent and subaccount values so
+  newly added TWILIO_INVENTORY_* roots are automatically searched without code changes.
+  """
+  roots, _ = _twilio_inventory_configured_roots()
+  preferred_name = (TWILIO_SUBACCOUNT_NAME if account != "salesforce" else TWILIO_SALESFORCE_SUBACCOUNT_NAME).strip().lower()
+  preferred_sid = (TWILIO_SUBACCOUNT_SID if account != "salesforce" else TWILIO_SALESFORCE_SUBACCOUNT_SID).strip()
+  candidates: list[tuple[str, str, str]] = []
+  seen: set[str] = set()
+
+  def add_candidate(sid: str, token: str, name: str):
+    sid = (sid or "").strip()
+    token = (token or "").strip()
+    name = (name or sid or "").strip()
+    if not sid or not token or sid in seen:
+      return
+    seen.add(sid)
+    candidates.append((sid, token, name))
+
+  for root in roots:
+    name = str(root.get("name", "") or "").strip()
+    sid = str(root.get("sid", "") or "").strip()
+    token = str(root.get("auth_token", "") or "").strip()
+    if not sid or not token:
+      continue
+    if preferred_sid and sid == preferred_sid:
+      add_candidate(sid, token, name)
+    elif preferred_name and name.strip().lower() == preferred_name:
+      add_candidate(sid, token, name)
+    elif sid == TWILIO_ACCOUNT_SID and sid != preferred_sid:
+      add_candidate(sid, token, name)
+    else:
+      add_candidate(sid, token, name)
+
+  if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_ACCOUNT_SID not in seen:
+    add_candidate(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PARENT_ACCOUNT_NAME or "Parent account")
+
+  if account == "salesforce":
+    if TWILIO_SALESFORCE_SUBACCOUNT_SID and TWILIO_SALESFORCE_AUTH_TOKEN and TWILIO_SALESFORCE_SUBACCOUNT_SID not in seen:
+      add_candidate(TWILIO_SALESFORCE_SUBACCOUNT_SID, TWILIO_SALESFORCE_AUTH_TOKEN, TWILIO_SALESFORCE_SUBACCOUNT_NAME or "Salesforce subaccount")
+  else:
+    if TWILIO_SUBACCOUNT_SID and TWILIO_SUBACCOUNT_AUTH_TOKEN and TWILIO_SUBACCOUNT_SID not in seen:
+      add_candidate(TWILIO_SUBACCOUNT_SID, TWILIO_SUBACCOUNT_AUTH_TOKEN, TWILIO_SUBACCOUNT_NAME or "AMNOne subaccount")
+
+  return candidates
+
+
 def _resolve_twilio_lookup_account_sid() -> str:
   """Choose subaccount SID for lookup if configured, else use primary account SID."""
+  candidates = _twilio_registry_lookup_accounts("default")
+  if candidates:
+    return candidates[0][0]
   if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
     return ""
+  return TWILIO_SUBACCOUNT_SID or TWILIO_ACCOUNT_SID
 
-  if TWILIO_SUBACCOUNT_SID:
-    return TWILIO_SUBACCOUNT_SID
-
-  if not TWILIO_SUBACCOUNT_NAME:
-    return TWILIO_ACCOUNT_SID
-
-  try:
-    resp = requests.get(
-      f"https://api.twilio.com/2010-04-01/Accounts.json",
-      params={"FriendlyName": TWILIO_SUBACCOUNT_NAME, "Status": "active", "PageSize": 20},
-      auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
-      timeout=20,
-    )
-    if resp.status_code != 200:
-      return TWILIO_ACCOUNT_SID
-    payload = resp.json() if resp.text else {}
-    for acct in payload.get("accounts", []) or []:
-      if str(acct.get("friendly_name", "")).strip() == TWILIO_SUBACCOUNT_NAME:
-        return str(acct.get("sid", "")).strip() or TWILIO_ACCOUNT_SID
-  except Exception:
-    pass
-
-  return TWILIO_ACCOUNT_SID
 
 def _resolve_twilio_salesforce_account_sid() -> str:
   """Choose Salesforce Enterprise Org Prod sub-account SID if configured."""
+  candidates = _twilio_registry_lookup_accounts("salesforce")
+  if candidates:
+    return candidates[0][0]
   if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
     return ""
-
-  if TWILIO_SALESFORCE_SUBACCOUNT_SID:
-    return TWILIO_SALESFORCE_SUBACCOUNT_SID
-
-  if not TWILIO_SALESFORCE_SUBACCOUNT_NAME:
-    return TWILIO_ACCOUNT_SID
-
-  try:
-    resp = requests.get(
-      f"https://api.twilio.com/2010-04-01/Accounts.json",
-      params={"FriendlyName": TWILIO_SALESFORCE_SUBACCOUNT_NAME, "Status": "active", "PageSize": 20},
-      auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
-      timeout=20,
-    )
-    if resp.status_code != 200:
-      return TWILIO_ACCOUNT_SID
-    payload = resp.json() if resp.text else {}
-    for acct in payload.get("accounts", []) or []:
-      if str(acct.get("friendly_name", "")).strip() == TWILIO_SALESFORCE_SUBACCOUNT_NAME:
-        return str(acct.get("sid", "")).strip() or TWILIO_ACCOUNT_SID
-  except Exception:
-    pass
-
-  return TWILIO_ACCOUNT_SID
+  return TWILIO_SALESFORCE_SUBACCOUNT_SID or TWILIO_ACCOUNT_SID
 
 
 def _resolve_twilio_lookup_auth_token_for_sid(account_sid: str) -> str:
@@ -12927,12 +12937,20 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
     }
 
   try:
-    lookup_accounts: list[tuple[str, str, str]] = [(lookup_sid, lookup_token, configured_account_name or "Configured subaccount")]
+    lookup_accounts: list[tuple[str, str, str]] = []
+    for candidate_sid, candidate_token, candidate_name in _twilio_registry_lookup_accounts(account):
+      if not candidate_sid or not candidate_token:
+        continue
+      lookup_accounts.append((candidate_sid, candidate_token, candidate_name or configured_account_name or "Configured account"))
+
+    if not lookup_accounts:
+      lookup_accounts = [(lookup_sid, lookup_token, configured_account_name or "Configured account")]
+
     # Fallback to parent account search in case the number lives there.
     if (
       TWILIO_ACCOUNT_SID
       and TWILIO_AUTH_TOKEN
-      and TWILIO_ACCOUNT_SID != lookup_sid
+      and TWILIO_ACCOUNT_SID not in {sid for sid, _, _ in lookup_accounts}
     ):
       lookup_accounts.append((TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, "Parent account"))
 
@@ -13021,72 +13039,49 @@ def _lookup_twilio_number_in_subaccount(phone_number: str, force_refresh: bool =
       "status": "No telephone",
     }
 
-  lookup_sid = _resolve_twilio_lookup_account_sid()
-  lookup_token = _resolve_twilio_lookup_auth_token_for_sid(lookup_sid)
-  if not lookup_sid or not lookup_token:
-    return {
-      "enabled": False,
-      "found": False,
-      "phone_number": e164,
-      "sid": "",
-      "lookup_account_sid": "",
-      "lookup_auth_token": "",
-      "status": "Twilio subaccount is not configured",
-    }
+  lookup_candidates = _twilio_registry_lookup_accounts("default")
+  if not lookup_candidates:
+    lookup_candidates = [(str(_resolve_twilio_lookup_account_sid() or ""), str(_resolve_twilio_lookup_auth_token_for_sid(_resolve_twilio_lookup_account_sid()) or ""), "Configured account")]
 
-  # Enforce subaccount-only behavior for hosting flow.
-  if TWILIO_ACCOUNT_SID and lookup_sid == TWILIO_ACCOUNT_SID:
-    return {
-      "enabled": False,
-      "found": False,
-      "phone_number": e164,
-      "sid": "",
-      "lookup_account_sid": "",
-      "lookup_auth_token": "",
-      "status": "Twilio subaccount SID is required; parent account is not allowed for hosting",
-    }
-
-  listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token, force_refresh=force_refresh)
-  if not listed.get("ok"):
-    return {
-      "enabled": True,
-      "found": False,
-      "phone_number": e164,
-      "sid": "",
-      "lookup_account_sid": lookup_sid,
-      "lookup_auth_token": lookup_token,
-      "status": str(listed.get("status", "Lookup failed")),
-    }
-
-  digits = "".join(ch for ch in e164 if ch.isdigit())
-  candidates = {e164, digits}
-  if len(digits) == 11 and digits.startswith("1"):
-    candidates.add(digits[1:])
-    candidates.add(f"+{digits[1:]}")
-
-  for number_item in listed.get("numbers", []) or []:
-    if not isinstance(number_item, dict):
+  for lookup_sid, lookup_token, _ in lookup_candidates:
+    if not lookup_sid or not lookup_token:
       continue
-    candidate = str(number_item.get("phone_number", "")).strip()
-    candidate_digits = "".join(ch for ch in candidate if ch.isdigit())
-    if candidate in candidates or candidate_digits in candidates:
-      return {
-        "enabled": True,
-        "found": True,
-        "phone_number": candidate or e164,
-        "sid": str(number_item.get("sid", "") or "").strip(),
-        "lookup_account_sid": lookup_sid,
-        "lookup_auth_token": lookup_token,
-        "status": "Found",
-      }
+    if TWILIO_ACCOUNT_SID and lookup_sid == TWILIO_ACCOUNT_SID and len(lookup_candidates) == 1:
+      continue
+
+    listed = _list_twilio_incoming_phone_numbers(lookup_sid, lookup_token, force_refresh=force_refresh)
+    if not listed.get("ok"):
+      continue
+
+    digits = "".join(ch for ch in e164 if ch.isdigit())
+    candidates = {e164, digits}
+    if len(digits) == 11 and digits.startswith("1"):
+      candidates.add(digits[1:])
+      candidates.add(f"+{digits[1:]}")
+
+    for number_item in listed.get("numbers", []) or []:
+      if not isinstance(number_item, dict):
+        continue
+      candidate = str(number_item.get("phone_number", "")).strip()
+      candidate_digits = "".join(ch for ch in candidate if ch.isdigit())
+      if candidate in candidates or candidate_digits in candidates:
+        return {
+          "enabled": True,
+          "found": True,
+          "phone_number": candidate or e164,
+          "sid": str(number_item.get("sid", "") or "").strip(),
+          "lookup_account_sid": lookup_sid,
+          "lookup_auth_token": lookup_token,
+          "status": "Found",
+        }
 
   return {
     "enabled": True,
     "found": False,
     "phone_number": e164,
     "sid": "",
-    "lookup_account_sid": lookup_sid,
-    "lookup_auth_token": lookup_token,
+    "lookup_account_sid": lookup_candidates[0][0] if lookup_candidates else "",
+    "lookup_auth_token": lookup_candidates[0][1] if lookup_candidates else "",
     "status": "Not Found",
   }
 
