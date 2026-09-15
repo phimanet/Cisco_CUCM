@@ -142,6 +142,9 @@ PERFMON_CALLMANAGER_CACHE_LOCK = threading.Lock()
 TWILIO_INCOMING_PHONE_NUMBER_CACHE = {}
 TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK = threading.Lock()
 TWILIO_INCOMING_PHONE_NUMBER_CACHE_TTL_SECONDS = 5 * 60
+TWILIO_ACCOUNT_LIST_CACHE = {"cached_at": 0.0, "accounts": []}
+TWILIO_ACCOUNT_LIST_CACHE_LOCK = threading.Lock()
+TWILIO_ACCOUNT_LIST_CACHE_TTL_SECONDS = 5 * 60
 TWILIO_MESSAGING_SERVICE_CACHE = {}
 TWILIO_MESSAGING_SERVICE_CACHE_LOCK = threading.Lock()
 TWILIO_MESSAGING_SERVICE_CACHE_TTL_SECONDS = 5 * 60
@@ -9263,6 +9266,7 @@ def _wants_json_response(request: Request) -> bool:
     "/strike-mask/options",
     "/strike-mask/in-use",
     "/lookup/sms-number-look",
+    "/twilio/all-accounts/number-inventory",
     "/twilio/amieweb/sms-host",
     "/twilio/amieweb/hosting-ready",
     "/ops/integrations/feasibility",
@@ -12042,7 +12046,12 @@ def _resolve_twilio_lookup_auth_token_for_sid(account_sid: str) -> str:
   return TWILIO_AUTH_TOKEN
 
 
-def _list_twilio_incoming_phone_numbers(lookup_sid: str, lookup_token: str, force_refresh: bool = False) -> dict:
+def _list_twilio_incoming_phone_numbers(
+  lookup_sid: str,
+  lookup_token: str,
+  force_refresh: bool = False,
+  auth_account_sid: str = "",
+) -> dict:
   if not lookup_sid or not lookup_token:
     return {"ok": False, "status": "Twilio account not configured", "numbers": []}
 
@@ -12069,7 +12078,7 @@ def _list_twilio_incoming_phone_numbers(lookup_sid: str, lookup_token: str, forc
         resp = requests.get(
           next_url,
           params=next_params,
-          auth=(lookup_sid, lookup_token),
+          auth=((auth_account_sid or lookup_sid), lookup_token),
           verify=False,
           timeout=20,
         )
@@ -12099,6 +12108,143 @@ def _list_twilio_incoming_phone_numbers(lookup_sid: str, lookup_token: str, forc
     return {"ok": True, "status": "OK", "numbers": cached_numbers}
   except Exception as exc:
     return {"ok": False, "status": f"Lookup error: {exc}", "numbers": []}
+
+
+def _list_twilio_accounts(force_refresh: bool = False) -> dict:
+  if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
+    return {"ok": False, "status": "Twilio parent account is not configured", "accounts": []}
+
+  now = time.time()
+  with TWILIO_ACCOUNT_LIST_CACHE_LOCK:
+    cached_at = float(TWILIO_ACCOUNT_LIST_CACHE.get("cached_at", 0) or 0)
+    if (not force_refresh) and cached_at and now - cached_at < TWILIO_ACCOUNT_LIST_CACHE_TTL_SECONDS:
+      return {"ok": True, "status": "OK", "accounts": list(TWILIO_ACCOUNT_LIST_CACHE.get("accounts", []) or [])}
+
+  accounts_by_sid = {
+    TWILIO_ACCOUNT_SID: {
+      "sid": TWILIO_ACCOUNT_SID,
+      "friendly_name": "Parent Account",
+      "status": "active",
+      "account_type": "Parent",
+    }
+  }
+  try:
+    next_url = "https://api.twilio.com/2010-04-01/Accounts.json"
+    next_params = {"PageSize": 100}
+    while next_url:
+      response = requests.get(
+        next_url,
+        params=next_params,
+        auth=(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN),
+        timeout=30,
+      )
+      if response.status_code != 200:
+        return {"ok": False, "status": f"Twilio account list failed HTTP {response.status_code}", "accounts": []}
+      payload = response.json() if response.text else {}
+      for account in payload.get("accounts", []) or []:
+        sid = str(account.get("sid", "") or "").strip()
+        if not sid:
+          continue
+        accounts_by_sid[sid] = {
+          "sid": sid,
+          "friendly_name": str(account.get("friendly_name", "") or "").strip() or sid,
+          "status": str(account.get("status", "") or "").strip() or "unknown",
+          "account_type": "Parent" if sid == TWILIO_ACCOUNT_SID else "Subaccount",
+        }
+      next_uri = str(payload.get("next_page_uri", "") or "").strip()
+      next_url = f"https://api.twilio.com{next_uri}" if next_uri.startswith("/") else (next_uri or None)
+      next_params = None
+  except Exception as exc:
+    return {"ok": False, "status": f"Twilio account list error: {exc}", "accounts": []}
+
+  accounts = sorted(
+    accounts_by_sid.values(),
+    key=lambda account: (0 if account["account_type"] == "Parent" else 1, account["friendly_name"].lower(), account["sid"]),
+  )
+  with TWILIO_ACCOUNT_LIST_CACHE_LOCK:
+    TWILIO_ACCOUNT_LIST_CACHE["cached_at"] = now
+    TWILIO_ACCOUNT_LIST_CACHE["accounts"] = list(accounts)
+  return {"ok": True, "status": "OK", "accounts": accounts}
+
+
+def _twilio_all_account_number_inventory(force_refresh: bool = False) -> dict:
+  account_result = _list_twilio_accounts(force_refresh=force_refresh)
+  if not account_result.get("ok"):
+    raise RuntimeError(str(account_result.get("status") or "Twilio account lookup failed"))
+
+  accounts = list(account_result.get("accounts", []) or [])
+  rows = []
+  failures = []
+
+  def load_account(account):
+    result = _list_twilio_incoming_phone_numbers(
+      str(account.get("sid", "") or ""),
+      TWILIO_AUTH_TOKEN,
+      force_refresh=force_refresh,
+      auth_account_sid=TWILIO_ACCOUNT_SID,
+    )
+    return account, result
+
+  max_workers = max(1, min(6, len(accounts)))
+  with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+    futures = [executor.submit(load_account, account) for account in accounts]
+    for future in concurrent.futures.as_completed(futures):
+      account, result = future.result()
+      if not result.get("ok"):
+        failures.append({
+          "account_name": account.get("friendly_name", ""),
+          "account_sid": account.get("sid", ""),
+          "error": result.get("status", "Twilio number lookup failed"),
+        })
+        continue
+      for number in result.get("numbers", []) or []:
+        capabilities = number.get("capabilities", {}) or {}
+        enabled_capabilities = [name.upper() for name in ("voice", "sms", "mms", "fax") if capabilities.get(name)]
+        rows.append({
+          "phone_number": str(number.get("phone_number", "") or "").strip(),
+          "friendly_name": str(number.get("friendly_name", "") or "").strip(),
+          "phone_sid": str(number.get("sid", "") or "").strip(),
+          "capabilities": ", ".join(enabled_capabilities),
+          "account_name": str(account.get("friendly_name", "") or "").strip(),
+          "account_sid": str(account.get("sid", "") or "").strip(),
+          "account_type": str(account.get("account_type", "") or "").strip(),
+          "account_status": str(account.get("status", "") or "").strip(),
+        })
+
+  rows.sort(key=lambda row: (row["account_name"].lower(), row["phone_number"], row["phone_sid"]))
+  return {
+    "accounts": accounts,
+    "rows": rows,
+    "failures": sorted(failures, key=lambda item: (item["account_name"].lower(), item["account_sid"])),
+  }
+
+
+@app.post("/twilio/all-accounts/number-inventory")
+def twilio_all_accounts_number_inventory_route(request: Request, force_refresh: str = Form("0")):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Not authorized for Twilio All Accounts Number Inventory."}, status_code=403)
+  try:
+    refresh = str(force_refresh or "").strip().lower() in {"1", "true", "yes", "on"}
+    inventory = _twilio_all_account_number_inventory(force_refresh=refresh)
+    account_count = len(inventory.get("accounts", []) or [])
+    number_count = len(inventory.get("rows", []) or [])
+    failure_count = len(inventory.get("failures", []) or [])
+    _append_audit_event(
+      action="twilio_all_accounts_number_inventory",
+      cucm_host=str(session.get("cucm_host", "") or ""),
+      operator=operator,
+      target=f"accounts={account_count};numbers={number_count};failures={failure_count};refresh={int(refresh)}",
+      inline_mode=True,
+    )
+    return JSONResponse({
+      "ok": True,
+      "summary": {"accounts": account_count, "numbers": number_count, "failures": failure_count},
+      **inventory,
+    })
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": f"Twilio inventory failed: {exc}"}, status_code=502)
 
 
 def _list_twilio_messaging_services(lookup_sid: str, lookup_token: str, force_refresh: bool = False) -> dict:
@@ -44784,6 +44930,7 @@ def page3_twilio_items(request: Request):
         <div class="portal-nav">
           __SMS_LOOK_MENU__
           __SMS_EXPERIMENTAL_MENU__
+          <button type="button" class="portal-nav-btn" data-panel="twilio-all-account-inventory">Twilio All Accounts Number Inventory</button>
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">AMIEWeb-Twilio Number Lookup</button>
           <a class="portal-nav-btn" href="/twilio/amieweb/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio Active Number Lookup</a>
           <a class="portal-nav-btn" href="/twilio/amieweb/messaging-webhook-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio - Messaging and Webhook</a>
@@ -44803,6 +44950,21 @@ def page3_twilio_items(request: Request):
         __SMS_LOOK_PANEL__
         __SMS_EXPERIMENTAL_PANEL__
         __AERIALINK_LOA_PANEL__
+        <section class="tool-panel" data-panel="twilio-all-account-inventory">
+          <div class="panel">
+            <h3>Twilio All Accounts Number Inventory</h3>
+            <p>Read-only inventory of Twilio Incoming Phone Numbers across the configured parent account and every accessible subaccount.</p>
+            <div class="search-filter-row">
+              <input id="twilio-inventory-filter" placeholder="Filter by number or account name" style="min-width:280px;">
+              <button type="button" id="twilio-inventory-load">Load Inventory</button>
+              <button type="button" id="twilio-inventory-refresh" style="background:linear-gradient(180deg,#385977,#29425a);">Refresh from Twilio</button>
+              <button type="button" id="twilio-inventory-download" disabled style="background:linear-gradient(180deg,#2f855a,#256b47);">Download CSV</button>
+            </div>
+            <p id="twilio-inventory-status" style="color:#2c5c8a;min-height:18px;margin-top:12px;">Click Load Inventory to list numbers and their owning Twilio account.</p>
+            <div id="twilio-inventory-failures" style="margin-bottom:10px;"></div>
+            <div id="twilio-inventory-results" style="overflow-x:auto;"></div>
+          </div>
+        </section>
         <section class="tool-panel" data-panel="twilio-lookup">
           <div class="panel">
             <h3>AMIEWeb-Twilio Number Lookup</h3>
@@ -45081,6 +45243,114 @@ def page3_twilio_items(request: Request):
             showPanel(firstButton.getAttribute("data-panel"));
           }
         }
+
+        // Twilio all-account number inventory.
+        (function () {
+          const filterEl = document.getElementById("twilio-inventory-filter");
+          const loadBtn = document.getElementById("twilio-inventory-load");
+          const refreshBtn = document.getElementById("twilio-inventory-refresh");
+          const downloadBtn = document.getElementById("twilio-inventory-download");
+          const statusEl = document.getElementById("twilio-inventory-status");
+          const failuresEl = document.getElementById("twilio-inventory-failures");
+          const resultsEl = document.getElementById("twilio-inventory-results");
+          if (!filterEl || !loadBtn || !refreshBtn || !downloadBtn || !statusEl || !failuresEl || !resultsEl) return;
+
+          let inventoryRows = [];
+          function escapeHtml(value) {
+            return String(value == null ? "" : value).replace(/[&<>"']/g, function (character) {
+              return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[character];
+            });
+          }
+          function csvCell(value) {
+            const text = String(value == null ? "" : value);
+            return /[",\r\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+          }
+          function filteredRows() {
+            const query = String(filterEl.value || "").trim().toLowerCase();
+            if (!query) return inventoryRows;
+            return inventoryRows.filter(function (row) {
+              return [row.phone_number, row.friendly_name, row.account_name, row.account_sid, row.phone_sid]
+                .some(function (value) { return String(value || "").toLowerCase().includes(query); });
+            });
+          }
+          function renderRows() {
+            const rows = filteredRows();
+            if (!rows.length) {
+              resultsEl.innerHTML = inventoryRows.length ? '<p style="color:#4e6a84;">No inventory rows match the current filter.</p>' : "";
+              return;
+            }
+            let html = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="background:#005eb8;color:#fff;">';
+            ["Phone Number", "Friendly Name", "Account", "Account Type", "Account Status", "Account SID", "Phone SID", "Capabilities"].forEach(function (heading) {
+              html += '<th style="padding:8px 10px;text-align:left;white-space:nowrap;">' + escapeHtml(heading) + '</th>';
+            });
+            html += "</tr></thead><tbody>";
+            rows.forEach(function (row, index) {
+              html += '<tr style="background:' + (index % 2 ? "#fff" : "#f7fbff") + ';border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px;font-family:Consolas,monospace;font-weight:700;">' + escapeHtml(row.phone_number || "-") + "</td>";
+              html += '<td style="padding:7px 10px;">' + escapeHtml(row.friendly_name || "-") + "</td>";
+              html += '<td style="padding:7px 10px;font-weight:700;">' + escapeHtml(row.account_name || "-") + "</td>";
+              html += '<td style="padding:7px 10px;">' + escapeHtml(row.account_type || "-") + "</td>";
+              html += '<td style="padding:7px 10px;">' + escapeHtml(row.account_status || "-") + "</td>";
+              html += '<td style="padding:7px 10px;font-family:Consolas,monospace;">' + escapeHtml(row.account_sid || "-") + "</td>";
+              html += '<td style="padding:7px 10px;font-family:Consolas,monospace;">' + escapeHtml(row.phone_sid || "-") + "</td>";
+              html += '<td style="padding:7px 10px;">' + escapeHtml(row.capabilities || "-") + "</td></tr>";
+            });
+            resultsEl.innerHTML = html + "</tbody></table>";
+          }
+          async function loadInventory(forceRefresh) {
+            loadBtn.disabled = true;
+            refreshBtn.disabled = true;
+            downloadBtn.disabled = true;
+            statusEl.textContent = forceRefresh ? "Refreshing all Twilio accounts and numbers..." : "Loading Twilio account inventory...";
+            failuresEl.innerHTML = "";
+            resultsEl.innerHTML = "";
+            try {
+              const formData = new FormData();
+              formData.append("force_refresh", forceRefresh ? "1" : "0");
+              const response = await fetch("/twilio/all-accounts/number-inventory", {method:"POST", body:formData, credentials:"same-origin"});
+              const payload = await response.json();
+              if (!response.ok || !payload.ok) throw new Error(payload.error || "Twilio inventory failed.");
+              inventoryRows = payload.rows || [];
+              const summary = payload.summary || {};
+              statusEl.textContent = "Accounts: " + String(summary.accounts || 0) + " | Numbers: " + String(summary.numbers || 0) + " | Account failures: " + String(summary.failures || 0);
+              const failures = payload.failures || [];
+              if (failures.length) {
+                failuresEl.innerHTML = '<div style="padding:9px 11px;border:1px solid #d7a4a4;background:#fff5f5;color:#8a1c1c;border-radius:6px;"><strong>Accounts not read:</strong> ' + failures.map(function (item) {
+                  return escapeHtml((item.account_name || item.account_sid || "Unknown") + ": " + (item.error || "Lookup failed"));
+                }).join(" | ") + "</div>";
+              }
+              downloadBtn.disabled = !inventoryRows.length;
+              renderRows();
+            } catch (error) {
+              inventoryRows = [];
+              statusEl.textContent = "Twilio inventory failed: " + error.message;
+            } finally {
+              loadBtn.disabled = false;
+              refreshBtn.disabled = false;
+            }
+          }
+          filterEl.addEventListener("input", renderRows);
+          loadBtn.addEventListener("click", function () { loadInventory(false); });
+          refreshBtn.addEventListener("click", function () { loadInventory(true); });
+          downloadBtn.addEventListener("click", function () {
+            const rows = filteredRows();
+            if (!rows.length) return;
+            const headers = ["Phone Number", "Friendly Name", "Account", "Account Type", "Account Status", "Account SID", "Phone SID", "Capabilities"];
+            const lines = [headers.map(csvCell).join(",")];
+            rows.forEach(function (row) {
+              lines.push([row.phone_number, row.friendly_name, row.account_name, row.account_type, row.account_status, row.account_sid, row.phone_sid, row.capabilities].map(csvCell).join(","));
+            });
+            const blob = new Blob([lines.join("\r\n") + "\r\n"], {type:"text/csv;charset=utf-8"});
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = "twilio_all_accounts_number_inventory.csv";
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+          });
+        })();
 
         // Twilio Inbound Verification Panel Handler
         function initTwilioInboundVerificationPanel(config) {

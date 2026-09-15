@@ -107,6 +107,12 @@ Priority keys:
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
 
+### 2026-09-15 (Twilio All Accounts Number Inventory)
+- Added a read-only SMS Item Menu panel that inventories Incoming Phone Numbers across the configured Twilio parent account and every accessible subaccount.
+- Account discovery and number retrieval preserve Twilio pagination, reuse five-minute caches, and use bounded parallel account reads with parent-account authentication.
+- Results identify each number's account name/type/status/SID plus friendly name, phone SID, and capabilities; optional filtering and CSV export are included.
+- Partial account failures remain visible without discarding numbers successfully loaded from other accounts.
+
 ### 2026-09-15 (Page 2 CUCM Route Plan Report)
 - Added an isolated, read-only Page 2 **CUCM Route Plan Report** for number/dial-string analysis.
 - Uses batched AXL `executeSQLQuery` against `numplan` and locally evaluates exact plus CUCM wildcard patterns (`X`, ranges, `!`, `?`, `@`, pre-dot, and escaped `+`).
