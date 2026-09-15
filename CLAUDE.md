@@ -113,6 +113,7 @@ Priority keys:
 - Results identify each number's account name/type/status/SID plus friendly name, phone SID, and capabilities; optional filtering and CSV export are included.
 - Partial account failures remain visible without discarding numbers successfully loaded from other accounts.
 - Fixed Page 3 navigation binding by preserving escaped CR/LF sequences in the embedded CSV JavaScript instead of rendering invalid literal line breaks.
+- Confirmed credential mapping: `TWILIO_ACCOUNT_SID` + `TWILIO_AUTH_TOKEN` are the AMN Healthcare parent pair; `TWILIO_SUBACCOUNT_SID` + `TWILIO_SUBACCOUNT_AUTH_TOKEN` are the AMNOne pair; Salesforce retains its dedicated SID/token pair.
 
 ### 2026-09-15 (Page 2 CUCM Route Plan Report)
 - Added an isolated, read-only Page 2 **CUCM Route Plan Report** for number/dial-string analysis.

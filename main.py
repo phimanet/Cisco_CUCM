@@ -499,6 +499,7 @@ GENESYS_GROUP_AUDIT_NOTIFY_RECIPIENTS = [
 ]
 TWILIO_ACCOUNT_SID = (os.getenv("TWILIO_ACCOUNT_SID", "") or "").strip()
 TWILIO_AUTH_TOKEN = (os.getenv("TWILIO_AUTH_TOKEN", "") or "").strip()
+TWILIO_PARENT_ACCOUNT_NAME = (os.getenv("TWILIO_PARENT_ACCOUNT_NAME", "AMN Healthcare") or "AMN Healthcare").strip()
 TWILIO_SUBACCOUNT_SID = (os.getenv("TWILIO_SUBACCOUNT_SID", "") or "").strip()
 TWILIO_SUBACCOUNT_AUTH_TOKEN = (os.getenv("TWILIO_SUBACCOUNT_AUTH_TOKEN", "") or "").strip()
 TWILIO_SUBACCOUNT_NAME = (os.getenv("TWILIO_SUBACCOUNT_NAME", "AMNOne-Notification-PROD") or "AMNOne-Notification-PROD").strip()
@@ -12123,7 +12124,7 @@ def _list_twilio_accounts(force_refresh: bool = False) -> dict:
   accounts_by_sid = {
     TWILIO_ACCOUNT_SID: {
       "sid": TWILIO_ACCOUNT_SID,
-      "friendly_name": "Parent Account",
+      "friendly_name": TWILIO_PARENT_ACCOUNT_NAME,
       "status": "active",
       "account_type": "Parent",
     }
