@@ -12237,6 +12237,7 @@ def twilio_all_accounts_number_inventory_route(request: Request, force_refresh: 
       cucm_host=str(session.get("cucm_host", "") or ""),
       operator=operator,
       target=f"accounts={account_count};numbers={number_count};failures={failure_count};refresh={int(refresh)}",
+      output_filename="",
       inline_mode=True,
     )
     return JSONResponse({
