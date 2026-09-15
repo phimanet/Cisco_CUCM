@@ -45263,7 +45263,7 @@ def page3_twilio_items(request: Request):
           }
           function csvCell(value) {
             const text = String(value == null ? "" : value);
-            return /[",\r\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+            return /[",\\r\\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
           }
           function filteredRows() {
             const query = String(filterEl.value || "").trim().toLowerCase();
@@ -45340,7 +45340,7 @@ def page3_twilio_items(request: Request):
             rows.forEach(function (row) {
               lines.push([row.phone_number, row.friendly_name, row.account_name, row.account_type, row.account_status, row.account_sid, row.phone_sid, row.capabilities].map(csvCell).join(","));
             });
-            const blob = new Blob([lines.join("\r\n") + "\r\n"], {type:"text/csv;charset=utf-8"});
+            const blob = new Blob([lines.join("\\r\\n") + "\\r\\n"], {type:"text/csv;charset=utf-8"});
             const url = URL.createObjectURL(blob);
             const link = document.createElement("a");
             link.href = url;

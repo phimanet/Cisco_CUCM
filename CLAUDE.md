@@ -112,6 +112,7 @@ Priority keys:
 - Account discovery and number retrieval preserve Twilio pagination, reuse five-minute caches, and use bounded parallel account reads with parent-account authentication.
 - Results identify each number's account name/type/status/SID plus friendly name, phone SID, and capabilities; optional filtering and CSV export are included.
 - Partial account failures remain visible without discarding numbers successfully loaded from other accounts.
+- Fixed Page 3 navigation binding by preserving escaped CR/LF sequences in the embedded CSV JavaScript instead of rendering invalid literal line breaks.
 
 ### 2026-09-15 (Page 2 CUCM Route Plan Report)
 - Added an isolated, read-only Page 2 **CUCM Route Plan Report** for number/dial-string analysis.
