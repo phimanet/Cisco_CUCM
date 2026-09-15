@@ -45589,7 +45589,7 @@ def page3_twilio_items(request: Request):
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">SMS Number</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Configured In</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Owning Account</th>';
             html += '</tr></thead><tbody>';
 
             rows.forEach(function (row, i) {
