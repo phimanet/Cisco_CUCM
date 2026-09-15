@@ -12010,45 +12010,17 @@ def _twilio_registry_lookup_accounts(account: str = "default") -> list[tuple[str
   else:
     add_candidate(TWILIO_SUBACCOUNT_SID, TWILIO_SUBACCOUNT_AUTH_TOKEN, TWILIO_SUBACCOUNT_NAME or "AMNOne subaccount")
 
-  for root in roots:
-    name = str(root.get("name", "") or "").strip()
-    sid = str(root.get("sid", "") or "").strip()
-    token = str(root.get("auth_token", "") or "").strip()
-    if not sid or not token:
-      continue
-    if preferred_sid and sid == preferred_sid:
-      add_candidate(sid, token, name)
-    elif preferred_name and name.strip().lower() == preferred_name:
-      add_candidate(sid, token, name)
-    elif sid == TWILIO_ACCOUNT_SID and sid != preferred_sid:
-      add_candidate(sid, token, name)
-    else:
-      add_candidate(sid, token, name)
-
-  if TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_ACCOUNT_SID not in seen:
-    add_candidate(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PARENT_ACCOUNT_NAME or "Parent account")
-
   return candidates
 
 
 def _resolve_twilio_lookup_account_sid() -> str:
-  """Choose subaccount SID for lookup if configured, else use primary account SID."""
-  candidates = _twilio_registry_lookup_accounts("default")
-  if candidates:
-    return candidates[0][0]
-  if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
-    return ""
-  return TWILIO_SUBACCOUNT_SID or TWILIO_ACCOUNT_SID
+  """Return the single configured AMIEWeb subaccount SID."""
+  return TWILIO_SUBACCOUNT_SID
 
 
 def _resolve_twilio_salesforce_account_sid() -> str:
-  """Choose Salesforce Enterprise Org Prod sub-account SID if configured."""
-  candidates = _twilio_registry_lookup_accounts("salesforce")
-  if candidates:
-    return candidates[0][0]
-  if not TWILIO_ACCOUNT_SID or not TWILIO_AUTH_TOKEN:
-    return ""
-  return TWILIO_SALESFORCE_SUBACCOUNT_SID or TWILIO_ACCOUNT_SID
+  """Return the single configured Salesforce Enterprise Org Prod SID."""
+  return TWILIO_SALESFORCE_SUBACCOUNT_SID
 
 
 def _resolve_twilio_lookup_auth_token_for_sid(account_sid: str) -> str:
@@ -12343,14 +12315,11 @@ def _lookup_twilio_number_direct(phone_number: str, account: str = "default") ->
   if not roots:
     return None
 
-  if account == "salesforce":
-    allowed_sids = {
-      str(TWILIO_SALESFORCE_SUBACCOUNT_SID or "").strip(),
-      str(TWILIO_ACCOUNT_SID or "").strip(),
-    }
-    roots = [root for root in roots if str(root.get("sid", "") or "").strip() in allowed_sids]
-    if not roots:
-      return None
+  allowed_sid = TWILIO_SALESFORCE_SUBACCOUNT_SID if account == "salesforce" else TWILIO_SUBACCOUNT_SID
+  allowed_sids = {str(allowed_sid or "").strip()}
+  roots = [root for root in roots if str(root.get("sid", "") or "").strip() in allowed_sids]
+  if not roots:
+    return None
 
   root_by_sid = {str(root.get("sid", "") or "").strip(): root for root in roots}
 
@@ -12398,7 +12367,11 @@ def _lookup_twilio_number_direct(phone_number: str, account: str = "default") ->
       root, result = root_future.result()
       if not result.get("ok"):
         continue
-      contexts = [build_context(root, account_context) for account_context in result.get("accounts", []) or []]
+      contexts = [
+        build_context(root, account_context)
+        for account_context in result.get("accounts", []) or []
+        if str(account_context.get("sid", "") or "").strip() in allowed_sids
+      ]
       with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(12, len(contexts)))) as account_executor:
         account_futures = [account_executor.submit(query_account, context) for context in contexts]
         for account_future in concurrent.futures.as_completed(account_futures):
