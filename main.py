@@ -9168,14 +9168,19 @@ def _check_aerialink_feasibility(force_refresh: bool = False) -> dict:
       ]
 
       probe_errors = []
+      probe_deadline = time.monotonic() + 15
       for attempt_url, attempt_params in probe_attempts:
+        remaining_seconds = probe_deadline - time.monotonic()
+        if remaining_seconds <= 0:
+          probe_errors.append("Aerialink preflight time budget exhausted")
+          break
         resp = requests.get(
           attempt_url,
           params=attempt_params,
           headers={"Accept": "application/json"},
           auth=HTTPBasicAuth(AERIALINK_USERNAME, AERIALINK_PASSWORD),
           verify=False,
-          timeout=20,
+          timeout=max(1, min(5, int(remaining_seconds))),
         )
 
         if resp.status_code == 200:
