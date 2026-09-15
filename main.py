@@ -53403,7 +53403,7 @@ def lookup_sms_number_look_route(
 
       def _build_platform_row(display_name: str, extension: str, telephone: str) -> dict:
         twilio_default = _lookup_twilio_number_by_phone(telephone, account="default", all_accounts=True)
-        aerialink = _lookup_aerialink_account_code_by_phone(telephone)
+        aerialink = {} if twilio_default.get("found") else _lookup_aerialink_account_code_by_phone(telephone)
         twilio_sfdc = {}
 
         found_in = []
