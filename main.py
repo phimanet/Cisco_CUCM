@@ -12304,12 +12304,12 @@ def _twilio_all_account_number_inventory(force_refresh: bool = False) -> dict:
     "failures": sorted(failures, key=lambda item: (item["account_name"].lower(), item["account_sid"])),
   }
 
-def _lookup_twilio_number_direct(phone_number: str, account: str = "default") -> dict | None:
+def _lookup_twilio_number_direct(phone_number: str, account: str = "default", all_accounts: bool = False) -> dict | None:
   e164 = _normalize_phone_to_e164(phone_number)
   if not e164:
     return None
 
-  cache_key = (account, e164)
+  cache_key = (account, e164, all_accounts)
   now = time.time()
   with TWILIO_DIRECT_LOOKUP_CACHE_LOCK:
     cached_result = TWILIO_DIRECT_LOOKUP_CACHE.get(cache_key)
@@ -12320,11 +12320,14 @@ def _lookup_twilio_number_direct(phone_number: str, account: str = "default") ->
   if not roots:
     return None
 
-  allowed_sid = TWILIO_SALESFORCE_SUBACCOUNT_SID if account == "salesforce" else TWILIO_SUBACCOUNT_SID
-  allowed_sids = {str(allowed_sid or "").strip()}
-  roots = [root for root in roots if str(root.get("sid", "") or "").strip() in allowed_sids]
-  if not roots:
-    return None
+  if all_accounts:
+    allowed_sids = set()
+  else:
+    allowed_sid = TWILIO_SALESFORCE_SUBACCOUNT_SID if account == "salesforce" else TWILIO_SUBACCOUNT_SID
+    allowed_sids = {str(allowed_sid or "").strip()}
+    roots = [root for root in roots if str(root.get("sid", "") or "").strip() in allowed_sids]
+    if not roots:
+      return None
 
   root_by_sid = {str(root.get("sid", "") or "").strip(): root for root in roots}
 
@@ -12375,7 +12378,7 @@ def _lookup_twilio_number_direct(phone_number: str, account: str = "default") ->
       contexts = [
         build_context(root, account_context)
         for account_context in result.get("accounts", []) or []
-        if str(account_context.get("sid", "") or "").strip() in allowed_sids
+        if all_accounts or str(account_context.get("sid", "") or "").strip() in allowed_sids
       ]
       with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, min(12, len(contexts)))) as account_executor:
         account_futures = [account_executor.submit(query_account, context) for context in contexts]
@@ -12960,7 +12963,7 @@ def _get_twilio_next_friendly_name_seed(account: str = "default") -> dict:
   return {"ok": True, "status": "OK", "date_prefix": date_prefix, "next_index": max_index + 1}
 
 
-def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", force_refresh: bool = False) -> dict:
+def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", force_refresh: bool = False, all_accounts: bool = False) -> dict:
   """Lookup Twilio IncomingPhoneNumbers by phone number; returns sid/number if found.
   
   Args:
@@ -13020,7 +13023,7 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
             "status": "Found in cached inventory",
           }
 
-  direct_result = _lookup_twilio_number_direct(e164, account=account)
+  direct_result = _lookup_twilio_number_direct(e164, account=account, all_accounts=all_accounts)
   if direct_result:
     return direct_result
 
@@ -13102,7 +13105,7 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
     }
 
     if not force_refresh:
-      return _lookup_twilio_number_by_phone(phone_number, account=account, force_refresh=True)
+      return _lookup_twilio_number_by_phone(phone_number, account=account, force_refresh=True, all_accounts=all_accounts)
 
     return not_found_payload
   except Exception as exc:
@@ -53399,13 +53402,9 @@ def lookup_sms_number_look_route(
       clean_first = (first_name or "").strip()
 
       def _build_platform_row(display_name: str, extension: str, telephone: str) -> dict:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-          twilio_default_future = executor.submit(_lookup_twilio_number_by_phone, telephone, "default")
-          twilio_sfdc_future = executor.submit(_lookup_twilio_number_by_phone, telephone, "salesforce")
-          aerialink_future = executor.submit(_lookup_aerialink_account_code_by_phone, telephone)
-          twilio_default = twilio_default_future.result()
-          twilio_sfdc = twilio_sfdc_future.result()
-          aerialink = aerialink_future.result()
+        twilio_default = _lookup_twilio_number_by_phone(telephone, account="default", all_accounts=True)
+        aerialink = _lookup_aerialink_account_code_by_phone(telephone)
+        twilio_sfdc = {}
 
         found_in = []
         if twilio_default.get("found") or twilio_sfdc.get("found"):
