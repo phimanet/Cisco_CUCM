@@ -45124,7 +45124,7 @@ def page3_twilio_items(request: Request):
     <header class="topbar">
       <div class="topbar-brand">
         <span class="brand-fallback">AMN Healthcare</span>
-        <strong>Voice Operations Portal - SIP Call Search</strong>
+        <strong>Voice Operations Portal</strong>
       </div>
       <div class="topbar-status">
         <span class="topbar-auth-pill">Authenticated Operator: __AUTH_USER__</span>
