@@ -45029,10 +45029,10 @@ def page3_twilio_items(request: Request):
         <div class="portal-nav">
           __SMS_LOOK_MENU__
           __SMS_EXPERIMENTAL_MENU__
-          <button type="button" class="portal-nav-btn" data-panel="twilio-all-account-inventory">Twilio All Accounts Number Inventory</button>
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">AMIEWeb-Twilio Number Lookup</button>
           <a class="portal-nav-btn" href="/twilio/amieweb/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio Active Number Lookup</a>
           <a class="portal-nav-btn" href="/twilio/amieweb/messaging-webhook-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio - Messaging and Webhook</a>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-all-account-inventory">Twilio All Accounts Number Inventory</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">SalesForce-Twilio Number Lookup</button>
           <a class="portal-nav-btn" href="/twilio/salesforce/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">SalesForce-Twilio Number Lookup</a>
           <a class="portal-nav-btn" href="/twilio/salesforce/configuration-page" style="display:block; box-sizing:border-box; text-decoration:none;">SalesForce-Twilio Configuration Lookup</a>
