@@ -88,6 +88,7 @@ Priority keys:
 - [x] Completed HTTPS cutover with internally signed enterprise certificate, Nginx TLS termination, and HTTP -> HTTPS redirect.
 
 ## Key Decisions
+- 2026-09-16: All portal web pages must use the Page 1 visual shell and navigation language: shared AMN top bar, responsive left-side menu, consistent buttons, spacing, colors, and authenticated navigation links. New pages must reuse existing page/menu patterns before introducing custom UI.
 - 2026-04-30: Use `CLAUDE.md` as the canonical running log for goals, pending tasks, and key decisions for this repository.
 - 2026-04-30: Treat current `main.py` routes and `toolkit/` scripts as the stable working baseline.
 - 2026-04-30: Prioritize reliability and maintainability improvements next, while preserving existing workflow behavior.
