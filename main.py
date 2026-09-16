@@ -188,6 +188,7 @@ def _startup_background_services():
   _start_genesys_cucm_sync_scheduler()
   _start_jabber_pool_scheduler()
   _start_expressway_certificate_notice_worker()
+  _start_ribbon_certificate_notice_worker()
 
 
 def _genesys_external_contact_load_update(job_id: str, **changes):
@@ -547,6 +548,7 @@ EXPRESSWAY_CERT_NOTICE_RECIPIENTS = [item.strip() for item in (os.getenv("EXPRES
 EXPRESSWAY_CERT_NOTICE_FROM = (os.getenv("EXPRESSWAY_CERT_NOTICE_FROM", "noreply@amnhealthcare.com") or "noreply@amnhealthcare.com").strip()
 EXPRESSWAY_CERT_NOTICE_ENABLED = (os.getenv("EXPRESSWAY_CERT_NOTICE_ENABLED", "true") or "true").strip().lower() in {"1", "true", "yes", "on"}
 EXPRESSWAY_CERT_NOTICE_STATE_PATH = (os.getenv("EXPRESSWAY_CERT_NOTICE_STATE_PATH", "") or "").strip() or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "expressway_cert_notice_state.json")
+RIBBON_CERT_NOTICE_STATE_PATH = (os.getenv("RIBBON_CERT_NOTICE_STATE_PATH", "") or "").strip() or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "ribbon_cert_notice_state.json")
 GENESYS_CLOUD_REGION = (os.getenv("GENESYS_CLOUD_REGION", "usw2") or "usw2").strip().lower()
 GENESYS_CLIENT_ID = (os.getenv("GENESYS_CLIENT_ID", "") or "").strip()
 GENESYS_CLIENT_SECRET = (os.getenv("GENESYS_CLIENT_SECRET", "") or "").strip()
@@ -981,6 +983,9 @@ DEFAULT_SETTINGS = {
     {"label": "Las Vegas Ribbon SBC 1", "host": "10.241.16.217"},
     {"label": "Reno Ribbon SBC 1", "host": "10.141.16.40"},
   ],
+  "ribbon_cert_notice_enabled": "true",
+  "ribbon_cert_notice_recipients": "",
+  "ribbon_cert_notice_from": "noreply@amnhealthcare.com",
 }
 SETTINGS_LOCK = threading.Lock()
 
@@ -39911,7 +39916,7 @@ def menu_admin_page(request: Request):
             <span>Live CUCM, Jabber registration, and Unity port telemetry.</span>
           </a>
           <a class="hero-link-card" href="/expressways">
-            <strong>Cisco Expressways</strong>
+            <strong>Cisco Expressway and Rbbn SBC</strong>
             <span>Production and LAB certificate, version, and call-status view.</span>
           </a>
           <a class="hero-link-card" href="/ribbon-sbc">
@@ -39978,7 +39983,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/sinch-work'">Sinch Admin Page</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">SMS Item Menu (Page 3)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">DN Prefix Settings</button>
-            <button type="button" class="portal-nav-btn portal-nav-btn-info" onclick="window.location.href='/expressways'">Cisco Expressway Status</button>
+            <button type="button" class="portal-nav-btn portal-nav-btn-info" onclick="window.location.href='/expressways'">Cisco Expressway and Rbbn SBC</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unityldapsync">Trigger Unity LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unity-user-extract">Unity Connection User Extract</button>
@@ -47605,6 +47610,7 @@ def _expressway_probe(host: str) -> dict:
 
   # Calls: probe /api/status/common/calls and /api/status/common/systeminfo (JSON REST API)
   # then fallback to /getxml?location=/Status
+  call_diag = []
   try:
     resp = requests.get(
       f"https://{clean_host}/api/status/common/systeminfo",
@@ -47613,14 +47619,15 @@ def _expressway_probe(host: str) -> dict:
       verify=False,
       timeout=2.5,
     )
+    call_diag.append(f"sysinfo:{resp.status_code}")
     if resp.status_code == 200:
       sdata = resp.json() if resp.text.strip().startswith(("{", "[")) else {}
       if isinstance(sdata, dict):
         cc = sdata.get("CurrentCalls")
         if cc is not None:
           result["voice_calls"] = str(cc)
-  except Exception:
-    pass
+  except Exception as e:
+    call_diag.append(f"sysinfo:err({type(e).__name__})")
 
   try:
     resp = requests.get(
@@ -47630,6 +47637,7 @@ def _expressway_probe(host: str) -> dict:
       verify=False,
       timeout=2.5,
     )
+    call_diag.append(f"calls:{resp.status_code}")
     if resp.status_code == 200:
       cdata = resp.json() if resp.text.strip().startswith(("{", "[")) else []
       if isinstance(cdata, list):
@@ -47643,8 +47651,8 @@ def _expressway_probe(host: str) -> dict:
               a_count += 1
         result["voice_calls"] = str(a_count)
         result["video_calls"] = str(v_count)
-  except Exception:
-    pass
+  except Exception as e:
+    call_diag.append(f"calls:err({type(e).__name__})")
 
   # Calls: query /getxml?location=/Status (timeout=2.5s)
   try:
@@ -47655,6 +47663,7 @@ def _expressway_probe(host: str) -> dict:
       verify=False,
       timeout=2.5,
     )
+    call_diag.append(f"getxml:{resp.status_code}")
     if resp.status_code == 200 and resp.text:
       root = ET.fromstring(resp.text)
       for tag in [".//Calls/Active/Audio", ".//Calls/Audio/Active", ".//Calls/Current/Audio", ".//Calls/Active"]:
@@ -47677,12 +47686,11 @@ def _expressway_probe(host: str) -> dict:
         if el is not None and (el.text or "").strip():
           result["peak_video_calls"] = el.text.strip()
           break
-    elif resp.status_code != 200:
-      if result["voice_calls"] == "Unavailable":
-        result["error"] = f"Calls API: HTTP {resp.status_code}"
-  except Exception as exc:
-    if result["voice_calls"] == "Unavailable":
-      result["error"] = f"Calls API: {exc}"
+  except Exception as e:
+    call_diag.append(f"getxml:err({type(e).__name__})")
+
+  if result["voice_calls"] == "Unavailable" and call_diag:
+    result["error"] = " | ".join(call_diag)
 
   return result
 
@@ -47692,18 +47700,14 @@ def _ribbon_sbc_configured_hosts() -> list[dict]:
   if not isinstance(configured, list) or not configured:
     configured = DEFAULT_SETTINGS.get("ribbon_sbc_hosts", [])
   hosts = []
-  total_slots = max(4, len(configured))
+  total_slots = 2
   default_labels = [
     "Las Vegas Ribbon SBC 1",
     "Reno Ribbon SBC 1",
-    "Las Vegas Ribbon SBC 2",
-    "Reno Ribbon SBC 2",
   ]
   default_hosts = [
     "10.241.16.217",
     "10.141.16.40",
-    "",
-    "",
   ]
   for index in range(total_slots):
     item = configured[index] if index < len(configured) and isinstance(configured[index], dict) else {}
@@ -47790,6 +47794,88 @@ def _ribbon_sbc_probe(host: str) -> dict:
     result["details"] = "TLS 443 Connected"
 
   return result
+
+
+RIBBON_CERT_NOTICE_LOCK = threading.Lock()
+
+
+def _ribbon_notice_state() -> dict:
+  try:
+    if os.path.exists(RIBBON_CERT_NOTICE_STATE_PATH):
+      with open(RIBBON_CERT_NOTICE_STATE_PATH, "r", encoding="utf-8") as handle:
+        value = json.load(handle)
+        return value if isinstance(value, dict) else {}
+  except Exception:
+    logger.exception("Failed to load Ribbon certificate notice state")
+  return {}
+
+
+def _ribbon_save_notice_state(state: dict) -> None:
+  os.makedirs(os.path.dirname(RIBBON_CERT_NOTICE_STATE_PATH), exist_ok=True)
+  temp_path = f"{RIBBON_CERT_NOTICE_STATE_PATH}.tmp"
+  with open(temp_path, "w", encoding="utf-8") as handle:
+    json.dump(state, handle, indent=2)
+  os.replace(temp_path, RIBBON_CERT_NOTICE_STATE_PATH)
+
+
+def _ribbon_send_due_certificate_notices() -> None:
+  notification_settings = _load_settings()
+  enabled = str(notification_settings.get("ribbon_cert_notice_enabled", "true") or "true").strip().lower() in {"1", "true", "yes", "on"}
+  recipients = [item.strip() for item in str(notification_settings.get("ribbon_cert_notice_recipients", "") or "").split(",") if item.strip()] or EXPRESSWAY_CERT_NOTICE_RECIPIENTS
+  sender = str(notification_settings.get("ribbon_cert_notice_from", "") or "").strip() or EXPRESSWAY_CERT_NOTICE_FROM
+  if not enabled or not recipients:
+    return
+  due = []
+  state = _ribbon_notice_state()
+  now = datetime.datetime.now(datetime.timezone.utc)
+  for item in _ribbon_sbc_configured_hosts():
+    if not item.get("host"):
+      continue
+    result = _ribbon_sbc_probe(item["host"])
+    days_remaining = result.get("days_remaining")
+    if not isinstance(days_remaining, int) or days_remaining < 0 or days_remaining > 30:
+      continue
+    key = item["host"].lower()
+    entry = state.get(key, {}) if isinstance(state.get(key), dict) else {}
+    expiry = str(result.get("certificate_expires", "") or "")
+    if entry.get("certificate_expires") != expiry:
+      entry = {"certificate_expires": expiry, "last_notified_at": ""}
+    last_notified = str(entry.get("last_notified_at", "") or "")
+    notify = not last_notified
+    if last_notified:
+      try:
+        notify = (now - datetime.datetime.fromisoformat(last_notified)).total_seconds() >= 7 * 86400
+      except ValueError:
+        notify = True
+    if notify:
+      due.append({**item, **result})
+      entry["last_notified_at"] = now.isoformat()
+    state[key] = entry
+  if not due:
+    return
+  body = "AMN Ribbon SBC certificate expiration notice\n\n"
+  body += "The following certificates have 30 or fewer days remaining:\n\n"
+  body += "\n".join(f"{item['label']} ({item['host']}): expires {item['certificate_expires']} ({item['days_remaining']} days remaining)" for item in due)
+  _send_smtp_email(sender, recipients, "AMN Ribbon SBC certificate expiration notice", body)
+  with RIBBON_CERT_NOTICE_LOCK:
+    _ribbon_save_notice_state(state)
+
+
+def _ribbon_certificate_notice_loop() -> None:
+  while True:
+    try:
+      _ribbon_send_due_certificate_notices()
+    except Exception:
+      logger.exception("Ribbon certificate notice worker failed")
+    time.sleep(24 * 60 * 60)
+
+
+def _start_ribbon_certificate_notice_worker() -> None:
+  if not _is_prod_runtime_host_strict():
+    logger.info("Ribbon certificate notices disabled on non-PROD runtime host")
+    return
+  thread = threading.Thread(target=_ribbon_certificate_notice_loop, name="ribbon-cert-notices", daemon=True)
+  thread.start()
 
 
 EXPRESSWAY_CERT_NOTICE_LOCK = threading.Lock()
@@ -47881,21 +47967,301 @@ def expressways_page(request: Request):
     return HTMLResponse(content="<h3>403 Forbidden</h3><p>You are not authorized to access Expressway status.</p>", status_code=403)
   rows = _expressway_configured_hosts()
   row_json = json.dumps(rows).replace("</", "<\\/")
-  page_template = '''<!doctype html><html><head><meta charset="utf-8"><title>Expressway Status</title><style>body{font-family:Segoe UI,Arial;background:#edf5fc;color:#12304a;margin:0}header{background:linear-gradient(90deg,#002f6c,#005eb8);color:white;padding:18px 24px}main{max-width:1500px;margin:22px auto;padding:0 18px}.toolbar{display:flex;gap:10px;margin:12px 0}button,a{padding:9px 13px;border:0;border-radius:6px;background:#005eb8;color:white;text-decoration:none;font-weight:700}table{width:100%;border-collapse:collapse;background:white;box-shadow:0 8px 20px #002f6c18}th{background:#005eb8;color:white;text-align:left;padding:9px}td{padding:8px;border-bottom:1px solid #c8dbee}.prod{border-left:5px solid #005eb8}.lab{border-left:5px solid #d97706}.ok{color:#16733b;font-weight:700}.bad{color:#a12626;font-weight:700}.warn-yellow{background:#fef08a !important;color:#854d0e !important;font-weight:700;}</style></head><body><header><strong>Cisco Expressway Status</strong><span style="float:right">Authenticated Operator: __USER__</span></header><main><h2>Expressway Certificate and Call Status</h2><p>Eight Production Expressways and two LAB Expressways. Certificate notices begin at 30 days and repeat every 7 days until renewal.</p><div class="toolbar"><button id="load">Refresh Status</button><a href="/settings">Expressway Settings</a><a href="/menu">Back to Main Menu</a></div><div id="status">Click Refresh Status.</div><div id="results"></div></main><script>const hosts=__HOSTS__;const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));function render(rows){let h='<table><tr><th>Environment</th><th>Expressway</th><th>Host</th><th>Reachability</th><th>Version</th><th>Certificate Expires</th><th>Days Remaining</th><th>Current Voice Calls</th><th>Current Video Calls</th><th>Peak Audio Calls</th><th>Peak Video Calls</th><th>Details</th></tr>';rows.forEach(r=>{const warnClass=(r.days_remaining!==null&&r.days_remaining!==undefined&&Number(r.days_remaining)<=30)?' class="warn-yellow"':'';h+='<tr class="'+(r.environment==='LAB'?'lab':'prod')+'"><td>'+esc(r.environment)+'</td><td>'+esc(r.label)+'</td><td>'+esc(r.host||'-')+'</td><td class="'+(r.reachable?'ok':'bad')+'">'+(r.reachable?'Reachable':'Unavailable')+'</td><td>'+esc(r.version)+'</td><td'+warnClass+'>'+esc(r.certificate_expires)+'</td><td'+warnClass+'>'+esc(r.days_remaining??'-')+'</td><td>'+esc(r.voice_calls)+'</td><td>'+esc(r.video_calls)+'</td><td>'+esc(r.peak_audio_calls)+'</td><td>'+esc(r.peak_video_calls)+'</td><td>'+esc(r.error||'-')+'</td></tr>'});document.getElementById('results').innerHTML=h+'</table>'}async function load(){document.getElementById('status').textContent='Loading Expressways...';try{const r=await fetch('/api/expressways/status',{credentials:'same-origin'});const text=await r.text();let p;try{p=JSON.parse(text);}catch(je){throw new Error('Server returned HTTP '+r.status+': '+text.slice(0,120));}if(!r.ok||!p.ok)throw new Error(p.error||('HTTP '+r.status));render(p.rows||[]);document.getElementById('status').textContent='Checked '+(p.rows||[]).length+' Expressways.';}catch(e){document.getElementById('status').textContent='Error: '+e.message;}}document.getElementById('load').onclick=()=>load();load();</script></body></html>'''
-  page_template = page_template.replace("</style>", ".topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 16px;background:linear-gradient(120deg,rgba(0,47,108,.98),rgba(0,94,184,.94));color:#fff;box-shadow:0 12px 28px rgba(0,47,108,.22)}.portal-shell{display:grid;grid-template-columns:250px minmax(0,1fr);gap:18px;max-width:1500px;margin:22px auto;padding:0 18px 30px}.portal-sidebar{background:linear-gradient(180deg,#002f6c,#005eb8);border-radius:12px;padding:12px;box-shadow:0 10px 24px rgba(0,47,108,.18);height:max-content}.portal-sidebar h4{color:#fff;margin:4px 8px 12px}.portal-nav-btn{display:block;width:100%;margin:0 0 8px;padding:10px 11px;border:1px solid rgba(255,255,255,.2);border-radius:8px;background:rgba(255,255,255,.12);color:#fff;text-align:left;font-weight:700;cursor:pointer}.portal-nav-btn:hover{background:#fff;color:#002f6c}.portal-main{min-width:0}.portal-main h2{margin-top:0}@media(max-width:900px){.portal-shell{grid-template-columns:1fr}.portal-sidebar{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.portal-sidebar h4{grid-column:1/-1}.portal-nav-btn{margin:0}}" + "</style>")
-  page_template = page_template.replace("<body><header>", "<body><header class=\"topbar\">")
-  page_template = page_template.replace("<main>", "<div class=\"portal-shell\"><aside class=\"portal-sidebar\"><h4>Voice Operations</h4><button class=\"portal-nav-btn\" onclick=\"location.href='/expressways'\">Cisco Expressway Status</button><button class=\"portal-nav-btn\" onclick=\"location.href='/ribbon-sbc'\">AMN Ribbon SBC</button><button class=\"portal-nav-btn\" onclick=\"location.href='/menu'\">Main Operations</button><button class=\"portal-nav-btn\" onclick=\"location.href='/page2'\">Administrative Items</button><button class=\"portal-nav-btn\" onclick=\"location.href='/page3'\">SMS Item Menu</button><button class=\"portal-nav-btn\" onclick=\"location.href='/dashboard'\">Voice Dashboard</button><button class=\"portal-nav-btn\" onclick=\"location.href='/settings'\">Settings</button><button class=\"portal-nav-btn\" onclick=\"location.href='/logout'\">Log Out</button></aside><main class=\"portal-main\">")
-  page_template = page_template.replace("</main><script>", "</main></div><script>")
-  notice_settings = _load_settings()
-  notice_enabled = str(notice_settings.get("expressway_cert_notice_enabled", "true") or "true").strip().lower() in {"1", "true", "yes", "on"}
-  notice_recipients = str(notice_settings.get("expressway_cert_notice_recipients", "") or "").strip()
-  notice_from = str(notice_settings.get("expressway_cert_notice_from", EXPRESSWAY_CERT_NOTICE_FROM) or EXPRESSWAY_CERT_NOTICE_FROM).strip()
-  notice_html = f'''<section style="background:#fff;border:1px solid #c8dbee;border-radius:8px;padding:14px;margin:14px 0;"><h3 style="margin:0 0 8px;color:#002f6c;">Certificate Notification Settings</h3><p style="margin:0 0 10px;color:#4e6a84;">PROD only. First email at 30 days remaining, then every 7 days until renewal.</p><label style="display:block;margin:6px 0;"><input id="expressway-notice-enabled" type="checkbox" {"checked" if notice_enabled else ""}> Turn notifications on/off</label><label style="display:block;margin:6px 0;">Recipients, comma-separated<input id="expressway-notice-recipients" value="{escape(notice_recipients)}" style="display:block;width:100%;box-sizing:border-box;padding:8px;margin-top:4px;"></label><label style="display:block;margin:6px 0;">From email<input id="expressway-notice-from" value="{escape(notice_from)}" style="display:block;width:100%;box-sizing:border-box;padding:8px;margin-top:4px;"></label><button id="expressway-notice-save" type="button" style="margin-top:8px;">Save Notification Settings</button><span id="expressway-notice-message" style="margin-left:10px;color:#16733b;"></span></section>'''
-  page_template = page_template
-  page_template = page_template.replace('<button class="portal-nav-btn" onclick="location.href=\'/menu\'">Main Operations</button>', '<button class="portal-nav-btn" onclick="location.href=\'/expressways/notifications\'">Expressway Certificate Notification Settings</button><button class="portal-nav-btn" onclick="location.href=\'/menu\'">Main Operations</button>')
-  save_script = "document.getElementById('expressway-notice-save').onclick=async()=>{const m=document.getElementById('expressway-notice-message');m.textContent='Saving...';try{const r=await fetch('/api/expressways/settings',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({enabled:document.getElementById('expressway-notice-enabled').checked,recipients:document.getElementById('expressway-notice-recipients').value,from:document.getElementById('expressway-notice-from').value})});const p=await r.json();m.textContent=p.ok?'Saved.':('Error: '+(p.error||'failed'));}catch(e){m.textContent='Error: '+e.message;}};"
-  page_template = page_template
-  return HTMLResponse(content=page_template.replace("__USER__", escape(str(session.get("username", "")))).replace("__HOSTS__", row_json))
+  auth_user = escape(str(session.get("username", "")))
+  auth_cucm_host = str(session.get("cucm_host", "") or "")
+  env_text, env_css_class = _get_environment_label(auth_cucm_host)
+  now_epoch = time.time()
+  has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
+  credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
+  credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
+
+  html = f'''<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Cisco Expressway and Rbbn SBC - Voice Operations Portal</title>
+  <style>
+    :root {{
+      --amn-blue: #005eb8;
+      --amn-navy: #002f6c;
+      --amn-sky: #eaf4ff;
+      --amn-text-soft: #4e6a84;
+      --amn-text: #12304a;
+      --amn-border: #c8dbee;
+      --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
+    }}
+    body {{
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      margin: 0;
+      background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+      color: var(--amn-text);
+    }}
+    .topbar {{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 16px;
+      background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94));
+      color: #fff;
+      box-shadow: 0 12px 28px rgba(0, 47, 108, 0.22);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+    }}
+    .topbar-brand {{ display: flex; align-items: center; gap: 12px; }}
+    .topbar-brand strong {{ font-size: 16px; letter-spacing: 0.2px; }}
+    .brand-fallback {{ font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; font-size: 12px; opacity: 0.86; }}
+    .topbar-status {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; }}
+    .topbar-status > * {{
+      display: inline-flex; align-items: center; min-height: 32px; padding: 6px 10px; border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.35); box-sizing: border-box; font-size: 11px; font-weight: 700; line-height: 1.1;
+    }}
+    .topbar-auth-pill {{ background: rgba(255, 255, 255, 0.12); color: #fff; }}
+    .topbar-status .env-banner {{ background: rgba(255, 255, 255, 0.12); color: #fff; border-color: rgba(255, 255, 255, 0.35); }}
+    .topbar-status .session-timer {{
+      background: linear-gradient(180deg, #fff4df, #ffdca3); color: #6a3c00; border-color: #f0b44a; box-shadow: 0 6px 12px rgba(198, 138, 18, 0.22);
+    }}
+    .topbar-actions {{ display: flex; align-items: center; gap: 10px; }}
+    .topbar-btn {{
+      display: inline-block; padding: 7px 12px; border-radius: 10px; font-size: 12px; font-weight: 700; text-decoration: none;
+      border: 1px solid rgba(255, 255, 255, 0.65); transition: transform 0.18s ease;
+    }}
+    .topbar-btn-login {{ color: #fff; background: rgba(255, 255, 255, 0.1); }}
+    .topbar-btn-logout {{ color: #fff; background: linear-gradient(180deg, #cb3b2f, #9f2018); border-color: #f0a79c; }}
+    .content {{ max-width: 1500px; margin: 8px auto 14px auto; padding: 0 12px 12px 12px; }}
+    .page-hero {{
+      padding: 12px 14px; margin-bottom: 10px; border-radius: 12px;
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95));
+      border: 1px solid rgba(0, 47, 108, 0.1); box-shadow: var(--amn-shadow);
+    }}
+    .page-title-row {{ display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }}
+    .page-title {{ margin: 0; color: var(--amn-navy); font-size: 22px; line-height: 1.1; }}
+    .page-subtitle {{ margin: 4px 0 0 0; color: var(--amn-text-soft); font-size: 12px; }}
+    .page-meta-card {{
+      min-width: 180px; padding: 8px 10px; border-radius: 10px;
+      background: linear-gradient(180deg, rgba(0, 47, 108, 0.96), rgba(0, 94, 184, 0.92));
+      color: #fff; box-shadow: 0 14px 28px rgba(0, 47, 108, 0.22);
+    }}
+    .page-meta-label {{ font-size: 10px; font-weight: 800; text-transform: uppercase; opacity: 0.76; }}
+    .page-meta-value {{ font-size: 14px; font-weight: 700; margin-top: 2px; }}
+    .hero-link-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-top: 8px; }}
+    .hero-link-card {{
+      display: block; padding: 7px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.9);
+      border: 1px solid rgba(0, 47, 108, 0.1); color: inherit; text-decoration: none; box-shadow: 0 10px 20px rgba(0, 47, 108, 0.06);
+    }}
+    .hero-link-card:hover {{ transform: translateY(-2px); border-color: rgba(0, 94, 184, 0.3); }}
+    .hero-link-card strong {{ display: block; color: var(--amn-navy); font-size: 12px; }}
+    .portal-shell {{ display: grid; grid-template-columns: 244px minmax(0, 1fr); gap: 10px; align-items: start; margin-top: 8px; }}
+    .portal-sidebar {{
+      position: sticky; top: 54px;
+      background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
+      border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 8px; box-shadow: 0 18px 36px rgba(0, 47, 108, 0.18);
+    }}
+    .portal-sidebar h4 {{ margin: 4px 6px 8px 6px; color: #fff; font-size: 13px; }}
+    .portal-nav {{ display: flex; flex-direction: column; gap: 6px; }}
+    .portal-nav-btn {{
+      width: 100%; text-align: left; background: rgba(255, 255, 255, 0.09); color: rgba(255, 255, 255, 0.94);
+      border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 8px; padding: 7px 8px; font-size: 12px; font-weight: 600; cursor: pointer;
+    }}
+    .portal-nav-btn:hover {{ background: rgba(255, 255, 255, 0.16); }}
+    .portal-nav-btn.active {{ background: #fff; color: var(--amn-navy); font-weight: 700; }}
+    .portal-main {{ min-width: 0; background: #fff; border: 1px solid var(--amn-border); border-radius: 12px; padding: 14px; box-shadow: var(--amn-shadow); }}
+    .toolbar {{ display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }}
+    .btn-action {{
+      padding: 8px 14px; border: 0; border-radius: 6px; background: var(--amn-blue); color: white;
+      text-decoration: none; font-weight: 700; cursor: pointer; font-size: 12px;
+    }}
+    .btn-action:hover {{ background: var(--amn-navy); }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
+    th {{ background: var(--amn-blue); color: white; text-align: left; padding: 8px 10px; }}
+    td {{ padding: 7px 10px; border-bottom: 1px solid var(--amn-border); }}
+    .prod {{ border-left: 4px solid var(--amn-blue); }}
+    .lab {{ border-left: 4px solid #d97706; }}
+    .ok {{ color: #16733b; font-weight: 700; }}
+    .bad {{ color: #a12626; font-weight: 700; }}
+    .warn-yellow {{ background: #fef08a !important; color: #854d0e !important; font-weight: 700; }}
+    @media(max-width:900px){{
+      .portal-shell {{ grid-template-columns: 1fr; }}
+    }}
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand">
+      <span class="brand-fallback">AMN Healthcare</span>
+      <strong>Voice Operations Portal</strong>
+    </div>
+    <div class="topbar-status">
+      <span class="topbar-auth-pill">Authenticated Operator: {auth_user}</span>
+      <div class="env-banner {env_css_class}">{env_text}</div>
+      <div id="session-timer-banner" class="session-timer" aria-live="polite">
+        <span class="timer-label">Auto logout in:</span>
+        <span id="session-timer-remaining" class="timer-value"></span>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <a class="topbar-btn topbar-btn-login" href="/">Log In</a>
+      <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
+    </div>
+  </header>
+
+  <script>
+    (function () {{
+      const hasCachedCucmPassword = {"true" if has_cached_cucm_pass else "false"};
+      const credentialExpiresAtMs = {credential_expires_at_ms};
+      const banner = document.getElementById("session-timer-banner");
+      const remaining = document.getElementById("session-timer-remaining");
+      if (!hasCachedCucmPassword || !banner || !remaining || !credentialExpiresAtMs) {{ return; }}
+      function fmt(totalSeconds) {{
+        const safe = Math.max(0, Math.floor(totalSeconds));
+        const h = Math.floor(safe / 3600);
+        const m = Math.floor((safe % 3600) / 60);
+        const s = safe % 60;
+        return `${{String(h).padStart(2, "0")}}:${{String(m).padStart(2, "0")}}:${{String(s).padStart(2, "0")}}`;
+      }}
+      banner.style.display = "flex";
+      const tick = () => {{
+        const ms = credentialExpiresAtMs - Date.now();
+        if (ms <= 0) {{ remaining.textContent = "Expired"; window.location.href = "/logout"; return; }}
+        remaining.textContent = fmt(ms / 1000);
+      }};
+      tick();
+      window.setInterval(tick, 1000);
+    }})();
+  </script>
+
+  <main class="content">
+    <section class="page-hero">
+      <div class="page-title-row">
+        <div class="page-title-block">
+          <h2 class="page-title">Cisco Expressway and Rbbn SBC</h2>
+          <p class="page-subtitle">Server certificates, reachability, call activity, and automated renewal notices.</p>
+        </div>
+        <div class="page-meta-card">
+          <span class="page-meta-label">Monitoring</span>
+          <span class="page-meta-value">10 Expressways</span>
+          <p style="margin:2px 0 0 0;font-size:10px;opacity:0.85;">8 Production + 2 LAB</p>
+        </div>
+      </div>
+      <div class="hero-link-grid">
+        <a class="hero-link-card" href="/menu">
+          <strong>Main Operations</strong>
+          <span>Return to core user workflows.</span>
+        </a>
+        <a class="hero-link-card" href="/page2">
+          <strong>Administrative Items</strong>
+          <span>Bulk actions and utilities.</span>
+        </a>
+        <a class="hero-link-card" href="/expressways">
+          <strong>Cisco Expressway Status</strong>
+          <span>Expressway monitoring view.</span>
+        </a>
+        <a class="hero-link-card" href="/ribbon-sbc">
+          <strong>AMN Ribbon SBC</strong>
+          <span>Ribbon SBC certificate view.</span>
+        </a>
+        <a class="hero-link-card" href="/dashboard">
+          <strong>Voice Dashboard</strong>
+          <span>Live telemetry overview.</span>
+        </a>
+        <a class="hero-link-card" href="/settings">
+          <strong>Settings</strong>
+          <span>Configure hosts & prefixes.</span>
+        </a>
+      </div>
+    </section>
+
+    <div class="portal-shell">
+      <aside class="portal-sidebar">
+        <h4>Operations Menu</h4>
+        <div class="portal-nav">
+          <button type="button" class="portal-nav-btn active" onclick="location.href='/expressways'">Cisco Expressway Status</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/ribbon-sbc'">AMN Ribbon SBC</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/expressways/notifications'">Expressway Certificate Notifications</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/menu'">Main Operations (Page 1)</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/page2'">Administrative Items (Page 2)</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/page3'">SMS Item Menu (Page 3)</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/settings'">Settings</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/logout'">Log Out</button>
+        </div>
+      </aside>
+
+      <section class="portal-main">
+        <h3 style="margin-top:0;color:var(--amn-navy);">Expressway Certificate and Call Status</h3>
+        <p style="color:var(--amn-text-soft);font-size:12px;margin-top:2px;">Eight Production Expressways and two LAB Expressways. Certificate notices begin at 30 days and repeat every 7 days until renewal.</p>
+        <div class="toolbar">
+          <button id="load" class="btn-action">Refresh Status</button>
+          <a href="/settings" class="btn-action" style="background:#2563eb;">Expressway Settings</a>
+          <a href="/expressways/notifications" class="btn-action" style="background:#0e7490;">Notification Settings</a>
+          <a href="/menu" class="btn-action" style="background:#4e6a84;">Back to Main Menu</a>
+        </div>
+        <div id="status" style="margin:6px 0;font-weight:600;color:var(--amn-text-soft);font-size:12px;">Click Refresh Status.</div>
+        <div id="results" style="overflow-x:auto;"></div>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    const hosts = {row_json};
+    const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}}[c]));
+
+    function render(rows) {{
+      let h = '<table><thead><tr>' +
+        '<th>Environment</th>' +
+        '<th>Expressway</th>' +
+        '<th>Host</th>' +
+        '<th>Reachability</th>' +
+        '<th>Version</th>' +
+        '<th>Certificate Expires</th>' +
+        '<th>Days Remaining</th>' +
+        '<th>Current Voice Calls</th>' +
+        '<th>Current Video Calls</th>' +
+        '<th>Peak Audio Calls</th>' +
+        '<th>Peak Video Calls</th>' +
+        '<th>Details</th>' +
+        '</tr></thead><tbody>';
+
+      rows.forEach(r => {{
+        const warnClass = (r.days_remaining !== null && r.days_remaining !== undefined && Number(r.days_remaining) <= 30) ? ' class="warn-yellow"' : '';
+        h += '<tr class="' + (r.environment === 'LAB' ? 'lab' : 'prod') + '">' +
+          '<td>' + esc(r.environment) + '</td>' +
+          '<td><strong>' + esc(r.label) + '</strong></td>' +
+          '<td><code>' + esc(r.host || '-') + '</code></td>' +
+          '<td class="' + (r.reachable ? 'ok' : 'bad') + '">' + (r.reachable ? 'Reachable' : 'Unavailable') + '</td>' +
+          '<td>' + esc(r.version) + '</td>' +
+          '<td' + warnClass + '>' + esc(r.certificate_expires) + '</td>' +
+          '<td' + warnClass + '>' + esc(r.days_remaining ?? '-') + '</td>' +
+          '<td>' + esc(r.voice_calls) + '</td>' +
+          '<td>' + esc(r.video_calls) + '</td>' +
+          '<td>' + esc(r.peak_audio_calls) + '</td>' +
+          '<td>' + esc(r.peak_video_calls) + '</td>' +
+          '<td>' + esc(r.error || '-') + '</td>' +
+          '</tr>';
+      }});
+      h += '</tbody></table>';
+      document.getElementById('results').innerHTML = h;
+    }}
+
+    async function load() {{
+      document.getElementById('status').textContent = 'Loading Expressways...';
+      try {{
+        const r = await fetch('/api/expressways/status', {{ credentials: 'same-origin' }});
+        const text = await r.text();
+        let p;
+        try {{ p = JSON.parse(text); }} catch (je) {{ throw new Error('Server returned HTTP ' + r.status + ': ' + text.slice(0, 120)); }}
+        if (!r.ok || !p.ok) throw new Error(p.error || ('HTTP ' + r.status));
+        render(p.rows || []);
+        document.getElementById('status').textContent = 'Checked ' + (p.rows || []).length + ' Expressways.';
+      }} catch (e) {{
+        document.getElementById('status').textContent = 'Error: ' + e.message;
+      }}
+    }}
+
+    document.getElementById('load').onclick = () => load();
+    load();
+  </script>
+</body>
+</html>'''
+  return HTMLResponse(content=html)
 
 
 @app.get("/expressways/notifications", response_class=HTMLResponse)
@@ -47972,120 +48338,240 @@ def expressways_status_api(request: Request):
 @app.get("/ribbon-sbc", response_class=HTMLResponse)
 def ribbon_sbc_page(request: Request):
   session = _get_auth_session(request) or {}
-  auth_user = str(session.get("username", ""))
-  if not _is_admin_user(auth_user):
+  auth_user = escape(str(session.get("username", "")))
+  if not _is_admin_user(str(session.get("username", ""))):
     return HTMLResponse(content="<h3>403 Forbidden</h3><p>You are not authorized to access Ribbon SBC status.</p>", status_code=403)
   rows = _ribbon_sbc_configured_hosts()
   row_json = json.dumps(rows).replace("</", "<\\/")
-  html = f'''<!doctype html>
+  auth_cucm_host = str(session.get("cucm_host", "") or "")
+  env_text, env_css_class = _get_environment_label(auth_cucm_host)
+  now_epoch = time.time()
+  has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", now_epoch)
+  credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
+  credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
+
+  html = f'''<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8">
-  <title>AMN Ribbon SBC Status</title>
+  <title>AMN Ribbon SBC - Voice Operations Portal</title>
   <style>
-    body {{ font-family: Segoe UI, Arial, sans-serif; background: #edf5fc; color: #12304a; margin: 0; }}
+    :root {{
+      --amn-blue: #005eb8;
+      --amn-navy: #002f6c;
+      --amn-sky: #eaf4ff;
+      --amn-text-soft: #4e6a84;
+      --amn-text: #12304a;
+      --amn-border: #c8dbee;
+      --amn-shadow: 0 14px 30px rgba(0, 47, 108, 0.11);
+    }}
+    body {{
+      font-family: "Segoe UI", Tahoma, Arial, sans-serif;
+      margin: 0;
+      background: linear-gradient(180deg, #f7fbff 0%, #edf5fc 100%);
+      color: var(--amn-text);
+    }}
     .topbar {{
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
       padding: 10px 16px;
-      background: linear-gradient(120deg, rgba(0,47,108,.98), rgba(0,94,184,.94));
+      background: linear-gradient(120deg, rgba(0, 47, 108, 0.98), rgba(0, 94, 184, 0.94));
       color: #fff;
-      box-shadow: 0 12px 28px rgba(0,47,108,.22);
+      box-shadow: 0 12px 28px rgba(0, 47, 108, 0.22);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.16);
     }}
-    .topbar strong {{ font-size: 16px; }}
-    .portal-shell {{
-      display: grid;
-      grid-template-columns: 250px minmax(0, 1fr);
-      gap: 18px;
-      max-width: 1500px;
-      margin: 22px auto;
-      padding: 0 18px 30px;
+    .topbar-brand {{ display: flex; align-items: center; gap: 12px; }}
+    .topbar-brand strong {{ font-size: 16px; letter-spacing: 0.2px; }}
+    .brand-fallback {{ font-weight: 700; letter-spacing: 0.6px; text-transform: uppercase; font-size: 12px; opacity: 0.86; }}
+    .topbar-status {{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; }}
+    .topbar-status > * {{
+      display: inline-flex; align-items: center; min-height: 32px; padding: 6px 10px; border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.35); box-sizing: border-box; font-size: 11px; font-weight: 700; line-height: 1.1;
     }}
+    .topbar-auth-pill {{ background: rgba(255, 255, 255, 0.12); color: #fff; }}
+    .topbar-status .env-banner {{ background: rgba(255, 255, 255, 0.12); color: #fff; border-color: rgba(255, 255, 255, 0.35); }}
+    .topbar-status .session-timer {{
+      background: linear-gradient(180deg, #fff4df, #ffdca3); color: #6a3c00; border-color: #f0b44a; box-shadow: 0 6px 12px rgba(198, 138, 18, 0.22);
+    }}
+    .topbar-actions {{ display: flex; align-items: center; gap: 10px; }}
+    .topbar-btn {{
+      display: inline-block; padding: 7px 12px; border-radius: 10px; font-size: 12px; font-weight: 700; text-decoration: none;
+      border: 1px solid rgba(255, 255, 255, 0.65); transition: transform 0.18s ease;
+    }}
+    .topbar-btn-login {{ color: #fff; background: rgba(255, 255, 255, 0.1); }}
+    .topbar-btn-logout {{ color: #fff; background: linear-gradient(180deg, #cb3b2f, #9f2018); border-color: #f0a79c; }}
+    .content {{ max-width: 1500px; margin: 8px auto 14px auto; padding: 0 12px 12px 12px; }}
+    .page-hero {{
+      padding: 12px 14px; margin-bottom: 10px; border-radius: 12px;
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.95));
+      border: 1px solid rgba(0, 47, 108, 0.1); box-shadow: var(--amn-shadow);
+    }}
+    .page-title-row {{ display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }}
+    .page-title {{ margin: 0; color: var(--amn-navy); font-size: 22px; line-height: 1.1; }}
+    .page-subtitle {{ margin: 4px 0 0 0; color: var(--amn-text-soft); font-size: 12px; }}
+    .page-meta-card {{
+      min-width: 180px; padding: 8px 10px; border-radius: 10px;
+      background: linear-gradient(180deg, rgba(0, 47, 108, 0.96), rgba(0, 94, 184, 0.92));
+      color: #fff; box-shadow: 0 14px 28px rgba(0, 47, 108, 0.22);
+    }}
+    .page-meta-label {{ font-size: 10px; font-weight: 800; text-transform: uppercase; opacity: 0.76; }}
+    .page-meta-value {{ font-size: 14px; font-weight: 700; margin-top: 2px; }}
+    .hero-link-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-top: 8px; }}
+    .hero-link-card {{
+      display: block; padding: 7px 10px; border-radius: 10px; background: rgba(255, 255, 255, 0.9);
+      border: 1px solid rgba(0, 47, 108, 0.1); color: inherit; text-decoration: none; box-shadow: 0 10px 20px rgba(0, 47, 108, 0.06);
+    }}
+    .hero-link-card:hover {{ transform: translateY(-2px); border-color: rgba(0, 94, 184, 0.3); }}
+    .hero-link-card strong {{ display: block; color: var(--amn-navy); font-size: 12px; }}
+    .portal-shell {{ display: grid; grid-template-columns: 244px minmax(0, 1fr); gap: 10px; align-items: start; margin-top: 8px; }}
     .portal-sidebar {{
-      background: linear-gradient(180deg, #002f6c, #005eb8);
-      border-radius: 12px;
-      padding: 12px;
-      box-shadow: 0 10px 24px rgba(0,47,108,.18);
-      height: max-content;
+      position: sticky; top: 54px;
+      background: linear-gradient(180deg, rgba(0, 47, 108, 0.97), rgba(7, 75, 138, 0.96));
+      border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 12px; padding: 8px; box-shadow: 0 18px 36px rgba(0, 47, 108, 0.18);
     }}
-    .portal-sidebar h4 {{ color: #fff; margin: 4px 8px 12px; font-size: 15px; }}
+    .portal-sidebar h4 {{ margin: 4px 6px 8px 6px; color: #fff; font-size: 13px; }}
+    .portal-nav {{ display: flex; flex-direction: column; gap: 6px; }}
     .portal-nav-btn {{
-      display: block;
-      width: 100%;
-      margin: 0 0 8px;
-      padding: 10px 11px;
-      border: 1px solid rgba(255,255,255,.2);
-      border-radius: 8px;
-      background: rgba(255,255,255,.12);
-      color: #fff;
-      text-align: left;
-      font-weight: 700;
-      cursor: pointer;
-      box-sizing: border-box;
-      font-size: 13px;
+      width: 100%; text-align: left; background: rgba(255, 255, 255, 0.09); color: rgba(255, 255, 255, 0.94);
+      border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 8px; padding: 7px 8px; font-size: 12px; font-weight: 600; cursor: pointer;
     }}
-    .portal-nav-btn:hover {{ background: #fff; color: #002f6c; }}
-    .portal-main {{ min-width: 0; }}
-    .portal-main h2 {{ margin-top: 0; color: #002f6c; }}
-    .toolbar {{ display: flex; gap: 10px; margin: 14px 0; align-items: center; }}
-    button.btn-action, a.btn-action {{
-      padding: 9px 15px;
-      border: 0;
-      border-radius: 6px;
-      background: #005eb8;
-      color: white;
-      text-decoration: none;
-      font-weight: 700;
-      cursor: pointer;
-      display: inline-block;
-      font-size: 13px;
+    .portal-nav-btn:hover {{ background: rgba(255, 255, 255, 0.16); }}
+    .portal-nav-btn.active {{ background: #fff; color: var(--amn-navy); font-weight: 700; }}
+    .portal-main {{ min-width: 0; background: #fff; border: 1px solid var(--amn-border); border-radius: 12px; padding: 14px; box-shadow: var(--amn-shadow); }}
+    .toolbar {{ display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap; }}
+    .btn-action {{
+      padding: 8px 14px; border: 0; border-radius: 6px; background: var(--amn-blue); color: white;
+      text-decoration: none; font-weight: 700; cursor: pointer; font-size: 12px;
     }}
-    button.btn-action:hover, a.btn-action:hover {{ background: #002f6c; }}
-    table {{ width: 100%; border-collapse: collapse; background: white; box-shadow: 0 8px 20px rgba(0,47,108,.1); border-radius: 8px; overflow: hidden; }}
-    th {{ background: #005eb8; color: white; text-align: left; padding: 10px 12px; font-size: 13px; }}
-    td {{ padding: 9px 12px; border-bottom: 1px solid #c8dbee; font-size: 13px; }}
-    tr:last-child td {{ border-bottom: none; }}
+    .btn-action:hover {{ background: var(--amn-navy); }}
+    table {{ width: 100%; border-collapse: collapse; font-size: 12px; }}
+    th {{ background: var(--amn-blue); color: white; text-align: left; padding: 8px 10px; }}
+    td {{ padding: 7px 10px; border-bottom: 1px solid var(--amn-border); }}
     .ok {{ color: #16733b; font-weight: 700; }}
     .bad {{ color: #a12626; font-weight: 700; }}
-    .warn-yellow {{ background: #fef08a !important; color: #854d0e !important; font-weight: 700; padding: 3px 6px; border-radius: 4px; }}
-    #status {{ margin: 8px 0; font-weight: 600; color: #4e6a84; font-size: 13px; }}
+    .warn-yellow {{ background: #fef08a !important; color: #854d0e !important; font-weight: 700; }}
     @media(max-width:900px){{
       .portal-shell {{ grid-template-columns: 1fr; }}
-      .portal-sidebar {{ display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }}
-      .portal-sidebar h4 {{ grid-column: 1 / -1; }}
-      .portal-nav-btn {{ margin: 0; }}
     }}
   </style>
 </head>
 <body>
   <header class="topbar">
-    <strong>AMN Ribbon SBC Status</strong>
-    <span>Authenticated Operator: {escape(auth_user)}</span>
-  </header>
-  <div class="portal-shell">
-    <aside class="portal-sidebar">
-      <h4>Voice Operations</h4>
-      <button class="portal-nav-btn" onclick="location.href='/expressways'">Cisco Expressway Status</button>
-      <button class="portal-nav-btn" onclick="location.href='/ribbon-sbc'">AMN Ribbon SBC</button>
-      <button class="portal-nav-btn" onclick="location.href='/menu'">Main Operations</button>
-      <button class="portal-nav-btn" onclick="location.href='/page2'">Administrative Items</button>
-      <button class="portal-nav-btn" onclick="location.href='/settings'">Settings</button>
-      <button class="portal-nav-btn" onclick="location.href='/logout'">Log Out</button>
-    </aside>
-    <main class="portal-main">
-      <h2>Ribbon SBC Certificate and Reachability Status</h2>
-      <p style="color:#4e6a84;">Live monitoring for AMN Ribbon Session Border Controllers (Las Vegas and Reno SBCs). Probes TLS port 443 connectivity, certificate expiration, and days remaining.</p>
-      <div class="toolbar">
-        <button id="load" class="btn-action">Refresh Status</button>
-        <a href="/settings" class="btn-action" style="background:#2563eb;">SBC Settings</a>
-        <a href="/menu" class="btn-action" style="background:#4e6a84;">Back to Main Menu</a>
+    <div class="topbar-brand">
+      <span class="brand-fallback">AMN Healthcare</span>
+      <strong>Voice Operations Portal</strong>
+    </div>
+    <div class="topbar-status">
+      <span class="topbar-auth-pill">Authenticated Operator: {auth_user}</span>
+      <div class="env-banner {env_css_class}">{env_text}</div>
+      <div id="session-timer-banner" class="session-timer" aria-live="polite">
+        <span class="timer-label">Auto logout in:</span>
+        <span id="session-timer-remaining" class="timer-value"></span>
       </div>
-      <div id="status">Click Refresh Status to probe SBC hosts.</div>
-      <div id="results"></div>
-    </main>
-  </div>
+    </div>
+    <div class="topbar-actions">
+      <a class="topbar-btn topbar-btn-login" href="/">Log In</a>
+      <a class="topbar-btn topbar-btn-logout" href="/logout">Log Out</a>
+    </div>
+  </header>
+
+  <script>
+    (function () {{
+      const hasCachedCucmPassword = {"true" if has_cached_cucm_pass else "false"};
+      const credentialExpiresAtMs = {credential_expires_at_ms};
+      const banner = document.getElementById("session-timer-banner");
+      const remaining = document.getElementById("session-timer-remaining");
+      if (!hasCachedCucmPassword || !banner || !remaining || !credentialExpiresAtMs) {{ return; }}
+      function fmt(totalSeconds) {{
+        const safe = Math.max(0, Math.floor(totalSeconds));
+        const h = Math.floor(safe / 3600);
+        const m = Math.floor((safe % 3600) / 60);
+        const s = safe % 60;
+        return `${{String(h).padStart(2, "0")}}:${{String(m).padStart(2, "0")}}:${{String(s).padStart(2, "0")}}`;
+      }}
+      banner.style.display = "flex";
+      const tick = () => {{
+        const ms = credentialExpiresAtMs - Date.now();
+        if (ms <= 0) {{ remaining.textContent = "Expired"; window.location.href = "/logout"; return; }}
+        remaining.textContent = fmt(ms / 1000);
+      }};
+      tick();
+      window.setInterval(tick, 1000);
+    }})();
+  </script>
+
+  <main class="content">
+    <section class="page-hero">
+      <div class="page-title-row">
+        <div class="page-title-block">
+          <h2 class="page-title">AMN Ribbon SBC Status</h2>
+          <p class="page-subtitle">Server certificates, reachability, and automated renewal notices for Las Vegas and Reno SBCs.</p>
+        </div>
+        <div class="page-meta-card">
+          <span class="page-meta-label">Monitoring</span>
+          <span class="page-meta-value">2 Ribbon SBCs</span>
+          <p style="margin:2px 0 0 0;font-size:10px;opacity:0.85;">Las Vegas + Reno</p>
+        </div>
+      </div>
+      <div class="hero-link-grid">
+        <a class="hero-link-card" href="/menu">
+          <strong>Main Operations</strong>
+          <span>Return to core user workflows.</span>
+        </a>
+        <a class="hero-link-card" href="/page2">
+          <strong>Administrative Items</strong>
+          <span>Bulk actions and utilities.</span>
+        </a>
+        <a class="hero-link-card" href="/expressways">
+          <strong>Cisco Expressway and Rbbn SBC</strong>
+          <span>Expressway monitoring view.</span>
+        </a>
+        <a class="hero-link-card" href="/ribbon-sbc">
+          <strong>AMN Ribbon SBC</strong>
+          <span>Ribbon SBC certificate view.</span>
+        </a>
+        <a class="hero-link-card" href="/dashboard">
+          <strong>Voice Dashboard</strong>
+          <span>Live telemetry overview.</span>
+        </a>
+        <a class="hero-link-card" href="/settings">
+          <strong>Settings</strong>
+          <span>Configure hosts & prefixes.</span>
+        </a>
+      </div>
+    </section>
+
+    <div class="portal-shell">
+      <aside class="portal-sidebar">
+        <h4>Operations Menu</h4>
+        <div class="portal-nav">
+          <button type="button" class="portal-nav-btn active" onclick="location.href='/ribbon-sbc'">AMN Ribbon SBC</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/expressways'">Cisco Expressway and Rbbn SBC</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/expressways/notifications'">Expressway Certificate Notifications</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/menu'">Main Operations (Page 1)</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/page2'">Administrative Items (Page 2)</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/page3'">SMS Item Menu (Page 3)</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/settings'">Settings</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/logout'">Log Out</button>
+        </div>
+      </aside>
+
+      <section class="portal-main">
+        <h3 style="margin-top:0;color:var(--amn-navy);">AMN Ribbon SBC Certificate Status</h3>
+        <p style="color:var(--amn-text-soft);font-size:12px;margin-top:2px;">Live certificate monitoring for Las Vegas (10.241.16.217) and Reno (10.141.16.40) Ribbon SBCs.</p>
+        <div class="toolbar">
+          <button id="load" class="btn-action">Refresh Status</button>
+          <a href="/settings" class="btn-action" style="background:#2563eb;">SBC Settings</a>
+          <a href="/menu" class="btn-action" style="background:#4e6a84;">Back to Main Menu</a>
+        </div>
+        <div id="status" style="margin:6px 0;font-weight:600;color:var(--amn-text-soft);font-size:12px;">Click Refresh Status to probe SBC hosts.</div>
+        <div id="results" style="overflow-x:auto;"></div>
+      </section>
+    </div>
+  </main>
+
   <script>
     const hosts = {row_json};
     const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}}[c]));
@@ -48097,7 +48583,6 @@ def ribbon_sbc_page(request: Request):
         '<th>Reachability</th>' +
         '<th>Certificate Expires</th>' +
         '<th>Days Remaining</th>' +
-        '<th>Details / Error</th>' +
         '</tr></thead><tbody>';
       
       rows.forEach(r => {{
@@ -48105,7 +48590,6 @@ def ribbon_sbc_page(request: Request):
         const reachClass = r.reachable ? 'ok' : 'bad';
         const reachText = r.reachable ? 'Reachable' : (r.host ? 'Unavailable' : 'Not configured');
         const daysText = r.days_remaining !== null ? `${{r.days_remaining}} days` : '-';
-        const detailsText = r.error || r.details || (r.reachable ? 'OK' : '-');
         
         h += '<tr>' +
           '<td><strong>' + esc(r.label) + '</strong></td>' +
@@ -48113,7 +48597,6 @@ def ribbon_sbc_page(request: Request):
           '<td><span class="' + reachClass + '">' + esc(reachText) + '</span></td>' +
           '<td>' + esc(r.certificate_expires || 'Unavailable') + '</td>' +
           '<td><span' + warnClass + '>' + esc(daysText) + '</span></td>' +
-          '<td>' + esc(detailsText) + '</td>' +
           '</tr>';
       }});
       h += '</tbody></table>';
@@ -48138,7 +48621,7 @@ def ribbon_sbc_page(request: Request):
     }}
 
     document.getElementById('load').addEventListener('click', load);
-    render(hosts.map(h => ({{ ...h, reachable: false, certificate_expires: 'Click Refresh', days_remaining: null, details: '-' }})));
+    render(hosts.map(h => ({{ ...h, reachable: false, certificate_expires: 'Click Refresh', days_remaining: null }})));
     load();
   </script>
 </body>
@@ -48197,7 +48680,7 @@ def settings_page(request: Request):
 
   sbc_list = _ribbon_sbc_configured_hosts()
   ribbon_inputs = []
-  for i, sbc in enumerate(sbc_list[:4]):
+  for i, sbc in enumerate(sbc_list[:2]):
     lbl = escape(sbc.get("label", ""))
     hst = escape(sbc.get("host", ""))
     ribbon_inputs.append(
@@ -48452,6 +48935,12 @@ def settings_page(request: Request):
             <div class="help-text">Enter eight Production Expressway IPs/hostnames and two LAB Expressway IPs/hostnames. API credentials remain in .env.</div>
             {"".join(f'<div style="display:grid;grid-template-columns:1fr 2fr;gap:8px;margin-top:10px;"><input type="text" id="expressway_label_{i + 1}" value="{escape((settings.get("expressway_hosts", [{}] * 10)[i] if isinstance(settings.get("expressway_hosts", []), list) and i < len(settings.get("expressway_hosts", [])) and isinstance(settings.get("expressway_hosts", [])[i], dict) else {}).get("label", (f"Production Expressway {i + 1}" if i < 8 else f"LAB Expressway {i - 7}")))}" placeholder="Display name"><input type="text" id="expressway_host_{i + 1}" value="{escape((settings.get("expressway_hosts", [{}] * 10)[i] if isinstance(settings.get("expressway_hosts", []), list) and i < len(settings.get("expressway_hosts", [])) and isinstance(settings.get("expressway_hosts", [])[i], dict) else {}).get("host", ""))}" placeholder="IP address or hostname" maxlength="255"></div>' for i in range(10))}
           </div>
+
+          <div class="form-group" style="border:2px solid #005eb8;border-radius:6px;padding:14px;background:#f4f8fc;">
+            <label>Ribbon SBC Hosts</label>
+            <div class="help-text">Enter Ribbon SBC names and IPs/hostnames. Credentials use Expressway defaults or RIBBON_SBC_API_USERNAME/PASSWORD in .env.</div>
+            {ribbon_sbc_inputs_html}
+          </div>
           
           <div class="button-group">
             <button type="submit" class="btn-save">Save Changes</button>
@@ -48495,6 +48984,10 @@ def settings_page(request: Request):
           expressway_hosts: Array.from({{length: 10}}, (_, i) => ({{
             label: document.getElementById('expressway_label_' + (i + 1)).value.trim() || (i < 8 ? ('Production Expressway ' + (i + 1)) : ('LAB Expressway ' + (i - 7))),
             host: document.getElementById('expressway_host_' + (i + 1)).value.trim(),
+          }})),
+          ribbon_sbc_hosts: Array.from({{length: 2}}, (_, i) => ({{
+            label: document.getElementById('ribbon_sbc_label_' + (i + 1)).value.trim() || (i === 0 ? 'Las Vegas Ribbon SBC 1' : 'Reno Ribbon SBC 1'),
+            host: document.getElementById('ribbon_sbc_host_' + (i + 1)).value.trim(),
           }})),
         }};
         
@@ -48610,6 +49103,17 @@ def update_settings_api(request: Request, body: dict = None):
           "label": str(item.get("label", "") or "").strip() or (f"Production Expressway {index + 1}" if index < 8 else f"LAB Expressway {index - 7}"),
           "host": str(item.get("host", "") or "").strip(),
         })
+
+    raw_ribbon_hosts = body.get("ribbon_sbc_hosts", [])
+    ribbon_sbc_hosts = []
+    if isinstance(raw_ribbon_hosts, list):
+      for index in range(2):
+        item = raw_ribbon_hosts[index] if index < len(raw_ribbon_hosts) and isinstance(raw_ribbon_hosts[index], dict) else {}
+        def_lbl = "Las Vegas Ribbon SBC 1" if index == 0 else "Reno Ribbon SBC 1"
+        ribbon_sbc_hosts.append({
+          "label": str(item.get("label", "") or "").strip() or def_lbl,
+          "host": str(item.get("host", "") or "").strip(),
+        })
     
     if not general_fte_prefix or not strike_prefix or not recruiter_prefix:
       return JSONResponse({"ok": False, "error": "All fields are required"}, status_code=400)
@@ -48665,6 +49169,7 @@ def update_settings_api(request: Request, body: dict = None):
       "sep_dn_delete_recipient": sep_dn_delete_recipient or "Laura.Alvarez@amnhealthcare.com",
       "sep_dn_delete_recipient_2": sep_dn_delete_recipient_2,
       "expressway_hosts": expressway_hosts,
+      "ribbon_sbc_hosts": ribbon_sbc_hosts,
     })
 
     if _save_settings(new_settings):
