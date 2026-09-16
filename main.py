@@ -47528,18 +47528,28 @@ def _parse_asn1_cert_expiry(der_bytes: bytes) -> tuple[str, int | None]:
 
 def _expressway_probe(host: str) -> dict:
   clean_host = (host or "").strip()
-  result = {"host": clean_host, "reachable": False, "version": "Unavailable", "certificate_expires": "Unavailable", "days_remaining": None, "voice_calls": "Unavailable", "video_calls": "Unavailable", "peak_audio_calls": "Unavailable", "peak_video_calls": "Unavailable", "error": ""}
+  result = {
+    "host": clean_host,
+    "reachable": False,
+    "version": "Unavailable",
+    "certificate_expires": "Unavailable",
+    "days_remaining": None,
+    "voice_calls": "Unavailable",
+    "video_calls": "Unavailable",
+    "peak_audio_calls": "Unavailable",
+    "peak_video_calls": "Unavailable",
+    "error": "",
+  }
   if not clean_host:
     result["error"] = "Not configured"
     return result
 
-  # 1. TLS handshake directly against port 443 — standard client handshake
-  # This works on every Expressway without requiring administrative credentials or REST API enablement
+  # 1. TLS handshake directly against port 443 (timeout=3s)
   try:
     context = ssl.create_default_context()
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
-    with socket.create_connection((clean_host, 443), timeout=10) as sock:
+    with socket.create_connection((clean_host, 443), timeout=3) as sock:
       with context.wrap_socket(sock) as tls_sock:
         result["reachable"] = True
         der = tls_sock.getpeercert(binary_form=True)
@@ -47550,168 +47560,71 @@ def _expressway_probe(host: str) -> dict:
             result["days_remaining"] = days
   except Exception as exc:
     result["error"] = f"TLS 443: {exc}"
+    # If TLS connection failed or timed out, host is not reachable; skip further HTTP attempts
+    return result
 
-  # 2. Query Expressway for version & call counters using Cisco's official REST API
+  # 2. Query Expressway for version & calls using Cisco REST/XML API (timeout=3s each)
   api_user = (EXPRESSWAY_API_USERNAME or "").strip()
   api_pass = EXPRESSWAY_API_PASSWORD or ""
   if not api_user or not api_pass:
-    if result.get("version") == "Unavailable":
-      result["error"] = "Set EXPRESSWAY_API_USERNAME & PASSWORD in .env"
     return result
 
-  # According to Cisco Expressway REST API Summary Guide (X14.2/X15.3) & OpenAPI specifications:
-  # Base URL: https://<host>/api/
-  # System Status: /api/status/common/systeminfo -> CurrentCalls, SoftwareVersion, SystemName
-  # Active Calls List: /api/status/common/calls -> array of ActiveCall with CallType (SIP, H.323), Bandwidth, etc.
-  # XML Status: /getxml?location=/Status
-  api_headers = {
-    "Accept": "application/json",
-    "X-CSRF-Header": "1",
-  }
-  
-  # 1. First query /api/status/common/systeminfo (JSON)
+  auth = HTTPBasicAuth(api_user, api_pass)
+  headers = {"Accept": "application/json", "X-CSRF-Header": "1"}
+
+  # Software Version: /api/provisioning/sysinfo (fast, proven on X15.4)
   try:
     resp = requests.get(
-      f"https://{clean_host}/api/status/common/systeminfo",
-      auth=HTTPBasicAuth(api_user, api_pass),
-      headers=api_headers,
+      f"https://{clean_host}/api/provisioning/sysinfo",
+      auth=auth,
+      headers=headers,
       verify=False,
-      timeout=6,
+      timeout=3,
     )
-    if resp.status_code == 200 and resp.text.strip().startswith(("{", "[")):
-      sys_info = resp.json()
-      if isinstance(sys_info, dict):
-        if sys_info.get("SoftwareVersion"):
-          result["version"] = str(sys_info["SoftwareVersion"]).strip()
-        curr_calls = sys_info.get("CurrentCalls")
-        if curr_calls is not None:
-          result["voice_calls"] = str(curr_calls)
+    if resp.status_code == 200:
+      data = resp.json() if resp.text.strip().startswith(("{", "[")) else {}
+      if isinstance(data, dict):
+        ver = data.get("SoftwareVersion") or data.get("version") or data.get("ProductVersion") or data.get("Release")
+        if ver:
+          result["version"] = str(ver).strip()
   except Exception:
     pass
 
-  # 2. Query /api/status/common/calls to classify active voice vs video calls
+  # Calls: query /getxml?location=/Status (timeout=2.5s)
   try:
     resp = requests.get(
-      f"https://{clean_host}/api/status/common/calls",
-      auth=HTTPBasicAuth(api_user, api_pass),
-      headers=api_headers,
+      f"https://{clean_host}/getxml?location=/Status",
+      auth=auth,
+      headers={"X-CSRF-Header": "1", "Accept": "text/xml, application/xml, */*"},
       verify=False,
-      timeout=6,
+      timeout=2.5,
     )
-    if resp.status_code == 200 and resp.text.strip().startswith(("{", "[")):
-      calls_list = resp.json()
-      if isinstance(calls_list, list):
-        audio_cnt = 0
-        video_cnt = 0
-        for c in calls_list:
-          if not isinstance(c, dict):
-            continue
-          bw = c.get("Bandwidth") or 0
-          # Calls with video or higher bandwidth (> 128kbps or explicit video attributes)
-          if c.get("CallType") == "Video" or bw > 128:
-            video_cnt += 1
-          else:
-            audio_cnt += 1
-        result["voice_calls"] = str(audio_cnt)
-        result["video_calls"] = str(video_cnt)
-  except Exception:
-    pass
-
-  # 3. Query XML API /getxml?location=/Status/Calls or /getxml?location=/Status for Peak counters
-  xml_endpoints = [
-    f"https://{clean_host}/getxml?location=/Status/Calls",
-    f"https://{clean_host}/getxml?location=/Status",
-    f"https://{clean_host}/status.xml",
-  ]
-  xml_headers = {
-    "X-CSRF-Header": "1",
-    "Accept": "text/xml, application/xml, */*",
-  }
-  for url in xml_endpoints:
-    try:
-      resp = requests.get(
-        url,
-        auth=HTTPBasicAuth(api_user, api_pass),
-        headers=xml_headers,
-        verify=False,
-        timeout=6,
-      )
-      if resp.status_code == 200 and resp.text:
-        root = ET.fromstring(resp.text)
-        if result["version"] == "Unavailable":
-          for tag in [".//Software/Version", ".//Product/Version", ".//SystemUnit/Software/Version", ".//Version", ".//SoftwareVersion"]:
-            el = root.find(tag)
-            if el is not None and (el.text or "").strip():
-              result["version"] = el.text.strip()
-              break
-
-        # Search every element case-insensitively for active audio / video and peak audio / video
-        for el in root.iter():
-          tag = el.tag.lower()
-          parent_path = "/".join(ancestor.tag.lower() for ancestor in root.iter() if el in list(ancestor))
-          # Active voice/audio
-          if result["voice_calls"] == "Unavailable":
-            if tag in ("audio", "voice") and el.find("Active") is not None:
-              result["voice_calls"] = el.find("Active").text.strip()
-            elif tag == "active" and any(p in parent_path for p in ("audio", "voice")):
-              result["voice_calls"] = (el.text or "").strip()
-            elif tag == "active" and el.text and el.text.isdigit():
-              result["voice_calls"] = el.text.strip()
-
-          # Active video
-          if result["video_calls"] == "Unavailable":
-            if tag == "video" and el.find("Active") is not None:
-              result["video_calls"] = el.find("Active").text.strip()
-            elif tag == "active" and "video" in parent_path:
-              result["video_calls"] = (el.text or "").strip()
-
-          # Peak audio/voice
-          if result["peak_audio_calls"] == "Unavailable":
-            if tag in ("audio", "voice") and el.find("Peak") is not None:
-              result["peak_audio_calls"] = el.find("Peak").text.strip()
-            elif tag in ("peak", "max") and any(p in parent_path for p in ("audio", "voice")):
-              result["peak_audio_calls"] = (el.text or "").strip()
-            elif tag == "peak" and el.text and el.text.isdigit():
-              result["peak_audio_calls"] = el.text.strip()
-
-          # Peak video
-          if result["peak_video_calls"] == "Unavailable":
-            if tag == "video" and el.find("Peak") is not None:
-              result["peak_video_calls"] = el.find("Peak").text.strip()
-            elif tag in ("peak", "max") and "video" in parent_path:
-              result["peak_video_calls"] = (el.text or "").strip()
-
-        # Fallback direct tag paths
-        if result["voice_calls"] == "Unavailable":
-          for tag in [".//Calls/Active/Audio", ".//Calls/Audio/Active", ".//Calls/Current/Audio", ".//Calls/Active", ".//Calls/Total/Active"]:
-            el = root.find(tag)
-            if el is not None and (el.text or "").strip():
-              result["voice_calls"] = el.text.strip()
-              break
-        if result["video_calls"] == "Unavailable":
-          for tag in [".//Calls/Active/Video", ".//Calls/Video/Active", ".//Calls/Current/Video"]:
-            el = root.find(tag)
-            if el is not None and (el.text or "").strip():
-              result["video_calls"] = el.text.strip()
-              break
-        if result["peak_audio_calls"] == "Unavailable":
-          for tag in [".//Calls/Peak/Audio", ".//Calls/Audio/Peak", ".//Calls/Max/Audio", ".//Calls/Peak"]:
-            el = root.find(tag)
-            if el is not None and (el.text or "").strip():
-              result["peak_audio_calls"] = el.text.strip()
-              break
-        if result["peak_video_calls"] == "Unavailable":
-          for tag in [".//Calls/Peak/Video", ".//Calls/Video/Peak", ".//Calls/Max/Video"]:
-            el = root.find(tag)
-            if el is not None and (el.text or "").strip():
-              result["peak_video_calls"] = el.text.strip()
-              break
-
-        if result["voice_calls"] != "Unavailable":
-          result["error"] = ""
+    if resp.status_code == 200 and resp.text:
+      root = ET.fromstring(resp.text)
+      for tag in [".//Calls/Active/Audio", ".//Calls/Audio/Active", ".//Calls/Current/Audio", ".//Calls/Active"]:
+        el = root.find(tag)
+        if el is not None and (el.text or "").strip():
+          result["voice_calls"] = el.text.strip()
           break
-    except Exception:
-      pass
+      for tag in [".//Calls/Active/Video", ".//Calls/Video/Active", ".//Calls/Current/Video"]:
+        el = root.find(tag)
+        if el is not None and (el.text or "").strip():
+          result["video_calls"] = el.text.strip()
+          break
+      for tag in [".//Calls/Peak/Audio", ".//Calls/Audio/Peak", ".//Calls/Max/Audio", ".//Calls/Peak"]:
+        el = root.find(tag)
+        if el is not None and (el.text or "").strip():
+          result["peak_audio_calls"] = el.text.strip()
+          break
+      for tag in [".//Calls/Peak/Video", ".//Calls/Video/Peak", ".//Calls/Max/Video"]:
+        el = root.find(tag)
+        if el is not None and (el.text or "").strip():
+          result["peak_video_calls"] = el.text.strip()
+          break
+  except Exception:
+    pass
+
+  return result
 
   return result
 
@@ -47868,10 +47781,11 @@ def expressways_status_api(request: Request):
   try:
     hosts = _expressway_configured_hosts()
     rows = []
-    # Probe hosts in parallel with ThreadPoolExecutor so 10 hosts complete in ~6s instead of 60s
+    # Probe hosts in parallel with bounded timeout so API always returns in < 8s, preventing Nginx 504
     with concurrent.futures.ThreadPoolExecutor(max_workers=min(10, len(hosts) or 1)) as executor:
       future_map = {executor.submit(_expressway_probe, item.get("host", "")): item for item in hosts}
-      for future in concurrent.futures.as_completed(future_map):
+      done, not_done = concurrent.futures.wait(future_map.keys(), timeout=10)
+      for future in done:
         item = future_map[future]
         row = dict(item)
         try:
@@ -47879,9 +47793,17 @@ def expressways_status_api(request: Request):
         except Exception as exc:
           row.update({"reachable": False, "error": str(exc)})
         rows.append(row)
+      for future in not_done:
+        item = future_map[future]
+        row = dict(item)
+        row.update({"reachable": False, "error": "Probe timed out"})
+        rows.append(row)
     # Restore original index order
     rows.sort(key=lambda r: r.get("index", 0))
     return JSONResponse({"ok": True, "rows": rows})
+  except Exception as exc:
+    logger.exception("Expressway status API failed: %s", exc)
+    return JSONResponse({"ok": False, "error": f"Status check failed: {exc}", "rows": []}, status_code=500)
   except Exception as exc:
     logger.exception("Expressway status API failed: %s", exc)
     return JSONResponse({"ok": False, "error": f"Status check failed: {exc}", "rows": []}, status_code=500)
