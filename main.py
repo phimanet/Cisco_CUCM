@@ -47559,11 +47559,15 @@ def _expressway_probe(host: str) -> dict:
       result["error"] = "Set EXPRESSWAY_API_USERNAME & PASSWORD in .env"
     return result
 
-  # According to Cisco Expressway REST API Summary Guide:
+  # According to Cisco Expressway REST API Summary Guide (X14.2/X15.3):
   # Base URL: https://<host>/api/
   # System Info / Version: /api/provisioning/sysinfo or /api/v1/provisioning/sysinfo
   # Status: /api/status/common/... or /getxml?location=/Status
-  api_headers = {"Accept": "application/json"}
+  # Note: Starting X14.2 / X15.0.3+, CSRF protection is enabled by default and requires 'X-CSRF-Header'
+  api_headers = {
+    "Accept": "application/json",
+    "X-CSRF-Header": "1",
+  }
   
   # Try sysinfo for software version:
   for sysinfo_path in ["/api/provisioning/sysinfo", "/api/v1/provisioning/sysinfo", "/api/sysinfo"]:
@@ -47592,11 +47596,16 @@ def _expressway_probe(host: str) -> dict:
     f"https://{clean_host}/getxml?location=/Status",
     f"https://{clean_host}/status.xml",
   ]
+  xml_headers = {
+    "X-CSRF-Header": "1",
+    "Accept": "text/xml, application/xml, */*",
+  }
   for url in xml_endpoints:
     try:
       resp = requests.get(
         url,
         auth=HTTPBasicAuth(api_user, api_pass),
+        headers=xml_headers,
         verify=False,
         timeout=6,
       )
