@@ -970,6 +970,9 @@ DEFAULT_SETTINGS = {
     {"label": "LAB Expressway 1", "host": ""},
     {"label": "LAB Expressway 2", "host": ""},
   ],
+  "expressway_cert_notice_enabled": "true",
+  "expressway_cert_notice_recipients": "",
+  "expressway_cert_notice_from": "noreply@amnhealthcare.com",
 }
 SETTINGS_LOCK = threading.Lock()
 
@@ -47567,7 +47570,11 @@ def _expressway_save_notice_state(state: dict) -> None:
 
 
 def _expressway_send_due_certificate_notices() -> None:
-  if not EXPRESSWAY_CERT_NOTICE_ENABLED or not EXPRESSWAY_CERT_NOTICE_RECIPIENTS:
+  notification_settings = _load_settings()
+  enabled = str(notification_settings.get("expressway_cert_notice_enabled", "true") or "true").strip().lower() in {"1", "true", "yes", "on"}
+  recipients = [item.strip() for item in str(notification_settings.get("expressway_cert_notice_recipients", "") or "").split(",") if item.strip()] or EXPRESSWAY_CERT_NOTICE_RECIPIENTS
+  sender = str(notification_settings.get("expressway_cert_notice_from", "") or "").strip() or EXPRESSWAY_CERT_NOTICE_FROM
+  if not enabled or not recipients:
     return
   due = []
   state = _expressway_notice_state()
@@ -47600,7 +47607,7 @@ def _expressway_send_due_certificate_notices() -> None:
   body = "Cisco Expressway certificate expiration notice\n\n"
   body += "The following certificates have 30 or fewer days remaining:\n\n"
   body += "\n".join(f"{item['label']} ({item['host']}): expires {item['certificate_expires']} ({item['days_remaining']} days remaining)" for item in due)
-  _send_smtp_email(EXPRESSWAY_CERT_NOTICE_FROM, EXPRESSWAY_CERT_NOTICE_RECIPIENTS, "Cisco Expressway certificate expiration notice", body)
+  _send_smtp_email(sender, recipients, "Cisco Expressway certificate expiration notice", body)
   with EXPRESSWAY_CERT_NOTICE_LOCK:
     _expressway_save_notice_state(state)
 
@@ -47630,7 +47637,41 @@ def expressways_page(request: Request):
   rows = _expressway_configured_hosts()
   row_json = json.dumps(rows).replace("</", "<\\/")
   page_template = '''<!doctype html><html><head><meta charset="utf-8"><title>Expressway Status</title><style>body{font-family:Segoe UI,Arial;background:#edf5fc;color:#12304a;margin:0}header{background:linear-gradient(90deg,#002f6c,#005eb8);color:white;padding:18px 24px}main{max-width:1500px;margin:22px auto;padding:0 18px}.toolbar{display:flex;gap:10px;margin:12px 0}button,a{padding:9px 13px;border:0;border-radius:6px;background:#005eb8;color:white;text-decoration:none;font-weight:700}table{width:100%;border-collapse:collapse;background:white;box-shadow:0 8px 20px #002f6c18}th{background:#005eb8;color:white;text-align:left;padding:9px}td{padding:8px;border-bottom:1px solid #c8dbee}.prod{border-left:5px solid #005eb8}.lab{border-left:5px solid #d97706}.ok{color:#16733b;font-weight:700}.bad{color:#a12626;font-weight:700}</style></head><body><header><strong>Cisco Expressway Status</strong><span style="float:right">Authenticated Operator: __USER__</span></header><main><h2>Expressway Certificate and Call Status</h2><p>Eight Production Expressways and two LAB Expressways. Certificate notices begin at 30 days and repeat every 7 days until renewal.</p><div class="toolbar"><button id="load">Refresh Status</button><a href="/settings">Expressway Settings</a><a href="/menu">Back to Main Menu</a></div><div id="status">Click Refresh Status.</div><div id="results"></div></main><script>const hosts=__HOSTS__;const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));function render(rows){let h='<table><tr><th>Environment</th><th>Expressway</th><th>Host</th><th>Reachability</th><th>Version</th><th>Certificate Expires</th><th>Days Remaining</th><th>Current Voice Calls</th><th>Current Video Calls</th><th>Peak Audio Calls</th><th>Peak Video Calls</th><th>Details</th></tr>';rows.forEach(r=>{h+='<tr class="'+(r.environment==='LAB'?'lab':'prod')+'"><td>'+esc(r.environment)+'</td><td>'+esc(r.label)+'</td><td>'+esc(r.host||'-')+'</td><td class="'+(r.reachable?'ok':'bad')+'">'+(r.reachable?'Reachable':'Unavailable')+'</td><td>'+esc(r.version)+'</td><td>'+esc(r.certificate_expires)+'</td><td>'+esc(r.days_remaining??'-')+'</td><td>'+esc(r.voice_calls)+'</td><td>'+esc(r.video_calls)+'</td><td>'+esc(r.peak_audio_calls)+'</td><td>'+esc(r.peak_video_calls)+'</td><td>'+esc(r.error||'-')+'</td></tr>'});document.getElementById('results').innerHTML=h+'</table>'}async function load(){document.getElementById('status').textContent='Loading Expressways...';const r=await fetch('/api/expressways/status',{credentials:'same-origin'});const p=await r.json();if(!r.ok||!p.ok)throw new Error(p.error||'Status lookup failed');render(p.rows);document.getElementById('status').textContent='Checked '+p.rows.length+' Expressways.'}document.getElementById('load').onclick=()=>load().catch(e=>document.getElementById('status').textContent='Error: '+e.message);load().catch(e=>document.getElementById('status').textContent='Error: '+e.message);</script></body></html>'''
+  notice_settings = _load_settings()
+  notice_enabled = str(notice_settings.get("expressway_cert_notice_enabled", "true") or "true").strip().lower() in {"1", "true", "yes", "on"}
+  notice_recipients = str(notice_settings.get("expressway_cert_notice_recipients", "") or "").strip()
+  notice_from = str(notice_settings.get("expressway_cert_notice_from", EXPRESSWAY_CERT_NOTICE_FROM) or EXPRESSWAY_CERT_NOTICE_FROM).strip()
+  notice_html = f'''<section style="background:#fff;border:1px solid #c8dbee;border-radius:8px;padding:14px;margin:14px 0;"><h3 style="margin:0 0 8px;color:#002f6c;">Certificate Notification Settings</h3><p style="margin:0 0 10px;color:#4e6a84;">PROD only. First email at 30 days remaining, then every 7 days until renewal.</p><label style="display:block;margin:6px 0;"><input id="expressway-notice-enabled" type="checkbox" {"checked" if notice_enabled else ""}> Turn notifications on/off</label><label style="display:block;margin:6px 0;">Recipients, comma-separated<input id="expressway-notice-recipients" value="{escape(notice_recipients)}" style="display:block;width:100%;box-sizing:border-box;padding:8px;margin-top:4px;"></label><label style="display:block;margin:6px 0;">From email<input id="expressway-notice-from" value="{escape(notice_from)}" style="display:block;width:100%;box-sizing:border-box;padding:8px;margin-top:4px;"></label><button id="expressway-notice-save" type="button" style="margin-top:8px;">Save Notification Settings</button><span id="expressway-notice-message" style="margin-left:10px;color:#16733b;"></span></section>'''
+  page_template = page_template.replace('<div id="status">', notice_html + '<div id="status">')
+  save_script = "document.getElementById('expressway-notice-save').onclick=async()=>{const m=document.getElementById('expressway-notice-message');m.textContent='Saving...';try{const r=await fetch('/api/expressways/settings',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'same-origin',body:JSON.stringify({enabled:document.getElementById('expressway-notice-enabled').checked,recipients:document.getElementById('expressway-notice-recipients').value,from:document.getElementById('expressway-notice-from').value})});const p=await r.json();m.textContent=p.ok?'Saved.':('Error: '+(p.error||'failed'));}catch(e){m.textContent='Error: '+e.message;}};"
+  page_template = page_template.replace("</script></body>", save_script + "</script></body>")
   return HTMLResponse(content=page_template.replace("__USER__", escape(str(session.get("username", "")))).replace("__HOSTS__", row_json))
+
+
+@app.post("/api/expressways/settings")
+async def expressways_settings_api(request: Request):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  try:
+    body = await request.json()
+  except Exception:
+    body = {}
+  if not body:
+    return JSONResponse({"ok": False, "error": "Invalid settings payload"}, status_code=400)
+  recipients = ",".join(item.strip() for item in str(body.get("recipients", "") or "").split(",") if item.strip())
+  sender = str(body.get("from", "") or "").strip()
+  if sender and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", sender):
+    return JSONResponse({"ok": False, "error": "From email is invalid"}, status_code=400)
+  settings = _load_settings()
+  settings.update({
+    "expressway_cert_notice_enabled": "true" if bool(body.get("enabled")) else "false",
+    "expressway_cert_notice_recipients": recipients,
+    "expressway_cert_notice_from": sender or EXPRESSWAY_CERT_NOTICE_FROM,
+  })
+  if not _save_settings(settings):
+    return JSONResponse({"ok": False, "error": "Failed to save settings"}, status_code=500)
+  return JSONResponse({"ok": True, "message": "Expressway notification settings saved"})
 
 
 @app.get("/api/expressways/status")
