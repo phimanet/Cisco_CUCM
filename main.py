@@ -40181,6 +40181,10 @@ def menu_admin_page(request: Request):
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
           <div class="compact-inline-row">
+            <select name="report_mode" aria-label="Route plan report mode">
+              <option value="all">All Patterns and URIs</option>
+              <option value="unassigned_dn">Unassigned DN</option>
+            </select>
             <span>Number or Dial String:</span>
             <input name="number" placeholder="8585236648" required style="min-width:260px;">
             <button type="button" onclick="if (window.runRoutePlanReport) { return window.runRoutePlanReport(event); } var form=this.form; var s=document.getElementById('admin-route-plan-status'); var out=document.getElementById('admin-route-plan-results'); var number=String(new FormData(form).get('number') || '').trim(); var url=new URL(window.location.href); url.searchParams.set('panel','route-plan-report'); if (number) url.searchParams.set('number',number); window.history.replaceState({},'',url.toString()); s.textContent='Searching the CUCM route plan...'; s.style.color='#2c5c8a'; out.innerHTML=''; fetch('/admin/route-plan-report',{method:'POST',body:new FormData(form),credentials:'same-origin'}).then(function(r){return r.json().then(function(p){if(!r.ok || !p.ok) throw new Error(p.error || 'Route plan lookup failed.'); return p;});}).then(function(p){var rows=p.results || []; s.textContent=rows.length ? 'Found ' + String(p.total_matches || rows.length) + ' matching route-plan object(s) for ' + String(p.query || '') + '.' : 'No exact or wildcard route-plan patterns matched ' + String(p.query || '') + '.'; var pre=document.createElement('pre'); pre.style.whiteSpace='pre-wrap'; pre.textContent=JSON.stringify(rows,null,2); out.appendChild(pre);}).catch(function(e){s.textContent='CUCM Route Plan Report failed: ' + e.message; s.style.color='#b42318';}); return false;">Find Route Plan Matches</button>
@@ -49511,6 +49515,7 @@ def route_plan_report_route(
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
     number: str = Form(""),
+    report_mode: str = Form("all"),
 ):
     session = _get_auth_session(request) or {}
     operator = str(session.get("username", "") or "").strip()
@@ -49519,7 +49524,32 @@ def route_plan_report_route(
     try:
       cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
       _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
-      report = lookup_route_plan(cucm_host, cucm_user, cucm_pass, number)
+      if report_mode == "unassigned_dn":
+        unassigned_rows, _debug_stats = _lookup_unassigned_directory_numbers(
+          cucm_host, cucm_user, cucm_pass, number, "ENT_DEVICE_PT"
+        )
+        report = {
+          "query": (number or "").strip(),
+          "results": [
+            {
+              "match": "Unassigned DN",
+              "pattern": row.get("pattern", ""),
+              "route_partition": row.get("route_partition", "ENT_DEVICE_PT"),
+              "type": "Directory Number",
+              "description": row.get("description", ""),
+              "called_party_transform_mask": "",
+              "is_callable": "f",
+              "devices": [],
+              "line_groups": [],
+            }
+            for row in unassigned_rows
+          ],
+          "total_matches": len(unassigned_rows),
+          "truncated": False,
+          "extended_details_fallback": False,
+        }
+      else:
+        report = lookup_route_plan(cucm_host, cucm_user, cucm_pass, number)
       _append_audit_event(
         action="cucm_route_plan_report",
         cucm_host=cucm_host,
