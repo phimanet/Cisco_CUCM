@@ -47666,26 +47666,74 @@ def _expressway_probe(host: str) -> dict:
     call_diag.append(f"getxml:{resp.status_code}")
     if resp.status_code == 200 and resp.text:
       root = ET.fromstring(resp.text)
-      for tag in [".//Calls/Active/Audio", ".//Calls/Audio/Active", ".//Calls/Current/Audio", ".//Calls/Active"]:
+      # Strip XML namespaces so tag matching works reliably on Tandberg/Cisco XML schemas
+      for elem in root.iter():
+        if "}" in elem.tag:
+          elem.tag = elem.tag.split("}", 1)[1]
+
+      # Extract software version from XML if still unavailable
+      if result["version"] == "Unavailable":
+        for tag in [".//SystemUnit/Software/Version", ".//Product/Version", ".//Software/Version", ".//Version"]:
+          el = root.find(tag)
+          if el is not None and (el.text or "").strip():
+            result["version"] = el.text.strip()
+            break
+
+      # Active audio/voice calls
+      for tag in [
+        ".//Calls/Active/Audio",
+        ".//Calls/Audio/Active",
+        ".//Calls/Current/Audio",
+        ".//Calls/Total/Active",
+        ".//Calls/Active",
+      ]:
         el = root.find(tag)
         if el is not None and (el.text or "").strip():
           result["voice_calls"] = el.text.strip()
           break
-      for tag in [".//Calls/Active/Video", ".//Calls/Video/Active", ".//Calls/Current/Video"]:
+
+      # Active video calls
+      for tag in [
+        ".//Calls/Active/Video",
+        ".//Calls/Video/Active",
+        ".//Calls/Current/Video",
+      ]:
         el = root.find(tag)
         if el is not None and (el.text or "").strip():
           result["video_calls"] = el.text.strip()
           break
-      for tag in [".//Calls/Peak/Audio", ".//Calls/Audio/Peak", ".//Calls/Max/Audio", ".//Calls/Peak"]:
+      if result["voice_calls"] != "Unavailable" and result["video_calls"] == "Unavailable":
+        result["video_calls"] = "0"
+
+      # Peak audio calls
+      for tag in [
+        ".//Calls/Peak/Audio",
+        ".//Calls/Audio/Peak",
+        ".//Calls/Total/Peak",
+        ".//Calls/Peak",
+        ".//Calls/Max/Audio",
+        ".//Calls/Max",
+      ]:
         el = root.find(tag)
         if el is not None and (el.text or "").strip():
           result["peak_audio_calls"] = el.text.strip()
           break
-      for tag in [".//Calls/Peak/Video", ".//Calls/Video/Peak", ".//Calls/Max/Video"]:
+
+      # Peak video calls
+      for tag in [
+        ".//Calls/Peak/Video",
+        ".//Calls/Video/Peak",
+        ".//Calls/Max/Video",
+      ]:
         el = root.find(tag)
         if el is not None and (el.text or "").strip():
           result["peak_video_calls"] = el.text.strip()
           break
+      if result["peak_audio_calls"] != "Unavailable" and result["peak_video_calls"] == "Unavailable":
+        result["peak_video_calls"] = "0"
+
+      if result["voice_calls"] != "Unavailable":
+        result["error"] = ""
   except Exception as e:
     call_diag.append(f"getxml:err({type(e).__name__})")
 
@@ -47727,6 +47775,7 @@ def _ribbon_sbc_probe(host: str) -> dict:
     "reachable": False,
     "certificate_expires": "Unavailable",
     "days_remaining": None,
+    "active_calls": "-",
     "details": "Ready",
     "error": "",
   }
@@ -47754,13 +47803,13 @@ def _ribbon_sbc_probe(host: str) -> dict:
     result["details"] = f"Connection error: {exc}"
     return result
 
-  # 2. HTTP Basic Auth probe on port 443
+  # 2. Query Ribbon SBC REST endpoints for active calls & system status
   api_user = (RIBBON_SBC_API_USERNAME or EXPRESSWAY_API_USERNAME or "ucmadmin").strip()
   api_pass = RIBBON_SBC_API_PASSWORD or EXPRESSWAY_API_PASSWORD or "abi3rto!"
   auth = HTTPBasicAuth(api_user, api_pass)
-  headers = {"Accept": "application/json, text/plain, */*"}
-  try:
-    for endpoint in ["/rest/system", "/rest/status", "/rest/node"]:
+  headers = {"Accept": "application/json, text/xml, application/xml, */*"}
+  for endpoint in ["/rest/callstatus", "/rest/channelstatus", "/rest/system", "/rest/status"]:
+    try:
       resp = requests.get(
         f"https://{clean_host}{endpoint}",
         auth=auth,
@@ -47768,30 +47817,41 @@ def _ribbon_sbc_probe(host: str) -> dict:
         verify=False,
         timeout=2.5,
       )
-      if resp.status_code == 200:
-        result["details"] = f"REST API OK ({endpoint})"
-        try:
-          data = resp.json() if resp.text.strip().startswith(("{", "[")) else {}
-          if isinstance(data, dict):
-            sys_name = data.get("systemName") or data.get("name") or data.get("description")
-            if sys_name:
-              result["details"] = f"REST OK: {sys_name}"
-        except Exception:
-          pass
-        break
-      elif resp.status_code in {401, 403}:
-        result["details"] = f"TLS 443 Active (Auth {resp.status_code})"
-        break
-      elif resp.status_code == 404:
-        continue
-      else:
-        result["details"] = f"HTTP {resp.status_code}"
-  except Exception as exc:
-    if not result.get("details") or result.get("details") == "Ready":
-      result["details"] = "TLS 443 Connected"
-
-  if result["details"] == "Ready":
-    result["details"] = "TLS 443 Connected"
+      if resp.status_code == 200 and resp.text:
+        text = resp.text.strip()
+        # JSON response
+        if text.startswith(("{", "[")):
+          try:
+            data = resp.json()
+            if isinstance(data, dict):
+              cnt = (
+                data.get("activeCalls")
+                or data.get("currentCalls")
+                or data.get("activeChannels")
+                or data.get("callCount")
+                or data.get("calls")
+              )
+              if cnt is not None:
+                result["active_calls"] = str(cnt)
+                break
+          except Exception:
+            pass
+        # XML response
+        elif "<" in text:
+          try:
+            root = ET.fromstring(text)
+            for elem in root.iter():
+              tag = elem.tag.split("}")[-1].lower()
+              if tag in ("activecalls", "currentcalls", "activechannels", "callcount", "active", "totalcalls"):
+                if elem.text and elem.text.strip().isdigit():
+                  result["active_calls"] = elem.text.strip()
+                  break
+            if result["active_calls"] != "-":
+              break
+          except Exception:
+            pass
+    except Exception:
+      pass
 
   return result
 
@@ -48050,6 +48110,12 @@ def expressways_page(request: Request):
     }}
     .hero-link-card:hover {{ transform: translateY(-2px); border-color: rgba(0, 94, 184, 0.3); }}
     .hero-link-card strong {{ display: block; color: var(--amn-navy); font-size: 12px; }}
+    .hero-link-card span {{ display: none; }}
+    .page-kicker {{
+      display: inline-flex; align-items: center; gap: 8px; padding: 5px 9px; border-radius: 999px;
+      background: rgba(0, 94, 184, 0.08); color: var(--amn-blue); font-size: 10px; font-weight: 800;
+      letter-spacing: 0.4px; text-transform: uppercase;
+    }}
     .portal-shell {{ display: grid; grid-template-columns: 244px minmax(0, 1fr); gap: 10px; align-items: start; margin-top: 8px; }}
     .portal-sidebar {{
       position: sticky; top: 54px;
@@ -48131,42 +48197,25 @@ def expressways_page(request: Request):
 
   <main class="content">
     <section class="page-hero">
+      <span class="page-kicker">EXPRESSWAY &amp; SBC WORKBENCH</span>
       <div class="page-title-row">
         <div class="page-title-block">
           <h2 class="page-title">Cisco Expressway and Rbbn SBC</h2>
           <p class="page-subtitle">Server certificates, reachability, call activity, and automated renewal notices.</p>
         </div>
         <div class="page-meta-card">
-          <span class="page-meta-label">Monitoring</span>
-          <span class="page-meta-value">10 Expressways</span>
-          <p style="margin:2px 0 0 0;font-size:10px;opacity:0.85;">8 Production + 2 LAB</p>
+          <span class="page-meta-label">PORTAL VERSION</span>
+          <span class="page-meta-value">v1.0 Current</span>
+          <p class="page-meta-note">10 Expressways (8 PROD + 2 LAB)</p>
         </div>
       </div>
       <div class="hero-link-grid">
-        <a class="hero-link-card" href="/menu">
-          <strong>Main Operations</strong>
-          <span>Return to core user workflows.</span>
-        </a>
-        <a class="hero-link-card" href="/page2">
-          <strong>Administrative Items</strong>
-          <span>Bulk actions and utilities.</span>
-        </a>
-        <a class="hero-link-card" href="/expressways">
-          <strong>Cisco Expressway Status</strong>
-          <span>Expressway monitoring view.</span>
-        </a>
-        <a class="hero-link-card" href="/ribbon-sbc">
-          <strong>AMN Ribbon SBC</strong>
-          <span>Ribbon SBC certificate view.</span>
-        </a>
-        <a class="hero-link-card" href="/dashboard">
-          <strong>Voice Dashboard</strong>
-          <span>Live telemetry overview.</span>
-        </a>
-        <a class="hero-link-card" href="/settings">
-          <strong>Settings</strong>
-          <span>Configure hosts & prefixes.</span>
-        </a>
+        <a class="hero-link-card" href="/menu"><strong>Main Operations</strong></a>
+        <a class="hero-link-card" href="/page2"><strong>Administrative Items</strong></a>
+        <a class="hero-link-card" href="/expressways"><strong>Cisco Expressway and Rbbn SBC</strong></a>
+        <a class="hero-link-card" href="/ribbon-sbc"><strong>AMN Ribbon SBC</strong></a>
+        <a class="hero-link-card" href="/dashboard"><strong>Voice Dashboard</strong></a>
+        <a class="hero-link-card" href="/settings"><strong>Settings</strong></a>
       </div>
     </section>
 
@@ -48504,42 +48553,25 @@ def ribbon_sbc_page(request: Request):
 
   <main class="content">
     <section class="page-hero">
+      <span class="page-kicker">EXPRESSWAY &amp; SBC WORKBENCH</span>
       <div class="page-title-row">
         <div class="page-title-block">
           <h2 class="page-title">AMN Ribbon SBC Status</h2>
-          <p class="page-subtitle">Server certificates, reachability, and automated renewal notices for Las Vegas and Reno SBCs.</p>
+          <p class="page-subtitle">Server certificates, reachability, call activity, and automated renewal notices for Las Vegas and Reno SBCs.</p>
         </div>
         <div class="page-meta-card">
-          <span class="page-meta-label">Monitoring</span>
-          <span class="page-meta-value">2 Ribbon SBCs</span>
-          <p style="margin:2px 0 0 0;font-size:10px;opacity:0.85;">Las Vegas + Reno</p>
+          <span class="page-meta-label">PORTAL VERSION</span>
+          <span class="page-meta-value">v1.0 Current</span>
+          <p class="page-meta-note">2 Ribbon SBCs (Las Vegas + Reno)</p>
         </div>
       </div>
       <div class="hero-link-grid">
-        <a class="hero-link-card" href="/menu">
-          <strong>Main Operations</strong>
-          <span>Return to core user workflows.</span>
-        </a>
-        <a class="hero-link-card" href="/page2">
-          <strong>Administrative Items</strong>
-          <span>Bulk actions and utilities.</span>
-        </a>
-        <a class="hero-link-card" href="/expressways">
-          <strong>Cisco Expressway and Rbbn SBC</strong>
-          <span>Expressway monitoring view.</span>
-        </a>
-        <a class="hero-link-card" href="/ribbon-sbc">
-          <strong>AMN Ribbon SBC</strong>
-          <span>Ribbon SBC certificate view.</span>
-        </a>
-        <a class="hero-link-card" href="/dashboard">
-          <strong>Voice Dashboard</strong>
-          <span>Live telemetry overview.</span>
-        </a>
-        <a class="hero-link-card" href="/settings">
-          <strong>Settings</strong>
-          <span>Configure hosts & prefixes.</span>
-        </a>
+        <a class="hero-link-card" href="/menu"><strong>Main Operations</strong></a>
+        <a class="hero-link-card" href="/page2"><strong>Administrative Items</strong></a>
+        <a class="hero-link-card" href="/expressways"><strong>Cisco Expressway and Rbbn SBC</strong></a>
+        <a class="hero-link-card" href="/ribbon-sbc"><strong>AMN Ribbon SBC</strong></a>
+        <a class="hero-link-card" href="/dashboard"><strong>Voice Dashboard</strong></a>
+        <a class="hero-link-card" href="/settings"><strong>Settings</strong></a>
       </div>
     </section>
 
@@ -48583,6 +48615,7 @@ def ribbon_sbc_page(request: Request):
         '<th>Reachability</th>' +
         '<th>Certificate Expires</th>' +
         '<th>Days Remaining</th>' +
+        '<th>Active Calls</th>' +
         '</tr></thead><tbody>';
       
       rows.forEach(r => {{
@@ -48597,8 +48630,12 @@ def ribbon_sbc_page(request: Request):
           '<td><span class="' + reachClass + '">' + esc(reachText) + '</span></td>' +
           '<td>' + esc(r.certificate_expires || 'Unavailable') + '</td>' +
           '<td><span' + warnClass + '>' + esc(daysText) + '</span></td>' +
+          '<td>' + esc(r.active_calls || '-') + '</td>' +
           '</tr>';
       }});
+      h += '</tbody></table>';
+      document.getElementById('results').innerHTML = h;
+    }}
       h += '</tbody></table>';
       document.getElementById('results').innerHTML = h;
     }}
