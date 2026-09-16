@@ -28,10 +28,12 @@ import requests
 import urllib3
 try:
   from cryptography.fernet import Fernet, InvalidToken
+  from cryptography import x509
   _FERNET_AVAILABLE = True
 except Exception:
   Fernet = None
   InvalidToken = Exception
+  x509 = None
   _FERNET_AVAILABLE = False
 from fastapi import FastAPI, Form, UploadFile, File, Query, Request
 from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse
@@ -538,7 +540,7 @@ TWILIO_HOSTED_NUMBERS_ACTIVE = (os.getenv("TWILIO_HOSTED_NUMBERS_ACTIVE", "false
 }
 EXPRESSWAY_API_USERNAME = (os.getenv("EXPRESSWAY_API_USERNAME", "") or "").strip()
 EXPRESSWAY_API_PASSWORD = os.getenv("EXPRESSWAY_API_PASSWORD", "") or ""
-EXPRESSWAY_API_CERTIFICATE_PATH = (os.getenv("EXPRESSWAY_API_CERTIFICATE_PATH", "/api/status/certificates") or "/api/status/certificates").strip()
+EXPRESSWAY_API_CERTIFICATE_PATH = (os.getenv("EXPRESSWAY_API_CERTIFICATE_PATH", "/api/provisioning/common/certs/server") or "/api/provisioning/common/certs/server").strip()
 EXPRESSWAY_CERT_NOTICE_RECIPIENTS = [item.strip() for item in (os.getenv("EXPRESSWAY_CERT_NOTICE_RECIPIENTS", "") or "").split(",") if item.strip()]
 EXPRESSWAY_CERT_NOTICE_FROM = (os.getenv("EXPRESSWAY_CERT_NOTICE_FROM", "noreply@amnhealthcare.com") or "noreply@amnhealthcare.com").strip()
 EXPRESSWAY_CERT_NOTICE_ENABLED = (os.getenv("EXPRESSWAY_CERT_NOTICE_ENABLED", "true") or "true").strip().lower() in {"1", "true", "yes", "on"}
@@ -47513,14 +47515,15 @@ def _expressway_probe(host: str) -> dict:
       verify=False, timeout=20,
     )
     if response.ok:
-      payload = response.json() if response.text else {}
-      text = json.dumps(payload, ensure_ascii=True)
-      result["version"] = str(payload.get("version", payload.get("softwareVersion", "Unavailable"))) if isinstance(payload, dict) else "Unavailable"
-      for key in ("notAfter", "expires", "expirationDate", "expiry", "validTo"):
-        match = re.search(rf'"{re.escape(key)}"\s*:\s*"([^"]+)"', text, re.IGNORECASE)
-        if match:
-          result["certificate_expires"] = match.group(1)
-          break
+      pem_text = response.text or ""
+      if x509 is not None and "BEGIN CERTIFICATE" in pem_text:
+        certificate = x509.load_pem_x509_certificate(pem_text.encode("ascii"))
+        expiry = certificate.not_valid_after_utc
+        result["certificate_expires"] = expiry.isoformat()
+        result["days_remaining"] = (expiry - datetime.datetime.now(datetime.timezone.utc)).days
+      else:
+        payload = response.json() if response.text else {}
+        result["version"] = str(payload.get("version", payload.get("softwareVersion", "Unavailable"))) if isinstance(payload, dict) else "Unavailable"
       result["reachable"] = True
     else:
       result["error"] = f"API HTTP {response.status_code}"
@@ -47533,14 +47536,17 @@ def _expressway_probe(host: str) -> dict:
     with socket.create_connection((clean_host, 443), timeout=12) as sock:
       with context.wrap_socket(sock, server_hostname=clean_host) as tls_sock:
         result["reachable"] = True
-        cert = tls_sock.getpeercert()
-        if cert.get("notAfter"):
-          result["certificate_expires"] = cert["notAfter"]
+        certificate_der = tls_sock.getpeercert(binary_form=True)
+        if certificate_der and x509 is not None:
+          certificate = x509.load_der_x509_certificate(certificate_der)
+          expiry = certificate.not_valid_after_utc
+          result["certificate_expires"] = expiry.isoformat()
           try:
-            expiry = datetime.datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z").replace(tzinfo=datetime.timezone.utc)
             result["days_remaining"] = (expiry - datetime.datetime.now(datetime.timezone.utc)).days
-          except ValueError:
+          except (TypeError, ValueError):
             pass
+          if result["error"].startswith("API HTTP"):
+            result["error"] = ""
   except Exception as exc:
     if not result["error"]:
       result["error"] = f"TLS: {exc}"
@@ -47951,7 +47957,7 @@ def settings_page(request: Request):
           <div class="form-group" style="border:2px solid #005eb8;border-radius:6px;padding:14px;background:#f4f8fc;">
             <label>Cisco Expressway Hosts</label>
             <div class="help-text">Enter eight Production Expressway IPs/hostnames and two LAB Expressway IPs/hostnames. API credentials remain in .env.</div>
-            {"".join(f'<label style="margin-top:10px;">{escape((settings.get("expressway_hosts", [{}] * 10)[i] if isinstance(settings.get("expressway_hosts", []), list) and i < len(settings.get("expressway_hosts", [])) and isinstance(settings.get("expressway_hosts", [])[i], dict) else {}).get("label", (f"Production Expressway {i + 1}" if i < 8 else f"LAB Expressway {i - 7}")))}</label><input type="text" id="expressway_host_{i + 1}" name="expressway_host_{i + 1}" value="{escape((settings.get("expressway_hosts", [{}] * 10)[i] if isinstance(settings.get("expressway_hosts", []), list) and i < len(settings.get("expressway_hosts", [])) and isinstance(settings.get("expressway_hosts", [])[i], dict) else {}).get("host", ""))}" maxlength="255">' for i in range(10))}
+            {"".join(f'<div style="display:grid;grid-template-columns:1fr 2fr;gap:8px;margin-top:10px;"><input type="text" id="expressway_label_{i + 1}" value="{escape((settings.get("expressway_hosts", [{}] * 10)[i] if isinstance(settings.get("expressway_hosts", []), list) and i < len(settings.get("expressway_hosts", [])) and isinstance(settings.get("expressway_hosts", [])[i], dict) else {}).get("label", (f"Production Expressway {i + 1}" if i < 8 else f"LAB Expressway {i - 7}")))}" placeholder="Display name"><input type="text" id="expressway_host_{i + 1}" value="{escape((settings.get("expressway_hosts", [{}] * 10)[i] if isinstance(settings.get("expressway_hosts", []), list) and i < len(settings.get("expressway_hosts", [])) and isinstance(settings.get("expressway_hosts", [])[i], dict) else {}).get("host", ""))}" placeholder="IP address or hostname" maxlength="255"></div>' for i in range(10))}
           </div>
           
           <div class="button-group">
@@ -47994,7 +48000,7 @@ def settings_page(request: Request):
           sip_call_search_per_file_mb: document.getElementById('sip_call_search_per_file_mb').value.trim(),
           sip_call_search_total_mb: document.getElementById('sip_call_search_total_mb').value.trim(),
           expressway_hosts: Array.from({{length: 10}}, (_, i) => ({{
-            label: i < 8 ? ('Production Expressway ' + (i + 1)) : ('LAB Expressway ' + (i - 7)),
+            label: document.getElementById('expressway_label_' + (i + 1)).value.trim() || (i < 8 ? ('Production Expressway ' + (i + 1)) : ('LAB Expressway ' + (i - 7))),
             host: document.getElementById('expressway_host_' + (i + 1)).value.trim(),
           }})),
         }};
@@ -48108,7 +48114,7 @@ def update_settings_api(request: Request, body: dict = None):
       for index in range(10):
         item = raw_expressway_hosts[index] if index < len(raw_expressway_hosts) and isinstance(raw_expressway_hosts[index], dict) else {}
         expressway_hosts.append({
-          "label": f"Production Expressway {index + 1}" if index < 8 else f"LAB Expressway {index - 7}",
+          "label": str(item.get("label", "") or "").strip() or (f"Production Expressway {index + 1}" if index < 8 else f"LAB Expressway {index - 7}"),
           "host": str(item.get("host", "") or "").strip(),
         })
     
