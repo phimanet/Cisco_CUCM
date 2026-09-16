@@ -47551,66 +47551,112 @@ def _expressway_probe(host: str) -> dict:
   except Exception as exc:
     result["error"] = f"TLS 443: {exc}"
 
-  # 2. Query Expressway status.xml / API for version & call counters
-  # Cisco VCS/Expressway exposes XML status at /status.xml with HTTP Basic Auth
-  try:
-    if EXPRESSWAY_API_USERNAME and EXPRESSWAY_API_PASSWORD:
+  # 2. Query Expressway for version & call counters
+  api_user = (EXPRESSWAY_API_USERNAME or "").strip()
+  api_pass = EXPRESSWAY_API_PASSWORD or ""
+  if not api_user or not api_pass:
+    if result.get("version") == "Unavailable":
+      result["error"] = "Set EXPRESSWAY_API_USERNAME & PASSWORD in .env"
+    return result
+
+  # Endpoints to probe in priority order:
+  # a) /getxml?location=/Status (Cisco VCS/Expressway standard XML API)
+  # b) /status.xml (Legacy/standard Tandberg/VCS XML)
+  # c) /api/provisioning/common/system/version or /api/status
+  endpoints = [
+    f"https://{clean_host}/getxml?location=/Status",
+    f"https://{clean_host}/status.xml",
+  ]
+
+  api_errors = []
+  for url in endpoints:
+    try:
       resp = requests.get(
-        f"https://{clean_host}/status.xml",
-        auth=HTTPBasicAuth(EXPRESSWAY_API_USERNAME, EXPRESSWAY_API_PASSWORD),
+        url,
+        auth=HTTPBasicAuth(api_user, api_pass),
         verify=False,
-        timeout=10,
+        timeout=8,
       )
-      if resp.ok and resp.text:
+      if resp.status_code == 200 and resp.text:
         result["reachable"] = True
         try:
           root = ET.fromstring(resp.text)
-          # Software Version: often in <Software><Version> or <Product><Version> or <SystemUnit><Software><Version>
-          for tag in [".//Software/Version", ".//Product/Version", ".//SystemUnit/Software/Version", ".//Version"]:
+          # Version: <Software><Version>, <Product><Version>, <Version>
+          for tag in [
+            ".//Software/Version",
+            ".//Product/Version",
+            ".//SystemUnit/Software/Version",
+            ".//Version",
+            ".//SoftwareVersion",
+          ]:
             el = root.find(tag)
             if el is not None and (el.text or "").strip():
               result["version"] = el.text.strip()
               break
-          # Calls / Calls/Active / Current / Total:
-          # In Cisco Expressway status.xml, calls are typically under:
-          # <Status><Calls><Active>...</Active></Calls></Status> or <Resource><Calls>
-          # Let's inspect active/current and peak/max counters
-          for tag in [".//Calls/Active/Audio", ".//Calls/Current/Audio", ".//Calls/Audio/Active", ".//Calls/Active"]:
+
+          # Active Calls:
+          # In /getxml?location=/Status:
+          # <Status><Calls><Active> or <Status><Calls><Total><Active>
+          # <Status><Media><Channels> etc.
+          # or <Calls><Active><Audio>, <Calls><Active><Video>
+          for tag in [
+            ".//Calls/Active/Audio",
+            ".//Calls/Current/Audio",
+            ".//Calls/Audio/Active",
+            ".//Calls/Active",
+            ".//Calls/Total/Active",
+          ]:
             el = root.find(tag)
             if el is not None and (el.text or "").strip():
               result["voice_calls"] = el.text.strip()
               break
-          for tag in [".//Calls/Active/Video", ".//Calls/Current/Video", ".//Calls/Video/Active"]:
+
+          for tag in [
+            ".//Calls/Active/Video",
+            ".//Calls/Current/Video",
+            ".//Calls/Video/Active",
+          ]:
             el = root.find(tag)
             if el is not None and (el.text or "").strip():
               result["video_calls"] = el.text.strip()
               break
-          for tag in [".//Calls/Peak/Audio", ".//Calls/Max/Audio", ".//Calls/Audio/Peak"]:
+
+          # Peak Calls:
+          for tag in [
+            ".//Calls/Peak/Audio",
+            ".//Calls/Max/Audio",
+            ".//Calls/Audio/Peak",
+            ".//Calls/Peak",
+            ".//Calls/Max",
+          ]:
             el = root.find(tag)
             if el is not None and (el.text or "").strip():
               result["peak_audio_calls"] = el.text.strip()
               break
-          for tag in [".//Calls/Peak/Video", ".//Calls/Max/Video", ".//Calls/Video/Peak"]:
+
+          for tag in [
+            ".//Calls/Peak/Video",
+            ".//Calls/Max/Video",
+            ".//Calls/Video/Peak",
+          ]:
             el = root.find(tag)
             if el is not None and (el.text or "").strip():
-              result["peak_video_calls"] = pv_el = el.text.strip()
+              result["peak_video_calls"] = el.text.strip()
               break
-        except Exception:
-          pass
-      elif not resp.ok:
-        # Note the HTTP response code from status.xml in details if calls remain unavailable
-        if result.get("version") == "Unavailable":
-          result["error"] = f"status.xml HTTP {resp.status_code}"
-    else:
-      if result.get("version") == "Unavailable":
-        result["error"] = "EXPRESSWAY_API_USERNAME/PASSWORD not in .env"
-  except Exception as exc:
-    if result.get("version") == "Unavailable":
-      result["error"] = f"status.xml: {exc}"
 
-  # If certificate was retrieved successfully, clear any transient API error
-  if result.get("certificate_expires") != "Unavailable":
-    result["error"] = ""
+          # If we matched version or calls, break early
+          if result["version"] != "Unavailable" or result["voice_calls"] != "Unavailable":
+            result["error"] = ""
+            break
+        except Exception as parse_err:
+          api_errors.append(f"XML parse: {parse_err}")
+      else:
+        api_errors.append(f"{url.split('?')[0].split('/')[-1]} HTTP {resp.status_code}")
+    except Exception as req_err:
+      api_errors.append(f"HTTP error: {req_err}")
+
+  if (result.get("version") == "Unavailable" or result.get("voice_calls") == "Unavailable") and api_errors:
+    result["error"] = " | ".join(api_errors[:2])
 
   return result
 
