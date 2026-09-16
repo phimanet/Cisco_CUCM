@@ -40205,7 +40205,7 @@ def menu_admin_page(request: Request):
             }
             function csvCell(value) {
               var text = String(value == null ? "" : value);
-              return /[",\r\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
+              return /[",\\r\\n]/.test(text) ? '"' + text.replace(/"/g, '""') + '"' : text;
             }
             function downloadCsv() {
               if (!reportRows.length) return;
@@ -40219,7 +40219,7 @@ def menu_admin_page(request: Request):
                   row.called_party_transform_mask, row.is_callable, routeDetails.join(" | ")
                 ].map(csvCell).join(","));
               });
-              var blob = new Blob([lines.join("\r\n") + "\r\n"], {type:"text/csv;charset=utf-8"});
+              var blob = new Blob([lines.join("\\r\\n") + "\\r\\n"], {type:"text/csv;charset=utf-8"});
               var url = URL.createObjectURL(blob);
               var link = document.createElement("a");
               link.href = url;
