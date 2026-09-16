@@ -47590,6 +47590,49 @@ def _expressway_probe(host: str) -> dict:
   except Exception:
     pass
 
+  # Calls: probe /api/status/common/calls and /api/status/common/systeminfo (JSON REST API)
+  # then fallback to /getxml?location=/Status
+  try:
+    resp = requests.get(
+      f"https://{clean_host}/api/status/common/systeminfo",
+      auth=auth,
+      headers=headers,
+      verify=False,
+      timeout=2.5,
+    )
+    if resp.status_code == 200:
+      sdata = resp.json() if resp.text.strip().startswith(("{", "[")) else {}
+      if isinstance(sdata, dict):
+        cc = sdata.get("CurrentCalls")
+        if cc is not None:
+          result["voice_calls"] = str(cc)
+  except Exception:
+    pass
+
+  try:
+    resp = requests.get(
+      f"https://{clean_host}/api/status/common/calls",
+      auth=auth,
+      headers=headers,
+      verify=False,
+      timeout=2.5,
+    )
+    if resp.status_code == 200:
+      cdata = resp.json() if resp.text.strip().startswith(("{", "[")) else []
+      if isinstance(cdata, list):
+        v_count = 0
+        a_count = 0
+        for call_item in cdata:
+          if isinstance(call_item, dict):
+            if str(call_item.get("CallType", "")).lower() == "video" or (call_item.get("Bandwidth") or 0) > 128:
+              v_count += 1
+            else:
+              a_count += 1
+        result["voice_calls"] = str(a_count)
+        result["video_calls"] = str(v_count)
+  except Exception:
+    pass
+
   # Calls: query /getxml?location=/Status (timeout=2.5s)
   try:
     resp = requests.get(
@@ -47621,8 +47664,12 @@ def _expressway_probe(host: str) -> dict:
         if el is not None and (el.text or "").strip():
           result["peak_video_calls"] = el.text.strip()
           break
-  except Exception:
-    pass
+    elif resp.status_code != 200:
+      if result["voice_calls"] == "Unavailable":
+        result["error"] = f"Calls API: HTTP {resp.status_code}"
+  except Exception as exc:
+    if result["voice_calls"] == "Unavailable":
+      result["error"] = f"Calls API: {exc}"
 
   return result
 
