@@ -49525,6 +49525,7 @@ def route_plan_report_route(
         cucm_host=cucm_host,
         operator=operator,
         target=f"number={report['query']};matches={report['total_matches']}",
+        output_filename="",
         inline_mode=True,
       )
       return JSONResponse({"ok": True, **report})
