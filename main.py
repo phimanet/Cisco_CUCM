@@ -47502,54 +47502,95 @@ def _expressway_configured_hosts() -> list[dict]:
   return hosts
 
 
+def _parse_asn1_cert_expiry(der_bytes: bytes) -> tuple[str, int | None]:
+  """Parse certificate expiration from DER bytes using pure Python ASN.1 parsing (no external cryptography lib required)."""
+  try:
+    if not der_bytes:
+      return "Unavailable", None
+    # X.509 Validity has UTCTime (\x17) or GeneralizedTime (\x18): [notBefore, notAfter]
+    matches = re.findall(rb'(\x17|\x18)([\x0d\x0f])([0-9]{12,14}Z)', der_bytes)
+    if len(matches) >= 2:
+      tag, length, time_bytes = matches[1]  # second match is notAfter
+      time_str = time_bytes.decode("ascii")
+      if tag == b'\x17':  # UTCTime YYMMDDHHMMSSZ
+        year = int(time_str[:2])
+        full_year = 2000 + year if year < 70 else 1900 + year
+        dt_str = f"{full_year}{time_str[2:]}"
+      else:  # GeneralizedTime YYYYMMDDHHMMSSZ
+        dt_str = time_str
+      dt = datetime.datetime.strptime(dt_str, "%Y%m%d%H%M%SZ").replace(tzinfo=datetime.timezone.utc)
+      days = (dt - datetime.datetime.now(datetime.timezone.utc)).days
+      return dt.strftime("%Y-%m-%d %H:%M:%S UTC"), days
+  except Exception as exc:
+    logger.debug("ASN.1 cert parse error: %s", exc)
+  return "Unavailable", None
+
+
 def _expressway_probe(host: str) -> dict:
   clean_host = (host or "").strip()
   result = {"host": clean_host, "reachable": False, "version": "Unavailable", "certificate_expires": "Unavailable", "days_remaining": None, "voice_calls": "Unavailable", "video_calls": "Unavailable", "peak_audio_calls": "Unavailable", "peak_video_calls": "Unavailable", "error": ""}
   if not clean_host:
     result["error"] = "Not configured"
     return result
-  try:
-    response = requests.get(
-      f"https://{clean_host}{EXPRESSWAY_API_CERTIFICATE_PATH}",
-      auth=HTTPBasicAuth(EXPRESSWAY_API_USERNAME, EXPRESSWAY_API_PASSWORD),
-      verify=False, timeout=20,
-    )
-    if response.ok:
-      pem_text = response.text or ""
-      if x509 is not None and "BEGIN CERTIFICATE" in pem_text:
-        certificate = x509.load_pem_x509_certificate(pem_text.encode("ascii"))
-        expiry = certificate.not_valid_after_utc
-        result["certificate_expires"] = expiry.isoformat()
-        result["days_remaining"] = (expiry - datetime.datetime.now(datetime.timezone.utc)).days
-      else:
-        payload = response.json() if response.text else {}
-        result["version"] = str(payload.get("version", payload.get("softwareVersion", "Unavailable"))) if isinstance(payload, dict) else "Unavailable"
-      result["reachable"] = True
-    else:
-      result["error"] = f"API HTTP {response.status_code}"
-  except Exception as exc:
-    result["error"] = f"API: {exc}"
+
+  # 1. TLS handshake directly against port 443 — standard client handshake
+  # This works on every Expressway without requiring administrative credentials or REST API enablement
   try:
     context = ssl.create_default_context()
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
-    with socket.create_connection((clean_host, 443), timeout=12) as sock:
-      with context.wrap_socket(sock, server_hostname=clean_host) as tls_sock:
+    with socket.create_connection((clean_host, 443), timeout=10) as sock:
+      with context.wrap_socket(sock) as tls_sock:
         result["reachable"] = True
-        certificate_der = tls_sock.getpeercert(binary_form=True)
-        if certificate_der and x509 is not None:
-          certificate = x509.load_der_x509_certificate(certificate_der)
-          expiry = certificate.not_valid_after_utc
-          result["certificate_expires"] = expiry.isoformat()
-          try:
-            result["days_remaining"] = (expiry - datetime.datetime.now(datetime.timezone.utc)).days
-          except (TypeError, ValueError):
-            pass
-          if result["error"].startswith("API HTTP"):
-            result["error"] = ""
+        der = tls_sock.getpeercert(binary_form=True)
+        if der:
+          exp_str, days = _parse_asn1_cert_expiry(der)
+          if exp_str != "Unavailable":
+            result["certificate_expires"] = exp_str
+            result["days_remaining"] = days
   except Exception as exc:
-    if not result["error"]:
-      result["error"] = f"TLS: {exc}"
+    result["error"] = f"TLS 443: {exc}"
+
+  # 2. Query Expressway status.xml / API for version & call counters
+  # Cisco VCS/Expressway exposes XML status at /status.xml with HTTP Basic Auth
+  try:
+    if EXPRESSWAY_API_USERNAME and EXPRESSWAY_API_PASSWORD:
+      resp = requests.get(
+        f"https://{clean_host}/status.xml",
+        auth=HTTPBasicAuth(EXPRESSWAY_API_USERNAME, EXPRESSWAY_API_PASSWORD),
+        verify=False,
+        timeout=10,
+      )
+      if resp.ok and resp.text:
+        result["reachable"] = True
+        try:
+          root = ET.fromstring(resp.text)
+          # Version: <Product><Version>X15.4.0</Version></Product> or <Software><Version>
+          ver_el = root.find(".//Software/Version") or root.find(".//Product/Version") or root.find(".//Version")
+          if ver_el is not None and ver_el.text:
+            result["version"] = ver_el.text.strip()
+          # Calls: <Calls><Active><Total> or <Current>
+          v_el = root.find(".//Calls/Active/Audio") or root.find(".//Calls/Current/Audio") or root.find(".//Calls/Active")
+          if v_el is not None and v_el.text:
+            result["voice_calls"] = v_el.text.strip()
+          vid_el = root.find(".//Calls/Active/Video") or root.find(".//Calls/Current/Video")
+          if vid_el is not None and vid_el.text:
+            result["video_calls"] = vid_el.text.strip()
+          pa_el = root.find(".//Calls/Peak/Audio") or root.find(".//Calls/Max/Audio")
+          if pa_el is not None and pa_el.text:
+            result["peak_audio_calls"] = pa_el.text.strip()
+          pv_el = root.find(".//Calls/Peak/Video") or root.find(".//Calls/Max/Video")
+          if pv_el is not None and pv_el.text:
+            result["peak_video_calls"] = pv_el.text.strip()
+        except Exception:
+          pass
+  except Exception:
+    pass
+
+  # If certificate was retrieved successfully, clear any transient API error
+  if result.get("certificate_expires") != "Unavailable":
+    result["error"] = ""
+
   return result
 
 
