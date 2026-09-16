@@ -185,6 +185,7 @@ def _startup_background_services():
   _start_genesys_external_contact_load_worker()
   _start_genesys_cucm_sync_scheduler()
   _start_jabber_pool_scheduler()
+  _start_expressway_certificate_notice_worker()
 
 
 def _genesys_external_contact_load_update(job_id: str, **changes):
@@ -535,6 +536,13 @@ TWILIO_HOSTED_NUMBERS_ACTIVE = (os.getenv("TWILIO_HOSTED_NUMBERS_ACTIVE", "false
   "yes",
   "on",
 }
+EXPRESSWAY_API_USERNAME = (os.getenv("EXPRESSWAY_API_USERNAME", "") or "").strip()
+EXPRESSWAY_API_PASSWORD = os.getenv("EXPRESSWAY_API_PASSWORD", "") or ""
+EXPRESSWAY_API_CERTIFICATE_PATH = (os.getenv("EXPRESSWAY_API_CERTIFICATE_PATH", "/api/status/certificates") or "/api/status/certificates").strip()
+EXPRESSWAY_CERT_NOTICE_RECIPIENTS = [item.strip() for item in (os.getenv("EXPRESSWAY_CERT_NOTICE_RECIPIENTS", "") or "").split(",") if item.strip()]
+EXPRESSWAY_CERT_NOTICE_FROM = (os.getenv("EXPRESSWAY_CERT_NOTICE_FROM", "noreply@amnhealthcare.com") or "noreply@amnhealthcare.com").strip()
+EXPRESSWAY_CERT_NOTICE_ENABLED = (os.getenv("EXPRESSWAY_CERT_NOTICE_ENABLED", "true") or "true").strip().lower() in {"1", "true", "yes", "on"}
+EXPRESSWAY_CERT_NOTICE_STATE_PATH = (os.getenv("EXPRESSWAY_CERT_NOTICE_STATE_PATH", "") or "").strip() or os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "expressway_cert_notice_state.json")
 GENESYS_CLOUD_REGION = (os.getenv("GENESYS_CLOUD_REGION", "usw2") or "usw2").strip().lower()
 GENESYS_CLIENT_ID = (os.getenv("GENESYS_CLIENT_ID", "") or "").strip()
 GENESYS_CLIENT_SECRET = (os.getenv("GENESYS_CLIENT_SECRET", "") or "").strip()
@@ -950,6 +958,18 @@ DEFAULT_SETTINGS = {
   "sip_call_search_retention_days": "14",
   "sip_call_search_total_mb": "4096",
   "sip_call_search_per_file_mb": "15",
+  "expressway_hosts": [
+    {"label": "Production Expressway 1", "host": ""},
+    {"label": "Production Expressway 2", "host": ""},
+    {"label": "Production Expressway 3", "host": ""},
+    {"label": "Production Expressway 4", "host": ""},
+    {"label": "Production Expressway 5", "host": ""},
+    {"label": "Production Expressway 6", "host": ""},
+    {"label": "Production Expressway 7", "host": ""},
+    {"label": "Production Expressway 8", "host": ""},
+    {"label": "LAB Expressway 1", "host": ""},
+    {"label": "LAB Expressway 2", "host": ""},
+  ],
 }
 SETTINGS_LOCK = threading.Lock()
 
@@ -39876,6 +39896,10 @@ def menu_admin_page(request: Request):
             <strong>Voice Dashboard</strong>
             <span>Live CUCM, Jabber registration, and Unity port telemetry.</span>
           </a>
+          <a class="hero-link-card" href="/expressways">
+            <strong>Cisco Expressways</strong>
+            <span>Production and LAB certificate, version, and call-status view.</span>
+          </a>
           <a class="hero-link-card" href="/audit-trail">
             <strong>Action History</strong>
             <span>Review recent portal actions and download the audit CSV.</span>
@@ -39936,6 +39960,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/sinch-work'">Sinch Admin Page</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">SMS Item Menu (Page 3)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">DN Prefix Settings</button>
+            <button type="button" class="portal-nav-btn portal-nav-btn-info" onclick="window.location.href='/expressways'">Cisco Expressway Status</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unityldapsync">Trigger Unity LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unity-user-extract">Unity Connection User Extract</button>
@@ -47459,6 +47484,168 @@ def sip_call_search_download(request: Request, rel_path: str = Query("")):
   )
 
 
+def _expressway_configured_hosts() -> list[dict]:
+  configured = _load_settings().get("expressway_hosts", [])
+  if not isinstance(configured, list):
+    configured = []
+  hosts = []
+  for index in range(10):
+    item = configured[index] if index < len(configured) and isinstance(configured[index], dict) else {}
+    label = str(item.get("label", "") or "").strip() or (f"Production Expressway {index + 1}" if index < 8 else f"LAB Expressway {index - 7}")
+    host = str(item.get("host", "") or "").strip()
+    hosts.append({"index": index + 1, "label": label, "host": host, "environment": "Production" if index < 8 else "LAB"})
+  return hosts
+
+
+def _expressway_probe(host: str) -> dict:
+  clean_host = (host or "").strip()
+  result = {"host": clean_host, "reachable": False, "version": "Unavailable", "certificate_expires": "Unavailable", "days_remaining": None, "voice_calls": "Unavailable", "video_calls": "Unavailable", "peak_audio_calls": "Unavailable", "peak_video_calls": "Unavailable", "error": ""}
+  if not clean_host:
+    result["error"] = "Not configured"
+    return result
+  try:
+    response = requests.get(
+      f"https://{clean_host}{EXPRESSWAY_API_CERTIFICATE_PATH}",
+      auth=HTTPBasicAuth(EXPRESSWAY_API_USERNAME, EXPRESSWAY_API_PASSWORD),
+      verify=False, timeout=20,
+    )
+    if response.ok:
+      payload = response.json() if response.text else {}
+      text = json.dumps(payload, ensure_ascii=True)
+      result["version"] = str(payload.get("version", payload.get("softwareVersion", "Unavailable"))) if isinstance(payload, dict) else "Unavailable"
+      for key in ("notAfter", "expires", "expirationDate", "expiry", "validTo"):
+        match = re.search(rf'"{re.escape(key)}"\s*:\s*"([^"]+)"', text, re.IGNORECASE)
+        if match:
+          result["certificate_expires"] = match.group(1)
+          break
+      result["reachable"] = True
+    else:
+      result["error"] = f"API HTTP {response.status_code}"
+  except Exception as exc:
+    result["error"] = f"API: {exc}"
+  try:
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    with socket.create_connection((clean_host, 443), timeout=12) as sock:
+      with context.wrap_socket(sock, server_hostname=clean_host) as tls_sock:
+        result["reachable"] = True
+        cert = tls_sock.getpeercert()
+        if cert.get("notAfter"):
+          result["certificate_expires"] = cert["notAfter"]
+          try:
+            expiry = datetime.datetime.strptime(cert["notAfter"], "%b %d %H:%M:%S %Y %Z").replace(tzinfo=datetime.timezone.utc)
+            result["days_remaining"] = (expiry - datetime.datetime.now(datetime.timezone.utc)).days
+          except ValueError:
+            pass
+  except Exception as exc:
+    if not result["error"]:
+      result["error"] = f"TLS: {exc}"
+  return result
+
+
+EXPRESSWAY_CERT_NOTICE_LOCK = threading.Lock()
+
+
+def _expressway_notice_state() -> dict:
+  try:
+    if os.path.exists(EXPRESSWAY_CERT_NOTICE_STATE_PATH):
+      with open(EXPRESSWAY_CERT_NOTICE_STATE_PATH, "r", encoding="utf-8") as handle:
+        value = json.load(handle)
+        return value if isinstance(value, dict) else {}
+  except Exception:
+    logger.exception("Failed to load Expressway certificate notice state")
+  return {}
+
+
+def _expressway_save_notice_state(state: dict) -> None:
+  os.makedirs(os.path.dirname(EXPRESSWAY_CERT_NOTICE_STATE_PATH), exist_ok=True)
+  temp_path = f"{EXPRESSWAY_CERT_NOTICE_STATE_PATH}.tmp"
+  with open(temp_path, "w", encoding="utf-8") as handle:
+    json.dump(state, handle, indent=2)
+  os.replace(temp_path, EXPRESSWAY_CERT_NOTICE_STATE_PATH)
+
+
+def _expressway_send_due_certificate_notices() -> None:
+  if not EXPRESSWAY_CERT_NOTICE_ENABLED or not EXPRESSWAY_CERT_NOTICE_RECIPIENTS:
+    return
+  due = []
+  state = _expressway_notice_state()
+  now = datetime.datetime.now(datetime.timezone.utc)
+  for item in _expressway_configured_hosts():
+    if not item.get("host"):
+      continue
+    result = _expressway_probe(item["host"])
+    days_remaining = result.get("days_remaining")
+    if not isinstance(days_remaining, int) or days_remaining < 0 or days_remaining > 30:
+      continue
+    key = item["host"].lower()
+    entry = state.get(key, {}) if isinstance(state.get(key), dict) else {}
+    expiry = str(result.get("certificate_expires", "") or "")
+    if entry.get("certificate_expires") != expiry:
+      entry = {"certificate_expires": expiry, "last_notified_at": ""}
+    last_notified = str(entry.get("last_notified_at", "") or "")
+    notify = not last_notified
+    if last_notified:
+      try:
+        notify = (now - datetime.datetime.fromisoformat(last_notified)).total_seconds() >= 7 * 86400
+      except ValueError:
+        notify = True
+    if notify:
+      due.append({**item, **result})
+      entry["last_notified_at"] = now.isoformat()
+    state[key] = entry
+  if not due:
+    return
+  body = "Cisco Expressway certificate expiration notice\n\n"
+  body += "The following certificates have 30 or fewer days remaining:\n\n"
+  body += "\n".join(f"{item['label']} ({item['host']}): expires {item['certificate_expires']} ({item['days_remaining']} days remaining)" for item in due)
+  _send_smtp_email(EXPRESSWAY_CERT_NOTICE_FROM, EXPRESSWAY_CERT_NOTICE_RECIPIENTS, "Cisco Expressway certificate expiration notice", body)
+  with EXPRESSWAY_CERT_NOTICE_LOCK:
+    _expressway_save_notice_state(state)
+
+
+def _expressway_certificate_notice_loop() -> None:
+  while True:
+    try:
+      _expressway_send_due_certificate_notices()
+    except Exception:
+      logger.exception("Expressway certificate notice worker failed")
+    time.sleep(24 * 60 * 60)
+
+
+def _start_expressway_certificate_notice_worker() -> None:
+  if not _is_prod_runtime_host_strict():
+    logger.info("Expressway certificate notices disabled on non-PROD runtime host")
+    return
+  thread = threading.Thread(target=_expressway_certificate_notice_loop, name="expressway-cert-notices", daemon=True)
+  thread.start()
+
+
+@app.get("/expressways", response_class=HTMLResponse)
+def expressways_page(request: Request):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", ""))):
+    return HTMLResponse(content="<h3>403 Forbidden</h3><p>You are not authorized to access Expressway status.</p>", status_code=403)
+  rows = _expressway_configured_hosts()
+  row_json = json.dumps(rows).replace("</", "<\\/")
+  page_template = '''<!doctype html><html><head><meta charset="utf-8"><title>Expressway Status</title><style>body{font-family:Segoe UI,Arial;background:#edf5fc;color:#12304a;margin:0}header{background:linear-gradient(90deg,#002f6c,#005eb8);color:white;padding:18px 24px}main{max-width:1500px;margin:22px auto;padding:0 18px}.toolbar{display:flex;gap:10px;margin:12px 0}button,a{padding:9px 13px;border:0;border-radius:6px;background:#005eb8;color:white;text-decoration:none;font-weight:700}table{width:100%;border-collapse:collapse;background:white;box-shadow:0 8px 20px #002f6c18}th{background:#005eb8;color:white;text-align:left;padding:9px}td{padding:8px;border-bottom:1px solid #c8dbee}.prod{border-left:5px solid #005eb8}.lab{border-left:5px solid #d97706}.ok{color:#16733b;font-weight:700}.bad{color:#a12626;font-weight:700}</style></head><body><header><strong>Cisco Expressway Status</strong><span style="float:right">Authenticated Operator: __USER__</span></header><main><h2>Expressway Certificate and Call Status</h2><p>Eight Production Expressways and two LAB Expressways. Certificate notices begin at 30 days and repeat every 7 days until renewal.</p><div class="toolbar"><button id="load">Refresh Status</button><a href="/settings">Expressway Settings</a><a href="/menu">Back to Main Menu</a></div><div id="status">Click Refresh Status.</div><div id="results"></div></main><script>const hosts=__HOSTS__;const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));function render(rows){let h='<table><tr><th>Environment</th><th>Expressway</th><th>Host</th><th>Reachability</th><th>Version</th><th>Certificate Expires</th><th>Days Remaining</th><th>Current Voice Calls</th><th>Current Video Calls</th><th>Peak Audio Calls</th><th>Peak Video Calls</th><th>Details</th></tr>';rows.forEach(r=>{h+='<tr class="'+(r.environment==='LAB'?'lab':'prod')+'"><td>'+esc(r.environment)+'</td><td>'+esc(r.label)+'</td><td>'+esc(r.host||'-')+'</td><td class="'+(r.reachable?'ok':'bad')+'">'+(r.reachable?'Reachable':'Unavailable')+'</td><td>'+esc(r.version)+'</td><td>'+esc(r.certificate_expires)+'</td><td>'+esc(r.days_remaining??'-')+'</td><td>'+esc(r.voice_calls)+'</td><td>'+esc(r.video_calls)+'</td><td>'+esc(r.peak_audio_calls)+'</td><td>'+esc(r.peak_video_calls)+'</td><td>'+esc(r.error||'-')+'</td></tr>'});document.getElementById('results').innerHTML=h+'</table>'}async function load(){document.getElementById('status').textContent='Loading Expressways...';const r=await fetch('/api/expressways/status',{credentials:'same-origin'});const p=await r.json();if(!r.ok||!p.ok)throw new Error(p.error||'Status lookup failed');render(p.rows);document.getElementById('status').textContent='Checked '+p.rows.length+' Expressways.'}document.getElementById('load').onclick=()=>load().catch(e=>document.getElementById('status').textContent='Error: '+e.message);load().catch(e=>document.getElementById('status').textContent='Error: '+e.message);</script></body></html>'''
+  return HTMLResponse(content=page_template.replace("__USER__", escape(str(session.get("username", "")))).replace("__HOSTS__", row_json))
+
+
+@app.get("/api/expressways/status")
+def expressways_status_api(request: Request):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  rows = []
+  for item in _expressway_configured_hosts():
+    row = dict(item)
+    row.update(_expressway_probe(item["host"]))
+    rows.append(row)
+  return JSONResponse({"ok": True, "rows": rows})
+
+
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request):
   """Admin settings page for configuring phone prefixes and Twilio LOA defaults."""
@@ -47715,6 +47902,12 @@ def settings_page(request: Request):
             <input type="text" id="sip_call_search_total_mb" name="sip_call_search_total_mb" value="{escape(settings.get('sip_call_search_total_mb', '12288'))}" maxlength="8">
             <div class="help-text">Hard cap across all SIP capture files before oldest days are pruned</div>
           </div>
+
+          <div class="form-group" style="border:2px solid #005eb8;border-radius:6px;padding:14px;background:#f4f8fc;">
+            <label>Cisco Expressway Hosts</label>
+            <div class="help-text">Enter eight Production Expressway IPs/hostnames and two LAB Expressway IPs/hostnames. API credentials remain in .env.</div>
+            {"".join(f'<label style="margin-top:10px;">{escape((settings.get("expressway_hosts", [{}] * 10)[i] if isinstance(settings.get("expressway_hosts", []), list) and i < len(settings.get("expressway_hosts", [])) and isinstance(settings.get("expressway_hosts", [])[i], dict) else {}).get("label", (f"Production Expressway {i + 1}" if i < 8 else f"LAB Expressway {i - 7}")))}</label><input type="text" id="expressway_host_{i + 1}" name="expressway_host_{i + 1}" value="{escape((settings.get("expressway_hosts", [{}] * 10)[i] if isinstance(settings.get("expressway_hosts", []), list) and i < len(settings.get("expressway_hosts", [])) and isinstance(settings.get("expressway_hosts", [])[i], dict) else {}).get("host", ""))}" maxlength="255">' for i in range(10))}
+          </div>
           
           <div class="button-group">
             <button type="submit" class="btn-save">Save Changes</button>
@@ -47755,6 +47948,10 @@ def settings_page(request: Request):
           sip_call_search_retention_days: document.getElementById('sip_call_search_retention_days').value.trim(),
           sip_call_search_per_file_mb: document.getElementById('sip_call_search_per_file_mb').value.trim(),
           sip_call_search_total_mb: document.getElementById('sip_call_search_total_mb').value.trim(),
+          expressway_hosts: Array.from({{length: 10}}, (_, i) => ({{
+            label: i < 8 ? ('Production Expressway ' + (i + 1)) : ('LAB Expressway ' + (i - 7)),
+            host: document.getElementById('expressway_host_' + (i + 1)).value.trim(),
+          }})),
         }};
         
         if (!formData.general_fte_prefix || !formData.strike_prefix || !formData.recruiter_prefix) {{
@@ -47860,6 +48057,15 @@ def update_settings_api(request: Request, body: dict = None):
     sip_call_search_retention_days = (body.get("sip_call_search_retention_days", "") or "").strip()
     sip_call_search_per_file_mb = (body.get("sip_call_search_per_file_mb", "") or "").strip()
     sip_call_search_total_mb = (body.get("sip_call_search_total_mb", "") or "").strip()
+    raw_expressway_hosts = body.get("expressway_hosts", [])
+    expressway_hosts = []
+    if isinstance(raw_expressway_hosts, list):
+      for index in range(10):
+        item = raw_expressway_hosts[index] if index < len(raw_expressway_hosts) and isinstance(raw_expressway_hosts[index], dict) else {}
+        expressway_hosts.append({
+          "label": f"Production Expressway {index + 1}" if index < 8 else f"LAB Expressway {index - 7}",
+          "host": str(item.get("host", "") or "").strip(),
+        })
     
     if not general_fte_prefix or not strike_prefix or not recruiter_prefix:
       return JSONResponse({"ok": False, "error": "All fields are required"}, status_code=400)
@@ -47914,6 +48120,7 @@ def update_settings_api(request: Request, body: dict = None):
       "sep_dn_delete_enabled": ("true" if sep_dn_delete_enabled in {"1", "true", "yes", "on"} else "false"),
       "sep_dn_delete_recipient": sep_dn_delete_recipient or "Laura.Alvarez@amnhealthcare.com",
       "sep_dn_delete_recipient_2": sep_dn_delete_recipient_2,
+      "expressway_hosts": expressway_hosts,
     })
 
     if _save_settings(new_settings):
