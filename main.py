@@ -40183,7 +40183,7 @@ def menu_admin_page(request: Request):
           <div class="compact-inline-row">
             <span>Number or Dial String:</span>
             <input name="number" placeholder="8585236648" required style="min-width:260px;">
-            <button type="submit">Find Route Plan Matches</button>
+            <button type="submit" onclick="if (window.runRoutePlanReport) {{ window.runRoutePlanReport(event); }}">Find Route Plan Matches</button>
             <button type="button" id="admin-route-plan-download" disabled style="background:linear-gradient(180deg,#2f855a,#256b47);">Download CSV</button>
           </div>
         </form>
@@ -40230,8 +40230,8 @@ def menu_admin_page(request: Request):
               URL.revokeObjectURL(url);
             }
             downloadBtn.addEventListener("click", downloadCsv);
-            form.addEventListener("submit", function (event) {
-              event.preventDefault();
+            window.runRoutePlanReport = function (event) {
+              if (event) event.preventDefault();
               const formData = new FormData(form);
               const numberValue = (formData.get("number") || "").toString().trim();
               const url = new URL(window.location.href);
@@ -40277,7 +40277,8 @@ def menu_admin_page(request: Request):
                   resultsEl.innerHTML = html + "</tbody></table>";
                 })
                 .catch(function (error) { statusEl.textContent = "CUCM Route Plan Report failed: " + error.message; });
-            });
+              };
+              form.addEventListener("submit", window.runRoutePlanReport);
           })();
         </script>
       </section>
