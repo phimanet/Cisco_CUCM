@@ -40176,14 +40176,14 @@ def menu_admin_page(request: Request):
       <section class="panel tool-panel" data-panel="route-plan-report">
         <h3>CUCM Route Plan Report</h3>
         <p>Enter a phone number or dial string to find every exact or wildcard CUCM route-plan pattern that can match it. This report is read-only.</p>
-        <form id="admin-route-plan-form">
+        <form id="admin-route-plan-form" action="javascript:void(0)" method="post" onsubmit="if (window.runRoutePlanReport) { return window.runRoutePlanReport(event); } var s=document.getElementById('admin-route-plan-status'); if (s) { s.textContent='Route Plan handler missing (JavaScript did not load).'; s.style.color='#b42318'; } return false;">
           <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
           <div class="compact-inline-row">
             <span>Number or Dial String:</span>
             <input name="number" placeholder="8585236648" required style="min-width:260px;">
-            <button type="submit" onclick="if (window.runRoutePlanReport) {{ window.runRoutePlanReport(event); }}">Find Route Plan Matches</button>
+            <button type="button" onclick="if (window.runRoutePlanReport) { return window.runRoutePlanReport(event); } var s=document.getElementById('admin-route-plan-status'); if (s) { s.textContent='Route Plan handler missing (JavaScript did not load).'; s.style.color='#b42318'; } return false;">Find Route Plan Matches</button>
             <button type="button" id="admin-route-plan-download" disabled style="background:linear-gradient(180deg,#2f855a,#256b47);">Download CSV</button>
           </div>
         </form>
