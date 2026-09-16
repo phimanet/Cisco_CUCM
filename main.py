@@ -12262,14 +12262,19 @@ def _twilio_all_account_number_inventory(force_refresh: bool = False) -> dict:
       force_refresh=force_refresh,
       auth_account_sid=str(account.get("auth_sid", "") or ""),
     )
-    return account, result
+    messaging = _list_twilio_messaging_services(
+      str(account.get("auth_sid", "") or ""),
+      str(account.get("auth_token", "") or ""),
+      force_refresh=force_refresh,
+    )
+    return account, result, messaging
 
   accounts = list(account_contexts.values())
   max_workers = max(1, min(8, len(accounts)))
   with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
     futures = [executor.submit(load_account, account) for account in accounts]
     for future in concurrent.futures.as_completed(futures):
-      account, result = future.result()
+      account, result, messaging = future.result()
       if not result.get("ok"):
         failures.append({
           "account_name": account.get("friendly_name", ""),
@@ -12277,14 +12282,23 @@ def _twilio_all_account_number_inventory(force_refresh: bool = False) -> dict:
           "error": result.get("status", "Twilio number lookup failed"),
         })
         continue
+      assignments = messaging.get("assignments", {}) if messaging.get("ok") else {}
       for number in result.get("numbers", []) or []:
         capabilities = number.get("capabilities", {}) or {}
         enabled_capabilities = [name.upper() for name in ("voice", "sms", "mms", "fax") if capabilities.get(name)]
+        phone_sid = str(number.get("sid", "") or "").strip()
+        assigned_services = assignments.get(phone_sid, []) or []
+        messaging_service = ", ".join(
+          f"{service.get('friendly_name', '')} ({service.get('sid', '')})"
+          for service in assigned_services
+          if service.get("friendly_name") or service.get("sid")
+        ) or "Not Set"
         rows.append({
           "phone_number": str(number.get("phone_number", "") or "").strip(),
           "friendly_name": str(number.get("friendly_name", "") or "").strip(),
-          "phone_sid": str(number.get("sid", "") or "").strip(),
+          "phone_sid": phone_sid,
           "capabilities": ", ".join(enabled_capabilities),
+          "messaging_service": messaging_service,
           "account_name": str(account.get("friendly_name", "") or "").strip(),
           "account_sid": str(account.get("sid", "") or "").strip(),
           "account_type": str(account.get("account_type", "") or "").strip(),
@@ -45552,7 +45566,7 @@ def page3_twilio_items(request: Request):
             const query = String(filterEl.value || "").trim().toLowerCase();
             if (!query) return inventoryRows;
             return inventoryRows.filter(function (row) {
-              return [row.phone_number, row.friendly_name, row.root_account_name, row.root_account_sid, row.account_name, row.account_sid, row.phone_sid]
+              return [row.phone_number, row.friendly_name, row.messaging_service, row.root_account_name, row.root_account_sid, row.account_name, row.account_sid, row.phone_sid]
                 .some(function (value) { return String(value || "").toLowerCase().includes(query); });
             });
           }
@@ -45563,7 +45577,7 @@ def page3_twilio_items(request: Request):
               return;
             }
             let html = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="background:#005eb8;color:#fff;">';
-            ["Phone Number", "Friendly Name", "Root Account", "Owning Account", "Account Type", "Account Status", "Account SID", "Phone SID", "Capabilities"].forEach(function (heading) {
+            ["Phone Number", "Friendly Name", "Messaging Service", "Root Account", "Owning Account", "Account Type", "Account Status", "Account SID", "Phone SID", "Capabilities"].forEach(function (heading) {
               html += '<th style="padding:8px 10px;text-align:left;white-space:nowrap;">' + escapeHtml(heading) + '</th>';
             });
             html += "</tr></thead><tbody>";
@@ -45571,6 +45585,7 @@ def page3_twilio_items(request: Request):
               html += '<tr style="background:' + (index % 2 ? "#fff" : "#f7fbff") + ';border-bottom:1px solid #c8dbee;">';
               html += '<td style="padding:7px 10px;font-family:Consolas,monospace;font-weight:700;">' + escapeHtml(row.phone_number || "-") + "</td>";
               html += '<td style="padding:7px 10px;">' + escapeHtml(row.friendly_name || "-") + "</td>";
+              html += '<td style="padding:7px 10px;">' + escapeHtml(row.messaging_service || "Not Set") + "</td>";
               html += '<td style="padding:7px 10px;">' + escapeHtml(row.root_account_name || "-") + "</td>";
               html += '<td style="padding:7px 10px;font-weight:700;">' + escapeHtml(row.account_name || "-") + "</td>";
               html += '<td style="padding:7px 10px;">' + escapeHtml(row.account_type || "-") + "</td>";
@@ -45619,10 +45634,10 @@ def page3_twilio_items(request: Request):
           downloadBtn.addEventListener("click", function () {
             const rows = filteredRows();
             if (!rows.length) return;
-            const headers = ["Phone Number", "Friendly Name", "Root Account", "Root Account SID", "Owning Account", "Account Type", "Account Status", "Account SID", "Phone SID", "Capabilities"];
+            const headers = ["Phone Number", "Friendly Name", "Messaging Service", "Root Account", "Root Account SID", "Owning Account", "Account Type", "Account Status", "Account SID", "Phone SID", "Capabilities"];
             const lines = [headers.map(csvCell).join(",")];
             rows.forEach(function (row) {
-              lines.push([row.phone_number, row.friendly_name, row.root_account_name, row.root_account_sid, row.account_name, row.account_type, row.account_status, row.account_sid, row.phone_sid, row.capabilities].map(csvCell).join(","));
+              lines.push([row.phone_number, row.friendly_name, row.messaging_service, row.root_account_name, row.root_account_sid, row.account_name, row.account_type, row.account_status, row.account_sid, row.phone_sid, row.capabilities].map(csvCell).join(","));
             });
             const blob = new Blob([lines.join("\\r\\n") + "\\r\\n"], {type:"text/csv;charset=utf-8"});
             const url = URL.createObjectURL(blob);
