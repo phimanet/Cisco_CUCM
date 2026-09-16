@@ -48262,11 +48262,6 @@ def expressways_page(request: Request):
         '<th>Version</th>' +
         '<th>Certificate Expires</th>' +
         '<th>Days Remaining</th>' +
-        '<th>Current Voice Calls</th>' +
-        '<th>Current Video Calls</th>' +
-        '<th>Peak Audio Calls</th>' +
-        '<th>Peak Video Calls</th>' +
-        '<th>Details</th>' +
         '</tr></thead><tbody>';
 
       rows.forEach(r => {{
@@ -48279,11 +48274,6 @@ def expressways_page(request: Request):
           '<td>' + esc(r.version) + '</td>' +
           '<td' + warnClass + '>' + esc(r.certificate_expires) + '</td>' +
           '<td' + warnClass + '>' + esc(r.days_remaining ?? '-') + '</td>' +
-          '<td>' + esc(r.voice_calls) + '</td>' +
-          '<td>' + esc(r.video_calls) + '</td>' +
-          '<td>' + esc(r.peak_audio_calls) + '</td>' +
-          '<td>' + esc(r.peak_video_calls) + '</td>' +
-          '<td>' + esc(r.error || '-') + '</td>' +
           '</tr>';
       }});
       h += '</tbody></table>';
@@ -48633,9 +48623,6 @@ def ribbon_sbc_page(request: Request):
           '<td>' + esc(r.active_calls || '-') + '</td>' +
           '</tr>';
       }});
-      h += '</tbody></table>';
-      document.getElementById('results').innerHTML = h;
-    }}
       h += '</tbody></table>';
       document.getElementById('results').innerHTML = h;
     }}
