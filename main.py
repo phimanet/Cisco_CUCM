@@ -39971,9 +39971,18 @@ def menu_admin_page(request: Request):
               });
             });
 
-            const initialPanel = (new URLSearchParams(window.location.search).get("panel") || "").trim();
-            if (initialPanel && panels.some((panel) => panel.dataset.panel === initialPanel)) {
-              showPanel(initialPanel);
+            const qs = new URLSearchParams(window.location.search);
+            const initialPanel = (qs.get("panel") || "").trim();
+            const initialNumber = (qs.get("number") || "").trim();
+            const resolvedPanel = initialPanel || (initialNumber ? "route-plan-report" : "");
+            if (resolvedPanel && panels.some((panel) => panel.dataset.panel === resolvedPanel)) {
+              showPanel(resolvedPanel);
+              if (resolvedPanel === "route-plan-report") {
+                const numberField = document.querySelector('#admin-route-plan-form input[name="number"]');
+                if (numberField && !numberField.value && initialNumber) {
+                  numberField.value = initialNumber;
+                }
+              }
             }
           }
 
@@ -40223,11 +40232,21 @@ def menu_admin_page(request: Request):
             downloadBtn.addEventListener("click", downloadCsv);
             form.addEventListener("submit", function (event) {
               event.preventDefault();
+              const formData = new FormData(form);
+              const numberValue = (formData.get("number") || "").toString().trim();
+              const url = new URL(window.location.href);
+              url.searchParams.set("panel", "route-plan-report");
+              if (numberValue) {
+                url.searchParams.set("number", numberValue);
+              } else {
+                url.searchParams.delete("number");
+              }
+              window.history.replaceState({}, "", url.toString());
               statusEl.textContent = "Searching the CUCM route plan...";
               resultsEl.innerHTML = "";
               reportRows = [];
               downloadBtn.disabled = true;
-              fetch("/admin/route-plan-report", {method:"POST", body:new FormData(form), credentials:"same-origin"})
+              fetch("/admin/route-plan-report", {method:"POST", body: formData, credentials:"same-origin"})
                 .then(function (response) { return response.json().then(function (payload) { if (!response.ok || !payload.ok) throw new Error(payload.error || "Route plan lookup failed."); return payload; }); })
                 .then(function (payload) {
                   reportRows = payload.results || [];
