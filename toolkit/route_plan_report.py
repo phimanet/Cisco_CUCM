@@ -82,9 +82,8 @@ def _pattern_regex(pattern):
 def _match_kind(pattern, number):
     if pattern == number:
         return "Exact"
-    compiled = _pattern_regex(pattern)
-    if compiled is not None and compiled.fullmatch(number):
-        return "Dial Pattern"
+    if str(pattern or "").startswith(number):
+        return "Begins With"
     return ""
 
 
@@ -125,18 +124,7 @@ def _execute_sql(session, cucm_host, sql):
 
 def _candidate_where(number):
     literal = _sql_literal(number)
-    clauses = [f"n.dnorpattern = '{literal}'"]
-    seen = set(clauses)
-    for length in range(len(number) + 1):
-        prefix = _sql_literal(number[:length])
-        for wildcard in ("X", "[", "!", "?", "@", "."):
-            clause = f"n.dnorpattern LIKE '{prefix}{wildcard}%'"
-            if clause not in seen:
-                seen.add(clause)
-                clauses.append(clause)
-    if number.startswith("+"):
-        clauses.append("n.dnorpattern LIKE '\\+%'")
-    return " OR ".join(clauses)
+    return f"n.dnorpattern LIKE '{literal}%'"
 
 
 def _route_plan_sql(number, include_extended_details=True):

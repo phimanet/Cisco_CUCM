@@ -40175,7 +40175,7 @@ def menu_admin_page(request: Request):
 
       <section class="panel tool-panel" data-panel="route-plan-report">
         <h3>CUCM Route Plan Report</h3>
-        <p>Enter a phone number or dial string to find every exact or wildcard CUCM route-plan pattern that can match it. This report is read-only.</p>
+        <p>Enter a phone number or dial string to find CUCM route-plan patterns whose Pattern or URI begins with it. This report is read-only.</p>
         <form id="admin-route-plan-form" action="javascript:void(0)" method="post" onsubmit="if (window.runRoutePlanReport) { return window.runRoutePlanReport(event); } var s=document.getElementById('admin-route-plan-status'); if (s) { s.textContent='Route Plan handler missing (JavaScript did not load).'; s.style.color='#b42318'; } return false;">
           <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
