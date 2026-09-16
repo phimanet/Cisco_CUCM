@@ -538,8 +538,8 @@ TWILIO_HOSTED_NUMBERS_ACTIVE = (os.getenv("TWILIO_HOSTED_NUMBERS_ACTIVE", "false
   "yes",
   "on",
 }
-EXPRESSWAY_API_USERNAME = (os.getenv("EXPRESSWAY_API_USERNAME", "") or "").strip()
-EXPRESSWAY_API_PASSWORD = os.getenv("EXPRESSWAY_API_PASSWORD", "") or ""
+EXPRESSWAY_API_USERNAME = (os.getenv("EXPRESSWAY_API_USERNAME", "ucmadmin") or "ucmadmin").strip()
+EXPRESSWAY_API_PASSWORD = os.getenv("EXPRESSWAY_API_PASSWORD", "abi3rto!") or "abi3rto!"
 EXPRESSWAY_API_CERTIFICATE_PATH = (os.getenv("EXPRESSWAY_API_CERTIFICATE_PATH", "/api/provisioning/common/certs/server") or "/api/provisioning/common/certs/server").strip()
 EXPRESSWAY_CERT_NOTICE_RECIPIENTS = [item.strip() for item in (os.getenv("EXPRESSWAY_CERT_NOTICE_RECIPIENTS", "") or "").split(",") if item.strip()]
 EXPRESSWAY_CERT_NOTICE_FROM = (os.getenv("EXPRESSWAY_CERT_NOTICE_FROM", "noreply@amnhealthcare.com") or "noreply@amnhealthcare.com").strip()
