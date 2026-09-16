@@ -47551,7 +47551,7 @@ def _expressway_probe(host: str) -> dict:
   except Exception as exc:
     result["error"] = f"TLS 443: {exc}"
 
-  # 2. Query Expressway for version & call counters
+  # 2. Query Expressway for version & call counters using Cisco's official REST API
   api_user = (EXPRESSWAY_API_USERNAME or "").strip()
   api_pass = EXPRESSWAY_API_PASSWORD or ""
   if not api_user or not api_pass:
@@ -47559,104 +47559,85 @@ def _expressway_probe(host: str) -> dict:
       result["error"] = "Set EXPRESSWAY_API_USERNAME & PASSWORD in .env"
     return result
 
-  # Endpoints to probe in priority order:
-  # a) /getxml?location=/Status (Cisco VCS/Expressway standard XML API)
-  # b) /status.xml (Legacy/standard Tandberg/VCS XML)
-  # c) /api/provisioning/common/system/version or /api/status
-  endpoints = [
+  # According to Cisco Expressway REST API Summary Guide:
+  # Base URL: https://<host>/api/
+  # System Info / Version: /api/provisioning/sysinfo or /api/v1/provisioning/sysinfo
+  # Status: /api/status/common/... or /getxml?location=/Status
+  api_headers = {"Accept": "application/json"}
+  
+  # Try sysinfo for software version:
+  for sysinfo_path in ["/api/provisioning/sysinfo", "/api/v1/provisioning/sysinfo", "/api/sysinfo"]:
+    try:
+      resp = requests.get(
+        f"https://{clean_host}{sysinfo_path}",
+        auth=HTTPBasicAuth(api_user, api_pass),
+        headers=api_headers,
+        verify=False,
+        timeout=6,
+      )
+      if resp.status_code == 200:
+        data = resp.json() if resp.text.strip().startswith(("{", "[")) else {}
+        if isinstance(data, dict):
+          # Extract version from JSON response
+          ver = data.get("SoftwareVersion") or data.get("version") or data.get("ProductVersion") or data.get("Release")
+          if ver:
+            result["version"] = str(ver).strip()
+            break
+    except Exception:
+      pass
+
+  # Try calls & status endpoints:
+  # /getxml?location=/Status (XML) and /status.xml
+  xml_endpoints = [
     f"https://{clean_host}/getxml?location=/Status",
     f"https://{clean_host}/status.xml",
   ]
-
-  api_errors = []
-  for url in endpoints:
+  for url in xml_endpoints:
     try:
       resp = requests.get(
         url,
         auth=HTTPBasicAuth(api_user, api_pass),
         verify=False,
-        timeout=8,
+        timeout=6,
       )
       if resp.status_code == 200 and resp.text:
-        result["reachable"] = True
-        try:
-          root = ET.fromstring(resp.text)
-          # Version: <Software><Version>, <Product><Version>, <Version>
-          for tag in [
-            ".//Software/Version",
-            ".//Product/Version",
-            ".//SystemUnit/Software/Version",
-            ".//Version",
-            ".//SoftwareVersion",
-          ]:
+        root = ET.fromstring(resp.text)
+        if result["version"] == "Unavailable":
+          for tag in [".//Software/Version", ".//Product/Version", ".//SystemUnit/Software/Version", ".//Version", ".//SoftwareVersion"]:
             el = root.find(tag)
             if el is not None and (el.text or "").strip():
               result["version"] = el.text.strip()
               break
 
-          # Active Calls:
-          # In /getxml?location=/Status:
-          # <Status><Calls><Active> or <Status><Calls><Total><Active>
-          # <Status><Media><Channels> etc.
-          # or <Calls><Active><Audio>, <Calls><Active><Video>
-          for tag in [
-            ".//Calls/Active/Audio",
-            ".//Calls/Current/Audio",
-            ".//Calls/Audio/Active",
-            ".//Calls/Active",
-            ".//Calls/Total/Active",
-          ]:
-            el = root.find(tag)
-            if el is not None and (el.text or "").strip():
-              result["voice_calls"] = el.text.strip()
-              break
-
-          for tag in [
-            ".//Calls/Active/Video",
-            ".//Calls/Current/Video",
-            ".//Calls/Video/Active",
-          ]:
-            el = root.find(tag)
-            if el is not None and (el.text or "").strip():
-              result["video_calls"] = el.text.strip()
-              break
-
-          # Peak Calls:
-          for tag in [
-            ".//Calls/Peak/Audio",
-            ".//Calls/Max/Audio",
-            ".//Calls/Audio/Peak",
-            ".//Calls/Peak",
-            ".//Calls/Max",
-          ]:
-            el = root.find(tag)
-            if el is not None and (el.text or "").strip():
-              result["peak_audio_calls"] = el.text.strip()
-              break
-
-          for tag in [
-            ".//Calls/Peak/Video",
-            ".//Calls/Max/Video",
-            ".//Calls/Video/Peak",
-          ]:
-            el = root.find(tag)
-            if el is not None and (el.text or "").strip():
-              result["peak_video_calls"] = el.text.strip()
-              break
-
-          # If we matched version or calls, break early
-          if result["version"] != "Unavailable" or result["voice_calls"] != "Unavailable":
-            result["error"] = ""
+        for tag in [".//Calls/Active/Audio", ".//Calls/Current/Audio", ".//Calls/Audio/Active", ".//Calls/Active", ".//Calls/Total/Active"]:
+          el = root.find(tag)
+          if el is not None and (el.text or "").strip():
+            result["voice_calls"] = el.text.strip()
             break
-        except Exception as parse_err:
-          api_errors.append(f"XML parse: {parse_err}")
-      else:
-        api_errors.append(f"{url.split('?')[0].split('/')[-1]} HTTP {resp.status_code}")
-    except Exception as req_err:
-      api_errors.append(f"HTTP error: {req_err}")
 
-  if (result.get("version") == "Unavailable" or result.get("voice_calls") == "Unavailable") and api_errors:
-    result["error"] = " | ".join(api_errors[:2])
+        for tag in [".//Calls/Active/Video", ".//Calls/Current/Video", ".//Calls/Video/Active"]:
+          el = root.find(tag)
+          if el is not None and (el.text or "").strip():
+            result["video_calls"] = el.text.strip()
+            break
+
+        for tag in [".//Calls/Peak/Audio", ".//Calls/Max/Audio", ".//Calls/Audio/Peak", ".//Calls/Peak", ".//Calls/Max"]:
+          el = root.find(tag)
+          if el is not None and (el.text or "").strip():
+            result["peak_audio_calls"] = el.text.strip()
+            break
+
+        for tag in [".//Calls/Peak/Video", ".//Calls/Max/Video", ".//Calls/Video/Peak"]:
+          el = root.find(tag)
+          if el is not None and (el.text or "").strip():
+            result["peak_video_calls"] = el.text.strip()
+            break
+
+        if result["version"] != "Unavailable" or result["voice_calls"] != "Unavailable":
+          result["error"] = ""
+          break
+    except Exception:
+      pass
 
   return result
 
