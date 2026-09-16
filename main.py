@@ -40281,6 +40281,56 @@ def menu_admin_page(request: Request):
               form.addEventListener("submit", window.runRoutePlanReport);
           })();
         </script>
+        <script>
+          (function () {
+            if (window.runRoutePlanReport) return;
+            var form = document.getElementById("admin-route-plan-form");
+            var statusEl = document.getElementById("admin-route-plan-status");
+            var resultsEl = document.getElementById("admin-route-plan-results");
+            var downloadBtn = document.getElementById("admin-route-plan-download");
+            if (!form || !statusEl || !resultsEl || !downloadBtn) return;
+            function escapeHtml(value) {
+              return String(value == null ? "" : value).replace(/[&<>"']/g, function (character) {
+                return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[character];
+              });
+            }
+            window.runRoutePlanReport = function (event) {
+              if (event) event.preventDefault();
+              var formData = new FormData(form);
+              var numberValue = String(formData.get("number") || "").trim();
+              var url = new URL(window.location.href);
+              url.searchParams.set("panel", "route-plan-report");
+              if (numberValue) url.searchParams.set("number", numberValue);
+              window.history.replaceState({}, "", url.toString());
+              statusEl.textContent = "Searching the CUCM route plan...";
+              statusEl.style.color = "#2c5c8a";
+              resultsEl.innerHTML = "";
+              downloadBtn.disabled = true;
+              fetch("/admin/route-plan-report", {method:"POST", body:formData, credentials:"same-origin"})
+                .then(function (response) { return response.json().then(function (payload) { if (!response.ok || !payload.ok) throw new Error(payload.error || "Route plan lookup failed."); return payload; }); })
+                .then(function (payload) {
+                  var rows = payload.results || [];
+                  statusEl.textContent = rows.length ? "Found " + String(payload.total_matches || rows.length) + " matching route-plan object(s) for " + String(payload.query || "") + "." : "No exact or wildcard route-plan patterns matched " + String(payload.query || "") + ".";
+                  downloadBtn.disabled = !rows.length;
+                  if (!rows.length) return;
+                  var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="background:#005eb8;color:#fff;">';
+                  ["Match","Pattern or URI","Partition","Type","Description","Called Party Transform Mask","Callable","Route Detail"].forEach(function (heading) { html += "<th style=\"padding:8px;text-align:left;white-space:nowrap;\">" + escapeHtml(heading) + "</th>"; });
+                  html += "</tr></thead><tbody>";
+                  rows.forEach(function (row, index) {
+                    var details = (row.devices || []).map(function (name) { return "Device: " + name; }).concat((row.line_groups || []).map(function (name) { return "Line Group: " + name; }));
+                    var values = [row.match, row.pattern, row.route_partition, row.type, row.description || "-", row.called_party_transform_mask || "-", row.is_callable || "-", details.join(" | ") || "-"];
+                    html += '<tr style="background:' + (index % 2 ? "#fff" : "#f7fbff") + ';border-bottom:1px solid #c8dbee;">';
+                    values.forEach(function (value) { html += '<td style="padding:7px 8px;">' + escapeHtml(value) + "</td>"; });
+                    html += "</tr>";
+                  });
+                  resultsEl.innerHTML = html + "</tbody></table>";
+                })
+                .catch(function (error) { statusEl.textContent = "CUCM Route Plan Report failed: " + error.message; statusEl.style.color = "#b42318"; });
+              return false;
+            };
+            form.addEventListener("submit", window.runRoutePlanReport);
+          })();
+        </script>
       </section>
 
       <section class="panel tool-panel" data-panel="ldapsync">
