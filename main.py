@@ -48603,7 +48603,6 @@ def _ribbon_sbc_probe(host: str) -> dict:
     "reachable": False,
     "certificate_expires": "Unavailable",
     "days_remaining": None,
-    "active_calls": "-",
     "details": "Ready",
     "error": "",
   }
@@ -48630,93 +48629,6 @@ def _ribbon_sbc_probe(host: str) -> dict:
     result["error"] = f"TLS 443: {exc}"
     result["details"] = f"Connection error: {exc}"
     return result
-
-  # 2. Query Ribbon SBC REST endpoints for active calls & system status
-  api_user = (RIBBON_SBC_API_USERNAME or EXPRESSWAY_API_USERNAME or "ucmadmin").strip()
-  api_pass = RIBBON_SBC_API_PASSWORD or EXPRESSWAY_API_PASSWORD or "abi3rto!"
-  auth = HTTPBasicAuth(api_user, api_pass)
-  headers = {"Accept": "application/json, text/xml, application/xml, */*"}
-  
-  # Query the direct Basic-auth resources. The SWe Edge /rest/login helper is
-  # not supported consistently across releases and is not needed here.
-  auth_error = False
-  authorized_endpoint_seen = False
-  for endpoint in [
-    "/rest/system/overview",
-    "/rest/callstatus",
-    "/rest/channelstatus",
-    "/rest/system",
-    "/rest/media",
-    "/rest/logicalinterface",
-  ]:
-    try:
-      resp = requests.get(
-        f"https://{clean_host}{endpoint}",
-        auth=auth,
-        headers=headers,
-        verify=False,
-        timeout=2.5,
-      )
-      if resp.status_code == 401 or "<http_code>401</http_code>" in (resp.text or ""):
-        auth_error = True
-        continue
-      if resp.status_code == 200:
-        authorized_endpoint_seen = True
-      if resp.status_code == 200 and resp.text:
-        text = resp.text.strip()
-        # JSON response
-        if text.startswith(("{", "[")):
-          try:
-            data = resp.json()
-            if isinstance(data, (dict, list)):
-              def find_active_call_count(value, endpoint_name):
-                if isinstance(value, dict):
-                  for key, child in value.items():
-                    key_text = str(key).lower()
-                    if isinstance(child, (int, float, str)) and not isinstance(child, bool) and str(child).strip().isdigit() and any(
-                      token in key_text for token in ("activecall", "currentcall", "activechannel", "callcount", "numcalls")
-                    ):
-                      return int(str(child).strip())
-                    found = find_active_call_count(child, endpoint_name)
-                    if found is not None:
-                      return found
-                elif isinstance(value, list):
-                  if endpoint_name in ("callstatus", "channelstatus"):
-                    return len(value)
-                  for child in value:
-                    found = find_active_call_count(child, endpoint_name)
-                    if found is not None:
-                      return found
-                return None
-
-              count = find_active_call_count(data, endpoint.rsplit("/", 1)[-1])
-              if count is not None:
-                result["active_calls"] = str(count)
-              if result["active_calls"] not in ("-", "Auth Error (401)"):
-                break
-          except Exception:
-            pass
-        # XML response
-        elif "<" in text:
-          try:
-            root = ET.fromstring(text)
-            for elem in root.iter():
-              if "}" in elem.tag:
-                elem.tag = elem.tag.split("}", 1)[1]
-              tag = elem.tag.lower()
-              if tag in ("activecalls", "currentcalls", "activechannels", "callcount", "active", "totalcalls", "numcalls", "calls"):
-                if elem.text and elem.text.strip().isdigit():
-                  result["active_calls"] = elem.text.strip()
-                  break
-            if result["active_calls"] not in ("-", "Auth Error (401)"):
-              break
-          except Exception:
-            pass
-    except Exception:
-      pass
-
-  if result["active_calls"] == "-" and auth_error and not authorized_endpoint_seen:
-    result["active_calls"] = "Auth Error (401)"
 
   return result
 
@@ -49450,7 +49362,6 @@ def ribbon_sbc_page(request: Request):
         <p style="color:var(--amn-text-soft);font-size:12px;margin-top:2px;">Live certificate monitoring for Las Vegas (10.241.16.217) and Reno (10.141.16.40) Ribbon SBCs.</p>
         <div class="toolbar">
           <button id="load" class="btn-action">Refresh Status</button>
-          <button id="refresh-calls" class="btn-action" style="background:#0e7490;">Refresh Active Calls</button>
           <a href="/settings" class="btn-action" style="background:#2563eb;">SBC Settings</a>
           <a href="/menu" class="btn-action" style="background:#4e6a84;">Back to Main Menu</a>
         </div>
@@ -49471,7 +49382,6 @@ def ribbon_sbc_page(request: Request):
         '<th>Reachability</th>' +
         '<th>Certificate Expires</th>' +
         '<th>Days Remaining</th>' +
-        '<th>Active Calls</th>' +
         '</tr></thead><tbody>';
       
       rows.forEach(r => {{
@@ -49486,7 +49396,6 @@ def ribbon_sbc_page(request: Request):
           '<td><span class="' + reachClass + '">' + esc(reachText) + '</span></td>' +
           '<td>' + esc(r.certificate_expires || 'Unavailable') + '</td>' +
           '<td><span' + warnClass + '>' + esc(daysText) + '</span></td>' +
-          '<td>' + esc(r.active_calls || '-') + '</td>' +
           '</tr>';
       }});
       h += '</tbody></table>';
@@ -49511,7 +49420,6 @@ def ribbon_sbc_page(request: Request):
     }}
 
     document.getElementById('load').addEventListener('click', load);
-    document.getElementById('refresh-calls').addEventListener('click', load);
     render(hosts.map(h => ({{ ...h, reachable: false, certificate_expires: 'Click Refresh', days_remaining: null }})));
     load();
   </script>
