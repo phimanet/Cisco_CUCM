@@ -29763,14 +29763,14 @@ __ADMIN_CARD__
             .replace(/'/g, "&#39;");
         }
 
-        function renderTable(managers) {
+        function renderTable(reports) {
           if (!tableBody) return;
           tableBody.innerHTML = "";
-          if (!managers.length) {
-            tableBody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:18px; color:#6b7280;">No managers matching search filter.</td></tr>';
+          if (!reports.length) {
+            tableBody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:18px; color:#6b7280;">No reports matching search filter.</td></tr>';
             return;
           }
-          managers.forEach(function (m, idx) {
+          reports.forEach(function (m, idx) {
             const tr = document.createElement("tr");
             const bg = idx % 2 === 0 ? "#f7fbff" : "#ffffff";
             tr.style.background = bg;
@@ -29784,11 +29784,9 @@ __ADMIN_CARD__
               + '<a href="' + dlCsvUrl + '" style="display:inline-block; text-decoration:none; padding:4px 10px; border-radius:5px; background:linear-gradient(180deg,#355978,#223e57); color:#fff; font-weight:600; font-size:11px; box-shadow:0 1px 3px rgba(0,0,0,0.15);">⬇ CSV</a>'
               + '</div>';
 
-            const groupsDisplay = m.assignment_groups_display || (m.assignment_groups ? m.assignment_groups.join(', ') : '-');
-
             tr.innerHTML = '<td style="padding:8px 12px; color:#4e6a84; font-size:12px;">' + (idx + 1) + '</td>'
               + '<td style="padding:8px 12px; font-weight:600; color:#12304a;">' + escapeHtml(m.name) + '</td>'
-              + '<td style="padding:8px 12px; font-size:12px; color:#355978;">' + escapeHtml(groupsDisplay) + '</td>'
+              + '<td style="padding:8px 12px; font-size:12px; color:#005eb8; font-weight:600;">' + escapeHtml(m.assignment_group || "-") + '</td>'
               + '<td style="padding:8px 12px; text-align:center;">' + countBadge + '</td>'
               + '<td style="padding:8px 12px; text-align:center;">' + actionBtn + '</td>';
             tableBody.appendChild(tr);
@@ -29799,14 +29797,14 @@ __ADMIN_CARD__
           const q = (filterInput.value || "").trim().toLowerCase();
           if (!q) {
             renderTable(currentManagers);
-            if (filterCount) filterCount.textContent = "Showing all " + currentManagers.length + " managers";
+            if (filterCount) filterCount.textContent = "Showing all " + currentManagers.length + " report files";
             return;
           }
           const filtered = currentManagers.filter(function (m) {
-            return (m.name || "").toLowerCase().includes(q);
+            return (m.name || "").toLowerCase().includes(q) || (m.assignment_group || "").toLowerCase().includes(q);
           });
           renderTable(filtered);
-          if (filterCount) filterCount.textContent = "Showing " + filtered.length + " of " + currentManagers.length + " managers";
+          if (filterCount) filterCount.textContent = "Showing " + filtered.length + " of " + currentManagers.length + " report files";
         }
 
         if (filterInput) {
@@ -29831,7 +29829,7 @@ __ADMIN_CARD__
           }
 
           if (metaSummary) {
-            metaSummary.innerHTML = "Source: <strong>" + escapeHtml(job.source_filename) + "</strong> &bull; Total Records: <strong>" + (job.total_records || 0).toLocaleString() + "</strong> &bull; Managers: <strong>" + (job.total_managers || currentManagers.length) + "</strong> &bull; Split by Column: <strong style='color:#005eb8;'>" + escapeHtml(job.manager_column || "Auto") + "</strong>";
+            metaSummary.innerHTML = "Source: <strong>" + escapeHtml(job.source_filename) + "</strong> &bull; Total Records: <strong>" + (job.total_records || 0).toLocaleString() + "</strong> &bull; Report Files: <strong>" + (job.total_reports || currentManagers.length) + "</strong> &bull; Unique Managers: <strong>" + (job.total_managers || 0) + "</strong>";
           }
           const downloadMasterBtn = document.getElementById("sr-download-master-btn");
           if (downloadMasterBtn) {
@@ -29844,7 +29842,7 @@ __ADMIN_CARD__
           if (resultsCard) resultsCard.style.display = "block";
           if (filterInput) filterInput.value = "";
           renderTable(currentManagers);
-          if (filterCount) filterCount.textContent = "Showing all " + currentManagers.length + " managers";
+          if (filterCount) filterCount.textContent = "Showing all " + currentManagers.length + " report files";
         }
 
         async function loadRecentJobs() {
@@ -29958,7 +29956,7 @@ __ADMIN_CARD__
 
               const job = data.job;
               displayJob(job);
-              statusEl.textContent = "Successfully split " + (job.total_records || 0) + " records across " + (job.total_managers || 0) + " managers!";
+              statusEl.textContent = "Successfully generated " + (job.total_reports || (job.managers && job.managers.length) || 0) + " report files across " + (job.total_managers || 0) + " managers!";
               statusEl.style.color = "#1f7a3d";
 
               // Refresh history list
@@ -51093,84 +51091,54 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
   with open(master_excel_path, "wb") as mf:
     mf.write(master_bytes)
 
-  # 2. Build individual manager Excel files (.xlsx) and CSV files (.csv)
+  # 2. Build individual (Manager + Assignment Group) Excel files (.xlsx) and CSV files (.csv)
+  # Each Manager and Assignment Group combination is generated as its own standalone report file.
   manager_entries = []
   zip_files = []
 
   for mgr in sorted_managers:
     ag_dict = mgr_ag_groups[mgr]
-    mgr_total = _mgr_total(mgr)
-    clean_name = re.sub(r'[^\w\s\-.]', '', mgr).strip().replace(' ', '_')
-    if not clean_name:
-      clean_name = "Unassigned"
+    clean_mgr = re.sub(r'[^\w\s\-.]', '', mgr).strip().replace(' ', '_')
+    if not clean_mgr:
+      clean_mgr = "Unassigned"
 
-    all_mgr_rows = []
-    for ag_rows in ag_dict.values():
-      all_mgr_rows.extend(ag_rows)
+    for ag, ag_rows in sorted(ag_dict.items(), key=lambda g: -len(g[1])):
+      clean_ag_short = re.sub(r'^(SN_AppSupp\s*[-–]\s*|SN_Service\s*Desk[-_]\s*|SN_)', '', ag).strip()
+      if not clean_ag_short:
+        clean_ag_short = ag.strip()
+      clean_ag_name = re.sub(r'[^\w\s\-.]', '', clean_ag_short).strip().replace(' ', '_')
+      if not clean_ag_name:
+        clean_ag_name = "Group"
 
-    # Multi-tab individual workbook if manager has multiple assignment groups
-    mgr_sheets = {}
-    if len(ag_dict) > 1:
-      # Tab 1: Summary of assignment groups
-      summary_rows = [["Assignment Group", "Ticket Count"]]
-      for ag in sorted(ag_dict.keys(), key=lambda g: -len(ag_dict[g])):
-        summary_rows.append([ag, len(ag_dict[ag])])
-      summary_rows.append(["TOTAL", mgr_total])
-      mgr_sheets["Summary"] = summary_rows
+      mgr_xlsx_filename = f"Service_Report_{clean_mgr}_{clean_ag_name}.xlsx"
+      mgr_csv_filename = f"Service_Report_{clean_mgr}_{clean_ag_name}.csv"
 
-      # Tab 2: All Tickets
-      all_sheet = [headers]
-      for r in all_mgr_rows:
-        all_sheet.append([r.get(h, "") for h in headers])
-      mgr_sheets["All Tickets"] = all_sheet
-
-      # Tabs 3..N: Dedicated tab for each Assignment Group
-      for ag in sorted(ag_dict.keys(), key=lambda g: -len(ag_dict[g])):
-        clean_ag = ag.replace("SN_AppSupp - ", "").replace("SN_AppSupp – ", "").replace("SN_Service Desk_", "").replace("SN_", "")
-        tab_name = clean_ag[:31]
-        ag_sheet_data = [headers]
-        for r in ag_dict[ag]:
-          ag_sheet_data.append([r.get(h, "") for h in headers])
-        mgr_sheets[tab_name] = ag_sheet_data
-    else:
-      # Single assignment group manager: 1 clean sheet
+      tab_name = _clean_excel_sheet_name(clean_ag_short[:31] if len(ag_dict) > 1 else mgr[:31])
       sheet_data = [headers]
-      for r in all_mgr_rows:
+      for r in ag_rows:
         sheet_data.append([r.get(h, "") for h in headers])
-      mgr_sheets[mgr] = sheet_data
 
-    mgr_xlsx_bytes = _create_multi_sheet_xlsx(mgr_sheets)
-    mgr_xlsx_filename = f"Service_Report_{clean_name}.xlsx"
-    mgr_xlsx_path = os.path.join(job_dir, mgr_xlsx_filename)
-    with open(mgr_xlsx_path, "wb") as xf:
-      xf.write(mgr_xlsx_bytes)
-    zip_files.append((mgr_xlsx_filename, mgr_xlsx_path))
+      mgr_xlsx_bytes = _create_multi_sheet_xlsx({tab_name: sheet_data})
+      mgr_xlsx_path = os.path.join(job_dir, mgr_xlsx_filename)
+      with open(mgr_xlsx_path, "wb") as xf:
+        xf.write(mgr_xlsx_bytes)
+      zip_files.append((mgr_xlsx_filename, mgr_xlsx_path))
 
-    # Individual Manager CSV (.csv with UTF-8 BOM for Excel)
-    mgr_csv_filename = f"Service_Report_{clean_name}.csv"
-    mgr_csv_path = os.path.join(job_dir, mgr_csv_filename)
-    with open(mgr_csv_path, "w", newline="", encoding="utf-8-sig") as cf:
-      writer = csv.DictWriter(cf, fieldnames=headers, extrasaction="ignore")
-      writer.writeheader()
-      writer.writerows(all_mgr_rows)
+      # Individual CSV (.csv with UTF-8 BOM for Excel)
+      mgr_csv_path = os.path.join(job_dir, mgr_csv_filename)
+      with open(mgr_csv_path, "w", newline="", encoding="utf-8-sig") as cf:
+        writer = csv.DictWriter(cf, fieldnames=headers, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(ag_rows)
+      zip_files.append((mgr_csv_filename, mgr_csv_path))
 
-    # Format assignment groups display
-    ag_list = sorted(ag_dict.keys(), key=lambda g: -len(ag_dict[g]))
-    if len(ag_list) > 2:
-      ag_display = f"{len(ag_list)} groups ({ag_list[0]}, {ag_list[1]}, ...)"
-    elif len(ag_list) == 2:
-      ag_display = f"2 groups ({ag_list[0]}, {ag_list[1]})"
-    else:
-      ag_display = ag_list[0] if ag_list else "-"
-
-    manager_entries.append({
-      "name": mgr,
-      "count": mgr_total,
-      "assignment_groups": ag_list,
-      "assignment_groups_display": ag_display,
-      "xlsx_filename": mgr_xlsx_filename,
-      "filename": mgr_csv_filename,
-    })
+      manager_entries.append({
+        "name": mgr,
+        "assignment_group": ag,
+        "count": len(ag_rows),
+        "xlsx_filename": mgr_xlsx_filename,
+        "filename": mgr_csv_filename,
+      })
 
   # Also include Master Workbook in the ZIP
   zip_files.append((master_excel_filename, master_excel_path))
@@ -51189,7 +51157,8 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
     "assignment_group_column": ag_col,
     "available_columns": headers,
     "total_records": len(rows),
-    "total_managers": len(manager_entries),
+    "total_managers": len(mgr_ag_groups),
+    "total_reports": len(manager_entries),
     "master_excel_filename": master_excel_filename,
     "zip_filename": zip_filename,
     "managers": manager_entries,

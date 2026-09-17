@@ -110,14 +110,14 @@ Priority keys:
 
 ### 2026-09-16 (Page 1 Service Reports Framework & AI Agent Menu Removal)
 - Removed "AI Agent - Read Only" menu button from Page 1 Operations Menu per user request.
-- Added new Page 1 Operations Menu item and panel: **Service Reports** (Service Desk Weekly Reports).
-- Accepts source file export from ServiceNow (`.xlsx` or `.csv`), auto-detects Manager column (Column B `Manager` takes top priority, with smart heuristics for `Caller's Manager`, etc., and dropdown manual override).
+- Added new Page 1 Operations Menu item and panel: **Service Reports** (Service Desk Weekly Reports) at the bottom of the menu.
+- Accepts source file export from ServiceNow (`.xlsx` or `.csv`), auto-detects Column B as `Manager` and Column C as `Assignment group`.
 - Builds a Master Multi-Tab Excel Workbook (`Service_Reports_Master_Workbook_YYYYMMDD.xlsx`):
-  - **Tab 1 ("Ticket Counts")**: Lists every manager with their total count of tickets (each line is a ticket count) and a TOTAL summary row.
+  - **Tab 1 ("Ticket Counts")**: Lists every manager with a breakdown of each assignment group they manage, ticket counts, subtotals, and a TOTAL summary row.
   - **Tab 2..N**: Creates a dedicated tab for each manager, listing out all tickets associated with that manager.
-- Generates individual manager `.xlsx` workbooks as well as individual `.csv` files for email distribution.
-- Packages all generated manager reports plus the Master Excel workbook into a single downloadable ZIP archive (`Service_Reports_All_Managers_YYYYMMDD.zip`).
-- Includes a persistent 90-day history (`data/service_reports/{job_id}/job_info.json`) with automatic pruning older than 90 days, enabling operators to inspect managers and re-download previous weekly runs by date.
+- Generates individual `.xlsx` and `.csv` files for each **(Manager + Assignment Group)** combination (e.g. `Service_Report_Colm_Kilkenny_Salesforce.xlsx`), accounting for managers leading multiple teams so each team's report can be emailed separately.
+- Packages all individual manager-group reports plus the Master Excel workbook into a single downloadable ZIP archive (`Service_Reports_All_Managers_YYYYMMDD.zip`).
+- Includes a persistent 90-day history (`data/service_reports/{job_id}/job_info.json`) with automatic pruning older than 90 days, enabling operators to inspect managers, filter by group, and re-download previous weekly runs by date.
 - Roadmap item noted for future iteration: query LDAP by Manager Name to automatically resolve manager email addresses for automated email distribution.
 
 ### 2026-09-15 (Twilio All Accounts Number Inventory)
