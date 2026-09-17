@@ -48892,9 +48892,13 @@ def _clearpass_peap_probe(host: str, nas_ip: str = "") -> dict:
     expiry_match = re.search(r"notAfter=([A-Z][a-z]{2} [ 0-9]{1,2} [0-9:]{8} [0-9]{4} GMT)", output)
     if certificate_path and os.path.exists(certificate_path) and os.path.getsize(certificate_path) > 0:
       try:
-        certificate_pem = open(certificate_path, "r", encoding="ascii").read()
-        certificate_der = ssl.PEM_cert_to_DER_cert(certificate_pem)
-        certificate_der_bytes = certificate_der if isinstance(certificate_der, bytes) else bytes.fromhex(certificate_der)
+        certificate_bytes = open(certificate_path, "rb").read()
+        if b"-----BEGIN CERTIFICATE-----" in certificate_bytes:
+          certificate_pem = certificate_bytes.decode("ascii")
+          certificate_der = ssl.PEM_cert_to_DER_cert(certificate_pem)
+          certificate_der_bytes = certificate_der if isinstance(certificate_der, bytes) else bytes.fromhex(certificate_der)
+        else:
+          certificate_der_bytes = certificate_bytes
         certificate_expires, certificate_days = _parse_asn1_cert_expiry(certificate_der_bytes)
         if certificate_expires != "Unavailable":
           expiry_match = True
@@ -48913,14 +48917,14 @@ def _clearpass_peap_probe(host: str, nas_ip: str = "") -> dict:
         diagnostic_lines.append(clean_line[-500:])
     diagnostic = " | ".join(diagnostic_lines[-5:])
     return {
-      "ok": bool(expiry_match),
-      "response": "PEAP certificate captured" if expiry_match else "PEAP exchange did not expose a certificate",
+      "ok": bool(expiry_match or completed.returncode == 0),
+      "response": "PEAP certificate captured" if expiry_match else ("PEAP authentication succeeded; certificate parsing unavailable" if completed.returncode == 0 else "PEAP exchange did not expose a certificate"),
       "certificate_expires": certificate_expires,
       "days_remaining": days_remaining,
       "authenticated": completed.returncode == 0,
       "return_code": completed.returncode,
-      "error": "" if expiry_match else f"eapol_test exited with code {completed.returncode}. {diagnostic or 'No diagnostic output matched.'}",
-      "note": "PEAP certificate validated against the configured CA." if expiry_match else "Review the diagnostic summary and ClearPass PEAP policy. Credentials are redacted.",
+      "error": "" if expiry_match or completed.returncode == 0 else f"eapol_test exited with code {completed.returncode}. {diagnostic or 'No diagnostic output matched.'}",
+      "note": "PEAP certificate validated against the configured CA." if expiry_match else ("PEAP authentication succeeded, but the certificate output could not be parsed." if completed.returncode == 0 else "Review the diagnostic summary and ClearPass PEAP policy. Credentials are redacted."),
     }
   except subprocess.TimeoutExpired:
     return {"ok": False, "error": "PEAP probe timed out after 30 seconds."}
