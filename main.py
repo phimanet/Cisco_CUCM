@@ -30186,9 +30186,45 @@ __ADMIN_CARD__
               + '<td style="padding:8px 12px;color:#005eb8;font-weight:600;">' + escapeValue(report.assignment_group || "-") + '</td>'
               + '<td style="padding:8px 12px;text-align:center;">' + (report.count || 0) + ' tickets</td>'
               + '<td style="padding:8px 12px;text-align:center;white-space:nowrap;"><a href="' + xlsxUrl + '" style="margin-right:5px;">Excel</a><a href="' + csvUrl + '">CSV</a></td>'
-              + '<td style="padding:8px 12px;text-align:center;color:#6b7280;">Use Email after reload</td>'
+              + '<td style="padding:8px 12px;text-align:center;"><button type="button" data-fallback-email="' + index + '" style="background:#237741;color:#fff;border:none;border-radius:5px;padding:5px 10px;font-weight:700;cursor:pointer;">✉️ Email</button></td>'
               + '</tr>';
           }).join("");
+
+          tableBody.querySelectorAll('button[data-fallback-email]').forEach(function (button) {
+            button.addEventListener("click", function () {
+              sendFallbackEmail(fallbackReports[Number(button.getAttribute("data-fallback-email"))], button);
+            });
+          });
+        }
+
+        async function sendFallbackEmail(report, button) {
+          if (!report) return;
+          const testMode = document.getElementById("sr-test-mode-toggle").checked;
+          const testerEmail = (document.getElementById("sr-tester-email").value || "").trim();
+          const senderEmail = (document.getElementById("sr-sender-email").value || "").trim();
+          const destination = testMode ? testerEmail : "the real manager email";
+          if (!window.confirm("Email " + report.name + "'s report to " + destination + "?")) return;
+          const original = button.textContent;
+          button.disabled = true;
+          button.textContent = "Sending...";
+          try {
+            const fd = new FormData();
+            fd.append("job_id", fallbackJobId);
+            fd.append("manager_name", report.name || "");
+            fd.append("assignment_group", report.assignment_group || "All Assignment Groups");
+            fd.append("filename", report.xlsx_filename || report.filename || "");
+            fd.append("is_test", testMode ? "1" : "0");
+            fd.append("tester_email", testerEmail);
+            fd.append("sender_email", senderEmail);
+            const response = await fetch("/service-reports/send-email", { method: "POST", body: fd, credentials: "same-origin", headers: { "Accept": "application/json" } });
+            const result = await response.json();
+            if (!response.ok || !result.ok) throw new Error(result.error || "Email failed.");
+            button.textContent = "✅ Sent";
+          } catch (error) {
+            button.disabled = false;
+            button.textContent = original;
+            window.alert("Email failed: " + (error.message || "Unknown error"));
+          }
         }
 
         async function uploadFallback() {
@@ -30281,6 +30317,36 @@ __ADMIN_CARD__
 
         const refreshBtn = document.getElementById("sr-refresh-history-btn");
         if (refreshBtn) refreshBtn.addEventListener("click", loadHistoryFallback);
+        const emailAllBtn = document.getElementById("sr-email-all-btn");
+        if (emailAllBtn) emailAllBtn.addEventListener("click", async function () {
+          if (!fallbackJobId || !fallbackReports.length) {
+            window.alert("Process a source file first.");
+            return;
+          }
+          const testMode = document.getElementById("sr-test-mode-toggle").checked;
+          const testerEmail = (document.getElementById("sr-tester-email").value || "").trim();
+          const senderEmail = (document.getElementById("sr-sender-email").value || "").trim();
+          const destination = testMode ? testerEmail : "the real manager emails";
+          if (!window.confirm("Email all " + fallbackReports.length + " manager reports to " + destination + "?")) return;
+          emailAllBtn.disabled = true;
+          emailAllBtn.textContent = "Sending...";
+          try {
+            const fd = new FormData();
+            fd.append("job_id", fallbackJobId);
+            fd.append("is_test", testMode ? "1" : "0");
+            fd.append("tester_email", testerEmail);
+            fd.append("sender_email", senderEmail);
+            const response = await fetch("/service-reports/send-email-batch", { method: "POST", body: fd, credentials: "same-origin", headers: { "Accept": "application/json" } });
+            const result = await response.json();
+            if (!response.ok || !result.ok) throw new Error(result.error || "Batch email failed.");
+            emailAllBtn.textContent = "✅ Sent " + result.sent_count + "/" + result.total_count;
+          } catch (error) {
+            emailAllBtn.textContent = "❌ Failed";
+            window.alert("Batch email failed: " + (error.message || "Unknown error"));
+          } finally {
+            window.setTimeout(function () { emailAllBtn.disabled = false; emailAllBtn.textContent = "✉️ Email All Reports"; }, 4000);
+          }
+        });
         loadHistoryFallback();
       })();
     </script>
