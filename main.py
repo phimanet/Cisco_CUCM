@@ -11804,6 +11804,7 @@ def _send_smtp_email(
     body: str,
   html_body: str = "",
     cc_recipients: list[str] | None = None,
+    bcc_recipients: list[str] | None = None,
     smtp_user: str = "",
     smtp_pass: str = "",
     smtp_port: int | None = None,
@@ -11823,6 +11824,9 @@ def _send_smtp_email(
     clean_cc_recipients = [r.strip() for r in (cc_recipients or []) if (r or "").strip() and r.strip() not in clean_recipients]
     if clean_cc_recipients:
       message["Cc"] = ", ".join(clean_cc_recipients)
+    clean_bcc_recipients = [r.strip() for r in (bcc_recipients or []) if (r or "").strip() and r.strip() not in clean_recipients and r.strip() not in clean_cc_recipients]
+    if clean_bcc_recipients:
+      message["Bcc"] = ", ".join(clean_bcc_recipients)
     message["Subject"] = subject or "CUCM Web SMTP Test"
     message.set_content(body or "SMTP test message from CUCM web portal.")
     if (html_body or "").strip():
@@ -51944,7 +51948,7 @@ Although it is not unusual to have open tickets assigned to our teams, many of o
 
 Please review the attached report with your team to ensure that these tickets are getting the necessary attention and have your team members close any tickets for work that has been completed.
 
-If you feel that you have been wrongly identified as the manager of an assignment group, please open an "IT Other Request" (https://amn.service-now.com/sp?id=sc_cat_item&sys_id=5aacef50db95be40b0f67a8eaf961902) and request that the group {clean_ag} be re-assigned.
+If you feel that you have been wrongly identified as the manager of an assignment group, please open an "IT Other Request" (https://amn.service-now.com/sp?id=sc_cat_item&sys_id=5aacef50db95be40b0f67a8eaf961902).
 
 If you have any additional questions about the report, feel free to reach out to Michael Mooter.
 
@@ -51972,7 +51976,7 @@ NYSE: AMN. If our services fail to meet your expectations, please escalate the i
 
 <p>Please review the attached report with your team to ensure that these tickets are getting the necessary attention and have your team members close any tickets for work that has been completed.</p>
 
-<p>If you feel that you have been wrongly identified as the manager of an assignment group, please open an <a href="https://amn.service-now.com/sp?id=sc_cat_item&sys_id=5aacef50db95be40b0f67a8eaf961902" style="color:#005eb8; font-weight:bold; text-decoration:underline;">“IT Other Request”</a> and request that the group <strong>{escape(clean_ag)}</strong> be re-assigned to &lt;person’s name&gt;.</p>
+<p>If you feel that you have been wrongly identified as the manager of an assignment group, please open an <a href="https://amn.service-now.com/sp?id=sc_cat_item&sys_id=5aacef50db95be40b0f67a8eaf961902" style="color:#005eb8; font-weight:bold; text-decoration:underline;">“IT Other Request”</a>.</p>
 
 <p>If you have any additional questions about the report, feel free to reach out to Michael Mooter.</p>
 
@@ -52047,6 +52051,7 @@ def service_reports_send_single_email(
         _send_smtp_email(
             sender=clean_sender,
             recipients=[recipient],
+        bcc_recipients=[] if test_mode else [clean_tester],
             subject=subject,
             body=plain_body,
             html_body=html_body,
@@ -52106,6 +52111,8 @@ def service_reports_send_batch_emails(
     for rep in managers:
         mgr_name = rep.get("name", "")
         ag_name = rep.get("assignment_group", "")
+      if not str(mgr_name or "").strip() or str(mgr_name).strip().lower().startswith("(blank"):
+        continue
         fname = rep.get("xlsx_filename") or rep.get("filename")
         if not fname:
             continue
@@ -52129,6 +52136,7 @@ def service_reports_send_batch_emails(
             _send_smtp_email(
                 sender=clean_sender,
                 recipients=[recipient],
+              bcc_recipients=[] if test_mode else [clean_tester],
                 subject=subject,
                 body=plain_body,
                 html_body=html_body,
