@@ -14,6 +14,7 @@ import tempfile
 import concurrent.futures
 import queue
 import zipfile
+import struct
 from collections import Counter
 import smtplib
 import ssl
@@ -48809,6 +48810,68 @@ def _clearpass_send_test_certificate_notice() -> dict:
     return {"ok": False, "error": str(exc)}
 
 
+def _radius_encrypt_user_password(password: str, secret: str, request_authenticator: bytes) -> bytes:
+  password_bytes = (password or "").encode("utf-8")
+  padded_length = ((len(password_bytes) // 16) + 1) * 16
+  padded = password_bytes.ljust(padded_length, b"\x00")
+  encrypted = b""
+  previous = request_authenticator
+  for offset in range(0, len(padded), 16):
+    digest = hashlib.md5(secret.encode("utf-8") + previous).digest()
+    block = bytes(left ^ right for left, right in zip(padded[offset:offset + 16], digest))
+    encrypted += block
+    previous = block
+  return encrypted
+
+
+def _radius_attribute(attribute_type: int, value: bytes) -> bytes:
+  return struct.pack("!BB", attribute_type, len(value) + 2) + value
+
+
+def _clearpass_radius_probe(host: str, username: str, password: str, shared_secret: str) -> dict:
+  """Send one PAP Access-Request to UDP 1812 without persisting credentials."""
+  clean_host = (host or "").strip()
+  clean_user = (username or "").strip()
+  if not clean_host or not clean_user or not shared_secret:
+    return {"ok": False, "error": "ClearPass host, username, and RADIUS shared secret are required."}
+  request_authenticator = os.urandom(16)
+  packet_id = int.from_bytes(os.urandom(1), "big")
+  attributes = b"".join([
+    _radius_attribute(1, clean_user.encode("utf-8")),
+    _radius_attribute(2, _radius_encrypt_user_password(password, shared_secret, request_authenticator)),
+    _radius_attribute(4, socket.inet_aton("0.0.0.0")),
+    _radius_attribute(5, struct.pack("!I", 1)),
+    _radius_attribute(6, struct.pack("!I", 2)),
+    _radius_attribute(32, b"AMN-CUCM-Portal"),
+  ])
+  packet = struct.pack("!BBH16s", 1, packet_id, 20 + len(attributes), request_authenticator) + attributes
+  try:
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+      sock.settimeout(5.0)
+      started = time.monotonic()
+      sock.sendto(packet, (clean_host, 1812))
+      response, _ = sock.recvfrom(4096)
+    elapsed_ms = int((time.monotonic() - started) * 1000)
+    if len(response) < 20:
+      return {"ok": False, "error": "RADIUS returned an invalid response.", "elapsed_ms": elapsed_ms}
+    response_code, response_id, _ = struct.unpack("!BBH", response[:4])
+    if response_id != packet_id:
+      return {"ok": False, "error": "RADIUS response ID did not match the request.", "elapsed_ms": elapsed_ms}
+    labels = {2: "Access-Accept", 3: "Access-Reject", 11: "Access-Challenge"}
+    return {
+      "ok": response_code == 2,
+      "response": labels.get(response_code, f"RADIUS code {response_code}"),
+      "authenticated": response_code == 2,
+      "eap_challenge": response_code == 11,
+      "elapsed_ms": elapsed_ms,
+      "note": "This PAP probe does not negotiate EAP or inspect an EAP certificate." if response_code != 11 else "ClearPass returned an EAP challenge; a full EAP supplicant is required to inspect the EAP certificate.",
+    }
+  except socket.timeout:
+    return {"ok": False, "error": "No RADIUS response received within 5 seconds. Check routing, UDP 1812, NAS/client definition, and shared secret."}
+  except Exception as exc:
+    return {"ok": False, "error": f"RADIUS probe failed: {exc}"}
+
+
 def _clearpass_certificate_notice_loop() -> None:
   while True:
     try:
@@ -49696,8 +49759,39 @@ def clearpass_page(request: Request):
   row_json = json.dumps(_clearpass_configured_hosts()).replace("</", "<\\/")
   html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><title>ClearPass Policy Manager</title>
 <style>body{{font-family:"Segoe UI",Arial,sans-serif;margin:0;background:#edf5fc;color:#12304a}}header{{padding:14px 20px;background:#002f6c;color:#fff;font-weight:700}}main{{max-width:1200px;margin:20px auto;padding:0 14px}}section{{background:#fff;border:1px solid #c8dbee;border-radius:12px;padding:18px;box-shadow:0 14px 30px rgba(0,47,108,.11)}}h2{{margin:0;color:#002f6c}}.note{{color:#4e6a84;font-size:13px}}button,a{{display:inline-block;padding:9px 14px;border:0;border-radius:6px;background:#005eb8;color:#fff;font-weight:700;text-decoration:none;cursor:pointer;margin:12px 6px 12px 0}}a{{background:#4e6a84}}table{{width:100%;border-collapse:collapse;font-size:13px}}th{{background:#005eb8;color:#fff;text-align:left;padding:9px}}td{{padding:9px;border-bottom:1px solid #c8dbee}}.ok{{color:#16733b;font-weight:700}}.bad{{color:#a12626;font-weight:700}}</style></head>
-<body><header>AMN Healthcare | ClearPass Policy Manager Certificate Status</header><main><section><h2>ClearPass Policy Manager Certificate Status</h2><p class="note">TLS certificate and HTTPS reachability monitoring. No ClearPass username or password is required.</p><button id="refresh" type="button">Refresh Status</button><button id="test-email" type="button">Send Test Notification</button><a href="/settings">ClearPass Settings</a><a href="/page2">Back to Administrative Menu</a><div id="status" class="note">Loading...</div><div id="results"></div></section></main>
+<body><header>AMN Healthcare | ClearPass Policy Manager Certificate Status</header><main><section><h2>ClearPass Policy Manager Certificate Status</h2><p class="note">TLS certificate and HTTPS reachability monitoring. No ClearPass username or password is required.</p><button id="refresh" type="button">Refresh Status</button><button id="test-email" type="button">Send Test Notification</button><a href="/settings">ClearPass Settings</a><a href="/page2">Back to Administrative Menu</a><div id="status" class="note">Loading...</div><div id="results"></div><hr><h3>Controlled RADIUS Probe - UDP 1812</h3><p class="note">Uses a one-time PAP Access-Request with the test account. Credentials are not stored. A full EAP supplicant is required to inspect an EAP certificate.</p><div style="display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:8px;"><input id="radius-host" placeholder="ClearPass hostname/IP"><input id="radius-user" placeholder="Test username"><input id="radius-password" type="password" placeholder="Test password"><input id="radius-secret" type="password" placeholder="RADIUS shared secret"></div><button id="radius-probe" type="button">Run RADIUS Probe</button><div id="radius-result" class="note"></div></section></main>
 <script>const hosts={row_json};const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}}[c]));function render(rows){{let h='<table><thead><tr><th>Node / Label</th><th>Host / IP</th><th>Reachability</th><th>Certificate Expires</th><th>Days Remaining</th></tr></thead><tbody>';rows.forEach(r=>{{const reach=r.reachable?'Reachable':(r.host?'Unavailable':'Not configured');h+='<tr><td><strong>'+esc(r.label)+'</strong></td><td><code>'+esc(r.host||'Not set')+'</code></td><td><span class="'+(r.reachable?'ok':'bad')+'">'+reach+'</span></td><td>'+esc(r.certificate_expires||'Unavailable')+'</td><td>'+esc(r.days_remaining===null?'-':r.days_remaining+' days')+'</td></tr>';}});document.getElementById('results').innerHTML=h+'</tbody></table>';}}async function load(){{const s=document.getElementById('status');s.textContent='Probing ClearPass nodes...';try{{const r=await fetch('/api/clearpass/status',{{credentials:'same-origin'}});const d=await r.json();if(!d.ok)throw Error(d.error||'Status check failed');render(d.rows||[]);s.textContent='Last refreshed: '+new Date().toLocaleTimeString();}}catch(e){{s.textContent='Error: '+e.message;}}}}document.getElementById('refresh').addEventListener('click',load);document.getElementById('test-email').addEventListener('click',async()=>{{const s=document.getElementById('status');const b=document.getElementById('test-email');b.disabled=true;s.textContent='Sending test notification...';try{{const r=await fetch('/api/clearpass/test-notification',{{method:'POST',credentials:'same-origin'}});const d=await r.json();if(!r.ok||!d.ok)throw Error(d.error||'Test notification failed');s.textContent='Test notification sent to '+d.recipients.join(', ')+' ('+d.nodes_checked+' node(s) checked).';}}catch(e){{s.textContent='Test notification error: '+e.message;}}finally{{b.disabled=false;}}}});render(hosts.map(h=>({{...h,reachable:false,certificate_expires:'Click Refresh',days_remaining:null}})));load();</script></body></html>'''
+  radius_script = """<script>
+    (function () {
+      const button = document.getElementById('radius-probe');
+      const result = document.getElementById('radius-result');
+      if (!button || !result) return;
+      button.addEventListener('click', async function () {
+        const host = document.getElementById('radius-host').value.trim();
+        const username = document.getElementById('radius-user').value.trim();
+        const passwordEl = document.getElementById('radius-password');
+        const secretEl = document.getElementById('radius-secret');
+        button.disabled = true;
+        result.textContent = 'Sending one RADIUS request to UDP 1812...';
+        try {
+          const response = await fetch('/api/clearpass/radius-probe', {
+            method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({host: host, username: username, password: passwordEl.value, shared_secret: secretEl.value})
+          });
+          const data = await response.json();
+          if (!response.ok || !data.ok) throw new Error((data.response ? data.response + ': ' : '') + (data.error || data.note || 'RADIUS probe failed'));
+          result.textContent = (data.response || 'RADIUS response') + ' (' + (data.elapsed_ms ?? '-') + ' ms). ' + (data.note || '');
+        } catch (error) {
+          result.textContent = 'RADIUS probe result: ' + error.message;
+        } finally {
+          button.disabled = false;
+          passwordEl.value = '';
+          secretEl.value = '';
+        }
+      });
+    })();
+  </script>"""
+  html = html.replace("</body>", radius_script + "</body>")
   return HTMLResponse(content=html)
 
 
@@ -49732,6 +49826,26 @@ def clearpass_test_notification_api(request: Request):
   if not _is_admin_user(str(session.get("username", ""))):
     return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
   result = _clearpass_send_test_certificate_notice()
+  return JSONResponse(result, status_code=200 if result.get("ok") else 400)
+
+
+@app.post("/api/clearpass/radius-probe")
+async def clearpass_radius_probe_api(request: Request):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  try:
+    body = await request.json()
+  except Exception:
+    body = {}
+  if not isinstance(body, dict):
+    return JSONResponse({"ok": False, "error": "JSON request body is required."}, status_code=400)
+  result = _clearpass_radius_probe(
+    host=str(body.get("host", "") or ""),
+    username=str(body.get("username", "") or ""),
+    password=str(body.get("password", "") or ""),
+    shared_secret=str(body.get("shared_secret", "") or ""),
+  )
   return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
 
