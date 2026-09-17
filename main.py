@@ -48640,30 +48640,26 @@ def _ribbon_sbc_probe(host: str) -> dict:
   sess = requests.Session()
   sess.verify = False
   
-  # Step A: Perform Ribbon SBC session login
+  # Login is optional; some SWe Edge builds reject /rest/login while allowing
+  # direct Basic-auth access to monitoring resources.
   login_ok = False
   auth_error = False
   try:
     login_resp = sess.post(
       f"https://{clean_host}/rest/login",
-      params={"username": api_user, "password": api_pass},
+      data={"username": api_user, "password": api_pass},
       headers=headers,
       timeout=2.5,
     )
-    if login_resp.text:
-      if "<http_code>401</http_code>" in login_resp.text or "code=\"20032\"" in login_resp.text:
-        auth_error = True
-      elif "<http_code>200</http_code>" in login_resp.text or "session id=" in login_resp.text:
-        login_ok = True
+    login_text = (login_resp.text or "").lower()
+    auth_error = login_resp.status_code == 401 or "<http_code>401</http_code>" in login_text or 'code="20032"' in login_text
+    login_ok = login_resp.status_code == 200 and ("session" in login_text or "<http_code>200</http_code>" in login_text)
   except Exception:
     pass
 
-  if auth_error and result["active_calls"] == "-":
-    result["active_calls"] = "Auth Error (401)"
-    return result
-
-  # Step B: Query status endpoints with authenticated session or Basic Auth
+  # Query direct Basic-auth endpoints even when the optional login returned 401.
   for endpoint in [
+    "/rest/system/overview",
     "/rest/system",
     "/rest/media",
     "/rest/logicalinterface",
@@ -48671,7 +48667,7 @@ def _ribbon_sbc_probe(host: str) -> dict:
     try:
       resp = sess.get(
         f"https://{clean_host}{endpoint}",
-        auth=auth if not login_ok else None,
+        auth=None if login_ok else auth,
         headers=headers,
         timeout=2.5,
       )
@@ -48685,17 +48681,27 @@ def _ribbon_sbc_probe(host: str) -> dict:
           try:
             data = resp.json()
             if isinstance(data, dict):
-              for k, v in data.items():
-                if any(sub in k.lower() for sub in ("call", "channel", "active", "current")):
-                  if isinstance(v, (int, str)) and str(v).isdigit():
-                    result["active_calls"] = str(v)
-                    break
-                  elif isinstance(v, dict):
-                    for subk, subv in v.items():
-                      if any(w in subk.lower() for w in ("active", "current", "total", "count")):
-                        if isinstance(subv, (int, str)) and str(subv).isdigit():
-                          result["active_calls"] = str(subv)
-                          break
+              def find_active_call_count(value):
+                if isinstance(value, dict):
+                  for key, child in value.items():
+                    key_text = str(key).lower()
+                    if isinstance(child, (int, float)) and not isinstance(child, bool) and any(
+                      token in key_text for token in ("activecall", "currentcall", "activechannel", "callcount", "numcalls")
+                    ):
+                      return int(child)
+                    found = find_active_call_count(child)
+                    if found is not None:
+                      return found
+                elif isinstance(value, list):
+                  for child in value:
+                    found = find_active_call_count(child)
+                    if found is not None:
+                      return found
+                return None
+
+              count = find_active_call_count(data)
+              if count is not None:
+                result["active_calls"] = str(count)
               if result["active_calls"] not in ("-", "Auth Error (401)"):
                 break
           except Exception:
