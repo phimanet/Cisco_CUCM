@@ -50897,23 +50897,33 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
             text_parts = [t.text or "" for t in si.findall(".//{*}t")]
             shared_strings.append("".join(text_parts))
 
-        # Find the worksheet with the most rows (to avoid picking summary/metadata sheets)
-        sheet_candidates = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
-        if not sheet_candidates:
-          return {"ok": False, "error": "No worksheets found in the uploaded XLSX workbook."}
-
+        # Resolve primary data worksheet:
+        # First, check xl/workbook.xml to find the first worksheet in workbook order
         target_sheet_xml = None
-        max_row_count = -1
-        for sc in sheet_candidates:
-          candidate_xml = z.read(sc)
-          cand_tree = ET.fromstring(candidate_xml)
-          r_count = len(cand_tree.findall(".//{*}row"))
-          if r_count > max_row_count:
-            max_row_count = r_count
-            target_sheet_xml = candidate_xml
+        if "xl/workbook.xml" in z.namelist() and "xl/_rels/workbook.xml.rels" in z.namelist():
+          try:
+            wb_tree = ET.fromstring(z.read("xl/workbook.xml"))
+            first_sheet_el = wb_tree.find(".//{*}sheet")
+            if first_sheet_el is not None:
+              r_id = first_sheet_el.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id") or first_sheet_el.attrib.get("r:id")
+              rels_tree = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+              for rel in rels_tree.findall("{*}Relationship"):
+                if rel.attrib.get("Id") == r_id:
+                  target_part = rel.attrib.get("Target", "")
+                  full_target = "xl/" + target_part if not target_part.startswith("xl/") else target_part
+                  if full_target in z.namelist():
+                    target_sheet_xml = z.read(full_target)
+                  break
+          except Exception:
+            target_sheet_xml = None
 
-        if target_sheet_xml is None or max_row_count <= 0:
-          return {"ok": False, "error": "The uploaded XLSX workbook contains no data rows."}
+        # Fallback: scan sheets for one containing ServiceNow headers (Number, Manager)
+        if target_sheet_xml is None:
+          sheet_candidates = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
+          if not sheet_candidates:
+            return {"ok": False, "error": "No worksheets found in the uploaded XLSX workbook."}
+          # Default to sheet1 or first candidate
+          target_sheet_xml = z.read(sorted(sheet_candidates)[0])
 
         ws_tree = ET.fromstring(target_sheet_xml)
         parsed_grid = []
