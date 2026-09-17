@@ -48913,7 +48913,7 @@ def _clearpass_peap_probe(host: str, nas_ip: str = "") -> dict:
     certificate_handle.close()
     os.remove(certificate_path)
     completed = subprocess.run(
-      [CLEARPASS_EAPOL_TEST_PATH, "-c", config_path, "-a", host, "-p", "1812", "-s", CLEARPASS_RADIUS_SHARED_SECRET, "-o", certificate_path],
+      [CLEARPASS_EAPOL_TEST_PATH, f"-c{config_path}", f"-a{host}", "-p1812", f"-s{CLEARPASS_RADIUS_SHARED_SECRET}", f"-o{certificate_path}"],
       capture_output=True,
       text=True,
       timeout=30,
@@ -48935,7 +48935,8 @@ def _clearpass_peap_probe(host: str, nas_ip: str = "") -> dict:
       clean_line = re.sub(r"(?i)(password|shared_secret|auth_server_shared_secret|identity)=\S+", r"\1=[redacted]", line).strip()
       if clean_line and re.search(r"(?i)(tls|eap|radius|certificate|error|fail|reject|auth|reason|timeout)", clean_line):
         diagnostic_lines.append(clean_line[-500:])
-    diagnostic = " | ".join(diagnostic_lines[-5:])
+    capture_detail = f"certificate_output_size={os.path.getsize(certificate_path) if os.path.exists(certificate_path) else 0}"
+    diagnostic = " | ".join([capture_detail] + diagnostic_lines[-5:])
     return {
       "ok": bool(expiry_match or completed.returncode == 0),
       "response": "PEAP certificate captured" if expiry_match else ("PEAP authentication succeeded; certificate parsing unavailable" if completed.returncode == 0 else "PEAP exchange did not expose a certificate"),
