@@ -541,8 +541,8 @@ TWILIO_HOSTED_NUMBERS_ACTIVE = (os.getenv("TWILIO_HOSTED_NUMBERS_ACTIVE", "false
 }
 EXPRESSWAY_API_USERNAME = (os.getenv("EXPRESSWAY_API_USERNAME", "ucmadmin") or "ucmadmin").strip()
 EXPRESSWAY_API_PASSWORD = os.getenv("EXPRESSWAY_API_PASSWORD", "abi3rto!") or "abi3rto!"
-RIBBON_SBC_API_USERNAME = (os.getenv("RIBBON_SBC_API_USERNAME", "ucmadmin") or "ucmadmin").strip()
-RIBBON_SBC_API_PASSWORD = os.getenv("RIBBON_SBC_API_PASSWORD", "abi3rto!") or "abi3rto!"
+RIBBON_SBC_API_USERNAME = (os.getenv("RIBBON_SBC_API_USERNAME", "") or os.getenv("EXPRESSWAY_API_USERNAME", "") or "ucmadmin").strip()
+RIBBON_SBC_API_PASSWORD = os.getenv("RIBBON_SBC_API_PASSWORD", "") or os.getenv("EXPRESSWAY_API_PASSWORD", "") or "abi3rto!"
 EXPRESSWAY_API_CERTIFICATE_PATH = (os.getenv("EXPRESSWAY_API_CERTIFICATE_PATH", "/api/provisioning/common/certs/server") or "/api/provisioning/common/certs/server").strip()
 EXPRESSWAY_CERT_NOTICE_RECIPIENTS = [item.strip() for item in (os.getenv("EXPRESSWAY_CERT_NOTICE_RECIPIENTS", "") or "").split(",") if item.strip()]
 EXPRESSWAY_CERT_NOTICE_FROM = (os.getenv("EXPRESSWAY_CERT_NOTICE_FROM", "noreply@amnhealthcare.com") or "noreply@amnhealthcare.com").strip()
@@ -47809,35 +47809,54 @@ def _ribbon_sbc_probe(host: str) -> dict:
   auth = HTTPBasicAuth(api_user, api_pass)
   headers = {"Accept": "application/json, text/xml, application/xml, */*"}
   
-  # Ribbon SBC SWe Edge documented REST paths:
-  # - /rest/system/overview (System Overview with active call & channel metrics)
-  # - /rest/callstatus
-  # - /rest/channelstatus
-  # - /rest/system
-  # - /rest/status
+  sess = requests.Session()
+  sess.verify = False
+  
+  # Step A: Perform Ribbon SBC session login
+  login_ok = False
+  auth_error = False
+  try:
+    login_resp = sess.post(
+      f"https://{clean_host}/rest/login",
+      params={"username": api_user, "password": api_pass},
+      headers=headers,
+      timeout=2.5,
+    )
+    if login_resp.text:
+      if "<http_code>401</http_code>" in login_resp.text or "code=\"20032\"" in login_resp.text:
+        auth_error = True
+      elif "<http_code>200</http_code>" in login_resp.text or "session id=" in login_resp.text:
+        login_ok = True
+  except Exception:
+    pass
+
+  if auth_error and result["active_calls"] == "-":
+    result["active_calls"] = "Auth Error (401)"
+    return result
+
+  # Step B: Query status endpoints with authenticated session or Basic Auth
   for endpoint in [
-    "/rest/system/overview",
-    "/rest/callstatus",
-    "/rest/channelstatus",
     "/rest/system",
-    "/rest/status",
+    "/rest/media",
+    "/rest/logicalinterface",
   ]:
     try:
-      resp = requests.get(
+      resp = sess.get(
         f"https://{clean_host}{endpoint}",
-        auth=auth,
+        auth=auth if not login_ok else None,
         headers=headers,
-        verify=False,
         timeout=2.5,
       )
       if resp.status_code == 200 and resp.text:
         text = resp.text.strip()
+        if "<http_code>401</http_code>" in text:
+          result["active_calls"] = "Auth Error (401)"
+          break
         # JSON response
         if text.startswith(("{", "[")):
           try:
             data = resp.json()
             if isinstance(data, dict):
-              # Check top-level or nested keys for active/current calls or channels in use
               for k, v in data.items():
                 if any(sub in k.lower() for sub in ("call", "channel", "active", "current")):
                   if isinstance(v, (int, str)) and str(v).isdigit():
@@ -47849,7 +47868,7 @@ def _ribbon_sbc_probe(host: str) -> dict:
                         if isinstance(subv, (int, str)) and str(subv).isdigit():
                           result["active_calls"] = str(subv)
                           break
-              if result["active_calls"] != "-":
+              if result["active_calls"] not in ("-", "Auth Error (401)"):
                 break
           except Exception:
             pass
@@ -47858,20 +47877,19 @@ def _ribbon_sbc_probe(host: str) -> dict:
           try:
             root = ET.fromstring(text)
             for elem in root.iter():
-              tag = elem.tag.split("}")[-1].lower()
-              if tag in ("activecalls", "currentcalls", "activechannels", "callcount", "active", "totalcalls", "numcalls"):
+              if "}" in elem.tag:
+                elem.tag = elem.tag.split("}", 1)[1]
+              tag = elem.tag.lower()
+              if tag in ("activecalls", "currentcalls", "activechannels", "callcount", "active", "totalcalls", "numcalls", "calls"):
                 if elem.text and elem.text.strip().isdigit():
                   result["active_calls"] = elem.text.strip()
                   break
-            if result["active_calls"] != "-":
+            if result["active_calls"] not in ("-", "Auth Error (401)"):
               break
           except Exception:
             pass
-      elif resp.status_code != 200 and result["active_calls"] == "-":
-        result["details"] = f"REST {endpoint.split('/')[-1]}: {resp.status_code}"
-    except Exception as e:
-      if result["active_calls"] == "-":
-        result["details"] = f"REST err: {type(e).__name__}"
+    except Exception:
+      pass
 
   return result
 
