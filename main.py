@@ -52106,8 +52106,8 @@ def service_reports_send_single_email(
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
-  @app.post("/service-reports/send-artifact-email")
-  def service_reports_send_artifact_email(
+@app.post("/service-reports/send-artifact-email")
+def service_reports_send_artifact_email(
     request: Request,
     job_id: str = Form(...),
     artifact: str = Form(...),
