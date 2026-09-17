@@ -52111,8 +52111,8 @@ def service_reports_send_batch_emails(
     for rep in managers:
         mgr_name = rep.get("name", "")
         ag_name = rep.get("assignment_group", "")
-      if not str(mgr_name or "").strip() or str(mgr_name).strip().lower().startswith("(blank"):
-        continue
+        if not str(mgr_name or "").strip() or str(mgr_name).strip().lower().startswith("(blank"):
+            continue
         fname = rep.get("xlsx_filename") or rep.get("filename")
         if not fname:
             continue
