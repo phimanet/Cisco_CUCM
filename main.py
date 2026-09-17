@@ -52118,7 +52118,7 @@ def service_reports_send_single_email(
         _send_smtp_email(
             sender=clean_sender,
             recipients=[recipient],
-        bcc_recipients=[] if test_mode else [clean_tester],
+          bcc_recipients=[] if test_mode else [clean_tester],
             subject=subject,
             body=plain_body,
             html_body=html_body,
@@ -52194,8 +52194,8 @@ def service_reports_send_artifact_email(
       return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
-  @app.post("/service-reports/send-all-files-to-tester")
-  def service_reports_send_all_files_to_tester(
+@app.post("/service-reports/send-all-files-to-tester")
+def service_reports_send_all_files_to_tester(
     request: Request,
     job_id: str = Form(...),
     tester_email: str = Form(...),
