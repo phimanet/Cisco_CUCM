@@ -51249,10 +51249,10 @@ def _create_multi_sheet_xlsx(sheets_dict: dict, formulas_dict: dict = None, acti
       '  <borders count="2">\n'
       '    <border><left/><right/><top/><bottom/><diagonal/></border>\n'
       '    <border>\n'
-      '      <left style="thin"><color rgb="FFD9D9D9"/></left>\n'
-      '      <right style="thin"><color rgb="FFD9D9D9"/></right>\n'
-      '      <top style="thin"><color rgb="FFD9D9D9"/></top>\n'
-      '      <bottom style="thin"><color rgb="FFD9D9D9"/></bottom>\n'
+      '      <left style="thin"><color rgb="FF7F7F7F"/></left>\n'
+      '      <right style="thin"><color rgb="FF7F7F7F"/></right>\n'
+      '      <top style="thin"><color rgb="FF7F7F7F"/></top>\n'
+      '      <bottom style="thin"><color rgb="FF7F7F7F"/></bottom>\n'
       '      <diagonal/>\n'
       '    </border>\n'
       '  </borders>\n'
@@ -51634,7 +51634,8 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
     for r in all_mgr_rows:
       sheet_data.append([r.get(h, "") for h in headers])
 
-    mgr_xlsx_bytes = _create_multi_sheet_xlsx({clean_mgr[:31]: sheet_data})
+    mgr_tab_name = _clean_excel_sheet_name(mgr)[:31]
+    mgr_xlsx_bytes = _create_multi_sheet_xlsx({mgr_tab_name: sheet_data})
     mgr_xlsx_path = os.path.join(job_dir, mgr_xlsx_filename)
     with open(mgr_xlsx_path, "wb") as xf:
       xf.write(mgr_xlsx_bytes)
