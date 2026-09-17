@@ -615,6 +615,9 @@ AERIALINK_V5_BASE_URL = (os.getenv("AERIALINK_V5_BASE_URL", "https://apix5.aeria
 AERIALINK_USERNAME = (os.getenv("AERIALINK_USERNAME", "") or "").strip()
 AERIALINK_PASSWORD = (os.getenv("AERIALINK_PASSWORD", "") or "").strip()
 AERIALINK_ACCOUNT_CODE_LOOKUP_PATH = (os.getenv("AERIALINK_ACCOUNT_CODE_LOOKUP_PATH", "/codes") or "/codes").strip()
+CLEARPASS_RADIUS_USERNAME = (os.getenv("CLEARPASS_RADIUS_USERNAME", "") or "").strip()
+CLEARPASS_RADIUS_PASSWORD = os.getenv("CLEARPASS_RADIUS_PASSWORD", "") or ""
+CLEARPASS_RADIUS_SHARED_SECRET = os.getenv("CLEARPASS_RADIUS_SHARED_SECRET", "") or ""
 INTELIQUENT_API_ENV = (os.getenv("INTELIQUENT_API_ENV", "production") or "production").strip().lower()
 _inteliquent_base_default = "https://services.inteliquent.com/Services/1.0.0"
 if INTELIQUENT_API_ENV == "sandbox":
@@ -994,6 +997,7 @@ DEFAULT_SETTINGS = {
     {"label": "ClearPass Policy Manager 3", "host": ""},
     {"label": "ClearPass Policy Manager 4", "host": ""},
   ],
+  "clearpass_radius_nas_ip": "",
   "ribbon_cert_notice_enabled": "true",
   "ribbon_cert_notice_recipients": "",
   "ribbon_cert_notice_from": "noreply@amnhealthcare.com",
@@ -48828,7 +48832,7 @@ def _radius_attribute(attribute_type: int, value: bytes) -> bytes:
   return struct.pack("!BB", attribute_type, len(value) + 2) + value
 
 
-def _clearpass_radius_probe(host: str, username: str, password: str, shared_secret: str) -> dict:
+def _clearpass_radius_probe(host: str, username: str, password: str, shared_secret: str, nas_ip: str = "") -> dict:
   """Send one PAP Access-Request to UDP 1812 without persisting credentials."""
   clean_host = (host or "").strip()
   clean_user = (username or "").strip()
@@ -48836,10 +48840,15 @@ def _clearpass_radius_probe(host: str, username: str, password: str, shared_secr
     return {"ok": False, "error": "ClearPass host, username, and RADIUS shared secret are required."}
   request_authenticator = os.urandom(16)
   packet_id = int.from_bytes(os.urandom(1), "big")
+  nas_address = (nas_ip or "").strip() or "0.0.0.0"
+  try:
+    nas_address_bytes = socket.inet_aton(nas_address)
+  except OSError:
+    return {"ok": False, "error": "RADIUS NAS / Device IP must be a valid IPv4 address."}
   attributes = b"".join([
     _radius_attribute(1, clean_user.encode("utf-8")),
     _radius_attribute(2, _radius_encrypt_user_password(password, shared_secret, request_authenticator)),
-    _radius_attribute(4, socket.inet_aton("0.0.0.0")),
+    _radius_attribute(4, nas_address_bytes),
     _radius_attribute(5, struct.pack("!I", 1)),
     _radius_attribute(6, struct.pack("!I", 2)),
     _radius_attribute(32, b"AMN-CUCM-Portal"),
@@ -49791,6 +49800,12 @@ def clearpass_page(request: Request):
       });
     })();
   </script>"""
+  html = html.replace("const username = document.getElementById('radius-user').value.trim();", "const username = ''; ")
+  html = html.replace("const passwordEl = document.getElementById('radius-password');", "const passwordEl = {value: ''};")
+  html = html.replace("const secretEl = document.getElementById('radius-secret');", "const secretEl = {value: ''};")
+  html = html.replace('<input id="radius-user" placeholder="Test username">', '')
+  html = html.replace('<input id="radius-password" type="password" placeholder="Test password">', '')
+  html = html.replace('<input id="radius-secret" type="password" placeholder="RADIUS shared secret">', '')
   html = html.replace("</body>", radius_script + "</body>")
   return HTMLResponse(content=html)
 
@@ -49842,9 +49857,10 @@ async def clearpass_radius_probe_api(request: Request):
     return JSONResponse({"ok": False, "error": "JSON request body is required."}, status_code=400)
   result = _clearpass_radius_probe(
     host=str(body.get("host", "") or ""),
-    username=str(body.get("username", "") or ""),
-    password=str(body.get("password", "") or ""),
-    shared_secret=str(body.get("shared_secret", "") or ""),
+    username=CLEARPASS_RADIUS_USERNAME,
+    password=CLEARPASS_RADIUS_PASSWORD,
+    shared_secret=CLEARPASS_RADIUS_SHARED_SECRET,
+    nas_ip=str(_load_settings().get("clearpass_radius_nas_ip", "") or ""),
   )
   return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
@@ -50153,6 +50169,12 @@ def settings_page(request: Request):
           </div>
 
           <div class="form-group">
+            <label for="clearpass_radius_nas_ip">ClearPass RADIUS NAS / Device IP</label>
+            <input type="text" id="clearpass_radius_nas_ip" value="{escape(settings.get('clearpass_radius_nas_ip', ''))}" maxlength="15" placeholder="IPv4 address used by the RADIUS client definition">
+            <div class="help-text">Used as the NAS-IP-Address in the controlled UDP 1812 probe. This is not a ClearPass credential.</div>
+          </div>
+
+          <div class="form-group">
             <label for="clearpass_cert_notice_recipients_2">ClearPass Certificate Expiration Email - Secondary Recipient (optional)</label>
             <input type="text" id="clearpass_cert_notice_recipients_2" value="{escape(settings.get('clearpass_cert_notice_recipients_2', ''))}" maxlength="254">
           </div>
@@ -50216,6 +50238,7 @@ def settings_page(request: Request):
           clearpass_cert_notice_recipients: document.getElementById('clearpass_cert_notice_recipients').value.trim(),
           clearpass_cert_notice_recipients_2: document.getElementById('clearpass_cert_notice_recipients_2').value.trim(),
           clearpass_cert_notice_from: document.getElementById('clearpass_cert_notice_from').value.trim(),
+          clearpass_radius_nas_ip: document.getElementById('clearpass_radius_nas_ip').value.trim(),
         }};
         
         if (!formData.general_fte_prefix || !formData.strike_prefix || !formData.recruiter_prefix) {{
@@ -50319,6 +50342,7 @@ def update_settings_api(request: Request, body: dict = None):
     clearpass_cert_notice_recipients = (body.get("clearpass_cert_notice_recipients", "") or "").strip()
     clearpass_cert_notice_recipients_2 = (body.get("clearpass_cert_notice_recipients_2", "") or "").strip()
     clearpass_cert_notice_from = (body.get("clearpass_cert_notice_from", "") or "").strip()
+    clearpass_radius_nas_ip = (body.get("clearpass_radius_nas_ip", "") or "").strip()
     sip_call_search_enabled = (body.get("sip_call_search_enabled", "") or "").strip().lower()
     sip_call_search_udp_port = (body.get("sip_call_search_udp_port", "") or "").strip()
     sip_call_search_retention_days = (body.get("sip_call_search_retention_days", "") or "").strip()
@@ -50414,6 +50438,7 @@ def update_settings_api(request: Request, body: dict = None):
       "clearpass_cert_notice_recipients": clearpass_cert_notice_recipients,
       "clearpass_cert_notice_recipients_2": clearpass_cert_notice_recipients_2,
       "clearpass_cert_notice_from": clearpass_cert_notice_from or "noreply@amnhealthcare.com",
+      "clearpass_radius_nas_ip": clearpass_radius_nas_ip,
     })
 
     if _save_settings(new_settings):
