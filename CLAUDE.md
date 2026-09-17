@@ -111,10 +111,14 @@ Priority keys:
 ### 2026-09-16 (Page 1 Service Reports Framework & AI Agent Menu Removal)
 - Removed "AI Agent - Read Only" menu button from Page 1 Operations Menu per user request.
 - Added new Page 1 Operations Menu item and panel: **Service Reports** (Service Desk Weekly Reports).
-- Accepts source file export from ServiceNow (`.csv` or `.xlsx`), auto-detects Manager column (e.g. `Caller's Manager`, `Manager`, `Reports to`, `Requested for.Manager`), and provides manual dropdown override if needed.
-- Parses records and groups rows by Manager, generating individual downloadable manager CSV files encoded with UTF-8 BOM (`utf-8-sig`) for Excel compatibility.
-- Packages all generated manager reports into a single downloadable ZIP archive (`Service_Reports_All_Managers_YYYYMMDD.zip`).
-- Includes persistent report history (`data/service_reports/{job_id}/job_info.json`) so operators can view and re-download previous weekly runs without re-uploading.
+- Accepts source file export from ServiceNow (`.xlsx` or `.csv`), auto-detects Manager column (Column B `Manager` takes top priority, with smart heuristics for `Caller's Manager`, etc., and dropdown manual override).
+- Builds a Master Multi-Tab Excel Workbook (`Service_Reports_Master_Workbook_YYYYMMDD.xlsx`):
+  - **Tab 1 ("Ticket Counts")**: Lists every manager with their total count of tickets (each line is a ticket count) and a TOTAL summary row.
+  - **Tab 2..N**: Creates a dedicated tab for each manager, listing out all tickets associated with that manager.
+- Generates individual manager `.xlsx` workbooks as well as individual `.csv` files for email distribution.
+- Packages all generated manager reports plus the Master Excel workbook into a single downloadable ZIP archive (`Service_Reports_All_Managers_YYYYMMDD.zip`).
+- Includes a persistent 90-day history (`data/service_reports/{job_id}/job_info.json`) with automatic pruning older than 90 days, enabling operators to inspect managers and re-download previous weekly runs by date.
+- Roadmap item noted for future iteration: query LDAP by Manager Name to automatically resolve manager email addresses for automated email distribution.
 
 ### 2026-09-15 (Twilio All Accounts Number Inventory)
 - Added a read-only SMS Item Menu panel that inventories Incoming Phone Numbers across the configured Twilio parent account and every accessible subaccount.

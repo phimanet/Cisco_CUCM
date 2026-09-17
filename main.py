@@ -29231,7 +29231,6 @@ __ADMIN_CARD__
         <h4>Operations Menu</h4>
         <div class="portal-nav">
           <button type="button" class="portal-nav-btn start-here-btn active" data-panel="personlookup">Start Here!<br>Employee Lookup By Name</button>
-          <button type="button" class="portal-nav-btn" data-panel="service-reports">Service Reports</button>
           <button type="button" class="portal-nav-btn" data-panel="jabber-forwarding-tool">Cisco Jabber Forwarding Tool</button>
           <button type="button" class="portal-nav-btn" onclick="window.location.href='/genesys-admin?panel=genesys-ad-webrtc-panel'">Add Genesys User</button>
           <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Reverse Lookup</button>
@@ -29251,6 +29250,7 @@ __ADMIN_CARD__
           <button type="button" class="portal-nav-btn" data-panel="rebuild">Re-Build Jabber CSF (from Offboard Audit)</button>
           <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
           <button type="button" class="portal-nav-btn" data-panel="genesys-ls-user-did-assignment">Genesys LS User DID Assignment</button>
+          <button type="button" class="portal-nav-btn" data-panel="service-reports">Service Reports</button>
         </div>
       </aside>
 
@@ -29683,9 +29683,12 @@ __ADMIN_CARD__
             <h4 style="margin:0 0 4px 0; color:#002f6c; font-size:17px;">Generated Manager Reports</h4>
             <div id="sr-meta-summary" style="font-size:13px; color:#4e6a84;"></div>
           </div>
-          <div style="display:flex; gap:10px;">
-            <a id="sr-download-zip-btn" href="#" target="_blank" style="display:inline-flex; align-items:center; gap:6px; background:linear-gradient(180deg,#1f7a3d,#14562b); color:#ffffff; text-decoration:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; box-shadow:0 2px 6px rgba(31,122,61,0.3);">
-              ⬇ Download All Reports (ZIP)
+          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <a id="sr-download-master-btn" href="#" target="_blank" style="display:inline-flex; align-items:center; gap:6px; background:linear-gradient(180deg,#005eb8,#003d7a); color:#ffffff; text-decoration:none; padding:9px 16px; border-radius:6px; font-weight:700; font-size:13px; box-shadow:0 2px 6px rgba(0,94,184,0.3);">
+              📊 Download Master Excel (All Tabs)
+            </a>
+            <a id="sr-download-zip-btn" href="#" target="_blank" style="display:inline-flex; align-items:center; gap:6px; background:linear-gradient(180deg,#1f7a3d,#14562b); color:#ffffff; text-decoration:none; padding:9px 16px; border-radius:6px; font-weight:700; font-size:13px; box-shadow:0 2px 6px rgba(31,122,61,0.3);">
+              📦 Download All Excel Files (ZIP)
             </a>
           </div>
         </div>
@@ -29704,7 +29707,7 @@ __ADMIN_CARD__
                 <th style="padding:9px 12px; text-align:left; width:45px;">#</th>
                 <th style="padding:9px 12px; text-align:left;">Manager Name</th>
                 <th style="padding:9px 12px; text-align:center; width:140px;">Record Count</th>
-                <th style="padding:9px 12px; text-align:center; width:160px;">Action</th>
+                <th style="padding:9px 12px; text-align:center; width:220px;">Download Actions</th>
               </tr>
             </thead>
             <tbody id="sr-table-body">
@@ -29713,11 +29716,14 @@ __ADMIN_CARD__
         </div>
       </div>
 
-      <!-- Recent Weekly Reports History -->
+      <!-- 90-Day Weekly Reports History -->
       <div style="background:#ffffff; border:1px solid #c8dbee; border-radius:8px; padding:16px 20px; box-shadow:0 4px 14px rgba(0,47,108,0.06);">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-          <h4 style="margin:0; color:#002f6c; font-size:15px;">Recent Weekly Service Reports</h4>
-          <button type="button" id="sr-refresh-history-btn" style="background:#e8f4fd; color:#005eb8; border:1px solid #a9c3d8; border-radius:5px; padding:4px 10px; font-size:12px; font-weight:600; cursor:pointer;">
+          <div>
+            <h4 style="margin:0; color:#002f6c; font-size:15px;">Weekly Service Reports History (Last 90 Days)</h4>
+            <span style="font-size:12px; color:#6b7280;">Reports are preserved by date for 90 days. Click "Load Report" to inspect managers or re-download Master Excel / ZIP.</span>
+          </div>
+          <button type="button" id="sr-refresh-history-btn" style="background:#e8f4fd; color:#005eb8; border:1px solid #a9c3d8; border-radius:5px; padding:5px 12px; font-size:12px; font-weight:600; cursor:pointer;">
             🔄 Refresh History
           </button>
         </div>
@@ -29770,8 +29776,12 @@ __ADMIN_CARD__
             tr.style.borderBottom = "1px solid #c8dbee";
 
             const countBadge = '<span style="display:inline-block; padding:3px 10px; border-radius:12px; background:#e8f4fd; color:#005eb8; font-weight:700; font-size:12px;">' + (m.count || 0) + ' records</span>';
-            const dlUrl = "/service-reports/download/" + encodeURIComponent(currentJobId) + "/" + encodeURIComponent(m.filename || "");
-            const actionBtn = '<a href="' + dlUrl + '" style="display:inline-block; text-decoration:none; padding:5px 12px; border-radius:5px; background:linear-gradient(180deg,#005eb8,#003d7a); color:#fff; font-weight:600; font-size:12px; box-shadow:0 1px 3px rgba(0,0,0,0.15);">⬇ Download CSV</a>';
+            const dlXlsxUrl = "/service-reports/download/" + encodeURIComponent(currentJobId) + "/" + encodeURIComponent(m.xlsx_filename || m.filename || "");
+            const dlCsvUrl = "/service-reports/download/" + encodeURIComponent(currentJobId) + "/" + encodeURIComponent(m.filename || "");
+            const actionBtn = '<div style="display:inline-flex; gap:6px;">'
+              + '<a href="' + dlXlsxUrl + '" style="display:inline-block; text-decoration:none; padding:4px 10px; border-radius:5px; background:linear-gradient(180deg,#005eb8,#003d7a); color:#fff; font-weight:600; font-size:11px; box-shadow:0 1px 3px rgba(0,0,0,0.15);">⬇ Excel</a>'
+              + '<a href="' + dlCsvUrl + '" style="display:inline-block; text-decoration:none; padding:4px 10px; border-radius:5px; background:linear-gradient(180deg,#355978,#223e57); color:#fff; font-weight:600; font-size:11px; box-shadow:0 1px 3px rgba(0,0,0,0.15);">⬇ CSV</a>'
+              + '</div>';
 
             tr.innerHTML = '<td style="padding:8px 12px; color:#4e6a84; font-size:12px;">' + (idx + 1) + '</td>'
               + '<td style="padding:8px 12px; font-weight:600; color:#12304a;">' + escapeHtml(m.name) + '</td>'
@@ -29819,6 +29829,10 @@ __ADMIN_CARD__
           if (metaSummary) {
             metaSummary.innerHTML = "Source: <strong>" + escapeHtml(job.source_filename) + "</strong> &bull; Total Records: <strong>" + (job.total_records || 0).toLocaleString() + "</strong> &bull; Managers: <strong>" + (job.total_managers || currentManagers.length) + "</strong> &bull; Split by Column: <strong style='color:#005eb8;'>" + escapeHtml(job.manager_column || "Auto") + "</strong>";
           }
+          const downloadMasterBtn = document.getElementById("sr-download-master-btn");
+          if (downloadMasterBtn) {
+            downloadMasterBtn.href = "/service-reports/download-master/" + encodeURIComponent(currentJobId);
+          }
           if (downloadZipBtn) {
             downloadZipBtn.href = "/service-reports/download-zip/" + encodeURIComponent(currentJobId);
           }
@@ -29843,7 +29857,7 @@ __ADMIN_CARD__
             }
             const jobs = data.jobs || [];
             if (!jobs.length) {
-              historyList.innerHTML = '<span style="color:#6b7280;">No previous weekly reports stored yet. Upload a file above to create your first report.</span>';
+              historyList.innerHTML = '<span style="color:#6b7280;">No previous weekly reports stored yet (kept for 90 days). Upload a file above to create your first report.</span>';
               return;
             }
 
@@ -29853,7 +29867,7 @@ __ADMIN_CARD__
             html += '<th style="padding:6px 10px; text-align:left;">Source File</th>';
             html += '<th style="padding:6px 10px; text-align:center;">Records</th>';
             html += '<th style="padding:6px 10px; text-align:center;">Managers</th>';
-            html += '<th style="padding:6px 10px; text-align:center;">Action</th>';
+            html += '<th style="padding:6px 10px; text-align:center; min-width:180px;">Download / Action</th>';
             html += '</tr></thead><tbody>';
 
             jobs.forEach(function (j, i) {
@@ -29863,9 +29877,10 @@ __ADMIN_CARD__
               html += '<td style="padding:6px 10px; font-weight:600;">' + escapeHtml(j.source_filename || "-") + '</td>';
               html += '<td style="padding:6px 10px; text-align:center;">' + (j.total_records || 0) + '</td>';
               html += '<td style="padding:6px 10px; text-align:center;">' + (j.total_managers || 0) + '</td>';
-              html += '<td style="padding:6px 10px; text-align:center;">';
-              html += '<button type="button" data-load-job="' + i + '" style="background:#005eb8; color:#fff; border:none; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600; cursor:pointer;">Load Report</button> ';
-              html += '<a href="/service-reports/download-zip/' + encodeURIComponent(j.job_id) + '" style="background:#1f7a3d; color:#fff; text-decoration:none; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600; display:inline-block;">ZIP</a>';
+              html += '<td style="padding:6px 10px; text-align:center; white-space:nowrap;">';
+              html += '<button type="button" data-load-job="' + i + '" style="background:#005eb8; color:#fff; border:none; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600; cursor:pointer; margin-right:4px;">Load</button>';
+              html += '<a href="/service-reports/download-master/' + encodeURIComponent(j.job_id) + '" style="background:#003d7a; color:#fff; text-decoration:none; border-radius:4px; padding:3px 7px; font-size:11px; font-weight:600; display:inline-block; margin-right:4px;">Master Excel</a>';
+              html += '<a href="/service-reports/download-zip/' + encodeURIComponent(j.job_id) + '" style="background:#1f7a3d; color:#fff; text-decoration:none; border-radius:4px; padding:3px 7px; font-size:11px; font-weight:600; display:inline-block;">ZIP</a>';
               html += '</td>';
               html += '</tr>';
             });
@@ -50641,11 +50656,153 @@ except Exception:
   pass
 
 
+def _prune_service_reports_history(days: int = 90):
+  """Prune weekly service report folders older than the retention threshold (default 90 days)."""
+  try:
+    if not os.path.exists(SERVICE_REPORTS_DIR):
+      return
+    cutoff = time.time() - (days * 86400)
+    for entry in os.listdir(SERVICE_REPORTS_DIR):
+      entry_path = os.path.join(SERVICE_REPORTS_DIR, entry)
+      if os.path.isdir(entry_path):
+        try:
+          mtime = os.path.getmtime(entry_path)
+          if mtime < cutoff:
+            import shutil
+            shutil.rmtree(entry_path, ignore_errors=True)
+        except Exception:
+          pass
+  except Exception:
+    pass
+
+
+def _clean_excel_sheet_name(name: str) -> str:
+  r"""Excel sheet names are capped at 31 chars and cannot contain : \ / ? * [ ]"""
+  cleaned = re.sub(r'[:\\/?*\[\]]', '_', str(name or '').strip())
+  return (cleaned[:31] if cleaned else 'Sheet1').strip()
+
+
+def _create_multi_sheet_xlsx(sheets_dict: dict) -> bytes:
+  """
+  Create a valid multi-sheet .xlsx workbook purely using Python stdlib (zipfile + XML).
+  Requires NO third-party pip packages (works on both Windows and Linux Ubuntu).
+  sheets_dict: { sheet_name: [ [row1_c1, row1_c2, ...], [row2_c1, ...] ] }
+  """
+  import io
+  import zipfile
+  import xml.etree.ElementTree as ET
+
+  zbuf = io.BytesIO()
+  with zipfile.ZipFile(zbuf, 'w', zipfile.ZIP_DEFLATED) as z:
+    ct = ET.Element('Types', xmlns='http://schemas.openxmlformats.org/package/2006/content-types')
+    ET.SubElement(ct, 'Default', Extension='rels', ContentType='application/vnd.openxmlformats-package.relationships+xml')
+    ET.SubElement(ct, 'Default', Extension='xml', ContentType='application/xml')
+    ET.SubElement(ct, 'Override', PartName='/xl/workbook.xml', ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml')
+    ET.SubElement(ct, 'Override', PartName='/xl/styles.xml', ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml')
+    ET.SubElement(ct, 'Override', PartName='/xl/sharedStrings.xml', ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStringTable+xml')
+
+    rels = ET.Element('Relationships', xmlns='http://schemas.openxmlformats.org/package/2006/relationships')
+    ET.SubElement(rels, 'Relationship', Id='rId1', Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument', Target='xl/workbook.xml')
+    z.writestr('_rels/.rels', ET.tostring(rels, encoding='utf-8', xml_declaration=True))
+
+    wb = ET.Element('workbook', xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main', attrib={'xmlns:r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'})
+    wb_sheets = ET.SubElement(wb, 'sheets')
+    wb_rels = ET.Element('Relationships', xmlns='http://schemas.openxmlformats.org/package/2006/relationships')
+
+    shared_strings = []
+    ss_map = {}
+    def get_ss(v):
+      s = str(v if v is not None else '')
+      if s not in ss_map:
+        ss_map[s] = len(shared_strings)
+        shared_strings.append(s)
+      return ss_map[s]
+
+    used_sheet_names = set()
+    for idx, (sname, srows) in enumerate(sheets_dict.items(), 1):
+      base_name = _clean_excel_sheet_name(sname)
+      candidate = base_name
+      suffix = 1
+      while candidate.lower() in used_sheet_names:
+        suffix_str = f"_{suffix}"
+        candidate = base_name[:(31 - len(suffix_str))] + suffix_str
+        suffix += 1
+      used_sheet_names.add(candidate.lower())
+
+      rid = f'rId{idx}'
+      sfile = f'sheet{idx}.xml'
+      ET.SubElement(wb_sheets, 'sheet', name=candidate, sheetId=str(idx), attrib={'r:id': rid})
+      ET.SubElement(wb_rels, 'Relationship', Id=rid, Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet', Target=f'worksheets/{sfile}')
+      ET.SubElement(ct, 'Override', PartName=f'/xl/worksheets/{sfile}', ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml')
+
+      ws = ET.Element('worksheet', xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main')
+      sheet_data = ET.SubElement(ws, 'sheetData')
+      for r_idx, row in enumerate(srows, 1):
+        r_el = ET.SubElement(sheet_data, 'row', r=str(r_idx))
+        for c_idx, cell in enumerate(row, 1):
+          num = c_idx
+          col_letters = ''
+          while num > 0:
+            num, rem = divmod(num - 1, 26)
+            col_letters = chr(65 + rem) + col_letters
+          ref = f'{col_letters}{r_idx}'
+
+          is_numeric = False
+          if isinstance(cell, (int, float)):
+            is_numeric = True
+          elif isinstance(cell, str) and cell.isdigit() and len(cell) < 10 and not cell.startswith('0'):
+            is_numeric = True
+
+          if is_numeric:
+            c_el = ET.SubElement(r_el, 'c', r=ref)
+            v_el = ET.SubElement(c_el, 'v')
+            v_el.text = str(cell)
+          else:
+            c_el = ET.SubElement(r_el, 'c', r=ref, t='s')
+            v_el = ET.SubElement(c_el, 'v')
+            v_el.text = str(get_ss(cell))
+      z.writestr(f'xl/worksheets/{sfile}', ET.tostring(ws, encoding='utf-8', xml_declaration=True))
+
+    ss_rid = f'rId{len(sheets_dict) + 1}'
+    st_rid = f'rId{len(sheets_dict) + 2}'
+    ET.SubElement(wb_rels, 'Relationship', Id=ss_rid, Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings', Target='sharedStrings.xml')
+    ET.SubElement(wb_rels, 'Relationship', Id=st_rid, Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles', Target='styles.xml')
+
+    z.writestr('xl/workbook.xml', ET.tostring(wb, encoding='utf-8', xml_declaration=True))
+    z.writestr('xl/_rels/workbook.xml.rels', ET.tostring(wb_rels, encoding='utf-8', xml_declaration=True))
+    z.writestr('[Content_Types].xml', ET.tostring(ct, encoding='utf-8', xml_declaration=True))
+
+    sst = ET.Element('sst', xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main', count=str(len(shared_strings)), uniqueCount=str(len(shared_strings)))
+    for s in shared_strings:
+      si = ET.SubElement(sst, 'si')
+      t = ET.SubElement(si, 't')
+      t.text = s
+    z.writestr('xl/sharedStrings.xml', ET.tostring(sst, encoding='utf-8', xml_declaration=True))
+
+    styles_xml = (
+      '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+      '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+      '<fonts count="1"><font><name val="Calibri"/><sz val="11"/></font></fonts>'
+      '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
+      '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
+      '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+      '<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>'
+      '</styleSheet>'
+    )
+    z.writestr('xl/styles.xml', styles_xml)
+
+  return zbuf.getvalue()
+
+
 def _detect_manager_column(headers: list) -> str:
   """Heuristic to detect the Manager column in a ServiceNow export."""
   if not headers:
     return ""
   norm_headers = [str(h or "").strip() for h in headers if str(h or "").strip()]
+
+  # If Column B (index 1) is called Manager, that takes top priority
+  if len(norm_headers) > 1 and norm_headers[1].lower() == "manager":
+    return norm_headers[1]
 
   # Priority 1: Exact matches (case-insensitive)
   p1 = [
@@ -50675,7 +50832,15 @@ def _detect_manager_column(headers: list) -> str:
 
 
 def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_override: str = "") -> dict:
-  """Parse ServiceNow export file (CSV or Excel) and split by Manager into separate CSVs."""
+  """
+  Parse ServiceNow export file (Excel .xlsx or CSV) and:
+  1. Build Master Excel file with:
+     - Tab 1: Ticket Counts (Manager, Ticket Count, and TOTAL)
+     - Tab 2..N: One tab per manager listing all associated tickets
+  2. Build individual manager Excel files (.xlsx) and CSV files (.csv)
+  3. Package all manager files into a downloadable ZIP archive
+  4. Preserve all runs by date/time in 90-day history with full re-download support
+  """
   import io
   import csv
   import zipfile
@@ -50683,6 +50848,9 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
   import json
   import re
   from datetime import datetime
+
+  # Prune old records (older than 90 days) on each run
+  _prune_service_reports_history(days=90)
 
   is_excel = filename.lower().endswith((".xlsx", ".xls"))
   headers = []
@@ -50739,14 +50907,17 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
               cell_ref = c_el.attrib.get("r", "")
               cell_type = c_el.attrib.get("t", "")
               v_el = c_el.find("{*}v")
-              cell_val = v_el.text if v_el is not None else ""
+              is_el = c_el.find(".//{*}t")
+              cell_val = ""
+              if is_el is not None and is_el.text:
+                cell_val = is_el.text
+              elif v_el is not None and v_el.text:
+                cell_val = v_el.text
+
               if cell_type == "s" and cell_val.isdigit():
                 s_idx = int(cell_val)
                 cell_val = shared_strings[s_idx] if s_idx < len(shared_strings) else ""
-              elif cell_type == "inlineStr":
-                is_el = c_el.find("{*}is")
-                if is_el is not None:
-                  cell_val = "".join([t_el.text or "" for t_el in is_el.findall(".//{*}t")])
+
               col_letters = "".join([ch for ch in cell_ref if ch.isalpha()])
               if col_letters:
                 cell_map[_col_str_to_idx(col_letters)] = str(cell_val or "").strip()
@@ -50760,7 +50931,20 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
           if not parsed_grid:
             return {"ok": False, "error": "The uploaded XLSX workbook contains no data rows."}
 
-          headers = [h for h in parsed_grid[0] if h]
+          raw_headers = parsed_grid[0]
+          # Disambiguate duplicate header names if any (e.g. two Manager columns)
+          seen_headers = {}
+          for h in raw_headers:
+            clean_h = str(h or "").strip()
+            if not clean_h:
+              clean_h = f"Column_{len(headers)+1}"
+            if clean_h in seen_headers:
+              seen_headers[clean_h] += 1
+              headers.append(f"{clean_h}_{seen_headers[clean_h]}")
+            else:
+              seen_headers[clean_h] = 1
+              headers.append(clean_h)
+
           for r in parsed_grid[1:]:
             row_dict = {}
             for idx, h in enumerate(headers):
@@ -50808,7 +50992,7 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
   if not rows:
     return {"ok": False, "error": "The uploaded file contains no data rows."}
 
-  # Manager column determination
+  # Manager column determination (defaults to Column B if named Manager, or auto-detects)
   manager_col = manager_col_override.strip() if manager_col_override else _detect_manager_column(headers)
   if not manager_col or manager_col not in headers:
     return {
@@ -50820,53 +51004,96 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
       "source_filename": filename,
     }
 
-  # Group by manager
+  # Group records by manager
   manager_groups = {}
   for r in rows:
     mgr = r.get(manager_col, "").strip()
     if not mgr:
-      mgr = "(Unassigned or No Manager)"
+      mgr = "(Blank / No Manager)"
     if mgr not in manager_groups:
       manager_groups[mgr] = []
     manager_groups[mgr].append(r)
 
+  # Sort managers by ticket count descending, with blank/no manager at bottom
   sorted_managers = sorted(
     manager_groups.keys(),
-    key=lambda m: (1 if m.startswith("(") else 0, m.lower())
+    key=lambda m: (1 if m.startswith("(") else 0, -len(manager_groups[m]), m.lower())
   )
 
   job_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
   job_dir = os.path.join(SERVICE_REPORTS_DIR, job_id)
   os.makedirs(job_dir, exist_ok=True)
 
+  # 1. Build Master Multi-Tab Excel Workbook
+  # Tab 1: Ticket Counts
+  counts_tab_rows = [["Manager", "Ticket Count"]]
+  total_ticket_count = 0
+  for mgr in sorted_managers:
+    cnt = len(manager_groups[mgr])
+    total_ticket_count += cnt
+    counts_tab_rows.append([mgr, cnt])
+  counts_tab_rows.append(["TOTAL", total_ticket_count])
+
+  master_sheets = {"Ticket Counts": counts_tab_rows}
+
+  # Tab 2..N: One tab per manager
+  for mgr in sorted_managers:
+    mgr_rows = manager_groups[mgr]
+    sheet_data = [headers]
+    for r in mgr_rows:
+      sheet_data.append([r.get(h, "") for h in headers])
+    master_sheets[mgr] = sheet_data
+
+  date_str = datetime.now().strftime('%Y%m%d')
+  master_excel_filename = f"Service_Reports_Master_Workbook_{date_str}.xlsx"
+  master_excel_path = os.path.join(job_dir, master_excel_filename)
+  master_bytes = _create_multi_sheet_xlsx(master_sheets)
+  with open(master_excel_path, "wb") as mf:
+    mf.write(master_bytes)
+
+  # 2. Build individual manager Excel and CSV files
   manager_entries = []
-  generated_files = []
+  zip_files = []
 
   for mgr in sorted_managers:
     mgr_rows = manager_groups[mgr]
     clean_name = re.sub(r'[^\w\s\-.]', '', mgr).strip().replace(' ', '_')
     if not clean_name:
       clean_name = "Unassigned"
-    out_filename = f"Service_Report_{clean_name}.csv"
-    out_filepath = os.path.join(job_dir, out_filename)
 
-    with open(out_filepath, "w", newline="", encoding="utf-8-sig") as out_f:
-      writer = csv.DictWriter(out_f, fieldnames=headers, extrasaction="ignore")
+    # Individual Manager Excel (.xlsx)
+    mgr_sheet_data = [headers]
+    for r in mgr_rows:
+      mgr_sheet_data.append([r.get(h, "") for h in headers])
+    mgr_xlsx_bytes = _create_multi_sheet_xlsx({mgr: mgr_sheet_data})
+    mgr_xlsx_filename = f"Service_Report_{clean_name}.xlsx"
+    mgr_xlsx_path = os.path.join(job_dir, mgr_xlsx_filename)
+    with open(mgr_xlsx_path, "wb") as xf:
+      xf.write(mgr_xlsx_bytes)
+    zip_files.append((mgr_xlsx_filename, mgr_xlsx_path))
+
+    # Individual Manager CSV (.csv with UTF-8 BOM for Excel)
+    mgr_csv_filename = f"Service_Report_{clean_name}.csv"
+    mgr_csv_path = os.path.join(job_dir, mgr_csv_filename)
+    with open(mgr_csv_path, "w", newline="", encoding="utf-8-sig") as cf:
+      writer = csv.DictWriter(cf, fieldnames=headers, extrasaction="ignore")
       writer.writeheader()
       writer.writerows(mgr_rows)
 
-    generated_files.append((out_filename, out_filepath))
     manager_entries.append({
       "name": mgr,
       "count": len(mgr_rows),
-      "filename": out_filename,
+      "xlsx_filename": mgr_xlsx_filename,
+      "filename": mgr_csv_filename,
     })
 
-  date_str = datetime.now().strftime('%Y%m%d')
+  # Also include the Master Workbook inside the ZIP
+  zip_files.append((master_excel_filename, master_excel_path))
+
   zip_filename = f"Service_Reports_All_Managers_{date_str}.zip"
   zip_filepath = os.path.join(job_dir, zip_filename)
   with zipfile.ZipFile(zip_filepath, "w", zipfile.ZIP_DEFLATED) as zip_f:
-    for fname, fpath in generated_files:
+    for fname, fpath in zip_files:
       zip_f.write(fpath, arcname=fname)
 
   job_info = {
@@ -50877,6 +51104,7 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
     "available_columns": headers,
     "total_records": len(rows),
     "total_managers": len(manager_entries),
+    "master_excel_filename": master_excel_filename,
     "zip_filename": zip_filename,
     "managers": manager_entries,
   }
@@ -50905,7 +51133,7 @@ async def service_reports_upload_route(
         return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
 
     file_bytes = await file.read()
-    filename = file.filename or "servicenow_export.csv"
+    filename = file.filename or "servicenow_export.xlsx"
     res = _parse_service_desk_file(file_bytes, filename, manager_col_override=manager_col)
     if res.get("ok"):
         job = res.get("job", {})
@@ -50915,12 +51143,43 @@ async def service_reports_upload_route(
               cucm_host="",
               operator=username,
               target=f"file={filename};records={job.get('total_records')};managers={job.get('total_managers')}",
-              output_filename=job.get("zip_filename", ""),
+              output_filename=job.get("master_excel_filename", job.get("zip_filename", "")),
               inline_mode=True,
           )
         except Exception:
           pass
     return JSONResponse(res)
+
+
+@app.get("/service-reports/download-master/{job_id}")
+def service_reports_download_master(request: Request, job_id: str):
+    session = _get_auth_session(request) or {}
+    if not (session.get("username", "") or "").strip():
+        return Response("Authentication required", status_code=401)
+
+    safe_job_id = re.sub(r'[^a-zA-Z0-9_\-]', '', job_id)
+    job_dir = os.path.abspath(os.path.join(SERVICE_REPORTS_DIR, safe_job_id))
+    info_path = os.path.join(job_dir, "job_info.json")
+
+    if not os.path.exists(info_path):
+        return Response("Report job not found.", status_code=404, media_type="text/plain")
+
+    try:
+        with open(info_path, "r", encoding="utf-8") as f:
+            info = json.load(f)
+        master_name = info.get("master_excel_filename", "Service_Reports_Master_Workbook.xlsx")
+        master_path = os.path.join(job_dir, master_name)
+        if not os.path.exists(master_path):
+            return Response("Master Excel workbook not found.", status_code=404, media_type="text/plain")
+        with open(master_path, "rb") as f:
+            data = f.read()
+        return Response(
+            data,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{master_name}"'}
+        )
+    except Exception as e:
+        return Response(f"Error reading report: {str(e)}", status_code=500, media_type="text/plain")
 
 
 @app.get("/service-reports/download/{job_id}/{filename}")
@@ -50940,9 +51199,10 @@ def service_reports_download_file(request: Request, job_id: str, filename: str):
     with open(target_path, "rb") as f:
         data = f.read()
 
+    media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if safe_filename.lower().endswith(".xlsx") else "text/csv"
     return Response(
         data,
-        media_type="text/csv",
+        media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'}
     )
 
@@ -50984,10 +51244,13 @@ def service_reports_recent_jobs(request: Request):
     if not (session.get("username", "") or "").strip():
         return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
 
+    # Prune any jobs older than 90 days
+    _prune_service_reports_history(days=90)
+
     jobs = []
     try:
         if os.path.exists(SERVICE_REPORTS_DIR):
-            for entry in sorted(os.listdir(SERVICE_REPORTS_DIR), reverse=True)[:15]:
+            for entry in sorted(os.listdir(SERVICE_REPORTS_DIR), reverse=True)[:50]:
                 entry_dir = os.path.join(SERVICE_REPORTS_DIR, entry)
                 info_file = os.path.join(entry_dir, "job_info.json")
                 if os.path.isdir(entry_dir) and os.path.exists(info_file):
