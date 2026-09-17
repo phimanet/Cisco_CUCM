@@ -48640,6 +48640,7 @@ def _ribbon_sbc_probe(host: str) -> dict:
   # Query the direct Basic-auth resources. The SWe Edge /rest/login helper is
   # not supported consistently across releases and is not needed here.
   auth_error = False
+  authorized_endpoint_seen = False
   for endpoint in [
     "/rest/system/overview",
     "/rest/callstatus",
@@ -48659,32 +48660,36 @@ def _ribbon_sbc_probe(host: str) -> dict:
       if resp.status_code == 401 or "<http_code>401</http_code>" in (resp.text or ""):
         auth_error = True
         continue
+      if resp.status_code == 200:
+        authorized_endpoint_seen = True
       if resp.status_code == 200 and resp.text:
         text = resp.text.strip()
         # JSON response
         if text.startswith(("{", "[")):
           try:
             data = resp.json()
-            if isinstance(data, dict):
-              def find_active_call_count(value):
+            if isinstance(data, (dict, list)):
+              def find_active_call_count(value, endpoint_name):
                 if isinstance(value, dict):
                   for key, child in value.items():
                     key_text = str(key).lower()
-                    if isinstance(child, (int, float)) and not isinstance(child, bool) and any(
+                    if isinstance(child, (int, float, str)) and not isinstance(child, bool) and str(child).strip().isdigit() and any(
                       token in key_text for token in ("activecall", "currentcall", "activechannel", "callcount", "numcalls")
                     ):
-                      return int(child)
-                    found = find_active_call_count(child)
+                      return int(str(child).strip())
+                    found = find_active_call_count(child, endpoint_name)
                     if found is not None:
                       return found
                 elif isinstance(value, list):
+                  if endpoint_name in ("callstatus", "channelstatus"):
+                    return len(value)
                   for child in value:
-                    found = find_active_call_count(child)
+                    found = find_active_call_count(child, endpoint_name)
                     if found is not None:
                       return found
                 return None
 
-              count = find_active_call_count(data)
+              count = find_active_call_count(data, endpoint.rsplit("/", 1)[-1])
               if count is not None:
                 result["active_calls"] = str(count)
               if result["active_calls"] not in ("-", "Auth Error (401)"):
@@ -48710,7 +48715,7 @@ def _ribbon_sbc_probe(host: str) -> dict:
     except Exception:
       pass
 
-  if result["active_calls"] == "-" and auth_error:
+  if result["active_calls"] == "-" and auth_error and not authorized_endpoint_seen:
     result["active_calls"] = "Auth Error (401)"
 
   return result
