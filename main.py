@@ -189,6 +189,7 @@ def _startup_background_services():
   _start_jabber_pool_scheduler()
   _start_expressway_certificate_notice_worker()
   _start_ribbon_certificate_notice_worker()
+  _start_clearpass_certificate_notice_worker()
 
 
 def _genesys_external_contact_load_update(job_id: str, **changes):
@@ -995,6 +996,10 @@ DEFAULT_SETTINGS = {
   "ribbon_cert_notice_enabled": "true",
   "ribbon_cert_notice_recipients": "",
   "ribbon_cert_notice_from": "noreply@amnhealthcare.com",
+  "clearpass_cert_notice_enabled": "true",
+  "clearpass_cert_notice_recipients": "",
+  "clearpass_cert_notice_recipients_2": "",
+  "clearpass_cert_notice_from": "noreply@amnhealthcare.com",
 }
 SETTINGS_LOCK = threading.Lock()
 
@@ -48722,6 +48727,79 @@ def _clearpass_probe(host: str) -> dict:
   return result
 
 
+CLEARPASS_CERT_NOTICE_STATE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "clearpass_cert_notice_state.json")
+CLEARPASS_CERT_NOTICE_LOCK = threading.Lock()
+
+
+def _clearpass_send_due_certificate_notices() -> None:
+  settings = _load_settings()
+  enabled = str(settings.get("clearpass_cert_notice_enabled", "true") or "true").strip().lower() in {"1", "true", "yes", "on"}
+  recipients = [str(settings.get("clearpass_cert_notice_recipients", "") or "").strip(), str(settings.get("clearpass_cert_notice_recipients_2", "") or "").strip()]
+  recipients = [item for item in recipients if item]
+  sender = str(settings.get("clearpass_cert_notice_from", "") or "noreply@amnhealthcare.com").strip()
+  if not enabled or not recipients:
+    return
+  try:
+    with open(CLEARPASS_CERT_NOTICE_STATE_PATH, "r", encoding="utf-8") as handle:
+      state = json.load(handle)
+  except Exception:
+    state = {}
+  state = state if isinstance(state, dict) else {}
+  now = datetime.datetime.now(datetime.timezone.utc)
+  due = []
+  for item in _clearpass_configured_hosts():
+    if not item.get("host"):
+      continue
+    result = _clearpass_probe(item["host"])
+    days = result.get("days_remaining")
+    if not isinstance(days, int) or days < 0 or days > 30:
+      continue
+    key = item["host"].lower()
+    entry = state.get(key, {}) if isinstance(state.get(key), dict) else {}
+    expiry = str(result.get("certificate_expires", "") or "")
+    if entry.get("certificate_expires") != expiry:
+      entry = {"certificate_expires": expiry, "last_notified_at": ""}
+    last = str(entry.get("last_notified_at", "") or "")
+    notify = not last
+    if last:
+      try:
+        notify = (now - datetime.datetime.fromisoformat(last)).total_seconds() >= 7 * 86400
+      except ValueError:
+        notify = True
+    if notify:
+      due.append({**item, **result})
+      entry["last_notified_at"] = now.isoformat()
+    state[key] = entry
+  if not due:
+    return
+  body = "ClearPass Policy Manager certificate expiration notice\n\n"
+  body += "The following certificates have 30 or fewer days remaining:\n\n"
+  body += "\n".join(f"{item['label']} ({item['host']}): expires {item['certificate_expires']} ({item['days_remaining']} days remaining)" for item in due)
+  _send_smtp_email(sender, recipients, "ClearPass Policy Manager certificate expiration notice", body)
+  with CLEARPASS_CERT_NOTICE_LOCK:
+    os.makedirs(os.path.dirname(CLEARPASS_CERT_NOTICE_STATE_PATH), exist_ok=True)
+    temp_path = f"{CLEARPASS_CERT_NOTICE_STATE_PATH}.tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+      json.dump(state, handle, indent=2)
+    os.replace(temp_path, CLEARPASS_CERT_NOTICE_STATE_PATH)
+
+
+def _clearpass_certificate_notice_loop() -> None:
+  while True:
+    try:
+      _clearpass_send_due_certificate_notices()
+    except Exception:
+      logger.exception("ClearPass certificate notice worker failed")
+    time.sleep(24 * 60 * 60)
+
+
+def _start_clearpass_certificate_notice_worker() -> None:
+  if not _is_prod_runtime_host_strict():
+    logger.info("ClearPass certificate notices disabled on non-PROD runtime host")
+    return
+  threading.Thread(target=_clearpass_certificate_notice_loop, name="clearpass-cert-notices", daemon=True).start()
+
+
 def _ribbon_sbc_probe(host: str) -> dict:
   clean_host = (host or "").strip()
   result = {
@@ -49919,6 +49997,22 @@ def settings_page(request: Request):
             <div class="help-text">Enter up to four ClearPass IPs/hostnames. Certificate checks use TLS on port 443 and do not require ClearPass credentials.</div>
             {clearpass_inputs_html}
           </div>
+
+          <div class="form-group">
+            <label for="clearpass_cert_notice_recipients">ClearPass Certificate Expiration Email - Primary Recipient</label>
+            <input type="text" id="clearpass_cert_notice_recipients" value="{escape(settings.get('clearpass_cert_notice_recipients', ''))}" maxlength="254">
+            <div class="help-text">Notifications are sent when a configured ClearPass certificate has 30 or fewer days remaining.</div>
+          </div>
+
+          <div class="form-group">
+            <label for="clearpass_cert_notice_recipients_2">ClearPass Certificate Expiration Email - Secondary Recipient (optional)</label>
+            <input type="text" id="clearpass_cert_notice_recipients_2" value="{escape(settings.get('clearpass_cert_notice_recipients_2', ''))}" maxlength="254">
+          </div>
+
+          <div class="form-group">
+            <label for="clearpass_cert_notice_from">ClearPass Certificate Expiration Email - From Address</label>
+            <input type="text" id="clearpass_cert_notice_from" value="{escape(settings.get('clearpass_cert_notice_from', 'noreply@amnhealthcare.com'))}" maxlength="254">
+          </div>
           
           <div class="button-group">
             <button type="submit" class="btn-save">Save Changes</button>
@@ -49971,6 +50065,9 @@ def settings_page(request: Request):
             label: document.getElementById('clearpass_label_' + (i + 1)).value.trim() || ('ClearPass Policy Manager ' + (i + 1)),
             host: document.getElementById('clearpass_host_' + (i + 1)).value.trim(),
           }})),
+          clearpass_cert_notice_recipients: document.getElementById('clearpass_cert_notice_recipients').value.trim(),
+          clearpass_cert_notice_recipients_2: document.getElementById('clearpass_cert_notice_recipients_2').value.trim(),
+          clearpass_cert_notice_from: document.getElementById('clearpass_cert_notice_from').value.trim(),
         }};
         
         if (!formData.general_fte_prefix || !formData.strike_prefix || !formData.recruiter_prefix) {{
@@ -50071,6 +50168,9 @@ def update_settings_api(request: Request, body: dict = None):
     twilio_loa_recipient_name = (body.get("twilio_loa_recipient_name", "") or "").strip()
     twilio_loa_recipient_email = (body.get("twilio_loa_recipient_email", "") or "").strip()
     twilio_loa_recipient_phone = (body.get("twilio_loa_recipient_phone", "") or "").strip()
+    clearpass_cert_notice_recipients = (body.get("clearpass_cert_notice_recipients", "") or "").strip()
+    clearpass_cert_notice_recipients_2 = (body.get("clearpass_cert_notice_recipients_2", "") or "").strip()
+    clearpass_cert_notice_from = (body.get("clearpass_cert_notice_from", "") or "").strip()
     sip_call_search_enabled = (body.get("sip_call_search_enabled", "") or "").strip().lower()
     sip_call_search_udp_port = (body.get("sip_call_search_udp_port", "") or "").strip()
     sip_call_search_retention_days = (body.get("sip_call_search_retention_days", "") or "").strip()
@@ -50163,6 +50263,9 @@ def update_settings_api(request: Request, body: dict = None):
       "expressway_hosts": expressway_hosts,
       "ribbon_sbc_hosts": ribbon_sbc_hosts,
       "clearpass_hosts": clearpass_hosts,
+      "clearpass_cert_notice_recipients": clearpass_cert_notice_recipients,
+      "clearpass_cert_notice_recipients_2": clearpass_cert_notice_recipients_2,
+      "clearpass_cert_notice_from": clearpass_cert_notice_from or "noreply@amnhealthcare.com",
     })
 
     if _save_settings(new_settings):
