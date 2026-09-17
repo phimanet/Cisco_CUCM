@@ -10246,6 +10246,45 @@ def _separation_report_build_html(sms_rows: list[dict], date_range_label: str) -
 </html>"""
 
 
+def _send_separation_report_failure_notice(
+  recipients: list[str],
+  sender: str,
+  triggered_by: str,
+  error: str,
+) -> None:
+  """Notify the configured report recipients when report generation fails."""
+  clean_recipients = [str(item or "").strip() for item in recipients if str(item or "").strip()]
+  if not clean_recipients:
+    return
+  detail = str(error or "Unknown error").strip()
+  subject = "[CUCM] Separation SMS Number Report FAILED"
+  body = (
+    "The Separation SMS Number Report could not be completed.\n\n"
+    f"Triggered by: {triggered_by}\n"
+    f"Error: {detail}\n\n"
+    "No successful report email was sent. Please retry from the portal or contact the portal administrator."
+  )
+  html_body = (
+    '<html><body style="font-family:Arial,sans-serif;color:#333">'
+    '<h2 style="color:#b71c1c">Separation SMS Number Report FAILED</h2>'
+    '<p>The report could not be completed and no successful report email was sent.</p>'
+    f'<p><strong>Triggered by:</strong> {escape(triggered_by)}<br>'
+    f'<strong>Error:</strong> {escape(detail)}</p>'
+    '<p>Please retry from the portal or contact the portal administrator.</p>'
+    '</body></html>'
+  )
+  try:
+    _send_smtp_email(
+      sender=sender or "noreply@amnhealthcare.com",
+      recipients=clean_recipients,
+      subject=subject,
+      body=body,
+      html_body=html_body,
+    )
+  except Exception:
+    logger.exception("Could not send separation SMS report failure notice")
+
+
 def _run_separation_sms_report(triggered_by: str = "scheduler") -> dict:
   """
   Run the separation SMS report for the configured lookback window.
@@ -10349,6 +10388,17 @@ def _run_separation_sms_report(triggered_by: str = "scheduler") -> dict:
     }
   except Exception as exc:
     logger.error("separation_sms_report failed: %s", exc, exc_info=True)
+    try:
+      failure_cfg = _get_sep_report_settings()
+      failure_recipients = [failure_cfg.get("recipient", ""), failure_cfg.get("recipient_2", "")]
+      _send_separation_report_failure_notice(
+        recipients=failure_recipients,
+        sender=str(failure_cfg.get("from_address", "") or "noreply@amnhealthcare.com"),
+        triggered_by=triggered_by,
+        error=str(exc),
+      )
+    except Exception:
+      logger.exception("Could not prepare separation SMS report failure notice")
     return {"success": False, "error": str(exc)}
 
 
