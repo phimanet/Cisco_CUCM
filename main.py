@@ -48784,6 +48784,31 @@ def _clearpass_send_due_certificate_notices() -> None:
     os.replace(temp_path, CLEARPASS_CERT_NOTICE_STATE_PATH)
 
 
+def _clearpass_send_test_certificate_notice() -> dict:
+  settings = _load_settings()
+  recipients = [str(settings.get("clearpass_cert_notice_recipients", "") or "").strip(), str(settings.get("clearpass_cert_notice_recipients_2", "") or "").strip()]
+  recipients = [item for item in recipients if item]
+  if not recipients:
+    return {"ok": False, "error": "Configure a primary ClearPass certificate notification recipient first."}
+  sender = str(settings.get("clearpass_cert_notice_from", "") or "noreply@amnhealthcare.com").strip()
+  rows = []
+  for item in _clearpass_configured_hosts():
+    if item.get("host"):
+      rows.append({**item, **_clearpass_probe(item["host"])})
+  body = "ClearPass Policy Manager certificate notification test\n\n"
+  body += "This is a test notification from the Voice Operations Portal.\n\n"
+  body += "\n".join(
+    f"{item['label']} ({item['host']}): {item.get('certificate_expires', 'Unavailable')} ({item.get('days_remaining') if item.get('days_remaining') is not None else 'unavailable'} days remaining)"
+    for item in rows
+  ) or "No ClearPass hosts are configured."
+  try:
+    _send_smtp_email(sender, recipients, "ClearPass Policy Manager certificate notification test", body)
+    return {"ok": True, "recipients": recipients, "nodes_checked": len(rows)}
+  except Exception as exc:
+    logger.exception("ClearPass certificate notification test failed")
+    return {"ok": False, "error": str(exc)}
+
+
 def _clearpass_certificate_notice_loop() -> None:
   while True:
     try:
@@ -49671,7 +49696,7 @@ def clearpass_page(request: Request):
   row_json = json.dumps(_clearpass_configured_hosts()).replace("</", "<\\/")
   html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><title>ClearPass Policy Manager</title>
 <style>body{{font-family:"Segoe UI",Arial,sans-serif;margin:0;background:#edf5fc;color:#12304a}}header{{padding:14px 20px;background:#002f6c;color:#fff;font-weight:700}}main{{max-width:1200px;margin:20px auto;padding:0 14px}}section{{background:#fff;border:1px solid #c8dbee;border-radius:12px;padding:18px;box-shadow:0 14px 30px rgba(0,47,108,.11)}}h2{{margin:0;color:#002f6c}}.note{{color:#4e6a84;font-size:13px}}button,a{{display:inline-block;padding:9px 14px;border:0;border-radius:6px;background:#005eb8;color:#fff;font-weight:700;text-decoration:none;cursor:pointer;margin:12px 6px 12px 0}}a{{background:#4e6a84}}table{{width:100%;border-collapse:collapse;font-size:13px}}th{{background:#005eb8;color:#fff;text-align:left;padding:9px}}td{{padding:9px;border-bottom:1px solid #c8dbee}}.ok{{color:#16733b;font-weight:700}}.bad{{color:#a12626;font-weight:700}}</style></head>
-<body><header>AMN Healthcare | ClearPass Policy Manager Certificate Status</header><main><section><h2>ClearPass Policy Manager Certificate Status</h2><p class="note">TLS certificate and HTTPS reachability monitoring. No ClearPass username or password is required.</p><button id="refresh" type="button">Refresh Status</button><a href="/settings">ClearPass Settings</a><a href="/page2">Back to Administrative Menu</a><div id="status" class="note">Loading...</div><div id="results"></div></section></main>
+<body><header>AMN Healthcare | ClearPass Policy Manager Certificate Status</header><main><section><h2>ClearPass Policy Manager Certificate Status</h2><p class="note">TLS certificate and HTTPS reachability monitoring. No ClearPass username or password is required.</p><button id="refresh" type="button">Refresh Status</button><button id="test-email" type="button">Send Test Notification</button><a href="/settings">ClearPass Settings</a><a href="/page2">Back to Administrative Menu</a><div id="status" class="note">Loading...</div><div id="results"></div></section></main>
 <script>const hosts={row_json};const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}}[c]));function render(rows){{let h='<table><thead><tr><th>Node / Label</th><th>Host / IP</th><th>Reachability</th><th>Certificate Expires</th><th>Days Remaining</th></tr></thead><tbody>';rows.forEach(r=>{{const reach=r.reachable?'Reachable':(r.host?'Unavailable':'Not configured');h+='<tr><td><strong>'+esc(r.label)+'</strong></td><td><code>'+esc(r.host||'Not set')+'</code></td><td><span class="'+(r.reachable?'ok':'bad')+'">'+reach+'</span></td><td>'+esc(r.certificate_expires||'Unavailable')+'</td><td>'+esc(r.days_remaining===null?'-':r.days_remaining+' days')+'</td></tr>';}});document.getElementById('results').innerHTML=h+'</tbody></table>';}}async function load(){{const s=document.getElementById('status');s.textContent='Probing ClearPass nodes...';try{{const r=await fetch('/api/clearpass/status',{{credentials:'same-origin'}});const d=await r.json();if(!d.ok)throw Error(d.error||'Status check failed');render(d.rows||[]);s.textContent='Last refreshed: '+new Date().toLocaleTimeString();}}catch(e){{s.textContent='Error: '+e.message;}}}}document.getElementById('refresh').addEventListener('click',load);render(hosts.map(h=>({{...h,reachable:false,certificate_expires:'Click Refresh',days_remaining:null}})));load();</script></body></html>'''
   return HTMLResponse(content=html)
 
@@ -49699,6 +49724,15 @@ def clearpass_status_api(request: Request):
       rows.append(row)
   rows.sort(key=lambda item: item.get("index", 0))
   return JSONResponse({"ok": True, "rows": rows})
+
+
+@app.post("/api/clearpass/test-notification")
+def clearpass_test_notification_api(request: Request):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  result = _clearpass_send_test_certificate_notice()
+  return JSONResponse(result, status_code=200 if result.get("ok") else 400)
 
 
 @app.get("/settings", response_class=HTMLResponse)
