@@ -44739,8 +44739,8 @@ def menu_admin_page(request: Request):
             if (runBtn) {
               runBtn.addEventListener("click", function () {
                 runBtn.disabled = true;
-                runBtn.textContent = "Running...";
-                if (runStatus) runStatus.innerHTML = '<span style="color:#555;font-size:13px;">Sending report email...</span>';
+                runBtn.textContent = "Submitted";
+                if (runStatus) runStatus.innerHTML = '<span style="color:#1b5e20;background:#e8f5e9;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">Submitted. The email will arrive within 10 minutes.</span>';
                 fetch("/admin/separation-sms-report/run", { method: "POST", credentials: "same-origin" })
                   .then(async r => {
                     const raw = await r.text();
@@ -44756,7 +44756,7 @@ def menu_admin_page(request: Request):
                       if (!statusResponse.ok || !statusData.ok) throw new Error(statusData.error || "Unable to read report status.");
                       const job = statusData.job || {};
                       if (job.status === "queued" || job.status === "running") {
-                        if (runStatus) runStatus.innerHTML = `<span style="color:#555;font-size:13px;">${job.status === "queued" ? "Queued..." : "Sending report email..."}</span>`;
+                        if (runStatus) runStatus.innerHTML = '<span style="color:#1b5e20;background:#e8f5e9;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">Submitted. The email will arrive within 10 minutes.</span>';
                         window.setTimeout(poll, 1500);
                         return;
                       }
