@@ -986,6 +986,12 @@ DEFAULT_SETTINGS = {
     {"label": "Las Vegas Ribbon SBC 1", "host": "10.241.16.217"},
     {"label": "Reno Ribbon SBC 1", "host": "10.141.16.40"},
   ],
+  "clearpass_hosts": [
+    {"label": "ClearPass Policy Manager 1", "host": ""},
+    {"label": "ClearPass Policy Manager 2", "host": ""},
+    {"label": "ClearPass Policy Manager 3", "host": ""},
+    {"label": "ClearPass Policy Manager 4", "host": ""},
+  ],
   "ribbon_cert_notice_enabled": "true",
   "ribbon_cert_notice_recipients": "",
   "ribbon_cert_notice_from": "noreply@amnhealthcare.com",
@@ -40800,6 +40806,10 @@ def menu_admin_page(request: Request):
             <strong>Cisco Expressway and Rbbn SBC</strong>
             <span>Production and LAB certificate, version, and call-status view.</span>
           </a>
+          <a class="hero-link-card" href="/clearpass">
+            <strong>ClearPass Policy Manager</strong>
+            <span>Monitor certificates and HTTPS reachability for four ClearPass nodes.</span>
+          </a>
           <a class="hero-link-card" href="/ribbon-sbc">
             <strong>AMN Ribbon SBC</strong>
             <span>Ribbon SBC certificate lifecycle, reachability, and status view.</span>
@@ -40865,6 +40875,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">SMS Item Menu (Page 3)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">DN Prefix Settings</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" onclick="window.location.href='/expressways'">Cisco Expressway and Rbbn SBC</button>
+            <button type="button" class="portal-nav-btn portal-nav-btn-info" onclick="window.location.href='/clearpass'">ClearPass Policy Manager</button>
             <button type="button" class="portal-nav-btn" data-panel="ldapsync">Trigger CUCM LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unityldapsync">Trigger Unity LDAP Sync</button>
             <button type="button" class="portal-nav-btn" data-panel="unity-user-extract">Unity Connection User Extract</button>
@@ -48667,6 +48678,50 @@ def _ribbon_sbc_configured_hosts() -> list[dict]:
   return hosts
 
 
+def _clearpass_configured_hosts() -> list[dict]:
+  configured = _load_settings().get("clearpass_hosts", [])
+  if not isinstance(configured, list):
+    configured = []
+  defaults = [f"ClearPass Policy Manager {index}" for index in range(1, 5)]
+  return [
+    {
+      "index": index + 1,
+      "label": str((configured[index] if index < len(configured) and isinstance(configured[index], dict) else {}).get("label", "") or defaults[index]).strip(),
+      "host": str((configured[index] if index < len(configured) and isinstance(configured[index], dict) else {}).get("host", "") or "").strip(),
+    }
+    for index in range(4)
+  ]
+
+
+def _clearpass_probe(host: str) -> dict:
+  clean_host = (host or "").strip()
+  result = {
+    "host": clean_host,
+    "reachable": False,
+    "certificate_expires": "Unavailable",
+    "days_remaining": None,
+    "error": "",
+  }
+  if not clean_host:
+    result["error"] = "Not configured"
+    return result
+  try:
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    with socket.create_connection((clean_host, 443), timeout=3) as sock:
+      with context.wrap_socket(sock, server_hostname=clean_host) as tls_sock:
+        result["reachable"] = True
+        der = tls_sock.getpeercert(binary_form=True)
+        if der:
+          exp_str, days = _parse_asn1_cert_expiry(der)
+          result["certificate_expires"] = exp_str
+          result["days_remaining"] = days
+  except Exception as exc:
+    result["error"] = f"TLS 443: {exc}"
+  return result
+
+
 def _ribbon_sbc_probe(host: str) -> dict:
   clean_host = (host or "").strip()
   result = {
@@ -49530,6 +49585,44 @@ def ribbon_sbc_status_api(request: Request):
     return JSONResponse({"ok": False, "error": f"Status check failed: {exc}", "rows": []}, status_code=500)
 
 
+@app.get("/clearpass", response_class=HTMLResponse)
+def clearpass_page(request: Request):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", ""))):
+    return HTMLResponse(content="<h3>403 Forbidden</h3><p>You are not authorized to access ClearPass status.</p>", status_code=403)
+  row_json = json.dumps(_clearpass_configured_hosts()).replace("</", "<\\/")
+  html = f'''<!DOCTYPE html><html><head><meta charset="utf-8"><title>ClearPass Policy Manager</title>
+<style>body{{font-family:"Segoe UI",Arial,sans-serif;margin:0;background:#edf5fc;color:#12304a}}header{{padding:14px 20px;background:#002f6c;color:#fff;font-weight:700}}main{{max-width:1200px;margin:20px auto;padding:0 14px}}section{{background:#fff;border:1px solid #c8dbee;border-radius:12px;padding:18px;box-shadow:0 14px 30px rgba(0,47,108,.11)}}h2{{margin:0;color:#002f6c}}.note{{color:#4e6a84;font-size:13px}}button,a{{display:inline-block;padding:9px 14px;border:0;border-radius:6px;background:#005eb8;color:#fff;font-weight:700;text-decoration:none;cursor:pointer;margin:12px 6px 12px 0}}a{{background:#4e6a84}}table{{width:100%;border-collapse:collapse;font-size:13px}}th{{background:#005eb8;color:#fff;text-align:left;padding:9px}}td{{padding:9px;border-bottom:1px solid #c8dbee}}.ok{{color:#16733b;font-weight:700}}.bad{{color:#a12626;font-weight:700}}</style></head>
+<body><header>AMN Healthcare | ClearPass Policy Manager Certificate Status</header><main><section><h2>ClearPass Policy Manager Certificate Status</h2><p class="note">TLS certificate and HTTPS reachability monitoring. No ClearPass username or password is required.</p><button id="refresh" type="button">Refresh Status</button><a href="/settings">ClearPass Settings</a><a href="/page2">Back to Administrative Menu</a><div id="status" class="note">Loading...</div><div id="results"></div></section></main>
+<script>const hosts={row_json};const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({{"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;", "'":"&#39;"}}[c]));function render(rows){{let h='<table><thead><tr><th>Node / Label</th><th>Host / IP</th><th>Reachability</th><th>Certificate Expires</th><th>Days Remaining</th></tr></thead><tbody>';rows.forEach(r=>{{const reach=r.reachable?'Reachable':(r.host?'Unavailable':'Not configured');h+='<tr><td><strong>'+esc(r.label)+'</strong></td><td><code>'+esc(r.host||'Not set')+'</code></td><td><span class="'+(r.reachable?'ok':'bad')+'">'+reach+'</span></td><td>'+esc(r.certificate_expires||'Unavailable')+'</td><td>'+esc(r.days_remaining===null?'-':r.days_remaining+' days')+'</td></tr>';}});document.getElementById('results').innerHTML=h+'</tbody></table>';}}async function load(){{const s=document.getElementById('status');s.textContent='Probing ClearPass nodes...';try{{const r=await fetch('/api/clearpass/status',{{credentials:'same-origin'}});const d=await r.json();if(!d.ok)throw Error(d.error||'Status check failed');render(d.rows||[]);s.textContent='Last refreshed: '+new Date().toLocaleTimeString();}}catch(e){{s.textContent='Error: '+e.message;}}}}document.getElementById('refresh').addEventListener('click',load);render(hosts.map(h=>({{...h,reachable:false,certificate_expires:'Click Refresh',days_remaining:null}})));load();</script></body></html>'''
+  return HTMLResponse(content=html)
+
+
+@app.get("/api/clearpass/status")
+def clearpass_status_api(request: Request):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  hosts = _clearpass_configured_hosts()
+  rows = []
+  with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+    future_map = {executor.submit(_clearpass_probe, item.get("host", "")): item for item in hosts}
+    done, not_done = concurrent.futures.wait(future_map.keys(), timeout=10)
+    for future in done:
+      row = dict(future_map[future])
+      try:
+        row.update(future.result())
+      except Exception as exc:
+        row.update({"reachable": False, "error": str(exc)})
+      rows.append(row)
+    for future in not_done:
+      row = dict(future_map[future])
+      row.update({"reachable": False, "error": "Probe timed out"})
+      rows.append(row)
+  rows.sort(key=lambda item: item.get("index", 0))
+  return JSONResponse({"ok": True, "rows": rows})
+
+
 @app.get("/settings", response_class=HTMLResponse)
 def settings_page(request: Request):
   """Admin settings page for configuring phone prefixes and Twilio LOA defaults."""
@@ -49560,6 +49653,15 @@ def settings_page(request: Request):
       f'</div>'
     )
   ribbon_sbc_inputs_html = "".join(ribbon_inputs)
+  clearpass_inputs = []
+  for i, node in enumerate(_clearpass_configured_hosts()):
+    clearpass_inputs.append(
+      f'<div style="display:grid;grid-template-columns:1fr 2fr;gap:8px;margin-top:10px;">'
+      f'<input type="text" id="clearpass_label_{i + 1}" value="{escape(node.get("label", ""))}" placeholder="Display name">'
+      f'<input type="text" id="clearpass_host_{i + 1}" value="{escape(node.get("host", ""))}" placeholder="IP address or hostname" maxlength="255">'
+      f'</div>'
+    )
+  clearpass_inputs_html = "".join(clearpass_inputs)
 
   html = f"""
 <html>
@@ -49811,6 +49913,12 @@ def settings_page(request: Request):
             <div class="help-text">Enter Ribbon SBC names and IPs/hostnames. Credentials use Expressway defaults or RIBBON_SBC_API_USERNAME/PASSWORD in .env.</div>
             {ribbon_sbc_inputs_html}
           </div>
+
+          <div class="form-group" style="border:2px solid #005eb8;border-radius:6px;padding:14px;background:#f4f8fc;">
+            <label>ClearPass Policy Manager Hosts</label>
+            <div class="help-text">Enter up to four ClearPass IPs/hostnames. Certificate checks use TLS on port 443 and do not require ClearPass credentials.</div>
+            {clearpass_inputs_html}
+          </div>
           
           <div class="button-group">
             <button type="submit" class="btn-save">Save Changes</button>
@@ -49858,6 +49966,10 @@ def settings_page(request: Request):
           ribbon_sbc_hosts: Array.from({{length: 2}}, (_, i) => ({{
             label: document.getElementById('ribbon_sbc_label_' + (i + 1)).value.trim() || (i === 0 ? 'Las Vegas Ribbon SBC 1' : 'Reno Ribbon SBC 1'),
             host: document.getElementById('ribbon_sbc_host_' + (i + 1)).value.trim(),
+          }})),
+          clearpass_hosts: Array.from({{length: 4}}, (_, i) => ({{
+            label: document.getElementById('clearpass_label_' + (i + 1)).value.trim() || ('ClearPass Policy Manager ' + (i + 1)),
+            host: document.getElementById('clearpass_host_' + (i + 1)).value.trim(),
           }})),
         }};
         
@@ -49984,6 +50096,16 @@ def update_settings_api(request: Request, body: dict = None):
           "label": str(item.get("label", "") or "").strip() or def_lbl,
           "host": str(item.get("host", "") or "").strip(),
         })
+
+    raw_clearpass_hosts = body.get("clearpass_hosts", [])
+    clearpass_hosts = []
+    if isinstance(raw_clearpass_hosts, list):
+      for index in range(4):
+        item = raw_clearpass_hosts[index] if index < len(raw_clearpass_hosts) and isinstance(raw_clearpass_hosts[index], dict) else {}
+        clearpass_hosts.append({
+          "label": str(item.get("label", "") or "").strip() or f"ClearPass Policy Manager {index + 1}",
+          "host": str(item.get("host", "") or "").strip(),
+        })
     
     if not general_fte_prefix or not strike_prefix or not recruiter_prefix:
       return JSONResponse({"ok": False, "error": "All fields are required"}, status_code=400)
@@ -50040,6 +50162,7 @@ def update_settings_api(request: Request, body: dict = None):
       "sep_dn_delete_recipient_2": sep_dn_delete_recipient_2,
       "expressway_hosts": expressway_hosts,
       "ribbon_sbc_hosts": ribbon_sbc_hosts,
+      "clearpass_hosts": clearpass_hosts,
     })
 
     if _save_settings(new_settings):
