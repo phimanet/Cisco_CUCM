@@ -51419,7 +51419,15 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
 
   counts_tab_rows.append(["TOTAL", "All Groups", grand_total])
 
-  master_sheets = {"Ticket Counts": counts_tab_rows}
+  manager_assignment_count_rows = [["Manager", "Assignment Group Count"]]
+  for mgr in sorted_managers:
+    manager_assignment_count_rows.append([mgr, len(mgr_ag_groups[mgr])])
+  manager_assignment_count_rows.append(["TOTAL UNIQUE MANAGERS", len(sorted_managers)])
+
+  master_sheets = {
+    "Manager-Assignment group": manager_assignment_count_rows,
+    "Ticket Counts": counts_tab_rows,
+  }
 
   # Tabs 2..N in Master Workbook: One tab per manager
   for mgr in sorted_managers:
@@ -51473,8 +51481,8 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
   with open(manager_assignment_path, "wb") as maf:
     maf.write(manager_assignment_bytes)
 
-  # 2. Build individual (Manager + Assignment Group) Excel files (.xlsx) and CSV files (.csv)
-  # Each Manager and Assignment Group combination is generated as its own standalone report file with exactly 1 tab.
+  # 2. Build one individual Excel and CSV file per manager.
+  # All assignment-group tickets for that manager stay together in one tab/file.
   manager_entries = []
   zip_files = []
 
@@ -51487,44 +51495,39 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
     if not clean_mgr:
       clean_mgr = "Unassigned"
 
-    for ag, ag_rows in sorted(ag_dict.items(), key=lambda g: -len(g[1])):
-      clean_ag_short = re.sub(r'^(SN_AppSupp\s*[-–]\s*|SN_Service\s*Desk[-_]\s*|SN_)', '', ag).strip()
-      if not clean_ag_short:
-        clean_ag_short = ag.strip()
-      clean_ag_name = re.sub(r'[^\w\s\-.]', '', clean_ag_short).strip().replace(' ', '_')
-      if not clean_ag_name:
-        clean_ag_name = "Group"
+    all_mgr_rows = []
+    for ag_rows in ag_dict.values():
+      all_mgr_rows.extend(ag_rows)
 
-      mgr_xlsx_filename = f"Service_Report_{clean_mgr}_{clean_ag_name}.xlsx"
-      mgr_csv_filename = f"Service_Report_{clean_mgr}_{clean_ag_name}.csv"
+    mgr_xlsx_filename = f"Service_Report_{clean_mgr}.xlsx"
+    mgr_csv_filename = f"Service_Report_{clean_mgr}.csv"
+    sheet_data = [headers]
+    for r in all_mgr_rows:
+      sheet_data.append([r.get(h, "") for h in headers])
 
-      # Exact 1 sheet per file
-      tab_name = _clean_excel_sheet_name(clean_ag_short[:31] if len(ag_dict) > 1 else mgr[:31])
-      sheet_data = [headers]
-      for r in ag_rows:
-        sheet_data.append([r.get(h, "") for h in headers])
+    mgr_xlsx_bytes = _create_multi_sheet_xlsx({clean_mgr[:31]: sheet_data})
+    mgr_xlsx_path = os.path.join(job_dir, mgr_xlsx_filename)
+    with open(mgr_xlsx_path, "wb") as xf:
+      xf.write(mgr_xlsx_bytes)
+    zip_files.append((mgr_xlsx_filename, mgr_xlsx_path))
 
-      mgr_xlsx_bytes = _create_multi_sheet_xlsx({tab_name: sheet_data})
-      mgr_xlsx_path = os.path.join(job_dir, mgr_xlsx_filename)
-      with open(mgr_xlsx_path, "wb") as xf:
-        xf.write(mgr_xlsx_bytes)
-      zip_files.append((mgr_xlsx_filename, mgr_xlsx_path))
+    mgr_csv_path = os.path.join(job_dir, mgr_csv_filename)
+    with open(mgr_csv_path, "w", newline="", encoding="utf-8-sig") as cf:
+      writer = csv.DictWriter(cf, fieldnames=headers, extrasaction="ignore")
+      writer.writeheader()
+      writer.writerows(all_mgr_rows)
+    zip_files.append((mgr_csv_filename, mgr_csv_path))
 
-      # Individual CSV (.csv with UTF-8 BOM for Excel)
-      mgr_csv_path = os.path.join(job_dir, mgr_csv_filename)
-      with open(mgr_csv_path, "w", newline="", encoding="utf-8-sig") as cf:
-        writer = csv.DictWriter(cf, fieldnames=headers, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(ag_rows)
-      zip_files.append((mgr_csv_filename, mgr_csv_path))
-
-      manager_entries.append({
-        "name": mgr,
-        "assignment_group": ag,
-        "count": len(ag_rows),
-        "xlsx_filename": mgr_xlsx_filename,
-        "filename": mgr_csv_filename,
-      })
+    ag_list = sorted(ag_dict.keys(), key=lambda g: -len(ag_dict[g]))
+    manager_entries.append({
+      "name": mgr,
+      "assignment_group": ", ".join(ag_list),
+      "assignment_groups": ag_list,
+      "assignment_group_count": len(ag_list),
+      "count": len(all_mgr_rows),
+      "xlsx_filename": mgr_xlsx_filename,
+      "filename": mgr_csv_filename,
+    })
 
   # Also include Master Workbook in the ZIP
   zip_files.append((master_excel_filename, master_excel_path))
