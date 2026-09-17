@@ -914,6 +914,9 @@ DEFAULT_SETTINGS = {
   "strike_prefix": "817",
   "recruiter_prefix": "469",
   "admin_users": "",
+  "service_reports_test_mode": "true",
+  "service_reports_tester_email": "nilesh.sonawane@amnhealthcare.com",
+  "service_reports_sender_email": "nilesh.sonawane@amnhealthcare.com",
   "twilio_loa_recipient_name": "Laura Alvarez",
   "twilio_loa_recipient_email": "laura.alvarez@amnhealthare.com",
   "twilio_loa_recipient_phone": "+18583503289",
@@ -29668,6 +29671,7 @@ __ADMIN_CARD__
           <label style="display:block; font-size:12px; font-weight:600; color:#355978; margin-bottom:3px;">Sender / From Address:</label>
           <input type="email" id="sr-sender-email" value="nilesh.sonawane@amnhealthcare.com" placeholder="nilesh.sonawane@amnhealthcare.com" style="width:100%; max-width:380px; padding:7px 10px; border:1px solid #a9c3d8; border-radius:5px; font-size:13px;">
         </div>
+        <button type="button" id="sr-save-email-settings-btn" style="align-self:flex-end; background:#005eb8; color:#fff; border:none; border-radius:5px; padding:8px 14px; font-weight:700; cursor:pointer;">💾 Save Email Settings</button>
       </div>
       <div style="margin-top:8px; font-size:12px; color:#4e6a84;">
         <span>💡 When <strong>Test Mode</strong> is ON, all individual and bulk emails will be delivered exclusively to the Tester email above with Reply-To set to the Sender. When OFF, each report is emailed directly to the resolved manager.</span>
@@ -29791,9 +29795,56 @@ __ADMIN_CARD__
         const colSelect = document.getElementById("sr-col-select");
         const historyList = document.getElementById("sr-history-list");
         const refreshHistoryBtn = document.getElementById("sr-refresh-history-btn");
+        const saveEmailSettingsBtn = document.getElementById("sr-save-email-settings-btn");
+        const testModeToggle = document.getElementById("sr-test-mode-toggle");
+        const testerEmailInput = document.getElementById("sr-tester-email");
+        const senderEmailInput = document.getElementById("sr-sender-email");
 
         let currentManagers = [];
         let currentJobId = "";
+
+        async function loadEmailSettings() {
+          try {
+            const response = await fetch("/service-reports/email-settings", { credentials: "same-origin", headers: { "Accept": "application/json" } });
+            const data = await response.json();
+            if (response.ok && data.ok) {
+              testModeToggle.checked = !!data.test_mode;
+              testerEmailInput.value = data.tester_email || testerEmailInput.value;
+              senderEmailInput.value = data.sender_email || senderEmailInput.value;
+            }
+          } catch (_) { /* Keep page defaults if settings cannot load. */ }
+        }
+
+        if (saveEmailSettingsBtn) {
+          saveEmailSettingsBtn.addEventListener("click", async function () {
+            saveEmailSettingsBtn.disabled = true;
+            try {
+              const response = await fetch("/service-reports/email-settings", {
+                method: "POST",
+                credentials: "same-origin",
+                headers: { "Content-Type": "application/json", "Accept": "application/json" },
+                body: JSON.stringify({
+                  test_mode: !!testModeToggle.checked,
+                  tester_email: testerEmailInput.value.trim(),
+                  sender_email: senderEmailInput.value.trim()
+                })
+              });
+              const data = await response.json();
+              if (!response.ok || !data.ok) throw new Error(data.error || "Save failed.");
+              if (statusEl) {
+                statusEl.textContent = "Email settings saved.";
+                statusEl.style.color = "#1f7a3d";
+              }
+            } catch (error) {
+              if (statusEl) {
+                statusEl.textContent = "Email settings failed: " + (error.message || "Save failed.");
+                statusEl.style.color = "#a63b00";
+              }
+            } finally {
+              saveEmailSettingsBtn.disabled = false;
+            }
+          });
+        }
 
         function escapeHtml(str) {
           return String(str == null ? "" : str)
@@ -30082,6 +30133,7 @@ __ADMIN_CARD__
 
         // Initial load of history on panel render
         setTimeout(loadRecentJobs, 800);
+        loadEmailSettings();
 
         if (form) {
           form.addEventListener("submit", async function (e) {
@@ -51660,6 +51712,45 @@ async def service_reports_upload_route(
         except Exception:
           pass
     return JSONResponse(res)
+
+
+  @app.get("/service-reports/email-settings")
+  def service_reports_email_settings_get(request: Request):
+    session = _get_auth_session(request) or {}
+    if not str(session.get("username", "") or "").strip():
+      return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+    settings = _load_settings()
+    return JSONResponse({
+      "ok": True,
+      "test_mode": str(settings.get("service_reports_test_mode", "true")).lower() in {"1", "true", "yes", "on"},
+      "tester_email": settings.get("service_reports_tester_email", "nilesh.sonawane@amnhealthcare.com"),
+      "sender_email": settings.get("service_reports_sender_email", "nilesh.sonawane@amnhealthcare.com"),
+    })
+
+
+  @app.post("/service-reports/email-settings")
+  async def service_reports_email_settings_save(request: Request):
+    session = _get_auth_session(request) or {}
+    if not str(session.get("username", "") or "").strip():
+      return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+    try:
+      body = await request.json()
+      tester_email = str(body.get("tester_email", "") or "").strip()
+      sender_email = str(body.get("sender_email", "") or "").strip()
+      test_mode = bool(body.get("test_mode", True))
+      if "@" not in tester_email or "@" not in sender_email:
+        return JSONResponse({"ok": False, "error": "Tester and sender email addresses are required."}, status_code=400)
+      settings = _load_settings()
+      settings.update({
+        "service_reports_test_mode": "true" if test_mode else "false",
+        "service_reports_tester_email": tester_email,
+        "service_reports_sender_email": sender_email,
+      })
+      if not _save_settings(settings):
+        return JSONResponse({"ok": False, "error": "Failed to save email settings."}, status_code=500)
+      return JSONResponse({"ok": True, "message": "Service Reports email settings saved."})
+    except Exception as exc:
+      return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
 
 
 @app.get("/service-reports/download-summary/{job_id}")
