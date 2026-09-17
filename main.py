@@ -29887,9 +29887,6 @@ __ADMIN_CARD__
             });
           });
 
-          submitBtn.addEventListener("click", function () {
-            form.dispatchEvent(new Event("submit", { cancelable: true }));
-          });
         }
 
         function applyFilter() {
@@ -29908,6 +29905,12 @@ __ADMIN_CARD__
 
         if (filterInput) {
           filterInput.addEventListener("input", applyFilter);
+        }
+
+        if (submitBtn && form) {
+          submitBtn.addEventListener("click", function () {
+            form.dispatchEvent(new Event("submit", { cancelable: true }));
+          });
         }
 
         // Email All Reports Button
