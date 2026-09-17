@@ -29706,7 +29706,8 @@ __ADMIN_CARD__
               <tr style="background:#005eb8; color:#ffffff;">
                 <th style="padding:9px 12px; text-align:left; width:45px;">#</th>
                 <th style="padding:9px 12px; text-align:left;">Manager Name</th>
-                <th style="padding:9px 12px; text-align:center; width:140px;">Record Count</th>
+                <th style="padding:9px 12px; text-align:left;">Assignment Group(s)</th>
+                <th style="padding:9px 12px; text-align:center; width:130px;">Total Tickets</th>
                 <th style="padding:9px 12px; text-align:center; width:220px;">Download Actions</th>
               </tr>
             </thead>
@@ -29766,7 +29767,7 @@ __ADMIN_CARD__
           if (!tableBody) return;
           tableBody.innerHTML = "";
           if (!managers.length) {
-            tableBody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding:18px; color:#6b7280;">No managers matching search filter.</td></tr>';
+            tableBody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:18px; color:#6b7280;">No managers matching search filter.</td></tr>';
             return;
           }
           managers.forEach(function (m, idx) {
@@ -29775,7 +29776,7 @@ __ADMIN_CARD__
             tr.style.background = bg;
             tr.style.borderBottom = "1px solid #c8dbee";
 
-            const countBadge = '<span style="display:inline-block; padding:3px 10px; border-radius:12px; background:#e8f4fd; color:#005eb8; font-weight:700; font-size:12px;">' + (m.count || 0) + ' records</span>';
+            const countBadge = '<span style="display:inline-block; padding:3px 10px; border-radius:12px; background:#e8f4fd; color:#005eb8; font-weight:700; font-size:12px;">' + (m.count || 0) + ' tickets</span>';
             const dlXlsxUrl = "/service-reports/download/" + encodeURIComponent(currentJobId) + "/" + encodeURIComponent(m.xlsx_filename || m.filename || "");
             const dlCsvUrl = "/service-reports/download/" + encodeURIComponent(currentJobId) + "/" + encodeURIComponent(m.filename || "");
             const actionBtn = '<div style="display:inline-flex; gap:6px;">'
@@ -29783,8 +29784,11 @@ __ADMIN_CARD__
               + '<a href="' + dlCsvUrl + '" style="display:inline-block; text-decoration:none; padding:4px 10px; border-radius:5px; background:linear-gradient(180deg,#355978,#223e57); color:#fff; font-weight:600; font-size:11px; box-shadow:0 1px 3px rgba(0,0,0,0.15);">⬇ CSV</a>'
               + '</div>';
 
+            const groupsDisplay = m.assignment_groups_display || (m.assignment_groups ? m.assignment_groups.join(', ') : '-');
+
             tr.innerHTML = '<td style="padding:8px 12px; color:#4e6a84; font-size:12px;">' + (idx + 1) + '</td>'
               + '<td style="padding:8px 12px; font-weight:600; color:#12304a;">' + escapeHtml(m.name) + '</td>'
+              + '<td style="padding:8px 12px; font-size:12px; color:#355978;">' + escapeHtml(groupsDisplay) + '</td>'
               + '<td style="padding:8px 12px; text-align:center;">' + countBadge + '</td>'
               + '<td style="padding:8px 12px; text-align:center;">' + actionBtn + '</td>';
             tableBody.appendChild(tr);
@@ -50685,6 +50689,8 @@ def _clean_excel_sheet_name(name: str) -> str:
 def _create_multi_sheet_xlsx(sheets_dict: dict) -> bytes:
   """
   Create a valid multi-sheet .xlsx workbook purely using Python stdlib (zipfile + XML).
+  Generates clean OpenXML with dimensions, views, styles, and inlineStr cells that open
+  in Microsoft Excel with 0 repair warnings or corrupt record dialogs.
   Requires NO third-party pip packages (works on both Windows and Linux Ubuntu).
   sheets_dict: { sheet_name: [ [row1_c1, row1_c2, ...], [row2_c1, ...] ] }
   """
@@ -50699,7 +50705,6 @@ def _create_multi_sheet_xlsx(sheets_dict: dict) -> bytes:
     ET.SubElement(ct, 'Default', Extension='xml', ContentType='application/xml')
     ET.SubElement(ct, 'Override', PartName='/xl/workbook.xml', ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml')
     ET.SubElement(ct, 'Override', PartName='/xl/styles.xml', ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml')
-    ET.SubElement(ct, 'Override', PartName='/xl/sharedStrings.xml', ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStringTable+xml')
 
     rels = ET.Element('Relationships', xmlns='http://schemas.openxmlformats.org/package/2006/relationships')
     ET.SubElement(rels, 'Relationship', Id='rId1', Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument', Target='xl/workbook.xml')
@@ -50708,15 +50713,6 @@ def _create_multi_sheet_xlsx(sheets_dict: dict) -> bytes:
     wb = ET.Element('workbook', xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main', attrib={'xmlns:r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'})
     wb_sheets = ET.SubElement(wb, 'sheets')
     wb_rels = ET.Element('Relationships', xmlns='http://schemas.openxmlformats.org/package/2006/relationships')
-
-    shared_strings = []
-    ss_map = {}
-    def get_ss(v):
-      s = str(v if v is not None else '')
-      if s not in ss_map:
-        ss_map[s] = len(shared_strings)
-        shared_strings.append(s)
-      return ss_map[s]
 
     used_sheet_names = set()
     for idx, (sname, srows) in enumerate(sheets_dict.items(), 1):
@@ -50735,7 +50731,22 @@ def _create_multi_sheet_xlsx(sheets_dict: dict) -> bytes:
       ET.SubElement(wb_rels, 'Relationship', Id=rid, Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet', Target=f'worksheets/{sfile}')
       ET.SubElement(ct, 'Override', PartName=f'/xl/worksheets/{sfile}', ContentType='application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml')
 
-      ws = ET.Element('worksheet', xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main')
+      # Calculate sheet dimension
+      num_rows = len(srows) if srows else 1
+      num_cols = max((len(r) for r in srows), default=1)
+      c_num = num_cols
+      max_col_letters = ''
+      while c_num > 0:
+        c_num, rem = divmod(c_num - 1, 26)
+        max_col_letters = chr(65 + rem) + max_col_letters
+      dim_ref = f'A1:{max_col_letters}{num_rows}'
+
+      ws = ET.Element('worksheet', xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main', attrib={'xmlns:r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'})
+      ET.SubElement(ws, 'dimension', ref=dim_ref)
+      sheet_views = ET.SubElement(ws, 'sheetViews')
+      ET.SubElement(sheet_views, 'sheetView', tabSelected='1' if idx == 1 else '0', workbookViewId='0')
+      ET.SubElement(ws, 'sheetFormatPr', defaultRowHeight='15')
+
       sheet_data = ET.SubElement(ws, 'sheetData')
       for r_idx, row in enumerate(srows, 1):
         r_el = ET.SubElement(sheet_data, 'row', r=str(r_idx))
@@ -50747,6 +50758,7 @@ def _create_multi_sheet_xlsx(sheets_dict: dict) -> bytes:
             col_letters = chr(65 + rem) + col_letters
           ref = f'{col_letters}{r_idx}'
 
+          # Distinguish numbers vs text
           is_numeric = False
           if isinstance(cell, (int, float)):
             is_numeric = True
@@ -50758,31 +50770,20 @@ def _create_multi_sheet_xlsx(sheets_dict: dict) -> bytes:
             v_el = ET.SubElement(c_el, 'v')
             v_el.text = str(cell)
           else:
-            c_el = ET.SubElement(r_el, 'c', r=ref, t='s')
-            v_el = ET.SubElement(c_el, 'v')
-            v_el.text = str(get_ss(cell))
+            c_el = ET.SubElement(r_el, 'c', r=ref, t='inlineStr')
+            is_el = ET.SubElement(c_el, 'is')
+            t_el = ET.SubElement(is_el, 't')
+            t_el.text = str(cell if cell is not None else '')
+
       z.writestr(f'xl/worksheets/{sfile}', ET.tostring(ws, encoding='utf-8', xml_declaration=True))
 
-    ss_rid = f'rId{len(sheets_dict) + 1}'
-    st_rid = f'rId{len(sheets_dict) + 2}'
-    ET.SubElement(wb_rels, 'Relationship', Id=ss_rid, Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings', Target='sharedStrings.xml')
+    st_rid = f'rId{len(sheets_dict) + 1}'
     ET.SubElement(wb_rels, 'Relationship', Id=st_rid, Type='http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles', Target='styles.xml')
-
-    z.writestr('xl/workbook.xml', ET.tostring(wb, encoding='utf-8', xml_declaration=True))
-    z.writestr('xl/_rels/workbook.xml.rels', ET.tostring(wb_rels, encoding='utf-8', xml_declaration=True))
-    z.writestr('[Content_Types].xml', ET.tostring(ct, encoding='utf-8', xml_declaration=True))
-
-    sst = ET.Element('sst', xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main', count=str(len(shared_strings)), uniqueCount=str(len(shared_strings)))
-    for s in shared_strings:
-      si = ET.SubElement(sst, 'si')
-      t = ET.SubElement(si, 't')
-      t.text = s
-    z.writestr('xl/sharedStrings.xml', ET.tostring(sst, encoding='utf-8', xml_declaration=True))
 
     styles_xml = (
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
       '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-      '<fonts count="1"><font><name val="Calibri"/><sz val="11"/></font></fonts>'
+      '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>'
       '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
       '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
       '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
@@ -50791,55 +50792,74 @@ def _create_multi_sheet_xlsx(sheets_dict: dict) -> bytes:
     )
     z.writestr('xl/styles.xml', styles_xml)
 
+    z.writestr('xl/workbook.xml', ET.tostring(wb, encoding='utf-8', xml_declaration=True))
+    z.writestr('xl/_rels/workbook.xml.rels', ET.tostring(wb_rels, encoding='utf-8', xml_declaration=True))
+    z.writestr('[Content_Types].xml', ET.tostring(ct, encoding='utf-8', xml_declaration=True))
+
   return zbuf.getvalue()
 
 
-def _detect_manager_column(headers: list) -> str:
-  """Heuristic to detect the Manager column in a ServiceNow export."""
+def _detect_manager_and_assignment_columns(headers: list) -> tuple:
+  """Detect the Manager column (Column B) and Assignment Group column (Column C)."""
   if not headers:
-    return ""
+    return ("", "")
   norm_headers = [str(h or "").strip() for h in headers if str(h or "").strip()]
 
-  # If Column B (index 1) is called Manager, that takes top priority
+  # Manager Column (Column B priority)
+  mgr_col = ""
   if len(norm_headers) > 1 and norm_headers[1].lower() == "manager":
-    return norm_headers[1]
+    mgr_col = norm_headers[1]
+  else:
+    for target in ["manager", "caller's manager", "caller manager", "assigned to.manager"]:
+      for h in norm_headers:
+        if h.lower() == target:
+          mgr_col = h
+          break
+      if mgr_col:
+        break
+    if not mgr_col:
+      for h in norm_headers:
+        if "manager" in h.lower():
+          mgr_col = h
+          break
 
-  # Priority 1: Exact matches (case-insensitive)
-  p1 = [
-    "manager", "caller's manager", "caller manager", "assigned to.manager",
-    "assigned to manager", "requested for.manager", "requested for manager",
-    "opened by.manager", "opened by manager", "department manager",
-    "supervisor", "reports to", "approver", "manager name", "manager_name"
-  ]
-  for target in p1:
-    for h in norm_headers:
-      if h.lower() == target:
-        return h
+  # Assignment Group Column (Column C priority)
+  ag_col = ""
+  if len(norm_headers) > 2 and "assignment" in norm_headers[2].lower():
+    ag_col = norm_headers[2]
+  else:
+    for target in ["assignment group", "assignment_group", "assignmentgroup"]:
+      for h in norm_headers:
+        if h.lower() == target:
+          ag_col = h
+          break
+      if ag_col:
+        break
+    if not ag_col:
+      for h in norm_headers:
+        if "assignment" in h.lower() or "group" in h.lower():
+          ag_col = h
+          break
 
-  # Priority 2: Ends with .manager (ServiceNow dot-walk fields) or ' manager'
-  for h in norm_headers:
-    hl = h.lower()
-    if hl.endswith(".manager") or hl.endswith(" manager") or hl.endswith("_manager"):
-      return h
-
-  # Priority 3: Contains 'manager' or 'supervisor' anywhere in name
-  for h in norm_headers:
-    hl = h.lower()
-    if "manager" in hl or "supervisor" in hl:
-      return h
-
-  return ""
+  return (mgr_col, ag_col)
 
 
 def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_override: str = "") -> dict:
   """
   Parse ServiceNow export file (Excel .xlsx or CSV) and:
-  1. Build Master Excel file with:
-     - Tab 1: Ticket Counts (Manager, Ticket Count, and TOTAL)
-     - Tab 2..N: One tab per manager listing all associated tickets
-  2. Build individual manager Excel files (.xlsx) and CSV files (.csv)
-  3. Package all manager files into a downloadable ZIP archive
-  4. Preserve all runs by date/time in 90-day history with full re-download support
+  1. Detect Column B as Manager and Column C as Assignment Group.
+  2. Group records by Manager, and within each Manager, group by Assignment Group.
+  3. Build Master Multi-Tab Excel Workbook:
+     - Tab 1 ("Ticket Counts"): Lists every Manager, their Assignment Group(s), and ticket counts,
+       with Manager Subtotals and a grand TOTAL row.
+     - Tabs 2..N: Dedicated tab for each Manager listing all their tickets.
+  4. Build individual manager Excel files (.xlsx) and CSV files (.csv):
+     - For managers with multiple Assignment Groups, their Excel file includes:
+       * Tab 1: Summary (breakdown by assignment group)
+       * Tab 2: All Tickets
+       * Tabs 3..N: Dedicated tab per Assignment Group
+  5. Package all manager workbooks and Master Excel into a single ZIP archive.
+  6. Maintain 90-day persistent history with re-download capabilities.
   """
   import io
   import csv
@@ -50848,6 +50868,7 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
   import json
   import re
   from datetime import datetime
+  from collections import defaultdict
 
   # Prune old records (older than 90 days) on each run
   _prune_service_reports_history(days=90)
@@ -50858,103 +50879,95 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
 
   if is_excel:
     try:
-      # First try openpyxl if installed
-      import openpyxl
-      wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
-      sheet = wb.active
-      all_rows = list(sheet.iter_rows(values_only=True))
-      if not all_rows:
-        return {"ok": False, "error": "The uploaded Excel workbook contains no data rows."}
-      headers = [str(cell or "").strip() for cell in all_rows[0] if cell is not None and str(cell).strip()]
-      for r in all_rows[1:]:
-        if any(cell is not None and str(cell).strip() != "" for cell in r):
+      import xml.etree.ElementTree as ET
+
+      def _col_str_to_idx(col_letters: str) -> int:
+        idx = 0
+        for ch in col_letters.upper():
+          if 'A' <= ch <= 'Z':
+            idx = idx * 26 + (ord(ch) - ord('A') + 1)
+        return idx - 1
+
+      with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
+        # Check shared strings if present
+        shared_strings = []
+        if "xl/sharedStrings.xml" in z.namelist():
+          ss_tree = ET.fromstring(z.read("xl/sharedStrings.xml"))
+          for si in ss_tree.findall(".//{*}si"):
+            text_parts = [t.text or "" for t in si.findall(".//{*}t")]
+            shared_strings.append("".join(text_parts))
+
+        # Find the worksheet with the most rows (to avoid picking summary/metadata sheets)
+        sheet_candidates = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
+        if not sheet_candidates:
+          return {"ok": False, "error": "No worksheets found in the uploaded XLSX workbook."}
+
+        target_sheet_xml = None
+        max_row_count = -1
+        for sc in sheet_candidates:
+          candidate_xml = z.read(sc)
+          cand_tree = ET.fromstring(candidate_xml)
+          r_count = len(cand_tree.findall(".//{*}row"))
+          if r_count > max_row_count:
+            max_row_count = r_count
+            target_sheet_xml = candidate_xml
+
+        if target_sheet_xml is None or max_row_count <= 0:
+          return {"ok": False, "error": "The uploaded XLSX workbook contains no data rows."}
+
+        ws_tree = ET.fromstring(target_sheet_xml)
+        parsed_grid = []
+        for r_el in ws_tree.findall(".//{*}row"):
+          cell_map = {}
+          for c_el in r_el.findall("{*}c"):
+            cell_ref = c_el.attrib.get("r", "")
+            cell_type = c_el.attrib.get("t", "")
+            v_el = c_el.find("{*}v")
+            is_el = c_el.find(".//{*}t")
+            cell_val = ""
+            if is_el is not None and is_el.text:
+              cell_val = is_el.text
+            elif v_el is not None and v_el.text:
+              cell_val = v_el.text
+
+            if cell_type == "s" and cell_val.isdigit():
+              s_idx = int(cell_val)
+              cell_val = shared_strings[s_idx] if s_idx < len(shared_strings) else ""
+
+            col_letters = "".join([ch for ch in cell_ref if ch.isalpha()])
+            if col_letters:
+              cell_map[_col_str_to_idx(col_letters)] = str(cell_val or "").strip()
+
+          if cell_map:
+            max_idx = max(cell_map.keys())
+            row_arr = [cell_map.get(i, "") for i in range(max_idx + 1)]
+            if any(cell != "" for cell in row_arr):
+              parsed_grid.append(row_arr)
+
+        if not parsed_grid or len(parsed_grid) < 2:
+          return {"ok": False, "error": "The uploaded XLSX workbook contains no data rows."}
+
+        raw_headers = parsed_grid[0]
+        seen_headers = {}
+        for h in raw_headers:
+          clean_h = str(h or "").strip()
+          if not clean_h:
+            clean_h = f"Column_{len(headers)+1}"
+          if clean_h in seen_headers:
+            seen_headers[clean_h] += 1
+            headers.append(f"{clean_h}_{seen_headers[clean_h]}")
+          else:
+            seen_headers[clean_h] = 1
+            headers.append(clean_h)
+
+        for r in parsed_grid[1:]:
           row_dict = {}
           for idx, h in enumerate(headers):
-            val = r[idx] if idx < len(r) else ""
-            row_dict[h] = "" if val is None else str(val).strip()
-          rows.append(row_dict)
-    except ImportError:
-      # Fallback: pure standard-library zipfile + ElementTree parser for XLSX (no third-party pip dependencies required)
-      try:
-        import xml.etree.ElementTree as ET
-
-        def _col_str_to_idx(col_letters: str) -> int:
-          idx = 0
-          for ch in col_letters.upper():
-            if 'A' <= ch <= 'Z':
-              idx = idx * 26 + (ord(ch) - ord('A') + 1)
-          return idx - 1
-
-        with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
-          shared_strings = []
-          if "xl/sharedStrings.xml" in z.namelist():
-            ss_tree = ET.fromstring(z.read("xl/sharedStrings.xml"))
-            for si in ss_tree.findall(".//{*}si"):
-              text_parts = [t.text or "" for t in si.findall(".//{*}t")]
-              shared_strings.append("".join(text_parts))
-
-          # Discover the first worksheet
-          sheet_names = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
-          if not sheet_names:
-            return {"ok": False, "error": "No worksheets found in the uploaded XLSX workbook."}
-          sheet_xml = z.read(sorted(sheet_names)[0])
-          ws_tree = ET.fromstring(sheet_xml)
-
-          parsed_grid = []
-          for r_el in ws_tree.findall(".//{*}row"):
-            cell_map = {}
-            for c_el in r_el.findall("{*}c"):
-              cell_ref = c_el.attrib.get("r", "")
-              cell_type = c_el.attrib.get("t", "")
-              v_el = c_el.find("{*}v")
-              is_el = c_el.find(".//{*}t")
-              cell_val = ""
-              if is_el is not None and is_el.text:
-                cell_val = is_el.text
-              elif v_el is not None and v_el.text:
-                cell_val = v_el.text
-
-              if cell_type == "s" and cell_val.isdigit():
-                s_idx = int(cell_val)
-                cell_val = shared_strings[s_idx] if s_idx < len(shared_strings) else ""
-
-              col_letters = "".join([ch for ch in cell_ref if ch.isalpha()])
-              if col_letters:
-                cell_map[_col_str_to_idx(col_letters)] = str(cell_val or "").strip()
-
-            if cell_map:
-              max_idx = max(cell_map.keys())
-              row_arr = [cell_map.get(i, "") for i in range(max_idx + 1)]
-              if any(cell != "" for cell in row_arr):
-                parsed_grid.append(row_arr)
-
-          if not parsed_grid:
-            return {"ok": False, "error": "The uploaded XLSX workbook contains no data rows."}
-
-          raw_headers = parsed_grid[0]
-          # Disambiguate duplicate header names if any (e.g. two Manager columns)
-          seen_headers = {}
-          for h in raw_headers:
-            clean_h = str(h or "").strip()
-            if not clean_h:
-              clean_h = f"Column_{len(headers)+1}"
-            if clean_h in seen_headers:
-              seen_headers[clean_h] += 1
-              headers.append(f"{clean_h}_{seen_headers[clean_h]}")
-            else:
-              seen_headers[clean_h] = 1
-              headers.append(clean_h)
-
-          for r in parsed_grid[1:]:
-            row_dict = {}
-            for idx, h in enumerate(headers):
-              row_dict[h] = r[idx] if idx < len(r) else ""
-            if any(val != "" for val in row_dict.values()):
-              rows.append(row_dict)
-      except Exception as xlsx_err:
-        return {"ok": False, "error": f"Failed to parse XLSX file: {str(xlsx_err)}"}
-    except Exception as e:
-      return {"ok": False, "error": f"Failed to parse Excel file: {str(e)}"}
+            row_dict[h] = r[idx] if idx < len(r) else ""
+          if any(val != "" for val in row_dict.values()):
+            rows.append(row_dict)
+    except Exception as xlsx_err:
+      return {"ok": False, "error": f"Failed to parse XLSX file: {str(xlsx_err)}"}
   else:
     # CSV parsing: attempt multi-encoding decode
     text_content = None
@@ -50969,7 +50982,6 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
       return {"ok": False, "error": "Unable to decode CSV file. Please ensure it is saved in UTF-8 or standard CSV format."}
 
     try:
-      # Delimiter sniffing
       sample = text_content[:4096]
       delimiter = ","
       try:
@@ -50992,32 +51004,39 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
   if not rows:
     return {"ok": False, "error": "The uploaded file contains no data rows."}
 
-  # Manager column determination (defaults to Column B if named Manager, or auto-detects)
-  manager_col = manager_col_override.strip() if manager_col_override else _detect_manager_column(headers)
+  # Detect columns: Column B is Manager, Column C is Assignment group
+  detected_mgr_col, detected_ag_col = _detect_manager_and_assignment_columns(headers)
+  manager_col = manager_col_override.strip() if manager_col_override else detected_mgr_col
+  ag_col = detected_ag_col or (headers[2] if len(headers) > 2 else "")
+
   if not manager_col or manager_col not in headers:
     return {
       "ok": False,
       "need_column_selection": True,
-      "error": "Could not automatically determine the Manager column. Please select the correct column from the dropdown above.",
+      "error": "Could not automatically determine the Manager column (Column B). Please select the correct column from the dropdown above.",
       "available_columns": headers,
       "total_records": len(rows),
       "source_filename": filename,
     }
 
-  # Group records by manager
-  manager_groups = {}
+  # Group data structure: mgr_ag_groups[manager][assignment_group] = [rows]
+  mgr_ag_groups = defaultdict(lambda: defaultdict(list))
   for r in rows:
     mgr = r.get(manager_col, "").strip()
     if not mgr:
       mgr = "(Blank / No Manager)"
-    if mgr not in manager_groups:
-      manager_groups[mgr] = []
-    manager_groups[mgr].append(r)
+    ag = r.get(ag_col, "").strip() if ag_col else ""
+    if not ag:
+      ag = "(No Assignment Group)"
+    mgr_ag_groups[mgr][ag].append(r)
 
-  # Sort managers by ticket count descending, with blank/no manager at bottom
+  # Sort managers by total ticket count descending
+  def _mgr_total(m):
+    return sum(len(ag_rows) for ag_rows in mgr_ag_groups[m].values())
+
   sorted_managers = sorted(
-    manager_groups.keys(),
-    key=lambda m: (1 if m.startswith("(") else 0, -len(manager_groups[m]), m.lower())
+    mgr_ag_groups.keys(),
+    key=lambda m: (1 if m.startswith("(") else 0, -_mgr_total(m), m.lower())
   )
 
   job_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
@@ -51025,22 +51044,35 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
   os.makedirs(job_dir, exist_ok=True)
 
   # 1. Build Master Multi-Tab Excel Workbook
-  # Tab 1: Ticket Counts
-  counts_tab_rows = [["Manager", "Ticket Count"]]
-  total_ticket_count = 0
+  # Tab 1: Ticket Counts (Manager, Assignment Group, Ticket Count)
+  counts_tab_rows = [["Manager", "Assignment Group", "Ticket Count"]]
+  grand_total = 0
   for mgr in sorted_managers:
-    cnt = len(manager_groups[mgr])
-    total_ticket_count += cnt
-    counts_tab_rows.append([mgr, cnt])
-  counts_tab_rows.append(["TOTAL", total_ticket_count])
+    ag_dict = mgr_ag_groups[mgr]
+    mgr_total = _mgr_total(mgr)
+    grand_total += mgr_total
+
+    if len(ag_dict) > 1:
+      # Multiple assignment groups: list each group, then subtotal
+      for ag in sorted(ag_dict.keys(), key=lambda g: -len(ag_dict[g])):
+        counts_tab_rows.append([mgr, ag, len(ag_dict[ag])])
+      counts_tab_rows.append([f"{mgr} (Subtotal)", "All Groups", mgr_total])
+    else:
+      # Single assignment group
+      ag_name = next(iter(ag_dict.keys()))
+      counts_tab_rows.append([mgr, ag_name, mgr_total])
+
+  counts_tab_rows.append(["TOTAL", "All Groups", grand_total])
 
   master_sheets = {"Ticket Counts": counts_tab_rows}
 
-  # Tab 2..N: One tab per manager
+  # Tabs 2..N in Master Workbook: One tab per manager
   for mgr in sorted_managers:
-    mgr_rows = manager_groups[mgr]
+    all_mgr_rows = []
+    for ag_rows in mgr_ag_groups[mgr].values():
+      all_mgr_rows.extend(ag_rows)
     sheet_data = [headers]
-    for r in mgr_rows:
+    for r in all_mgr_rows:
       sheet_data.append([r.get(h, "") for h in headers])
     master_sheets[mgr] = sheet_data
 
@@ -51051,21 +51083,53 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
   with open(master_excel_path, "wb") as mf:
     mf.write(master_bytes)
 
-  # 2. Build individual manager Excel and CSV files
+  # 2. Build individual manager Excel files (.xlsx) and CSV files (.csv)
   manager_entries = []
   zip_files = []
 
   for mgr in sorted_managers:
-    mgr_rows = manager_groups[mgr]
+    ag_dict = mgr_ag_groups[mgr]
+    mgr_total = _mgr_total(mgr)
     clean_name = re.sub(r'[^\w\s\-.]', '', mgr).strip().replace(' ', '_')
     if not clean_name:
       clean_name = "Unassigned"
 
-    # Individual Manager Excel (.xlsx)
-    mgr_sheet_data = [headers]
-    for r in mgr_rows:
-      mgr_sheet_data.append([r.get(h, "") for h in headers])
-    mgr_xlsx_bytes = _create_multi_sheet_xlsx({mgr: mgr_sheet_data})
+    all_mgr_rows = []
+    for ag_rows in ag_dict.values():
+      all_mgr_rows.extend(ag_rows)
+
+    # Multi-tab individual workbook if manager has multiple assignment groups
+    mgr_sheets = {}
+    if len(ag_dict) > 1:
+      # Tab 1: Summary of assignment groups
+      summary_rows = [["Assignment Group", "Ticket Count"]]
+      for ag in sorted(ag_dict.keys(), key=lambda g: -len(ag_dict[g])):
+        summary_rows.append([ag, len(ag_dict[ag])])
+      summary_rows.append(["TOTAL", mgr_total])
+      mgr_sheets["Summary"] = summary_rows
+
+      # Tab 2: All Tickets
+      all_sheet = [headers]
+      for r in all_mgr_rows:
+        all_sheet.append([r.get(h, "") for h in headers])
+      mgr_sheets["All Tickets"] = all_sheet
+
+      # Tabs 3..N: Dedicated tab for each Assignment Group
+      for ag in sorted(ag_dict.keys(), key=lambda g: -len(ag_dict[g])):
+        clean_ag = ag.replace("SN_AppSupp - ", "").replace("SN_AppSupp – ", "").replace("SN_Service Desk_", "").replace("SN_", "")
+        tab_name = clean_ag[:31]
+        ag_sheet_data = [headers]
+        for r in ag_dict[ag]:
+          ag_sheet_data.append([r.get(h, "") for h in headers])
+        mgr_sheets[tab_name] = ag_sheet_data
+    else:
+      # Single assignment group manager: 1 clean sheet
+      sheet_data = [headers]
+      for r in all_mgr_rows:
+        sheet_data.append([r.get(h, "") for h in headers])
+      mgr_sheets[mgr] = sheet_data
+
+    mgr_xlsx_bytes = _create_multi_sheet_xlsx(mgr_sheets)
     mgr_xlsx_filename = f"Service_Report_{clean_name}.xlsx"
     mgr_xlsx_path = os.path.join(job_dir, mgr_xlsx_filename)
     with open(mgr_xlsx_path, "wb") as xf:
@@ -51078,16 +51142,27 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
     with open(mgr_csv_path, "w", newline="", encoding="utf-8-sig") as cf:
       writer = csv.DictWriter(cf, fieldnames=headers, extrasaction="ignore")
       writer.writeheader()
-      writer.writerows(mgr_rows)
+      writer.writerows(all_mgr_rows)
+
+    # Format assignment groups display
+    ag_list = sorted(ag_dict.keys(), key=lambda g: -len(ag_dict[g]))
+    if len(ag_list) > 2:
+      ag_display = f"{len(ag_list)} groups ({ag_list[0]}, {ag_list[1]}, ...)"
+    elif len(ag_list) == 2:
+      ag_display = f"2 groups ({ag_list[0]}, {ag_list[1]})"
+    else:
+      ag_display = ag_list[0] if ag_list else "-"
 
     manager_entries.append({
       "name": mgr,
-      "count": len(mgr_rows),
+      "count": mgr_total,
+      "assignment_groups": ag_list,
+      "assignment_groups_display": ag_display,
       "xlsx_filename": mgr_xlsx_filename,
       "filename": mgr_csv_filename,
     })
 
-  # Also include the Master Workbook inside the ZIP
+  # Also include Master Workbook in the ZIP
   zip_files.append((master_excel_filename, master_excel_path))
 
   zip_filename = f"Service_Reports_All_Managers_{date_str}.zip"
@@ -51101,6 +51176,7 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
     "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
     "source_filename": filename,
     "manager_column": manager_col,
+    "assignment_group_column": ag_col,
     "available_columns": headers,
     "total_records": len(rows),
     "total_managers": len(manager_entries),
