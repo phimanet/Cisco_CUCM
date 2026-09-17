@@ -48938,7 +48938,7 @@ def _clearpass_peap_probe(host: str, nas_ip: str = "") -> dict:
     capture_detail = f"certificate_output_size={os.path.getsize(certificate_path) if os.path.exists(certificate_path) else 0}"
     diagnostic = " | ".join([capture_detail] + diagnostic_lines[-5:])
     return {
-      "ok": bool(expiry_match or completed.returncode == 0),
+      "ok": bool(expiry_match),
       "response": "PEAP certificate captured" if expiry_match else ("PEAP authentication succeeded; certificate parsing unavailable" if completed.returncode == 0 else "PEAP exchange did not expose a certificate"),
       "certificate_expires": certificate_expires,
       "days_remaining": days_remaining,
