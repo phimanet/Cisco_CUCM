@@ -618,6 +618,11 @@ AERIALINK_ACCOUNT_CODE_LOOKUP_PATH = (os.getenv("AERIALINK_ACCOUNT_CODE_LOOKUP_P
 CLEARPASS_RADIUS_USERNAME = (os.getenv("CLEARPASS_RADIUS_USERNAME", "") or "").strip()
 CLEARPASS_RADIUS_PASSWORD = os.getenv("CLEARPASS_RADIUS_PASSWORD", "") or ""
 CLEARPASS_RADIUS_SHARED_SECRET = os.getenv("CLEARPASS_RADIUS_SHARED_SECRET", "") or ""
+CLEARPASS_RADIUS_EAP_METHOD = (os.getenv("CLEARPASS_RADIUS_EAP_METHOD", "") or "").strip().upper()
+CLEARPASS_RADIUS_INNER_AUTH = (os.getenv("CLEARPASS_RADIUS_INNER_AUTH", "MSCHAPV2") or "MSCHAPV2").strip().upper()
+CLEARPASS_RADIUS_OUTER_IDENTITY = (os.getenv("CLEARPASS_RADIUS_OUTER_IDENTITY", "anonymous") or "anonymous").strip()
+CLEARPASS_RADIUS_CA_CERT = (os.getenv("CLEARPASS_RADIUS_CA_CERT", "") or "").strip()
+CLEARPASS_EAPOL_TEST_PATH = (os.getenv("CLEARPASS_EAPOL_TEST_PATH", "eapol_test") or "eapol_test").strip()
 INTELIQUENT_API_ENV = (os.getenv("INTELIQUENT_API_ENV", "production") or "production").strip().lower()
 _inteliquent_base_default = "https://services.inteliquent.com/Services/1.0.0"
 if INTELIQUENT_API_ENV == "sandbox":
@@ -48756,6 +48761,10 @@ def _clearpass_send_due_certificate_notices() -> None:
     if not item.get("host"):
       continue
     result = _clearpass_probe(item["host"])
+    if CLEARPASS_RADIUS_EAP_METHOD == "PEAP":
+      eap_result = _clearpass_peap_probe(item["host"])
+      if eap_result.get("certificate_expires") not in {None, "", "Unavailable"}:
+        result.update(eap_result)
     days = result.get("days_remaining")
     if not isinstance(days, int) or days < 0 or days > 30:
       continue
@@ -48799,7 +48808,12 @@ def _clearpass_send_test_certificate_notice() -> dict:
   rows = []
   for item in _clearpass_configured_hosts():
     if item.get("host"):
-      rows.append({**item, **_clearpass_probe(item["host"])})
+      result = _clearpass_probe(item["host"])
+      if CLEARPASS_RADIUS_EAP_METHOD == "PEAP":
+        eap_result = _clearpass_peap_probe(item["host"])
+        if eap_result.get("certificate_expires") not in {None, "", "Unavailable"}:
+          result.update(eap_result)
+      rows.append({**item, **result})
   body = "ClearPass Policy Manager certificate notification test\n\n"
   body += "This is a test notification from the Voice Operations Portal.\n\n"
   body += "\n".join(
@@ -48832,8 +48846,80 @@ def _radius_attribute(attribute_type: int, value: bytes) -> bytes:
   return struct.pack("!BB", attribute_type, len(value) + 2) + value
 
 
+def _clearpass_peap_probe(host: str, nas_ip: str = "") -> dict:
+  """Run one PEAP/MSCHAPv2 exchange and extract the ClearPass EAP certificate expiry."""
+  if not CLEARPASS_RADIUS_USERNAME or not CLEARPASS_RADIUS_PASSWORD or not CLEARPASS_RADIUS_SHARED_SECRET:
+    return {"ok": False, "error": "PEAP RADIUS credentials are not configured in the service environment."}
+  if not CLEARPASS_RADIUS_CA_CERT or not os.path.isfile(CLEARPASS_RADIUS_CA_CERT):
+    return {"ok": False, "error": "CLEARPASS_RADIUS_CA_CERT is missing or does not point to a file."}
+  if not shutil.which(CLEARPASS_EAPOL_TEST_PATH):
+    return {"ok": False, "error": f"eapol_test was not found: {CLEARPASS_EAPOL_TEST_PATH}"}
+  config_path = ""
+  def quote_config(value: str) -> str:
+    return '"' + str(value or "").replace("\\", "\\\\").replace('"', '\\"') + '"'
+  try:
+    config_text = "\n".join([
+      "ctrl_interface=/tmp/eapol_test",
+      "ap_scan=0",
+      "fast_reauth=0",
+      "eapol_version=1",
+      f"auth_server_addr={host}",
+      "auth_server_port=1812",
+      f"auth_server_shared_secret={quote_config(CLEARPASS_RADIUS_SHARED_SECRET)}",
+      "network={",
+      "  key_mgmt=WPA-EAP",
+      "  eap=PEAP",
+      f"  identity={quote_config(CLEARPASS_RADIUS_USERNAME)}",
+      f"  anonymous_identity={quote_config(CLEARPASS_RADIUS_OUTER_IDENTITY)}",
+      f"  password={quote_config(CLEARPASS_RADIUS_PASSWORD)}",
+      f"  phase2=\"auth={CLEARPASS_RADIUS_INNER_AUTH}\"",
+      f"  ca_cert={quote_config(CLEARPASS_RADIUS_CA_CERT)}",
+      "}",
+    ])
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", prefix="clearpass-peap-", suffix=".conf", delete=False) as handle:
+      config_path = handle.name
+      os.chmod(config_path, 0o600)
+      handle.write(config_text)
+    completed = subprocess.run(
+      [CLEARPASS_EAPOL_TEST_PATH, "-c", config_path, "-dd"],
+      capture_output=True,
+      text=True,
+      timeout=30,
+      check=False,
+    )
+    output = (completed.stdout or "") + "\n" + (completed.stderr or "")
+    expiry_match = re.search(r"notAfter=([A-Z][a-z]{2} [ 0-9]{1,2} [0-9:]{8} [0-9]{4} GMT)", output)
+    certificate_expires = "Unavailable"
+    days_remaining = None
+    if expiry_match:
+      expiry_dt = datetime.datetime.strptime(expiry_match.group(1), "%b %d %H:%M:%S %Y GMT").replace(tzinfo=datetime.timezone.utc)
+      certificate_expires = expiry_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+      days_remaining = (expiry_dt - datetime.datetime.now(datetime.timezone.utc)).days
+    return {
+      "ok": bool(expiry_match),
+      "response": "PEAP certificate captured" if expiry_match else "PEAP exchange did not expose a certificate",
+      "certificate_expires": certificate_expires,
+      "days_remaining": days_remaining,
+      "authenticated": completed.returncode == 0,
+      "return_code": completed.returncode,
+      "note": "PEAP certificate validated against the configured CA." if expiry_match else "Review eapol_test output and ClearPass PEAP policy; no credentials or raw output are returned.",
+    }
+  except subprocess.TimeoutExpired:
+    return {"ok": False, "error": "PEAP probe timed out after 30 seconds."}
+  except Exception as exc:
+    return {"ok": False, "error": f"PEAP probe failed: {exc}"}
+  finally:
+    if config_path:
+      try:
+        os.remove(config_path)
+      except OSError:
+        pass
+
+
 def _clearpass_radius_probe(host: str, username: str, password: str, shared_secret: str, nas_ip: str = "") -> dict:
   """Send one PAP Access-Request to UDP 1812 without persisting credentials."""
+  if CLEARPASS_RADIUS_EAP_METHOD == "PEAP":
+    return _clearpass_peap_probe(host, nas_ip=nas_ip)
   clean_host = (host or "").strip()
   clean_user = (username or "").strip()
   if not clean_host or not clean_user or not shared_secret:
