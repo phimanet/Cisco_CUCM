@@ -51183,6 +51183,13 @@ def _create_multi_sheet_xlsx(sheets_dict: dict, formulas_dict: dict = None, acti
       ET.SubElement(sheet_views, 'sheetView', tabSelected='1' if idx == active_tab_index else '0', workbookViewId='0')
       ET.SubElement(ws, 'sheetFormatPr', defaultRowHeight='15')
 
+      # AutoFit-style widths based on the longest displayed value in each column.
+      cols = ET.SubElement(ws, 'cols')
+      for col_idx in range(num_cols):
+        max_length = max((len(str(row[col_idx] if col_idx < len(row) and row[col_idx] is not None else '')) for row in srows), default=10)
+        width = min(max(max_length + 2, 10), 80)
+        ET.SubElement(cols, 'col', min=str(col_idx + 1), max=str(col_idx + 1), width=str(width), bestFit='1', customWidth='1')
+
       sheet_formulas = formulas_dict.get(sname, {})
 
       sheet_data = ET.SubElement(ws, 'sheetData')
@@ -51237,7 +51244,7 @@ def _create_multi_sheet_xlsx(sheets_dict: dict, formulas_dict: dict = None, acti
       '  <fills count="3">\n'
       '    <fill><patternFill patternType="none"/></fill>\n'
       '    <fill><patternFill patternType="gray125"/></fill>\n'
-      '    <fill><patternFill patternType="solid"><fgColor rgb="FFBDD7EE"/><bgColor indexed="64"/></patternFill></fill>\n'
+      '    <fill><patternFill patternType="solid"><fgColor rgb="FFFFFF00"/><bgColor indexed="64"/></patternFill></fill>\n'
       '  </fills>\n'
       '  <borders count="2">\n'
       '    <border><left/><right/><top/><bottom/><diagonal/></border>\n'
