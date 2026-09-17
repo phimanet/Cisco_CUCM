@@ -49777,15 +49777,12 @@ def clearpass_page(request: Request):
       if (!button || !result) return;
       button.addEventListener('click', async function () {
         const host = document.getElementById('radius-host').value.trim();
-        const username = document.getElementById('radius-user').value.trim();
-        const passwordEl = document.getElementById('radius-password');
-        const secretEl = document.getElementById('radius-secret');
         button.disabled = true;
         result.textContent = 'Sending one RADIUS request to UDP 1812...';
         try {
           const response = await fetch('/api/clearpass/radius-probe', {
             method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({host: host, username: username, password: passwordEl.value, shared_secret: secretEl.value})
+            body: JSON.stringify({host: host})
           });
           const data = await response.json();
           if (!response.ok || !data.ok) throw new Error((data.response ? data.response + ': ' : '') + (data.error || data.note || 'RADIUS probe failed'));
@@ -49794,8 +49791,6 @@ def clearpass_page(request: Request):
           result.textContent = 'RADIUS probe result: ' + error.message;
         } finally {
           button.disabled = false;
-          passwordEl.value = '';
-          secretEl.value = '';
         }
       });
     })();
