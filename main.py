@@ -1015,6 +1015,9 @@ SEPARATION_REPORT_FREQUENCY = (os.getenv("SEPARATION_REPORT_FREQUENCY", "daily")
 SEPARATION_REPORT_WEEKLY_DAY = (os.getenv("SEPARATION_REPORT_WEEKLY_DAY", "monday") or "monday").strip().lower()
 _SEPARATION_REPORT_SCHEDULER_LAST_FIRED: dict[str, str] = {}
 _SEPARATION_REPORT_SCHEDULER_LOCK = threading.Lock()
+_SEPARATION_REPORT_MANUAL_JOBS: dict[str, dict] = {}
+_SEPARATION_REPORT_MANUAL_JOBS_LOCK = threading.Lock()
+_SEPARATION_REPORT_MANUAL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2)
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -44739,19 +44742,37 @@ def menu_admin_page(request: Request):
                 runBtn.textContent = "Running...";
                 if (runStatus) runStatus.innerHTML = '<span style="color:#555;font-size:13px;">Sending report email...</span>';
                 fetch("/admin/separation-sms-report/run", { method: "POST", credentials: "same-origin" })
-                  .then(r => r.json())
-                  .then(data => {
-                    runBtn.disabled = false;
-                    runBtn.textContent = "Run Report Now";
-                    if (runStatus) {
-                      if (data.ok) {
-                        runStatus.innerHTML = `<span style="color:#1b5e20;background:#e8f5e9;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">
-                          OK Sent to <strong>${(data.recipients || []).join(", ")}</strong> - period: ${data.date_range} - ${data.numbers_checked} extension(s) checked, ${data.numbers_found_in_sms} found in SMS platform(s)</span>`;
-                        loadHistory();
-                      } else {
-                        runStatus.innerHTML = `<span style="color:#b71c1c;background:#ffebee;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">X ${data.error || "Unknown error"}</span>`;
+                  .then(async r => {
+                    const raw = await r.text();
+                    let data = {};
+                    try { data = raw ? JSON.parse(raw) : {}; } catch (_) { throw new Error(`Server returned HTTP ${r.status} instead of JSON.`); }
+                    if (!r.ok || !data.ok) throw new Error(data.error || "Unable to start report.");
+                    const jobId = data.job_id;
+                    const poll = async () => {
+                      const statusResponse = await fetch(`/admin/separation-sms-report/status/${encodeURIComponent(jobId)}`, { credentials: "same-origin" });
+                      const statusRaw = await statusResponse.text();
+                      let statusData = {};
+                      try { statusData = statusRaw ? JSON.parse(statusRaw) : {}; } catch (_) { throw new Error(`Status request returned HTTP ${statusResponse.status} instead of JSON.`); }
+                      if (!statusResponse.ok || !statusData.ok) throw new Error(statusData.error || "Unable to read report status.");
+                      const job = statusData.job || {};
+                      if (job.status === "queued" || job.status === "running") {
+                        if (runStatus) runStatus.innerHTML = `<span style="color:#555;font-size:13px;">${job.status === "queued" ? "Queued..." : "Sending report email..."}</span>`;
+                        window.setTimeout(poll, 1500);
+                        return;
                       }
-                    }
+                      runBtn.disabled = false;
+                      runBtn.textContent = "Run Report Now";
+                      if (runStatus) {
+                        if (job.status === "completed") {
+                          runStatus.innerHTML = `<span style="color:#1b5e20;background:#e8f5e9;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">
+                            OK Sent to <strong>${(job.recipients || []).join(", ")}</strong> - period: ${job.date_range} - ${job.numbers_checked} extension(s) checked, ${job.numbers_found_in_sms} found in SMS platform(s)</span>`;
+                          loadHistory();
+                        } else {
+                          runStatus.innerHTML = `<span style="color:#b71c1c;background:#ffebee;padding:8px 14px;border-radius:5px;font-size:13px;display:inline-block">X ${job.error || "Report failed."}</span>`;
+                        }
+                      }
+                    };
+                    await poll();
                   })
                   .catch(err => {
                     runBtn.disabled = false;
@@ -57800,19 +57821,52 @@ def sep_sms_report_run_route(request: Request):
     return JSONResponse({"ok": False, "error": "Separation SMS report is available only on PROD web server."}, status_code=403)
 
   operator = str(session.get("username", "manual")).strip() or "manual"
-  result = _run_separation_sms_report(triggered_by=f"manual:{operator}")
-  if result.get("success"):
-    operators_included = list(result.get("operators_included", []) or [])
-    return JSONResponse({
-      "ok": True,
-      "date_range": result.get("date_range", ""),
-      "numbers_checked": result.get("numbers_checked", 0),
-      "numbers_found_in_sms": result.get("numbers_found_in_sms", 0),
-      "operators_included_count": len(operators_included),
-      "operators_included": operators_included,
-      "recipients": result.get("recipients", []),
-    })
-  return JSONResponse({"ok": False, "error": result.get("error", "Unknown error")}, status_code=500)
+  job_id = str(uuid4())
+  with _SEPARATION_REPORT_MANUAL_JOBS_LOCK:
+    _SEPARATION_REPORT_MANUAL_JOBS[job_id] = {
+      "job_id": job_id,
+      "status": "queued",
+      "operator": operator,
+      "created_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+    }
+
+  def run_manual_job():
+    with _SEPARATION_REPORT_MANUAL_JOBS_LOCK:
+      job = _SEPARATION_REPORT_MANUAL_JOBS.get(job_id)
+      if job:
+        job["status"] = "running"
+        job["started_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+    result = _run_separation_sms_report(triggered_by=f"manual:{operator}")
+    with _SEPARATION_REPORT_MANUAL_JOBS_LOCK:
+      job = _SEPARATION_REPORT_MANUAL_JOBS.get(job_id)
+      if job:
+        job.update({
+          "status": "completed" if result.get("success") else "failed",
+          "completed_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+          "error": result.get("error") or "",
+          "date_range": result.get("date_range", ""),
+          "numbers_checked": result.get("numbers_checked", 0),
+          "numbers_found_in_sms": result.get("numbers_found_in_sms", 0),
+          "operators_included": list(result.get("operators_included", []) or []),
+          "recipients": result.get("recipients", []),
+        })
+
+  _SEPARATION_REPORT_MANUAL_EXECUTOR.submit(run_manual_job)
+  return JSONResponse({"ok": True, "job_id": job_id, "status": "queued"}, status_code=202)
+
+
+@app.get("/admin/separation-sms-report/status/{job_id}")
+def sep_sms_report_status_route(request: Request, job_id: str):
+  session = _get_auth_session(request)
+  if not session or not _is_admin_user(str(session.get("username", ""))):
+    return JSONResponse({"ok": False, "error": "Forbidden"}, status_code=403)
+  if not _is_prod_runtime_host_strict():
+    return JSONResponse({"ok": False, "error": "Separation SMS report is available only on PROD web server."}, status_code=403)
+  with _SEPARATION_REPORT_MANUAL_JOBS_LOCK:
+    job = dict(_SEPARATION_REPORT_MANUAL_JOBS.get(str(job_id or "").strip()) or {})
+  if not job:
+    return JSONResponse({"ok": False, "error": "Report job was not found or has expired."}, status_code=404)
+  return JSONResponse({"ok": True, "job": job})
 
 
 @app.get("/admin/separation-sms-report/history")
