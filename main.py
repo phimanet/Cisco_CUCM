@@ -29677,7 +29677,7 @@ __ADMIN_CARD__
     <div class="service-reports-container" style="max-width:960px;">
       <!-- Upload Card -->
       <div style="background:#ffffff; border:1px solid #c8dbee; border-radius:8px; padding:18px 22px; box-shadow:0 4px 14px rgba(0,47,108,0.06); margin-bottom:20px;">
-        <form id="sr-upload-form" enctype="multipart/form-data" onsubmit="return false;">
+        <form id="sr-upload-form" action="javascript:void(0)" method="post" enctype="multipart/form-data" onsubmit="if (window.runServiceReportsUpload) { return window.runServiceReportsUpload(event); } var s=document.getElementById('sr-status'); if (s) { s.textContent='Service Reports handler missing (JavaScript did not load).'; s.style.color='#b42318'; } return false;">
           <div style="display:flex; flex-direction:column; gap:14px;">
             <div>
               <label style="font-weight:700; color:#12304a; display:block; margin-bottom:6px;">Select ServiceNow Source File:</label>
@@ -29694,7 +29694,7 @@ __ADMIN_CARD__
             </div>
 
             <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:6px;">
-              <button type="button" id="sr-submit-btn" style="background:linear-gradient(180deg,#005eb8,#003d7a); color:#fff; border:none; border-radius:6px; padding:10px 22px; font-weight:700; font-size:14px; cursor:pointer; box-shadow:0 2px 6px rgba(0,94,184,0.3);">
+              <button type="button" id="sr-submit-btn" onclick="if (window.runServiceReportsUpload) { return window.runServiceReportsUpload(event); } var s=document.getElementById('sr-status'); if (s) { s.textContent='Service Reports handler missing (JavaScript did not load).'; s.style.color='#b42318'; } return false;" style="background:linear-gradient(180deg,#005eb8,#003d7a); color:#fff; border:none; border-radius:6px; padding:10px 22px; font-weight:700; font-size:14px; cursor:pointer; box-shadow:0 2px 6px rgba(0,94,184,0.3);">
                 Process &amp; Split by Manager
               </button>
               <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
@@ -29905,12 +29905,6 @@ __ADMIN_CARD__
 
         if (filterInput) {
           filterInput.addEventListener("input", applyFilter);
-        }
-
-        if (submitBtn && form) {
-          submitBtn.addEventListener("click", function () {
-            form.dispatchEvent(new Event("submit", { cancelable: true }));
-          });
         }
 
         // Email All Reports Button
@@ -30143,6 +30137,125 @@ __ADMIN_CARD__
             }
           });
         }
+      })();
+    </script>
+
+    <script>
+      // Independent fallback for Service Reports upload/history binding.
+      (function () {
+        if (window.__serviceReportsFallbackBound) return;
+        window.__serviceReportsFallbackBound = true;
+
+        const form = document.getElementById("sr-upload-form");
+        const fileInput = document.getElementById("sr-file-input");
+        const submitBtn = document.getElementById("sr-submit-btn");
+        const statusEl = document.getElementById("sr-status");
+        const historyEl = document.getElementById("sr-history-list");
+        const resultsCard = document.getElementById("sr-results-card");
+        const metaEl = document.getElementById("sr-meta-summary");
+
+        function setStatus(message, color) {
+          if (statusEl) {
+            statusEl.textContent = message;
+            statusEl.style.color = color || "#005eb8";
+          }
+        }
+
+        function escapeValue(value) {
+          return String(value == null ? "" : value)
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;").replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        async function uploadFallback() {
+          if (!fileInput || !fileInput.files || !fileInput.files.length) {
+            setStatus("Please select a ServiceNow file first.", "#a63b00");
+            return;
+          }
+          const buttonText = submitBtn ? submitBtn.textContent : "Process";
+          if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.textContent = "Processing...";
+          }
+          setStatus("Uploading and processing the ServiceNow file...", "#005eb8");
+          try {
+            const fd = new FormData(form);
+            const response = await fetch("/service-reports/upload", {
+              method: "POST",
+              body: fd,
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" }
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) throw new Error(payload.error || "Service Reports upload failed.");
+            const job = payload.job || {};
+            if (resultsCard) resultsCard.style.display = "block";
+            if (metaEl) {
+              metaEl.innerHTML = "Source: <strong>" + escapeValue(job.source_filename) + "</strong> &bull; Total Records: <strong>" + Number(job.total_records || 0).toLocaleString() + "</strong> &bull; Report Files: <strong>" + (job.total_reports || 0) + "</strong> &bull; Unique Managers: <strong>" + (job.total_managers || 0) + "</strong>";
+            }
+            const summaryLink = document.getElementById("sr-download-summary-btn");
+            const masterLink = document.getElementById("sr-download-master-btn");
+            const zipLink = document.getElementById("sr-download-zip-btn");
+            if (summaryLink) summaryLink.href = "/service-reports/download-summary/" + encodeURIComponent(job.job_id);
+            if (masterLink) masterLink.href = "/service-reports/download-master/" + encodeURIComponent(job.job_id);
+            if (zipLink) zipLink.href = "/service-reports/download-zip/" + encodeURIComponent(job.job_id);
+            setStatus("Successfully generated " + (job.total_reports || 0) + " report files across " + (job.total_managers || 0) + " managers!", "#1f7a3d");
+            loadHistoryFallback();
+          } catch (error) {
+            setStatus("Service Reports failed: " + (error.message || "Unknown error"), "#a63b00");
+          } finally {
+            if (submitBtn) {
+              submitBtn.disabled = false;
+              submitBtn.textContent = buttonText;
+            }
+          }
+        }
+
+        window.runServiceReportsUpload = function (event) {
+          if (event) event.preventDefault();
+          uploadFallback();
+          return false;
+        };
+
+        async function loadHistoryFallback() {
+          if (!historyEl) return;
+          historyEl.textContent = "Loading previous weekly reports...";
+          const controller = new AbortController();
+          const timeoutId = window.setTimeout(function () { controller.abort(); }, 10000);
+          try {
+            const response = await fetch("/service-reports/recent-jobs", {
+              credentials: "same-origin",
+              headers: { "Accept": "application/json" },
+              signal: controller.signal
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) throw new Error(payload.error || "History request failed.");
+            const jobs = payload.jobs || [];
+            if (!jobs.length) {
+              historyEl.textContent = "No previous weekly reports found.";
+              return;
+            }
+            historyEl.innerHTML = jobs.map(function (job) {
+              return '<div style="padding:7px 0;border-bottom:1px solid #e1ecf7;">'
+                + '<strong>' + escapeValue(job.created_at || "") + '</strong> &bull; '
+                + escapeValue(job.source_filename || "") + ' &bull; '
+                + Number(job.total_records || 0).toLocaleString() + ' records &bull; '
+                + (job.total_managers || 0) + ' managers '
+                + '<a href="/service-reports/download-summary/' + encodeURIComponent(job.job_id) + '">Source + Summary</a> '
+                + '<a href="/service-reports/download-zip/' + encodeURIComponent(job.job_id) + '">ZIP</a>'
+                + '</div>';
+            }).join("");
+          } catch (error) {
+            historyEl.innerHTML = '<span style="color:#a63b00;">History unavailable: ' + escapeValue(error.name === "AbortError" ? "request timed out" : error.message) + '</span>';
+          } finally {
+            window.clearTimeout(timeoutId);
+          }
+        }
+
+        const refreshBtn = document.getElementById("sr-refresh-history-btn");
+        if (refreshBtn) refreshBtn.addEventListener("click", loadHistoryFallback);
+        loadHistoryFallback();
       })();
     </script>
 
