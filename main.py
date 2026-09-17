@@ -51714,8 +51714,8 @@ async def service_reports_upload_route(
     return JSONResponse(res)
 
 
-  @app.get("/service-reports/email-settings")
-  def service_reports_email_settings_get(request: Request):
+@app.get("/service-reports/email-settings")
+def service_reports_email_settings_get(request: Request):
     session = _get_auth_session(request) or {}
     if not str(session.get("username", "") or "").strip():
       return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
@@ -51728,8 +51728,8 @@ async def service_reports_upload_route(
     })
 
 
-  @app.post("/service-reports/email-settings")
-  async def service_reports_email_settings_save(request: Request):
+@app.post("/service-reports/email-settings")
+async def service_reports_email_settings_save(request: Request):
     session = _get_auth_session(request) or {}
     if not str(session.get("username", "") or "").strip():
       return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
