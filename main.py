@@ -48469,6 +48469,36 @@ def _parse_asn1_cert_expiry(der_bytes: bytes) -> tuple[str, int | None]:
   return "Unavailable", None
 
 
+def _parse_certificate_file_expiry(certificate_path: str) -> tuple[str, int | None]:
+  """Read PEM or DER certificate expiry using OpenSSL, with ASN.1 fallback."""
+  if not certificate_path or not os.path.isfile(certificate_path) or os.path.getsize(certificate_path) <= 0:
+    return "Unavailable", None
+  for input_format in ("PEM", "DER"):
+    try:
+      completed = subprocess.run(
+        ["openssl", "x509", "-inform", input_format, "-in", certificate_path, "-noout", "-enddate"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+      )
+      match = re.search(r"notAfter=(.+)", completed.stdout or "")
+      if not match:
+        continue
+      expiry_dt = datetime.datetime.strptime(match.group(1).strip(), "%b %d %H:%M:%S %Y GMT").replace(tzinfo=datetime.timezone.utc)
+      return expiry_dt.strftime("%Y-%m-%d %H:%M:%S UTC"), (expiry_dt - datetime.datetime.now(datetime.timezone.utc)).days
+    except Exception:
+      continue
+  try:
+    certificate_bytes = open(certificate_path, "rb").read()
+    if b"-----BEGIN CERTIFICATE-----" in certificate_bytes:
+      certificate_der = ssl.PEM_cert_to_DER_cert(certificate_bytes.decode("ascii"))
+      certificate_bytes = certificate_der if isinstance(certificate_der, bytes) else bytes.fromhex(certificate_der)
+    return _parse_asn1_cert_expiry(certificate_bytes)
+  except Exception:
+    return "Unavailable", None
+
+
 def _expressway_probe(host: str) -> dict:
   clean_host = (host or "").strip()
   result = {
@@ -48881,6 +48911,7 @@ def _clearpass_peap_probe(host: str, nas_ip: str = "") -> dict:
     certificate_handle = tempfile.NamedTemporaryFile(prefix="clearpass-peap-cert-", suffix=".pem", delete=False)
     certificate_path = certificate_handle.name
     certificate_handle.close()
+    os.remove(certificate_path)
     completed = subprocess.run(
       [CLEARPASS_EAPOL_TEST_PATH, "-c", config_path, "-a", host, "-p", "1812", "-s", CLEARPASS_RADIUS_SHARED_SECRET, "-o", certificate_path],
       capture_output=True,
@@ -48890,20 +48921,9 @@ def _clearpass_peap_probe(host: str, nas_ip: str = "") -> dict:
     )
     output = (completed.stdout or "") + "\n" + (completed.stderr or "")
     expiry_match = re.search(r"notAfter=([A-Z][a-z]{2} [ 0-9]{1,2} [0-9:]{8} [0-9]{4} GMT)", output)
-    if certificate_path and os.path.exists(certificate_path) and os.path.getsize(certificate_path) > 0:
-      try:
-        certificate_bytes = open(certificate_path, "rb").read()
-        if b"-----BEGIN CERTIFICATE-----" in certificate_bytes:
-          certificate_pem = certificate_bytes.decode("ascii")
-          certificate_der = ssl.PEM_cert_to_DER_cert(certificate_pem)
-          certificate_der_bytes = certificate_der if isinstance(certificate_der, bytes) else bytes.fromhex(certificate_der)
-        else:
-          certificate_der_bytes = certificate_bytes
-        certificate_expires, certificate_days = _parse_asn1_cert_expiry(certificate_der_bytes)
-        if certificate_expires != "Unavailable":
-          expiry_match = True
-      except Exception:
-        certificate_expires = "Unavailable"
+    certificate_expires, certificate_days = _parse_certificate_file_expiry(certificate_path)
+    if certificate_expires != "Unavailable":
+      expiry_match = True
     certificate_expires = locals().get("certificate_expires", "Unavailable")
     days_remaining = locals().get("certificate_days")
     if expiry_match and certificate_expires == "Unavailable":
