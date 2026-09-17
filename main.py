@@ -29746,6 +29746,9 @@ __ADMIN_CARD__
             <button type="button" id="sr-email-all-btn" style="background:linear-gradient(180deg,#c48a16,#8a5e00); color:#ffffff; border:none; border-radius:6px; padding:8px 16px; font-weight:700; font-size:13px; cursor:pointer; box-shadow:0 2px 6px rgba(196,138,22,0.3);">
               ✉️ Email All Reports
             </button>
+            <button type="button" id="sr-email-all-files-btn" style="background:linear-gradient(180deg,#7a5a13,#4d3809); color:#ffffff; border:none; border-radius:6px; padding:8px 16px; font-weight:700; font-size:13px; cursor:pointer; box-shadow:0 2px 6px rgba(122,90,19,0.3);">
+              ✉️ Email Every Manager File to Tester
+            </button>
             <span id="sr-email-status" style="font-size:12px; font-weight:600; color:#2c5c8a;"></span>
           </div>
         </div>
@@ -30429,6 +30432,34 @@ __ADMIN_CARD__
             window.alert("Batch email failed: " + (error.message || "Unknown error"));
           } finally {
             window.setTimeout(function () { emailAllBtn.disabled = false; emailAllBtn.textContent = "✉️ Email All Reports"; }, 4000);
+          }
+        });
+        const emailAllFilesBtn = document.getElementById("sr-email-all-files-btn");
+        if (emailAllFilesBtn) emailAllFilesBtn.addEventListener("click", async function () {
+          if (!fallbackJobId) {
+            window.alert("Process a source file first.");
+            return;
+          }
+          const testerEmail = (document.getElementById("sr-tester-email").value || "").trim();
+          const senderEmail = (document.getElementById("sr-sender-email").value || "").trim();
+          if (!window.confirm("Send one email to " + testerEmail + " with every individual manager Excel file attached?")) return;
+          emailAllFilesBtn.disabled = true;
+          emailAllFilesBtn.textContent = "Sending all files...";
+          try {
+            const fd = new FormData();
+            fd.append("job_id", fallbackJobId);
+            fd.append("tester_email", testerEmail);
+            fd.append("sender_email", senderEmail);
+            const response = await fetch("/service-reports/send-all-files-to-tester", { method: "POST", body: fd, credentials: "same-origin", headers: { "Accept": "application/json" } });
+            const result = await response.json();
+            if (!response.ok || !result.ok) throw new Error(result.error || "Email failed.");
+            emailAllFilesBtn.textContent = "✅ Sent " + result.attachment_count + " files";
+            window.alert("One email was sent to " + result.recipient + " with " + result.attachment_count + " manager files attached.");
+          } catch (error) {
+            emailAllFilesBtn.textContent = "❌ Failed";
+            window.alert("Email failed: " + (error.message || "Unknown error"));
+          } finally {
+            window.setTimeout(function () { emailAllFilesBtn.disabled = false; emailAllFilesBtn.textContent = "✉️ Email Every Manager File to Tester"; }, 5000);
           }
         });
         loadHistoryFallback();
@@ -52159,6 +52190,57 @@ def service_reports_send_artifact_email(
         attachments=[(filename, data, mime_type)],
       )
       return JSONResponse({"ok": True, "recipient": recipient, "filename": filename})
+    except Exception as exc:
+      return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+  @app.post("/service-reports/send-all-files-to-tester")
+  def service_reports_send_all_files_to_tester(
+    request: Request,
+    job_id: str = Form(...),
+    tester_email: str = Form(...),
+    sender_email: str = Form(...),
+  ):
+    session = _get_auth_session(request) or {}
+    if not str(session.get("username", "") or "").strip():
+      return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+
+    recipient = str(tester_email or "").strip()
+    sender = str(sender_email or "").strip()
+    if "@" not in recipient or "@" not in sender:
+      return JSONResponse({"ok": False, "error": "Valid tester and sender email addresses are required."}, status_code=400)
+
+    safe_job_id = re.sub(r'[^a-zA-Z0-9_\-]', '', job_id)
+    job_dir = os.path.abspath(os.path.join(SERVICE_REPORTS_DIR, safe_job_id))
+    info_path = os.path.join(job_dir, "job_info.json")
+    if not os.path.exists(info_path):
+      return JSONResponse({"ok": False, "error": "Report job not found."}, status_code=404)
+
+    with open(info_path, "r", encoding="utf-8") as f:
+      info = json.load(f)
+
+    attachments = []
+    for report in info.get("managers", []):
+      filename = os.path.basename(str(report.get("xlsx_filename") or "").strip())
+      if not filename:
+        continue
+      file_path = os.path.join(job_dir, filename)
+      if os.path.exists(file_path):
+        with open(file_path, "rb") as f:
+          attachments.append((filename, f.read(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+
+    if not attachments:
+      return JSONResponse({"ok": False, "error": "No individual manager Excel files were found."}, status_code=404)
+
+    try:
+      _send_smtp_email(
+        sender=sender,
+        recipients=[recipient],
+        subject=f"Service Reports - All Manager Files ({len(attachments)} attachments)",
+        body="Attached are the individual Service Desk report files for every manager in this report run.",
+        attachments=attachments,
+      )
+      return JSONResponse({"ok": True, "recipient": recipient, "attachment_count": len(attachments)})
     except Exception as exc:
       return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
