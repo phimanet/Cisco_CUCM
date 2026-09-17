@@ -47808,7 +47808,20 @@ def _ribbon_sbc_probe(host: str) -> dict:
   api_pass = RIBBON_SBC_API_PASSWORD or EXPRESSWAY_API_PASSWORD or "abi3rto!"
   auth = HTTPBasicAuth(api_user, api_pass)
   headers = {"Accept": "application/json, text/xml, application/xml, */*"}
-  for endpoint in ["/rest/callstatus", "/rest/channelstatus", "/rest/system", "/rest/status"]:
+  
+  # Ribbon SBC SWe Edge documented REST paths:
+  # - /rest/system/overview (System Overview with active call & channel metrics)
+  # - /rest/callstatus
+  # - /rest/channelstatus
+  # - /rest/system
+  # - /rest/status
+  for endpoint in [
+    "/rest/system/overview",
+    "/rest/callstatus",
+    "/rest/channelstatus",
+    "/rest/system",
+    "/rest/status",
+  ]:
     try:
       resp = requests.get(
         f"https://{clean_host}{endpoint}",
@@ -47824,15 +47837,19 @@ def _ribbon_sbc_probe(host: str) -> dict:
           try:
             data = resp.json()
             if isinstance(data, dict):
-              cnt = (
-                data.get("activeCalls")
-                or data.get("currentCalls")
-                or data.get("activeChannels")
-                or data.get("callCount")
-                or data.get("calls")
-              )
-              if cnt is not None:
-                result["active_calls"] = str(cnt)
+              # Check top-level or nested keys for active/current calls or channels in use
+              for k, v in data.items():
+                if any(sub in k.lower() for sub in ("call", "channel", "active", "current")):
+                  if isinstance(v, (int, str)) and str(v).isdigit():
+                    result["active_calls"] = str(v)
+                    break
+                  elif isinstance(v, dict):
+                    for subk, subv in v.items():
+                      if any(w in subk.lower() for w in ("active", "current", "total", "count")):
+                        if isinstance(subv, (int, str)) and str(subv).isdigit():
+                          result["active_calls"] = str(subv)
+                          break
+              if result["active_calls"] != "-":
                 break
           except Exception:
             pass
@@ -47842,7 +47859,7 @@ def _ribbon_sbc_probe(host: str) -> dict:
             root = ET.fromstring(text)
             for elem in root.iter():
               tag = elem.tag.split("}")[-1].lower()
-              if tag in ("activecalls", "currentcalls", "activechannels", "callcount", "active", "totalcalls"):
+              if tag in ("activecalls", "currentcalls", "activechannels", "callcount", "active", "totalcalls", "numcalls"):
                 if elem.text and elem.text.strip().isdigit():
                   result["active_calls"] = elem.text.strip()
                   break
@@ -47850,8 +47867,11 @@ def _ribbon_sbc_probe(host: str) -> dict:
               break
           except Exception:
             pass
-    except Exception:
-      pass
+      elif resp.status_code != 200 and result["active_calls"] == "-":
+        result["details"] = f"REST {endpoint.split('/')[-1]}: {resp.status_code}"
+    except Exception as e:
+      if result["active_calls"] == "-":
+        result["details"] = f"REST err: {type(e).__name__}"
 
   return result
 
@@ -48585,6 +48605,7 @@ def ribbon_sbc_page(request: Request):
         <p style="color:var(--amn-text-soft);font-size:12px;margin-top:2px;">Live certificate monitoring for Las Vegas (10.241.16.217) and Reno (10.141.16.40) Ribbon SBCs.</p>
         <div class="toolbar">
           <button id="load" class="btn-action">Refresh Status</button>
+          <button id="refresh-calls" class="btn-action" style="background:#0e7490;">Refresh Active Calls</button>
           <a href="/settings" class="btn-action" style="background:#2563eb;">SBC Settings</a>
           <a href="/menu" class="btn-action" style="background:#4e6a84;">Back to Main Menu</a>
         </div>
@@ -48645,6 +48666,7 @@ def ribbon_sbc_page(request: Request):
     }}
 
     document.getElementById('load').addEventListener('click', load);
+    document.getElementById('refresh-calls').addEventListener('click', load);
     render(hosts.map(h => ({{ ...h, reachable: false, certificate_expires: 'Click Refresh', days_remaining: null }})));
     load();
   </script>
