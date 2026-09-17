@@ -29724,12 +29724,15 @@ __ADMIN_CARD__
             <a id="sr-download-summary-btn" href="#" target="_blank" style="display:inline-flex; align-items:center; gap:6px; background:linear-gradient(180deg,#7a5a13,#4d3809); color:#ffffff; text-decoration:none; padding:9px 16px; border-radius:6px; font-weight:700; font-size:13px; box-shadow:0 2px 6px rgba(122,90,19,0.3);">
               📋 Download Manager-Assignment Group (Source Intact)
             </a>
+            <button type="button" onclick="if(window.emailServiceReportArtifact){return window.emailServiceReportArtifact('summary');} return false;" style="background:#7a5a13;color:#fff;border:none;border-radius:5px;padding:7px 10px;font-weight:700;cursor:pointer;">✉️ Email</button>
             <a id="sr-download-master-btn" href="#" target="_blank" style="display:inline-flex; align-items:center; gap:6px; background:linear-gradient(180deg,#005eb8,#003d7a); color:#ffffff; text-decoration:none; padding:9px 16px; border-radius:6px; font-weight:700; font-size:13px; box-shadow:0 2px 6px rgba(0,94,184,0.3);">
               📊 Download Master Excel (All Tabs)
             </a>
+            <button type="button" onclick="if(window.emailServiceReportArtifact){return window.emailServiceReportArtifact('master');} return false;" style="background:#005eb8;color:#fff;border:none;border-radius:5px;padding:7px 10px;font-weight:700;cursor:pointer;">✉️ Email</button>
             <a id="sr-download-zip-btn" href="#" target="_blank" style="display:inline-flex; align-items:center; gap:6px; background:linear-gradient(180deg,#1f7a3d,#14562b); color:#ffffff; text-decoration:none; padding:9px 16px; border-radius:6px; font-weight:700; font-size:13px; box-shadow:0 2px 6px rgba(31,122,61,0.3);">
               📦 Download All Excel Files (ZIP)
             </a>
+            <button type="button" onclick="if(window.emailServiceReportArtifact){return window.emailServiceReportArtifact('zip');} return false;" style="background:#1f7a3d;color:#fff;border:none;border-radius:5px;padding:7px 10px;font-weight:700;cursor:pointer;">✉️ Email</button>
           </div>
         </div>
 
@@ -30226,6 +30229,31 @@ __ADMIN_CARD__
             .replace(/>/g, "&gt;").replace(/"/g, "&quot;")
             .replace(/'/g, "&#39;");
         }
+
+        window.emailServiceReportArtifact = async function (artifact) {
+          if (!fallbackJobId) {
+            window.alert("Process a source file first.");
+            return false;
+          }
+          const testerEmail = (document.getElementById("sr-tester-email").value || "").trim();
+          const senderEmail = (document.getElementById("sr-sender-email").value || "").trim();
+          const labels = { summary: "Manager-Assignment Group source file", master: "Master Excel workbook", zip: "All reports ZIP" };
+          if (!window.confirm("Email the " + (labels[artifact] || "selected report") + " to " + testerEmail + "?")) return false;
+          try {
+            const fd = new FormData();
+            fd.append("job_id", fallbackJobId);
+            fd.append("artifact", artifact);
+            fd.append("tester_email", testerEmail);
+            fd.append("sender_email", senderEmail);
+            const response = await fetch("/service-reports/send-artifact-email", { method: "POST", body: fd, credentials: "same-origin", headers: { "Accept": "application/json" } });
+            const result = await response.json();
+            if (!response.ok || !result.ok) throw new Error(result.error || "Email failed.");
+            window.alert("Sent " + (labels[artifact] || "report") + " to " + result.recipient + ".");
+          } catch (error) {
+            window.alert("Email failed: " + (error.message || "Unknown error"));
+          }
+          return false;
+        };
 
         function renderFallbackReports(reports) {
           if (!tableBody) return;
@@ -52076,6 +52104,63 @@ def service_reports_send_single_email(
         return JSONResponse({"ok": True, "recipient": recipient, "is_test": test_mode})
     except Exception as exc:
         return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+  @app.post("/service-reports/send-artifact-email")
+  def service_reports_send_artifact_email(
+    request: Request,
+    job_id: str = Form(...),
+    artifact: str = Form(...),
+    tester_email: str = Form("nilesh.sonawane@amnhealthcare.com"),
+    sender_email: str = Form("nilesh.sonawane@amnhealthcare.com"),
+  ):
+    session = _get_auth_session(request) or {}
+    operator = str(session.get("username", "") or "").strip()
+    if not operator:
+      return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+
+    safe_job_id = re.sub(r'[^a-zA-Z0-9_\-]', '', job_id)
+    job_dir = os.path.abspath(os.path.join(SERVICE_REPORTS_DIR, safe_job_id))
+    info_path = os.path.join(job_dir, "job_info.json")
+    if not os.path.exists(info_path):
+      return JSONResponse({"ok": False, "error": "Report job not found."}, status_code=404)
+
+    with open(info_path, "r", encoding="utf-8") as f:
+      info = json.load(f)
+
+    artifact_map = {
+      "summary": (info.get("manager_assignment_filename", "Manager-Assignment_group.xlsx"), "Manager-Assignment Group source file"),
+      "master": (info.get("master_excel_filename", "Service_Reports_Master_Workbook.xlsx"), "Master Excel workbook"),
+      "zip": (info.get("zip_filename", "Service_Reports_All_Managers.zip"), "All manager reports ZIP"),
+    }
+    selected = artifact_map.get(str(artifact or "").strip().lower())
+    if not selected:
+      return JSONResponse({"ok": False, "error": "Unknown report artifact."}, status_code=400)
+
+    filename, label = selected
+    file_path = os.path.join(job_dir, os.path.basename(filename))
+    if not os.path.exists(file_path):
+      return JSONResponse({"ok": False, "error": f"{label} was not found."}, status_code=404)
+
+    recipient = str(tester_email or "").strip()
+    sender = str(sender_email or "").strip()
+    if "@" not in recipient or "@" not in sender:
+      return JSONResponse({"ok": False, "error": "Valid tester and sender email addresses are required."}, status_code=400)
+
+    try:
+      with open(file_path, "rb") as f:
+        data = f.read()
+      mime_type = "application/zip" if filename.lower().endswith(".zip") else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      _send_smtp_email(
+        sender=sender,
+        recipients=[recipient],
+        subject=f"[TEST] Service Reports - {label}",
+        body=f"Attached is the {label} for Service Reports validation.",
+        attachments=[(filename, data, mime_type)],
+      )
+      return JSONResponse({"ok": True, "recipient": recipient, "filename": filename})
+    except Exception as exc:
+      return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
 @app.post("/service-reports/send-email-batch")
