@@ -48637,45 +48637,30 @@ def _ribbon_sbc_probe(host: str) -> dict:
   auth = HTTPBasicAuth(api_user, api_pass)
   headers = {"Accept": "application/json, text/xml, application/xml, */*"}
   
-  sess = requests.Session()
-  sess.verify = False
-  
-  # Login is optional; some SWe Edge builds reject /rest/login while allowing
-  # direct Basic-auth access to monitoring resources.
-  login_ok = False
+  # Query the direct Basic-auth resources. The SWe Edge /rest/login helper is
+  # not supported consistently across releases and is not needed here.
   auth_error = False
-  try:
-    login_resp = sess.post(
-      f"https://{clean_host}/rest/login",
-      data={"username": api_user, "password": api_pass},
-      headers=headers,
-      timeout=2.5,
-    )
-    login_text = (login_resp.text or "").lower()
-    auth_error = login_resp.status_code == 401 or "<http_code>401</http_code>" in login_text or 'code="20032"' in login_text
-    login_ok = login_resp.status_code == 200 and ("session" in login_text or "<http_code>200</http_code>" in login_text)
-  except Exception:
-    pass
-
-  # Query direct Basic-auth endpoints even when the optional login returned 401.
   for endpoint in [
     "/rest/system/overview",
+    "/rest/callstatus",
+    "/rest/channelstatus",
     "/rest/system",
     "/rest/media",
     "/rest/logicalinterface",
   ]:
     try:
-      resp = sess.get(
+      resp = requests.get(
         f"https://{clean_host}{endpoint}",
-        auth=None if login_ok else auth,
+        auth=auth,
         headers=headers,
+        verify=False,
         timeout=2.5,
       )
+      if resp.status_code == 401 or "<http_code>401</http_code>" in (resp.text or ""):
+        auth_error = True
+        continue
       if resp.status_code == 200 and resp.text:
         text = resp.text.strip()
-        if "<http_code>401</http_code>" in text:
-          result["active_calls"] = "Auth Error (401)"
-          break
         # JSON response
         if text.startswith(("{", "[")):
           try:
@@ -48724,6 +48709,9 @@ def _ribbon_sbc_probe(host: str) -> dict:
             pass
     except Exception:
       pass
+
+  if result["active_calls"] == "-" and auth_error:
+    result["active_calls"] = "Auth Error (401)"
 
   return result
 
