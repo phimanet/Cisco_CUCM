@@ -29677,7 +29677,7 @@ __ADMIN_CARD__
     <div class="service-reports-container" style="max-width:960px;">
       <!-- Upload Card -->
       <div style="background:#ffffff; border:1px solid #c8dbee; border-radius:8px; padding:18px 22px; box-shadow:0 4px 14px rgba(0,47,108,0.06); margin-bottom:20px;">
-        <form id="sr-upload-form" enctype="multipart/form-data">
+        <form id="sr-upload-form" enctype="multipart/form-data" onsubmit="return false;">
           <div style="display:flex; flex-direction:column; gap:14px;">
             <div>
               <label style="font-weight:700; color:#12304a; display:block; margin-bottom:6px;">Select ServiceNow Source File:</label>
