@@ -29694,7 +29694,7 @@ __ADMIN_CARD__
             </div>
 
             <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:6px;">
-              <button type="submit" id="sr-submit-btn" style="background:linear-gradient(180deg,#005eb8,#003d7a); color:#fff; border:none; border-radius:6px; padding:10px 22px; font-weight:700; font-size:14px; cursor:pointer; box-shadow:0 2px 6px rgba(0,94,184,0.3);">
+              <button type="button" id="sr-submit-btn" style="background:linear-gradient(180deg,#005eb8,#003d7a); color:#fff; border:none; border-radius:6px; padding:10px 22px; font-weight:700; font-size:14px; cursor:pointer; box-shadow:0 2px 6px rgba(0,94,184,0.3);">
                 Process &amp; Split by Manager
               </button>
               <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
@@ -29886,6 +29886,10 @@ __ADMIN_CARD__
               }
             });
           });
+
+          submitBtn.addEventListener("click", function () {
+            form.dispatchEvent(new Event("submit", { cancelable: true }));
+          });
         }
 
         function applyFilter() {
@@ -30007,11 +30011,16 @@ __ADMIN_CARD__
 
         async function loadRecentJobs() {
           if (!historyList) return;
+          historyList.textContent = "Loading previous weekly reports...";
           try {
+            const controller = new AbortController();
+            const timeoutId = window.setTimeout(function () { controller.abort(); }, 10000);
             const resp = await fetch("/service-reports/recent-jobs", {
               credentials: "same-origin",
-              headers: { "Accept": "application/json" }
+              headers: { "Accept": "application/json" },
+              signal: controller.signal
             });
+            window.clearTimeout(timeoutId);
             const data = await resp.json();
             if (!resp.ok || !data.ok) {
               historyList.innerHTML = '<span style="color:#6b7280;">No previous reports found.</span>';
@@ -30065,7 +30074,8 @@ __ADMIN_CARD__
               });
             });
           } catch (err) {
-            historyList.innerHTML = '<span style="color:#a63b00;">Failed to load report history: ' + escapeHtml(err.message || 'Error') + '</span>';
+            const message = err && err.name === "AbortError" ? "The history request timed out. Click Refresh History to retry." : (err.message || "Error");
+            historyList.innerHTML = '<span style="color:#a63b00;">Failed to load report history: ' + escapeHtml(message) + '</span>';
           }
         }
 
