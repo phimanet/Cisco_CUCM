@@ -48895,6 +48895,12 @@ def _clearpass_peap_probe(host: str, nas_ip: str = "") -> dict:
       expiry_dt = datetime.datetime.strptime(expiry_match.group(1), "%b %d %H:%M:%S %Y GMT").replace(tzinfo=datetime.timezone.utc)
       certificate_expires = expiry_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
       days_remaining = (expiry_dt - datetime.datetime.now(datetime.timezone.utc)).days
+    diagnostic_lines = []
+    for line in output.splitlines():
+      clean_line = re.sub(r"(?i)(password|shared_secret|auth_server_shared_secret|identity)=\S+", r"\1=[redacted]", line).strip()
+      if clean_line and re.search(r"(?i)(tls|eap|radius|certificate|error|fail|reject|auth|reason|timeout)", clean_line):
+        diagnostic_lines.append(clean_line[-500:])
+    diagnostic = " | ".join(diagnostic_lines[-5:])
     return {
       "ok": bool(expiry_match),
       "response": "PEAP certificate captured" if expiry_match else "PEAP exchange did not expose a certificate",
@@ -48902,7 +48908,8 @@ def _clearpass_peap_probe(host: str, nas_ip: str = "") -> dict:
       "days_remaining": days_remaining,
       "authenticated": completed.returncode == 0,
       "return_code": completed.returncode,
-      "note": "PEAP certificate validated against the configured CA." if expiry_match else "Review eapol_test output and ClearPass PEAP policy; no credentials or raw output are returned.",
+      "error": "" if expiry_match else f"eapol_test exited with code {completed.returncode}. {diagnostic or 'No diagnostic output matched.'}",
+      "note": "PEAP certificate validated against the configured CA." if expiry_match else "Review the diagnostic summary and ClearPass PEAP policy. Credentials are redacted.",
     }
   except subprocess.TimeoutExpired:
     return {"ok": False, "error": "PEAP probe timed out after 30 seconds."}
