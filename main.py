@@ -29643,7 +29643,36 @@ __ADMIN_CARD__
     <section class="tool-panel" data-panel="service-reports">
 
     <h3>Service Reports — Service Desk Weekly Reports</h3>
-    <p>Upload your weekly ServiceNow source file (<strong>.csv</strong> or <strong>.xlsx</strong>) to parse records by Manager and generate individual downloadable CSV reports for each manager, or download all in a single ZIP archive for email distribution.</p>
+    <p>Upload your weekly ServiceNow source file (<strong>.csv</strong> or <strong>.xlsx</strong>) to parse records by Manager and Assignment Group, generate individual styled Excel reports, or download all in a single ZIP archive for email distribution.</p>
+
+    <!-- Email Dispatch & Test Mode Configuration Banner -->
+    <div style="background:#f0f7ff; border:2px solid #005eb8; border-radius:8px; padding:16px 20px; margin-bottom:20px; box-shadow:0 4px 14px rgba(0,94,184,0.08); max-width:960px;">
+      <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:10px;">
+        <div style="display:flex; align-items:center; gap:10px;">
+          <span style="font-size:18px;">✉️</span>
+          <strong style="color:#002f6c; font-size:15px;">Email Dispatch &amp; Test Mode Configuration</strong>
+        </div>
+        <div style="display:flex; align-items:center; gap:8px;">
+          <label style="display:inline-flex; align-items:center; gap:6px; font-weight:700; color:#12304a; font-size:13px; cursor:pointer;">
+            <input type="checkbox" id="sr-test-mode-toggle" checked style="width:18px; height:18px; cursor:pointer;">
+            <span>TEST MODE ENABLED (Redirect all emails to Tester)</span>
+          </label>
+        </div>
+      </div>
+      <div style="display:flex; gap:14px; align-items:center; flex-wrap:wrap;">
+        <div style="flex:1; min-width:280px;">
+          <label style="display:block; font-size:12px; font-weight:600; color:#355978; margin-bottom:3px;">Tester Email Address (Default is Nilesh):</label>
+          <input type="email" id="sr-tester-email" value="nilesh.sonawane@amnhealthcare.com" placeholder="nilesh.sonawane@amnhealthcare.com" style="width:100%; max-width:380px; padding:7px 10px; border:1px solid #a9c3d8; border-radius:5px; font-size:13px;">
+        </div>
+        <div style="flex:1; min-width:280px;">
+          <label style="display:block; font-size:12px; font-weight:600; color:#355978; margin-bottom:3px;">Sender / From Address:</label>
+          <input type="email" id="sr-sender-email" value="nilesh.sonawane@amnhealthcare.com" placeholder="nilesh.sonawane@amnhealthcare.com" style="width:100%; max-width:380px; padding:7px 10px; border:1px solid #a9c3d8; border-radius:5px; font-size:13px;">
+        </div>
+      </div>
+      <div style="margin-top:8px; font-size:12px; color:#4e6a84;">
+        <span>💡 When <strong>Test Mode</strong> is ON, all individual and bulk emails will be delivered exclusively to the Tester email above with Reply-To set to the Sender. When OFF, each report is emailed directly to the resolved manager.</span>
+      </div>
+    </div>
 
     <div class="service-reports-container" style="max-width:960px;">
       <!-- Upload Card -->
@@ -29696,10 +29725,18 @@ __ADMIN_CARD__
           </div>
         </div>
 
-        <!-- Filter bar -->
+        <!-- Filter & Email All bar -->
         <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
-          <input type="text" id="sr-filter-input" placeholder="Search / filter by manager name..." style="padding:7px 12px; border:1px solid #a9c3d8; border-radius:6px; width:280px; font-size:13px;">
-          <span id="sr-filter-count" style="font-size:12px; color:#6b7280;"></span>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <input type="text" id="sr-filter-input" placeholder="Search / filter by manager or group..." style="padding:7px 12px; border:1px solid #a9c3d8; border-radius:6px; width:280px; font-size:13px;">
+            <span id="sr-filter-count" style="font-size:12px; color:#6b7280;"></span>
+          </div>
+          <div style="display:flex; align-items:center; gap:10px;">
+            <button type="button" id="sr-email-all-btn" style="background:linear-gradient(180deg,#c48a16,#8a5e00); color:#ffffff; border:none; border-radius:6px; padding:8px 16px; font-weight:700; font-size:13px; cursor:pointer; box-shadow:0 2px 6px rgba(196,138,22,0.3);">
+              ✉️ Email All Reports
+            </button>
+            <span id="sr-email-status" style="font-size:12px; font-weight:600; color:#2c5c8a;"></span>
+          </div>
         </div>
 
         <!-- Manager Reports Table -->
@@ -29710,8 +29747,9 @@ __ADMIN_CARD__
                 <th style="padding:9px 12px; text-align:left; width:45px;">#</th>
                 <th style="padding:9px 12px; text-align:left;">Manager Name</th>
                 <th style="padding:9px 12px; text-align:left;">Assignment Group(s)</th>
-                <th style="padding:9px 12px; text-align:center; width:130px;">Total Tickets</th>
-                <th style="padding:9px 12px; text-align:center; width:220px;">Download Actions</th>
+                <th style="padding:9px 12px; text-align:center; width:110px;">Total Tickets</th>
+                <th style="padding:9px 12px; text-align:center; width:160px;">Download</th>
+                <th style="padding:9px 12px; text-align:center; width:130px;">Email</th>
               </tr>
             </thead>
             <tbody id="sr-table-body">
@@ -29770,7 +29808,7 @@ __ADMIN_CARD__
           if (!tableBody) return;
           tableBody.innerHTML = "";
           if (!reports.length) {
-            tableBody.innerHTML = '<tr><td colspan="5" style="text-align:center; padding:18px; color:#6b7280;">No reports matching search filter.</td></tr>';
+            tableBody.innerHTML = '<tr><td colspan="6" style="text-align:center; padding:18px; color:#6b7280;">No reports matching search filter.</td></tr>';
             return;
           }
           reports.forEach(function (m, idx) {
@@ -29783,16 +29821,70 @@ __ADMIN_CARD__
             const dlXlsxUrl = "/service-reports/download/" + encodeURIComponent(currentJobId) + "/" + encodeURIComponent(m.xlsx_filename || m.filename || "");
             const dlCsvUrl = "/service-reports/download/" + encodeURIComponent(currentJobId) + "/" + encodeURIComponent(m.filename || "");
             const actionBtn = '<div style="display:inline-flex; gap:6px;">'
-              + '<a href="' + dlXlsxUrl + '" style="display:inline-block; text-decoration:none; padding:4px 10px; border-radius:5px; background:linear-gradient(180deg,#005eb8,#003d7a); color:#fff; font-weight:600; font-size:11px; box-shadow:0 1px 3px rgba(0,0,0,0.15);">⬇ Excel</a>'
-              + '<a href="' + dlCsvUrl + '" style="display:inline-block; text-decoration:none; padding:4px 10px; border-radius:5px; background:linear-gradient(180deg,#355978,#223e57); color:#fff; font-weight:600; font-size:11px; box-shadow:0 1px 3px rgba(0,0,0,0.15);">⬇ CSV</a>'
+              + '<a href="' + dlXlsxUrl + '" style="display:inline-block; text-decoration:none; padding:4px 9px; border-radius:5px; background:linear-gradient(180deg,#005eb8,#003d7a); color:#fff; font-weight:600; font-size:11px; box-shadow:0 1px 3px rgba(0,0,0,0.15);">⬇ Excel</a>'
+              + '<a href="' + dlCsvUrl + '" style="display:inline-block; text-decoration:none; padding:4px 9px; border-radius:5px; background:linear-gradient(180deg,#355978,#223e57); color:#fff; font-weight:600; font-size:11px; box-shadow:0 1px 3px rgba(0,0,0,0.15);">⬇ CSV</a>'
               + '</div>';
+
+            const emailBtn = '<button type="button" data-email-report="' + idx + '" style="background:linear-gradient(180deg,#237741,#15522b); color:#fff; border:none; border-radius:5px; padding:5px 12px; font-size:11px; font-weight:700; cursor:pointer; box-shadow:0 1px 3px rgba(0,0,0,0.15);">'
+              + '✉️ Email</button>';
 
             tr.innerHTML = '<td style="padding:8px 12px; color:#4e6a84; font-size:12px;">' + (idx + 1) + '</td>'
               + '<td style="padding:8px 12px; font-weight:600; color:#12304a;">' + escapeHtml(m.name) + '</td>'
               + '<td style="padding:8px 12px; font-size:12px; color:#005eb8; font-weight:600;">' + escapeHtml(m.assignment_group || "-") + '</td>'
               + '<td style="padding:8px 12px; text-align:center;">' + countBadge + '</td>'
-              + '<td style="padding:8px 12px; text-align:center;">' + actionBtn + '</td>';
+              + '<td style="padding:8px 12px; text-align:center;">' + actionBtn + '</td>'
+              + '<td style="padding:8px 12px; text-align:center;">' + emailBtn + '</td>';
             tableBody.appendChild(tr);
+          });
+
+          // Bind individual email buttons
+          tableBody.querySelectorAll('button[data-email-report]').forEach(function (btn) {
+            btn.addEventListener('click', async function () {
+              const repIdx = Number(btn.getAttribute('data-email-report'));
+              const rep = reports[repIdx];
+              if (!rep) return;
+
+              const isTest = document.getElementById("sr-test-mode-toggle").checked;
+              const testerEmail = (document.getElementById("sr-tester-email").value || "").trim();
+              const senderEmail = (document.getElementById("sr-sender-email").value || "").trim();
+
+              const targetNotice = isTest ? ("TEST MODE (Will send to " + testerEmail + ")") : ("LIVE MODE (Will send to manager " + rep.name + ")");
+              if (!window.confirm("Send service report email for " + rep.name + " (" + rep.assignment_group + ")?\n\n" + targetNotice)) {
+                return;
+              }
+
+              const origText = btn.textContent;
+              btn.disabled = true;
+              btn.textContent = "Sending...";
+              try {
+                const fd = new FormData();
+                fd.append("job_id", currentJobId);
+                fd.append("manager_name", rep.name);
+                fd.append("assignment_group", rep.assignment_group);
+                fd.append("filename", rep.xlsx_filename || rep.filename);
+                fd.append("is_test", isTest ? "1" : "0");
+                fd.append("tester_email", testerEmail);
+                fd.append("sender_email", senderEmail);
+
+                const resp = await fetch("/service-reports/send-email", {
+                  method: "POST",
+                  body: fd,
+                  credentials: "same-origin",
+                  headers: { "Accept": "application/json" }
+                });
+                const result = await resp.json();
+                if (!resp.ok || !result.ok) {
+                  throw new Error(result.error || result.detail || "Email failed.");
+                }
+                btn.textContent = "✅ Sent!";
+                btn.style.background = "#14562b";
+                window.alert("Email sent successfully to: " + (result.recipient || testerEmail));
+              } catch (err) {
+                btn.textContent = "❌ Failed";
+                window.alert("Email failed: " + (err.message || "Error"));
+                setTimeout(function() { btn.disabled = false; btn.textContent = origText; }, 2500);
+              }
+            });
           });
         }
 
@@ -29812,6 +29904,67 @@ __ADMIN_CARD__
 
         if (filterInput) {
           filterInput.addEventListener("input", applyFilter);
+        }
+
+        // Email All Reports Button
+        const emailAllBtn = document.getElementById("sr-email-all-btn");
+        const emailStatusEl = document.getElementById("sr-email-status");
+        if (emailAllBtn) {
+          emailAllBtn.addEventListener("click", async function () {
+            if (!currentManagers.length || !currentJobId) {
+              window.alert("Please upload or load a report first.");
+              return;
+            }
+            const isTest = document.getElementById("sr-test-mode-toggle").checked;
+            const testerEmail = (document.getElementById("sr-tester-email").value || "").trim();
+            const senderEmail = (document.getElementById("sr-sender-email").value || "").trim();
+
+            const modeDesc = isTest
+              ? ("TEST MODE ENABLED\nAll " + currentManagers.length + " report emails will be sent directly to:\n" + testerEmail)
+              : ("LIVE MODE WARNING!\nAll " + currentManagers.length + " report emails will be sent directly to the REAL managers.");
+
+            if (!window.confirm("Are you sure you want to email all " + currentManagers.length + " service reports?\n\n" + modeDesc)) {
+              return;
+            }
+
+            emailAllBtn.disabled = true;
+            emailAllBtn.textContent = "Sending Batch...";
+            emailStatusEl.textContent = "Dispatching " + currentManagers.length + " reports...";
+            emailStatusEl.style.color = "#005eb8";
+
+            try {
+              const fd = new FormData();
+              fd.append("job_id", currentJobId);
+              fd.append("is_test", isTest ? "1" : "0");
+              fd.append("tester_email", testerEmail);
+              fd.append("sender_email", senderEmail);
+
+              const resp = await fetch("/service-reports/send-email-batch", {
+                method: "POST",
+                body: fd,
+                credentials: "same-origin",
+                headers: { "Accept": "application/json" }
+              });
+              const res = await resp.json();
+              if (!resp.ok || !res.ok) {
+                throw new Error(res.error || res.detail || "Batch email failed.");
+              }
+              emailStatusEl.textContent = "Sent " + res.sent_count + " of " + res.total_count + " emails successfully!";
+              emailStatusEl.style.color = "#1f7a3d";
+              emailAllBtn.textContent = "✅ All Sent!";
+              window.alert("Batch email complete!\nSent: " + res.sent_count + " / " + res.total_count + "\nDestination: " + (isTest ? testerEmail : "Real managers"));
+            } catch (err) {
+              emailStatusEl.textContent = "Batch email failed: " + (err.message || "Error");
+              emailStatusEl.style.color = "#a63b00";
+              emailAllBtn.textContent = "❌ Failed";
+              window.alert("Batch email error: " + (err.message || "Unknown error"));
+            } finally {
+              setTimeout(function() {
+                emailAllBtn.disabled = false;
+                emailAllBtn.textContent = "✉️ Email All Reports";
+              }, 4000);
+            }
+          });
         }
 
         function displayJob(job) {
@@ -51404,6 +51557,291 @@ def service_reports_download_zip(request: Request, job_id: str):
         )
     except Exception as e:
         return Response(f"Error reading report: {str(e)}", status_code=500, media_type="text/plain")
+
+
+def _resolve_manager_email(manager_name: str, cucm_host: str = "", cucm_user: str = "", cucm_pass: str = "") -> str:
+    """Resolve a manager name (e.g. 'Alex McKeown') to their corporate email using AD LDAP or CUCM."""
+    clean_name = str(manager_name or "").strip()
+    if not clean_name or clean_name.startswith("("):
+        return ""
+
+    # Strategy 1: Active Directory LDAP lookup by displayName or cn
+    try:
+        from toolkit.ad_phone_fields import _resolve_ldap_config, _resolve_ldap_bind_credentials, _escape_ldap_filter_value, LDAP3_AVAILABLE
+        config, config_error = _resolve_ldap_config()
+        if not config_error and LDAP3_AVAILABLE:
+            from ldap3 import Server, Connection, ALL, SUBTREE
+            bind_user, bind_auth, bind_error = _resolve_ldap_bind_credentials(None, config)
+            if not bind_error:
+                bind_pass = str(os.getenv("AD_LDAP_BIND_PASSWORD") or "")
+                server = Server(config["server"], port=config["port"], use_ssl=config["use_ssl"], get_info=ALL, connect_timeout=10)
+                conn = Connection(server, user=bind_user, password=bind_pass, authentication=bind_auth, auto_bind=True, receive_timeout=15)
+                esc = _escape_ldap_filter_value(clean_name)
+                # Search by displayName, cn, or name
+                conn.search(
+                    search_base=config["base_dn"],
+                    search_filter=f"(&(objectClass=user)(|(displayName={esc})(cn={esc})(name={esc})))",
+                    search_scope=SUBTREE,
+                    attributes=["mail", "userPrincipalName"],
+                )
+                if conn.entries:
+                    entry = conn.entries[0]
+                    mail_val = str(getattr(getattr(entry, "mail", None), "value", "") or "").strip()
+                    if mail_val and "@" in mail_val:
+                        return mail_val
+                    upn_val = str(getattr(getattr(entry, "userPrincipalName", None), "value", "") or "").strip()
+                    if upn_val and "@" in upn_val:
+                        return upn_val
+    except Exception:
+        pass
+
+    # Strategy 2: CUCM Person Lookup by name if credentials available
+    if cucm_host and cucm_user:
+        try:
+            parts = clean_name.split(None, 1)
+            first_name = parts[0] if len(parts) > 1 else ""
+            last_name = parts[1] if len(parts) > 1 else parts[0]
+            from toolkit.person_lookup import search_persons_by_name
+            cucm_results = search_persons_by_name(cucm_host, cucm_user, cucm_pass, last_name, first_name)
+            for person in cucm_results:
+                mail = str(person.get("mailid") or "").strip()
+                if mail and "@" in mail:
+                    return mail
+        except Exception:
+            pass
+
+    # Strategy 3: Heuristic name construction (First.Last@amnhealthcare.com)
+    clean_parts = re.findall(r'[a-zA-Z]+', clean_name)
+    if len(clean_parts) >= 2:
+        return f"{clean_parts[0]}.{clean_parts[-1]}@amnhealthcare.com"
+
+    return ""
+
+
+def _build_service_report_email_content(manager_name: str, assignment_group: str) -> tuple[str, str, str]:
+    """Generate the exact subject, plain text, and HTML body matching the approved Service Desk template."""
+    clean_mgr = str(manager_name or "").strip()
+    clean_ag = str(assignment_group or "").strip()
+    subject = f"Action Required: Weekly Open Ticket Report - {clean_ag} ({clean_mgr})"
+
+    plain_body = f"""Hello {clean_mgr},
+
+As part of our on-going efforts at improving our department’s ticket management, we will be distributing weekly open ticket reports to all “assignment group” managers. You are receiving this email because you are listed as the manager of a team that has open tickets.
+
+Although it is not unusual to have open tickets assigned to our teams, many of our assignment groups have older tickets that appear to have been lost or forgotten.
+
+Please review the attached report with your team to ensure that these tickets are getting the necessary attention and have your team members close any tickets for work that has been completed.
+
+If you feel that you have been wrongly identified as the manager of an assignment group, please open an "IT Other Request" (https://amn.service-now.com/sp?id=sc_cat_item&sys_id=5aacef50db95be40b0f67a8eaf961902) and request that the group {clean_ag} be re-assigned.
+
+If you have any additional questions about the report, feel free to reach out to Michael Mooter.
+
+“To protect your information, all official AMN Healthcare communications come from @amnhealthcare.com. Please verify the sender if anything appears suspicious.”
+
+Regards,
+Nilesh Sonawane, Production Specialist. Service Desk
+Innovative Workforce Solutions
+24x7 Service Desk: (855) 435-7822, Option 1. Internal: x5555
+nilesh.sonawane@amnhealthcare.com | AMN Healthcare: AMNHealthcare.com
+NYSE: AMN. If our services fail to meet your expectations, please escalate the issue to Customer Care (ServiceDesk_Customercare@amnhealthcare.com).
+"""
+
+    html_body = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+</head>
+<body style="font-family: Calibri, Arial, sans-serif; font-size: 14px; color: #12304a; line-height: 1.5;">
+<p>Hello <strong style="color:#005eb8;">{escape(clean_mgr)}</strong>,</p>
+
+<p>As part of our on-going efforts at improving our department’s ticket management, we will be distributing weekly open ticket reports to all “assignment group” managers. You are receiving this email because you are listed as the manager of a team that has open tickets.</p>
+
+<p>Although it is not unusual to have open tickets assigned to our teams, many of our assignment groups have older tickets that appear to have been lost or forgotten.</p>
+
+<p>Please review the attached report with your team to ensure that these tickets are getting the necessary attention and have your team members close any tickets for work that has been completed.</p>
+
+<p>If you feel that you have been wrongly identified as the manager of an assignment group, please open an <a href="https://amn.service-now.com/sp?id=sc_cat_item&sys_id=5aacef50db95be40b0f67a8eaf961902" style="color:#005eb8; font-weight:bold; text-decoration:underline;">“IT Other Request”</a> and request that the group <strong>{escape(clean_ag)}</strong> be re-assigned to &lt;person’s name&gt;.</p>
+
+<p>If you have any additional questions about the report, feel free to reach out to Michael Mooter.</p>
+
+<br>
+<p style="background:#f4f6f8; border-left:4px solid #005eb8; padding:8px 12px; font-weight:bold; color:#002f6c; font-size:13px;">
+“To protect your information, all official AMN Healthcare communications come from @amnhealthcare.com. Please verify the sender if anything appears suspicious.”
+</p>
+<br>
+
+<p style="margin-bottom:4px;"><em>Regards,</em></p>
+<p style="margin-top:0; margin-bottom:4px;"><em><strong>Nilesh Sonawane</strong>, Production Specialist. Service Desk</em></p>
+<p style="margin-top:0; margin-bottom:4px; color:#4e6a84;"><em>Innovative Workforce Solutions</em></p>
+<p style="margin-top:0; margin-bottom:4px;">24x7 Service Desk: (855) 435-7822, Option 1. Internal: x5555</p>
+<p style="margin-top:0; margin-bottom:4px;"><a href="mailto:nilesh.sonawane@amnhealthcare.com" style="color:#005eb8;">nilesh.sonawane@amnhealthcare.com</a> &bull; <strong>AMN Healthcare:</strong> <a href="http://www.amnhealthcare.com/" style="color:#005eb8;">AMNHealthcare.com</a></p>
+<p style="margin-top:0; font-size:12px; color:#6b7280;">NYSE: AMN. <em>If our services fail to meet your expectations, please escalate the issue to <a href="mailto:ServiceDesk_Customercare@amnhealthcare.com" style="color:#005eb8; font-weight:bold;">Customer Care</a>.</em></p>
+</body>
+</html>"""
+
+    return subject, plain_body, html_body
+
+
+@app.post("/service-reports/send-email")
+def service_reports_send_single_email(
+    request: Request,
+    job_id: str = Form(...),
+    manager_name: str = Form(...),
+    assignment_group: str = Form(...),
+    filename: str = Form(...),
+    is_test: str = Form("1"),
+    tester_email: str = Form("nilesh.sonawane@amnhealthcare.com"),
+    sender_email: str = Form("nilesh.sonawane@amnhealthcare.com"),
+):
+    session = _get_auth_session(request) or {}
+    operator = str(session.get("username", "") or "").strip()
+    if not operator:
+        return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+
+    cucm_host = str(session.get("cucm_host", "") or "").strip()
+    cucm_user = str(session.get("username", "") or "").strip()
+    cucm_pass = str(AUTH_SESSION_SECRETS.get(request.cookies.get(SESSION_COOKIE_NAME, ""), {}).get("cucm_pass", "") or "")
+
+    safe_job_id = re.sub(r'[^a-zA-Z0-9_\-]', '', job_id)
+    safe_filename = os.path.basename(filename)
+    job_dir = os.path.abspath(os.path.join(SERVICE_REPORTS_DIR, safe_job_id))
+    file_path = os.path.join(job_dir, safe_filename)
+
+    if not os.path.exists(file_path):
+        return JSONResponse({"ok": False, "error": f"Report file '{safe_filename}' not found on server."}, status_code=404)
+
+    test_mode = str(is_test or "").strip().lower() in {"1", "true", "yes", "on"}
+    clean_tester = str(tester_email or "nilesh.sonawane@amnhealthcare.com").strip()
+    clean_sender = str(sender_email or "nilesh.sonawane@amnhealthcare.com").strip()
+
+    if test_mode:
+        recipient = clean_tester
+    else:
+        recipient = _resolve_manager_email(manager_name, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass)
+        if not recipient:
+            recipient = clean_tester
+
+    subject, plain_body, html_body = _build_service_report_email_content(manager_name, assignment_group)
+    if test_mode:
+        subject = f"[TEST MODE - Destined for {manager_name}] {subject}"
+
+    with open(file_path, "rb") as f:
+        file_bytes = f.read()
+
+    mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if safe_filename.endswith(".xlsx") else "text/csv"
+    attachment = (safe_filename, file_bytes, mime_type)
+
+    try:
+        _send_smtp_email(
+            sender=clean_sender,
+            recipients=[recipient],
+            subject=subject,
+            body=plain_body,
+            html_body=html_body,
+            attachments=[attachment],
+        )
+        _append_audit_event(
+            action="service_report_emailed",
+            cucm_host=cucm_host,
+            operator=operator,
+            target=f"manager={manager_name};group={assignment_group};to={recipient};test={test_mode}",
+            output_filename=safe_filename,
+            inline_mode=True,
+        )
+        return JSONResponse({"ok": True, "recipient": recipient, "is_test": test_mode})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@app.post("/service-reports/send-email-batch")
+def service_reports_send_batch_emails(
+    request: Request,
+    job_id: str = Form(...),
+    is_test: str = Form("1"),
+    tester_email: str = Form("nilesh.sonawane@amnhealthcare.com"),
+    sender_email: str = Form("nilesh.sonawane@amnhealthcare.com"),
+):
+    session = _get_auth_session(request) or {}
+    operator = str(session.get("username", "") or "").strip()
+    if not operator:
+        return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+
+    cucm_host = str(session.get("cucm_host", "") or "").strip()
+    cucm_user = str(session.get("username", "") or "").strip()
+    cucm_pass = str(AUTH_SESSION_SECRETS.get(request.cookies.get(SESSION_COOKIE_NAME, ""), {}).get("cucm_pass", "") or "")
+
+    safe_job_id = re.sub(r'[^a-zA-Z0-9_\-]', '', job_id)
+    job_dir = os.path.abspath(os.path.join(SERVICE_REPORTS_DIR, safe_job_id))
+    info_path = os.path.join(job_dir, "job_info.json")
+
+    if not os.path.exists(info_path):
+        return JSONResponse({"ok": False, "error": "Report job not found."}, status_code=404)
+
+    with open(info_path, "r", encoding="utf-8") as f:
+        job_info = json.load(f)
+
+    managers = job_info.get("managers", [])
+    if not managers:
+        return JSONResponse({"ok": False, "error": "No manager reports found in this job."}, status_code=400)
+
+    test_mode = str(is_test or "").strip().lower() in {"1", "true", "yes", "on"}
+    clean_tester = str(tester_email or "nilesh.sonawane@amnhealthcare.com").strip()
+    clean_sender = str(sender_email or "nilesh.sonawane@amnhealthcare.com").strip()
+
+    sent_count = 0
+    errors = []
+
+    for rep in managers:
+        mgr_name = rep.get("name", "")
+        ag_name = rep.get("assignment_group", "")
+        fname = rep.get("xlsx_filename") or rep.get("filename")
+        if not fname:
+            continue
+        fpath = os.path.join(job_dir, fname)
+        if not os.path.exists(fpath):
+            continue
+
+        if test_mode:
+            recipient = clean_tester
+        else:
+            recipient = _resolve_manager_email(mgr_name, cucm_host=cucm_host, cucm_user=cucm_user, cucm_pass=cucm_pass) or clean_tester
+
+        subject, plain_body, html_body = _build_service_report_email_content(mgr_name, ag_name)
+        if test_mode:
+            subject = f"[TEST MODE - Destined for {mgr_name}] {subject}"
+
+        try:
+            with open(fpath, "rb") as mf:
+                fbytes = mf.read()
+            mime_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" if fname.endswith(".xlsx") else "text/csv"
+            _send_smtp_email(
+                sender=clean_sender,
+                recipients=[recipient],
+                subject=subject,
+                body=plain_body,
+                html_body=html_body,
+                attachments=[(fname, fbytes, mime_type)],
+            )
+            sent_count += 1
+        except Exception as exc:
+            errors.append(f"{mgr_name} ({ag_name}): {str(exc)}")
+
+    _append_audit_event(
+        action="service_reports_batch_emailed",
+        cucm_host=cucm_host,
+        operator=operator,
+        target=f"job_id={job_id};sent={sent_count};total={len(managers)};test={test_mode};tester={clean_tester}",
+        output_filename=job_info.get("zip_filename", ""),
+        inline_mode=True,
+    )
+
+    return JSONResponse({
+        "ok": True,
+        "sent_count": sent_count,
+        "total_count": len(managers),
+        "is_test": test_mode,
+        "errors": errors[:5],
+    })
 
 
 @app.get("/service-reports/recent-jobs")

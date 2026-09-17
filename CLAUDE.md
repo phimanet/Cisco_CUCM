@@ -115,10 +115,11 @@ Priority keys:
 - Builds a Master Multi-Tab Excel Workbook (`Service_Reports_Master_Workbook_YYYYMMDD.xlsx`):
   - **Tab 1 ("Ticket Counts")**: Lists every manager with a breakdown of each assignment group they manage, ticket counts, subtotals, and a TOTAL summary row.
   - **Tab 2..N**: Creates a dedicated tab for each manager, listing out all tickets associated with that manager.
-- Generates individual `.xlsx` and `.csv` files for each **(Manager + Assignment Group)** combination (e.g. `Service_Report_Colm_Kilkenny_Salesforce.xlsx`), accounting for managers leading multiple teams so each team's report can be emailed separately.
+- Builds an intact source file (`Manager-Assignment_group_YYYYMMDD.xlsx`) with Tab 1 as `Manager-Assignment group` calculating ticket counts using live Excel `=COUNTIF(...)` formulas, and Tab 2 as `Page 1` with the complete raw source data intact.
+- Generates individual styled `.xlsx` and `.csv` files for each **(Manager + Assignment Group)** combination (e.g. `Service_Report_Colm_Kilkenny_Salesforce.xlsx`) with 1 tab, bold headers, blue fill (`#BDD7EE`), and full grid borders (`#D9D9D9`).
 - Packages all individual manager-group reports plus the Master Excel workbook into a single downloadable ZIP archive (`Service_Reports_All_Managers_YYYYMMDD.zip`).
-- Includes a persistent 90-day history (`data/service_reports/{job_id}/job_info.json`) with automatic pruning older than 90 days, enabling operators to inspect managers, filter by group, and re-download previous weekly runs by date.
-- Roadmap item noted for future iteration: query LDAP by Manager Name to automatically resolve manager email addresses for automated email distribution.
+- Includes a persistent 90-day history (`data/service_reports/{job_id}/job_info.json`) with automatic pruning older than 90 days.
+- **Email Dispatching & Test Mode**: Added editable Tester Email and Sender Email settings at top of the panel (defaults to Nilesh Sonawane, `nilesh.sonawane@amnhealthcare.com`), with Test Mode ON/OFF toggle. When ON, all individual and bulk emails redirect to Nilesh for safe validation; when OFF, LDAP resolves each manager's email directly. Uses the official Service Desk email template with attached reports and audit tracking.
 
 ### 2026-09-15 (Twilio All Accounts Number Inventory)
 - Added a read-only SMS Item Menu panel that inventories Incoming Phone Numbers across the configured Twilio parent account and every accessible subaccount.
