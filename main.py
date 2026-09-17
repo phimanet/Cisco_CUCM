@@ -48855,6 +48855,7 @@ def _clearpass_peap_probe(host: str, nas_ip: str = "") -> dict:
   if not shutil.which(CLEARPASS_EAPOL_TEST_PATH):
     return {"ok": False, "error": f"eapol_test was not found: {CLEARPASS_EAPOL_TEST_PATH}"}
   config_path = ""
+  certificate_path = ""
   def quote_config(value: str) -> str:
     return '"' + str(value or "").replace("\\", "\\\\").replace('"', '\\"') + '"'
   try:
@@ -48880,8 +48881,11 @@ def _clearpass_peap_probe(host: str, nas_ip: str = "") -> dict:
       config_path = handle.name
       os.chmod(config_path, 0o600)
       handle.write(config_text)
+    certificate_handle = tempfile.NamedTemporaryFile(prefix="clearpass-peap-cert-", suffix=".pem", delete=False)
+    certificate_path = certificate_handle.name
+    certificate_handle.close()
     completed = subprocess.run(
-      [CLEARPASS_EAPOL_TEST_PATH, "-c", config_path, "-dd"],
+      [CLEARPASS_EAPOL_TEST_PATH, "-c", config_path, "-o", certificate_path],
       capture_output=True,
       text=True,
       timeout=30,
@@ -48889,9 +48893,19 @@ def _clearpass_peap_probe(host: str, nas_ip: str = "") -> dict:
     )
     output = (completed.stdout or "") + "\n" + (completed.stderr or "")
     expiry_match = re.search(r"notAfter=([A-Z][a-z]{2} [ 0-9]{1,2} [0-9:]{8} [0-9]{4} GMT)", output)
-    certificate_expires = "Unavailable"
-    days_remaining = None
-    if expiry_match:
+    if certificate_path and os.path.exists(certificate_path) and os.path.getsize(certificate_path) > 0:
+      try:
+        certificate_pem = open(certificate_path, "r", encoding="ascii").read()
+        certificate_der = ssl.PEM_cert_to_DER_cert(certificate_pem)
+        certificate_der_bytes = certificate_der if isinstance(certificate_der, bytes) else bytes.fromhex(certificate_der)
+        certificate_expires, certificate_days = _parse_asn1_cert_expiry(certificate_der_bytes)
+        if certificate_expires != "Unavailable":
+          expiry_match = True
+      except Exception:
+        certificate_expires = "Unavailable"
+    certificate_expires = locals().get("certificate_expires", "Unavailable")
+    days_remaining = locals().get("certificate_days")
+    if expiry_match and certificate_expires == "Unavailable":
       expiry_dt = datetime.datetime.strptime(expiry_match.group(1), "%b %d %H:%M:%S %Y GMT").replace(tzinfo=datetime.timezone.utc)
       certificate_expires = expiry_dt.strftime("%Y-%m-%d %H:%M:%S UTC")
       days_remaining = (expiry_dt - datetime.datetime.now(datetime.timezone.utc)).days
@@ -48919,6 +48933,11 @@ def _clearpass_peap_probe(host: str, nas_ip: str = "") -> dict:
     if config_path:
       try:
         os.remove(config_path)
+      except OSError:
+        pass
+    if certificate_path:
+      try:
+        os.remove(certificate_path)
       except OSError:
         pass
 
