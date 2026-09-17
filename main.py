@@ -29231,7 +29231,7 @@ __ADMIN_CARD__
         <h4>Operations Menu</h4>
         <div class="portal-nav">
           <button type="button" class="portal-nav-btn start-here-btn active" data-panel="personlookup">Start Here!<br>Employee Lookup By Name</button>
-          <button type="button" class="portal-nav-btn" data-panel="aiagent">AI Agent - Read Only</button>
+          <button type="button" class="portal-nav-btn" data-panel="service-reports">Service Reports</button>
           <button type="button" class="portal-nav-btn" data-panel="jabber-forwarding-tool">Cisco Jabber Forwarding Tool</button>
           <button type="button" class="portal-nav-btn" onclick="window.location.href='/genesys-admin?panel=genesys-ad-webrtc-panel'">Add Genesys User</button>
           <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Reverse Lookup</button>
@@ -29635,6 +29635,323 @@ __ADMIN_CARD__
             sendBtn.disabled = false;
           }
         });
+      })();
+    </script>
+
+    </section>
+
+    <section class="tool-panel" data-panel="service-reports">
+
+    <h3>Service Reports — Service Desk Weekly Reports</h3>
+    <p>Upload your weekly ServiceNow source file (<strong>.csv</strong> or <strong>.xlsx</strong>) to parse records by Manager and generate individual downloadable CSV reports for each manager, or download all in a single ZIP archive for email distribution.</p>
+
+    <div class="service-reports-container" style="max-width:960px;">
+      <!-- Upload Card -->
+      <div style="background:#ffffff; border:1px solid #c8dbee; border-radius:8px; padding:18px 22px; box-shadow:0 4px 14px rgba(0,47,108,0.06); margin-bottom:20px;">
+        <form id="sr-upload-form" enctype="multipart/form-data">
+          <div style="display:flex; flex-direction:column; gap:14px;">
+            <div>
+              <label style="font-weight:700; color:#12304a; display:block; margin-bottom:6px;">Select ServiceNow Source File:</label>
+              <input type="file" id="sr-file-input" name="file" accept=".csv,.xlsx,.xls" required style="padding:8px; border:1px solid #a9c3d8; border-radius:6px; width:100%; max-width:540px; background:#fafcff;">
+              <span style="display:block; margin-top:4px; font-size:12px; color:#4e6a84;">Supported formats: CSV (standard ServiceNow export) or Excel (.xlsx). Encoding and delimiters are auto-detected.</span>
+            </div>
+
+            <div id="sr-col-override-wrapper" style="display:none; background:#f0f7ff; border:1px solid #b9d8f3; border-radius:6px; padding:10px 14px;">
+              <label style="font-weight:700; color:#002f6c; display:block; margin-bottom:4px;">Manager Column (Select Override if needed):</label>
+              <select id="sr-col-select" name="manager_col" style="padding:7px 12px; border:1px solid #a9c3d8; border-radius:6px; min-width:320px; font-size:13px; background:#ffffff;">
+                <option value="">-- Auto-Detect Manager Column --</option>
+              </select>
+              <span style="display:block; margin-top:4px; font-size:11px; color:#4e6a84;">If auto-detection picks the wrong column or fails, choose the column that contains the manager's name from this dropdown.</span>
+            </div>
+
+            <div style="display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:6px;">
+              <button type="submit" id="sr-submit-btn" style="background:linear-gradient(180deg,#005eb8,#003d7a); color:#fff; border:none; border-radius:6px; padding:10px 22px; font-weight:700; font-size:14px; cursor:pointer; box-shadow:0 2px 6px rgba(0,94,184,0.3);">
+                Process &amp; Split by Manager
+              </button>
+              <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+              <span id="sr-status" style="font-size:13px; font-weight:600; color:#2c5c8a;"></span>
+            </div>
+          </div>
+        </form>
+      </div>
+
+      <!-- Results Section (Hidden until upload or loaded) -->
+      <div id="sr-results-card" style="display:none; background:#ffffff; border:1px solid #c8dbee; border-radius:8px; padding:20px 22px; box-shadow:0 4px 14px rgba(0,47,108,0.06); margin-bottom:20px;">
+        <!-- Summary Banner -->
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:14px; margin-bottom:16px; padding-bottom:14px; border-bottom:1px solid #e1ecf7;">
+          <div>
+            <h4 style="margin:0 0 4px 0; color:#002f6c; font-size:17px;">Generated Manager Reports</h4>
+            <div id="sr-meta-summary" style="font-size:13px; color:#4e6a84;"></div>
+          </div>
+          <div style="display:flex; gap:10px;">
+            <a id="sr-download-zip-btn" href="#" target="_blank" style="display:inline-flex; align-items:center; gap:6px; background:linear-gradient(180deg,#1f7a3d,#14562b); color:#ffffff; text-decoration:none; padding:9px 18px; border-radius:6px; font-weight:700; font-size:13px; box-shadow:0 2px 6px rgba(31,122,61,0.3);">
+              ⬇ Download All Reports (ZIP)
+            </a>
+          </div>
+        </div>
+
+        <!-- Filter bar -->
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:12px; flex-wrap:wrap;">
+          <input type="text" id="sr-filter-input" placeholder="Search / filter by manager name..." style="padding:7px 12px; border:1px solid #a9c3d8; border-radius:6px; width:280px; font-size:13px;">
+          <span id="sr-filter-count" style="font-size:12px; color:#6b7280;"></span>
+        </div>
+
+        <!-- Manager Reports Table -->
+        <div style="overflow-x:auto;">
+          <table style="width:100%; border-collapse:collapse; font-size:13px;">
+            <thead>
+              <tr style="background:#005eb8; color:#ffffff;">
+                <th style="padding:9px 12px; text-align:left; width:45px;">#</th>
+                <th style="padding:9px 12px; text-align:left;">Manager Name</th>
+                <th style="padding:9px 12px; text-align:center; width:140px;">Record Count</th>
+                <th style="padding:9px 12px; text-align:center; width:160px;">Action</th>
+              </tr>
+            </thead>
+            <tbody id="sr-table-body">
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Recent Weekly Reports History -->
+      <div style="background:#ffffff; border:1px solid #c8dbee; border-radius:8px; padding:16px 20px; box-shadow:0 4px 14px rgba(0,47,108,0.06);">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+          <h4 style="margin:0; color:#002f6c; font-size:15px;">Recent Weekly Service Reports</h4>
+          <button type="button" id="sr-refresh-history-btn" style="background:#e8f4fd; color:#005eb8; border:1px solid #a9c3d8; border-radius:5px; padding:4px 10px; font-size:12px; font-weight:600; cursor:pointer;">
+            🔄 Refresh History
+          </button>
+        </div>
+        <div id="sr-history-list" style="font-size:13px; color:#4e6a84;">
+          Loading previous weekly reports...
+        </div>
+      </div>
+    </div>
+
+    <script>
+      (function () {
+        const form = document.getElementById("sr-upload-form");
+        const fileInput = document.getElementById("sr-file-input");
+        const submitBtn = document.getElementById("sr-submit-btn");
+        const statusEl = document.getElementById("sr-status");
+        const resultsCard = document.getElementById("sr-results-card");
+        const metaSummary = document.getElementById("sr-meta-summary");
+        const downloadZipBtn = document.getElementById("sr-download-zip-btn");
+        const tableBody = document.getElementById("sr-table-body");
+        const filterInput = document.getElementById("sr-filter-input");
+        const filterCount = document.getElementById("sr-filter-count");
+        const colOverrideWrapper = document.getElementById("sr-col-override-wrapper");
+        const colSelect = document.getElementById("sr-col-select");
+        const historyList = document.getElementById("sr-history-list");
+        const refreshHistoryBtn = document.getElementById("sr-refresh-history-btn");
+
+        let currentManagers = [];
+        let currentJobId = "";
+
+        function escapeHtml(str) {
+          return String(str == null ? "" : str)
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+            .replace(/"/g, "&quot;")
+            .replace(/'/g, "&#39;");
+        }
+
+        function renderTable(managers) {
+          if (!tableBody) return;
+          tableBody.innerHTML = "";
+          if (!managers.length) {
+            tableBody.innerHTML = '<tr><td colspan="4" style="text-align:center; padding:18px; color:#6b7280;">No managers matching search filter.</td></tr>';
+            return;
+          }
+          managers.forEach(function (m, idx) {
+            const tr = document.createElement("tr");
+            const bg = idx % 2 === 0 ? "#f7fbff" : "#ffffff";
+            tr.style.background = bg;
+            tr.style.borderBottom = "1px solid #c8dbee";
+
+            const countBadge = '<span style="display:inline-block; padding:3px 10px; border-radius:12px; background:#e8f4fd; color:#005eb8; font-weight:700; font-size:12px;">' + (m.count || 0) + ' records</span>';
+            const dlUrl = "/service-reports/download/" + encodeURIComponent(currentJobId) + "/" + encodeURIComponent(m.filename || "");
+            const actionBtn = '<a href="' + dlUrl + '" style="display:inline-block; text-decoration:none; padding:5px 12px; border-radius:5px; background:linear-gradient(180deg,#005eb8,#003d7a); color:#fff; font-weight:600; font-size:12px; box-shadow:0 1px 3px rgba(0,0,0,0.15);">⬇ Download CSV</a>';
+
+            tr.innerHTML = '<td style="padding:8px 12px; color:#4e6a84; font-size:12px;">' + (idx + 1) + '</td>'
+              + '<td style="padding:8px 12px; font-weight:600; color:#12304a;">' + escapeHtml(m.name) + '</td>'
+              + '<td style="padding:8px 12px; text-align:center;">' + countBadge + '</td>'
+              + '<td style="padding:8px 12px; text-align:center;">' + actionBtn + '</td>';
+            tableBody.appendChild(tr);
+          });
+        }
+
+        function applyFilter() {
+          const q = (filterInput.value || "").trim().toLowerCase();
+          if (!q) {
+            renderTable(currentManagers);
+            if (filterCount) filterCount.textContent = "Showing all " + currentManagers.length + " managers";
+            return;
+          }
+          const filtered = currentManagers.filter(function (m) {
+            return (m.name || "").toLowerCase().includes(q);
+          });
+          renderTable(filtered);
+          if (filterCount) filterCount.textContent = "Showing " + filtered.length + " of " + currentManagers.length + " managers";
+        }
+
+        if (filterInput) {
+          filterInput.addEventListener("input", applyFilter);
+        }
+
+        function displayJob(job) {
+          if (!job) return;
+          currentJobId = job.job_id || "";
+          currentManagers = job.managers || [];
+
+          if (colSelect && job.available_columns && job.available_columns.length) {
+            colSelect.innerHTML = "";
+            job.available_columns.forEach(function (c) {
+              const opt = document.createElement("option");
+              opt.value = c;
+              opt.textContent = c + (c === job.manager_column ? " (Active)" : "");
+              if (c === job.manager_column) opt.selected = true;
+              colSelect.appendChild(opt);
+            });
+            if (colOverrideWrapper) colOverrideWrapper.style.display = "block";
+          }
+
+          if (metaSummary) {
+            metaSummary.innerHTML = "Source: <strong>" + escapeHtml(job.source_filename) + "</strong> &bull; Total Records: <strong>" + (job.total_records || 0).toLocaleString() + "</strong> &bull; Managers: <strong>" + (job.total_managers || currentManagers.length) + "</strong> &bull; Split by Column: <strong style='color:#005eb8;'>" + escapeHtml(job.manager_column || "Auto") + "</strong>";
+          }
+          if (downloadZipBtn) {
+            downloadZipBtn.href = "/service-reports/download-zip/" + encodeURIComponent(currentJobId);
+          }
+
+          if (resultsCard) resultsCard.style.display = "block";
+          if (filterInput) filterInput.value = "";
+          renderTable(currentManagers);
+          if (filterCount) filterCount.textContent = "Showing all " + currentManagers.length + " managers";
+        }
+
+        async function loadRecentJobs() {
+          if (!historyList) return;
+          try {
+            const resp = await fetch("/service-reports/recent-jobs", {
+              credentials: "same-origin",
+              headers: { "Accept": "application/json" }
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.ok) {
+              historyList.innerHTML = '<span style="color:#6b7280;">No previous reports found.</span>';
+              return;
+            }
+            const jobs = data.jobs || [];
+            if (!jobs.length) {
+              historyList.innerHTML = '<span style="color:#6b7280;">No previous weekly reports stored yet. Upload a file above to create your first report.</span>';
+              return;
+            }
+
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:12px;">';
+            html += '<thead><tr style="background:#eaf4ff; color:#002f6c; border-bottom:1px solid #c8dbee;">';
+            html += '<th style="padding:6px 10px; text-align:left;">Date &amp; Time</th>';
+            html += '<th style="padding:6px 10px; text-align:left;">Source File</th>';
+            html += '<th style="padding:6px 10px; text-align:center;">Records</th>';
+            html += '<th style="padding:6px 10px; text-align:center;">Managers</th>';
+            html += '<th style="padding:6px 10px; text-align:center;">Action</th>';
+            html += '</tr></thead><tbody>';
+
+            jobs.forEach(function (j, i) {
+              const bg = i % 2 === 0 ? "#ffffff" : "#f7fbff";
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #e1ecf7;">';
+              html += '<td style="padding:6px 10px;">' + escapeHtml(j.created_at || "-") + '</td>';
+              html += '<td style="padding:6px 10px; font-weight:600;">' + escapeHtml(j.source_filename || "-") + '</td>';
+              html += '<td style="padding:6px 10px; text-align:center;">' + (j.total_records || 0) + '</td>';
+              html += '<td style="padding:6px 10px; text-align:center;">' + (j.total_managers || 0) + '</td>';
+              html += '<td style="padding:6px 10px; text-align:center;">';
+              html += '<button type="button" data-load-job="' + i + '" style="background:#005eb8; color:#fff; border:none; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600; cursor:pointer;">Load Report</button> ';
+              html += '<a href="/service-reports/download-zip/' + encodeURIComponent(j.job_id) + '" style="background:#1f7a3d; color:#fff; text-decoration:none; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600; display:inline-block;">ZIP</a>';
+              html += '</td>';
+              html += '</tr>';
+            });
+            html += '</tbody></table>';
+            historyList.innerHTML = html;
+
+            historyList.querySelectorAll('button[data-load-job]').forEach(function (btn) {
+              btn.addEventListener('click', function () {
+                const idx = Number(btn.getAttribute('data-load-job'));
+                const selectedJob = jobs[idx];
+                if (selectedJob) {
+                  displayJob(selectedJob);
+                  if (statusEl) {
+                    statusEl.textContent = 'Loaded report from ' + (selectedJob.created_at || 'past run') + '.';
+                    statusEl.style.color = '#005eb8';
+                  }
+                  window.scrollTo({ top: resultsCard.offsetTop - 60, behavior: 'smooth' });
+                }
+              });
+            });
+          } catch (err) {
+            historyList.innerHTML = '<span style="color:#a63b00;">Failed to load report history: ' + escapeHtml(err.message || 'Error') + '</span>';
+          }
+        }
+
+        if (refreshHistoryBtn) {
+          refreshHistoryBtn.addEventListener("click", loadRecentJobs);
+        }
+
+        // Initial load of history on panel render
+        setTimeout(loadRecentJobs, 800);
+
+        if (form) {
+          form.addEventListener("submit", async function (e) {
+            e.preventDefault();
+            if (!fileInput.files || !fileInput.files.length) {
+              statusEl.textContent = "Please select a ServiceNow file first.";
+              statusEl.style.color = "#a63b00";
+              return;
+            }
+
+            const fd = new FormData(form);
+            submitBtn.disabled = true;
+            statusEl.textContent = "Uploading and splitting records by manager...";
+            statusEl.style.color = "#005eb8";
+
+            try {
+              const resp = await fetch("/service-reports/upload", {
+                method: "POST",
+                body: fd,
+                credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" }
+              });
+              const data = await resp.json();
+              if (!resp.ok || !data.ok) {
+                if (data.need_column_selection && data.available_columns) {
+                  colSelect.innerHTML = '<option value="">-- Select Manager Column --</option>';
+                  data.available_columns.forEach(function (c) {
+                    const opt = document.createElement("option");
+                    opt.value = c;
+                    opt.textContent = c;
+                    colSelect.appendChild(opt);
+                  });
+                  colOverrideWrapper.style.display = "block";
+                  statusEl.textContent = "Could not auto-detect Manager column. Please select it from the dropdown above and click Process again.";
+                  statusEl.style.color = "#a63b00";
+                  return;
+                }
+                throw new Error(data.error || "Failed to process file.");
+              }
+
+              const job = data.job;
+              displayJob(job);
+              statusEl.textContent = "Successfully split " + (job.total_records || 0) + " records across " + (job.total_managers || 0) + " managers!";
+              statusEl.style.color = "#1f7a3d";
+
+              // Refresh history list
+              loadRecentJobs();
+            } catch (err) {
+              statusEl.textContent = "Error: " + ((err && err.message) || "Upload failed.");
+              statusEl.style.color = "#a63b00";
+            } finally {
+              submitBtn.disabled = false;
+            }
+          });
+        }
       })();
     </script>
 
@@ -50312,6 +50629,376 @@ def audit_trail_stats():
     "retention_days": AUDIT_RETENTION_DAYS,
     "record_count": record_count,
   })
+
+
+# -----------------------------------------------------------------------------
+# Service Desk Weekly Reports Framework
+# -----------------------------------------------------------------------------
+SERVICE_REPORTS_DIR = os.path.join(os.path.dirname(__file__), "data", "service_reports")
+try:
+  os.makedirs(SERVICE_REPORTS_DIR, exist_ok=True)
+except Exception:
+  pass
+
+
+def _detect_manager_column(headers: list) -> str:
+  """Heuristic to detect the Manager column in a ServiceNow export."""
+  if not headers:
+    return ""
+  norm_headers = [str(h or "").strip() for h in headers if str(h or "").strip()]
+
+  # Priority 1: Exact matches (case-insensitive)
+  p1 = [
+    "manager", "caller's manager", "caller manager", "assigned to.manager",
+    "assigned to manager", "requested for.manager", "requested for manager",
+    "opened by.manager", "opened by manager", "department manager",
+    "supervisor", "reports to", "approver", "manager name", "manager_name"
+  ]
+  for target in p1:
+    for h in norm_headers:
+      if h.lower() == target:
+        return h
+
+  # Priority 2: Ends with .manager (ServiceNow dot-walk fields) or ' manager'
+  for h in norm_headers:
+    hl = h.lower()
+    if hl.endswith(".manager") or hl.endswith(" manager") or hl.endswith("_manager"):
+      return h
+
+  # Priority 3: Contains 'manager' or 'supervisor' anywhere in name
+  for h in norm_headers:
+    hl = h.lower()
+    if "manager" in hl or "supervisor" in hl:
+      return h
+
+  return ""
+
+
+def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_override: str = "") -> dict:
+  """Parse ServiceNow export file (CSV or Excel) and split by Manager into separate CSVs."""
+  import io
+  import csv
+  import zipfile
+  import uuid
+  import json
+  import re
+  from datetime import datetime
+
+  is_excel = filename.lower().endswith((".xlsx", ".xls"))
+  headers = []
+  rows = []
+
+  if is_excel:
+    try:
+      # First try openpyxl if installed
+      import openpyxl
+      wb = openpyxl.load_workbook(io.BytesIO(file_bytes), data_only=True)
+      sheet = wb.active
+      all_rows = list(sheet.iter_rows(values_only=True))
+      if not all_rows:
+        return {"ok": False, "error": "The uploaded Excel workbook contains no data rows."}
+      headers = [str(cell or "").strip() for cell in all_rows[0] if cell is not None and str(cell).strip()]
+      for r in all_rows[1:]:
+        if any(cell is not None and str(cell).strip() != "" for cell in r):
+          row_dict = {}
+          for idx, h in enumerate(headers):
+            val = r[idx] if idx < len(r) else ""
+            row_dict[h] = "" if val is None else str(val).strip()
+          rows.append(row_dict)
+    except ImportError:
+      # Fallback: pure standard-library zipfile + ElementTree parser for XLSX (no third-party pip dependencies required)
+      try:
+        import xml.etree.ElementTree as ET
+
+        def _col_str_to_idx(col_letters: str) -> int:
+          idx = 0
+          for ch in col_letters.upper():
+            if 'A' <= ch <= 'Z':
+              idx = idx * 26 + (ord(ch) - ord('A') + 1)
+          return idx - 1
+
+        with zipfile.ZipFile(io.BytesIO(file_bytes)) as z:
+          shared_strings = []
+          if "xl/sharedStrings.xml" in z.namelist():
+            ss_tree = ET.fromstring(z.read("xl/sharedStrings.xml"))
+            for si in ss_tree.findall(".//{*}si"):
+              text_parts = [t.text or "" for t in si.findall(".//{*}t")]
+              shared_strings.append("".join(text_parts))
+
+          # Discover the first worksheet
+          sheet_names = [n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and n.endswith(".xml")]
+          if not sheet_names:
+            return {"ok": False, "error": "No worksheets found in the uploaded XLSX workbook."}
+          sheet_xml = z.read(sorted(sheet_names)[0])
+          ws_tree = ET.fromstring(sheet_xml)
+
+          parsed_grid = []
+          for r_el in ws_tree.findall(".//{*}row"):
+            cell_map = {}
+            for c_el in r_el.findall("{*}c"):
+              cell_ref = c_el.attrib.get("r", "")
+              cell_type = c_el.attrib.get("t", "")
+              v_el = c_el.find("{*}v")
+              cell_val = v_el.text if v_el is not None else ""
+              if cell_type == "s" and cell_val.isdigit():
+                s_idx = int(cell_val)
+                cell_val = shared_strings[s_idx] if s_idx < len(shared_strings) else ""
+              elif cell_type == "inlineStr":
+                is_el = c_el.find("{*}is")
+                if is_el is not None:
+                  cell_val = "".join([t_el.text or "" for t_el in is_el.findall(".//{*}t")])
+              col_letters = "".join([ch for ch in cell_ref if ch.isalpha()])
+              if col_letters:
+                cell_map[_col_str_to_idx(col_letters)] = str(cell_val or "").strip()
+
+            if cell_map:
+              max_idx = max(cell_map.keys())
+              row_arr = [cell_map.get(i, "") for i in range(max_idx + 1)]
+              if any(cell != "" for cell in row_arr):
+                parsed_grid.append(row_arr)
+
+          if not parsed_grid:
+            return {"ok": False, "error": "The uploaded XLSX workbook contains no data rows."}
+
+          headers = [h for h in parsed_grid[0] if h]
+          for r in parsed_grid[1:]:
+            row_dict = {}
+            for idx, h in enumerate(headers):
+              row_dict[h] = r[idx] if idx < len(r) else ""
+            if any(val != "" for val in row_dict.values()):
+              rows.append(row_dict)
+      except Exception as xlsx_err:
+        return {"ok": False, "error": f"Failed to parse XLSX file: {str(xlsx_err)}"}
+    except Exception as e:
+      return {"ok": False, "error": f"Failed to parse Excel file: {str(e)}"}
+  else:
+    # CSV parsing: attempt multi-encoding decode
+    text_content = None
+    for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
+      try:
+        text_content = file_bytes.decode(enc)
+        break
+      except UnicodeDecodeError:
+        continue
+
+    if text_content is None:
+      return {"ok": False, "error": "Unable to decode CSV file. Please ensure it is saved in UTF-8 or standard CSV format."}
+
+    try:
+      # Delimiter sniffing
+      sample = text_content[:4096]
+      delimiter = ","
+      try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=",\t;")
+        delimiter = dialect.delimiter
+      except Exception:
+        delimiter = ","
+
+      reader = csv.DictReader(io.StringIO(text_content), delimiter=delimiter)
+      if not reader.fieldnames:
+        return {"ok": False, "error": "The uploaded CSV file does not contain a header row."}
+      headers = [str(f or "").strip() for f in reader.fieldnames if str(f or "").strip()]
+      for r in reader:
+        if any(v is not None and str(v).strip() != "" for v in r.values()):
+          cleaned_row = {str(k or "").strip(): ("" if v is None else str(v).strip()) for k, v in r.items() if k}
+          rows.append(cleaned_row)
+    except Exception as e:
+      return {"ok": False, "error": f"Failed to parse CSV file: {str(e)}"}
+
+  if not rows:
+    return {"ok": False, "error": "The uploaded file contains no data rows."}
+
+  # Manager column determination
+  manager_col = manager_col_override.strip() if manager_col_override else _detect_manager_column(headers)
+  if not manager_col or manager_col not in headers:
+    return {
+      "ok": False,
+      "need_column_selection": True,
+      "error": "Could not automatically determine the Manager column. Please select the correct column from the dropdown above.",
+      "available_columns": headers,
+      "total_records": len(rows),
+      "source_filename": filename,
+    }
+
+  # Group by manager
+  manager_groups = {}
+  for r in rows:
+    mgr = r.get(manager_col, "").strip()
+    if not mgr:
+      mgr = "(Unassigned or No Manager)"
+    if mgr not in manager_groups:
+      manager_groups[mgr] = []
+    manager_groups[mgr].append(r)
+
+  sorted_managers = sorted(
+    manager_groups.keys(),
+    key=lambda m: (1 if m.startswith("(") else 0, m.lower())
+  )
+
+  job_id = f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+  job_dir = os.path.join(SERVICE_REPORTS_DIR, job_id)
+  os.makedirs(job_dir, exist_ok=True)
+
+  manager_entries = []
+  generated_files = []
+
+  for mgr in sorted_managers:
+    mgr_rows = manager_groups[mgr]
+    clean_name = re.sub(r'[^\w\s\-.]', '', mgr).strip().replace(' ', '_')
+    if not clean_name:
+      clean_name = "Unassigned"
+    out_filename = f"Service_Report_{clean_name}.csv"
+    out_filepath = os.path.join(job_dir, out_filename)
+
+    with open(out_filepath, "w", newline="", encoding="utf-8-sig") as out_f:
+      writer = csv.DictWriter(out_f, fieldnames=headers, extrasaction="ignore")
+      writer.writeheader()
+      writer.writerows(mgr_rows)
+
+    generated_files.append((out_filename, out_filepath))
+    manager_entries.append({
+      "name": mgr,
+      "count": len(mgr_rows),
+      "filename": out_filename,
+    })
+
+  date_str = datetime.now().strftime('%Y%m%d')
+  zip_filename = f"Service_Reports_All_Managers_{date_str}.zip"
+  zip_filepath = os.path.join(job_dir, zip_filename)
+  with zipfile.ZipFile(zip_filepath, "w", zipfile.ZIP_DEFLATED) as zip_f:
+    for fname, fpath in generated_files:
+      zip_f.write(fpath, arcname=fname)
+
+  job_info = {
+    "job_id": job_id,
+    "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    "source_filename": filename,
+    "manager_column": manager_col,
+    "available_columns": headers,
+    "total_records": len(rows),
+    "total_managers": len(manager_entries),
+    "zip_filename": zip_filename,
+    "managers": manager_entries,
+  }
+
+  try:
+    with open(os.path.join(job_dir, "job_info.json"), "w", encoding="utf-8") as jf:
+      json.dump(job_info, jf, indent=2)
+  except Exception:
+    pass
+
+  return {
+    "ok": True,
+    "job": job_info,
+  }
+
+
+@app.post("/service-reports/upload")
+async def service_reports_upload_route(
+    request: Request,
+    file: UploadFile = File(...),
+    manager_col: str = Form(""),
+):
+    session = _get_auth_session(request) or {}
+    username = str(session.get("username", "") or "").strip()
+    if not username:
+        return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+
+    file_bytes = await file.read()
+    filename = file.filename or "servicenow_export.csv"
+    res = _parse_service_desk_file(file_bytes, filename, manager_col_override=manager_col)
+    if res.get("ok"):
+        job = res.get("job", {})
+        try:
+          _append_audit_event(
+              action="service_reports_generated",
+              cucm_host="",
+              operator=username,
+              target=f"file={filename};records={job.get('total_records')};managers={job.get('total_managers')}",
+              output_filename=job.get("zip_filename", ""),
+              inline_mode=True,
+          )
+        except Exception:
+          pass
+    return JSONResponse(res)
+
+
+@app.get("/service-reports/download/{job_id}/{filename}")
+def service_reports_download_file(request: Request, job_id: str, filename: str):
+    session = _get_auth_session(request) or {}
+    if not (session.get("username", "") or "").strip():
+        return Response("Authentication required", status_code=401)
+
+    safe_job_id = re.sub(r'[^a-zA-Z0-9_\-]', '', job_id)
+    safe_filename = os.path.basename(filename)
+    job_dir = os.path.abspath(os.path.join(SERVICE_REPORTS_DIR, safe_job_id))
+    target_path = os.path.abspath(os.path.join(job_dir, safe_filename))
+
+    if not target_path.startswith(job_dir) or not os.path.exists(target_path):
+        return Response("Report file not found.", status_code=404, media_type="text/plain")
+
+    with open(target_path, "rb") as f:
+        data = f.read()
+
+    return Response(
+        data,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'}
+    )
+
+
+@app.get("/service-reports/download-zip/{job_id}")
+def service_reports_download_zip(request: Request, job_id: str):
+    session = _get_auth_session(request) or {}
+    if not (session.get("username", "") or "").strip():
+        return Response("Authentication required", status_code=401)
+
+    safe_job_id = re.sub(r'[^a-zA-Z0-9_\-]', '', job_id)
+    job_dir = os.path.abspath(os.path.join(SERVICE_REPORTS_DIR, safe_job_id))
+    info_path = os.path.join(job_dir, "job_info.json")
+
+    if not os.path.exists(info_path):
+        return Response("Report job not found.", status_code=404, media_type="text/plain")
+
+    try:
+        with open(info_path, "r", encoding="utf-8") as f:
+            info = json.load(f)
+        zip_name = info.get("zip_filename", "Service_Reports_All.zip")
+        zip_path = os.path.join(job_dir, zip_name)
+        if not os.path.exists(zip_path):
+            return Response("ZIP archive not found.", status_code=404, media_type="text/plain")
+        with open(zip_path, "rb") as f:
+            data = f.read()
+        return Response(
+            data,
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{zip_name}"'}
+        )
+    except Exception as e:
+        return Response(f"Error reading report: {str(e)}", status_code=500, media_type="text/plain")
+
+
+@app.get("/service-reports/recent-jobs")
+def service_reports_recent_jobs(request: Request):
+    session = _get_auth_session(request) or {}
+    if not (session.get("username", "") or "").strip():
+        return JSONResponse({"ok": False, "error": "Authentication required"}, status_code=401)
+
+    jobs = []
+    try:
+        if os.path.exists(SERVICE_REPORTS_DIR):
+            for entry in sorted(os.listdir(SERVICE_REPORTS_DIR), reverse=True)[:15]:
+                entry_dir = os.path.join(SERVICE_REPORTS_DIR, entry)
+                info_file = os.path.join(entry_dir, "job_info.json")
+                if os.path.isdir(entry_dir) and os.path.exists(info_file):
+                    try:
+                        with open(info_file, "r", encoding="utf-8") as jf:
+                            jobs.append(json.load(jf))
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return JSONResponse({"ok": True, "jobs": jobs})
 
 
 @app.post("/add/directorynumbers")
