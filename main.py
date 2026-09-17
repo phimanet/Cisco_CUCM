@@ -30153,6 +30153,9 @@ __ADMIN_CARD__
         const historyEl = document.getElementById("sr-history-list");
         const resultsCard = document.getElementById("sr-results-card");
         const metaEl = document.getElementById("sr-meta-summary");
+        const tableBody = document.getElementById("sr-table-body");
+        let fallbackJobId = "";
+        let fallbackReports = [];
 
         function setStatus(message, color) {
           if (statusEl) {
@@ -30166,6 +30169,26 @@ __ADMIN_CARD__
             .replace(/&/g, "&amp;").replace(/</g, "&lt;")
             .replace(/>/g, "&gt;").replace(/"/g, "&quot;")
             .replace(/'/g, "&#39;");
+        }
+
+        function renderFallbackReports(reports) {
+          if (!tableBody) return;
+          if (!reports.length) {
+            tableBody.innerHTML = '<tr><td colspan="6" style="padding:16px;color:#6b7280;text-align:center;">No report rows returned.</td></tr>';
+            return;
+          }
+          tableBody.innerHTML = reports.map(function (report, index) {
+            const xlsxUrl = "/service-reports/download/" + encodeURIComponent(fallbackJobId) + "/" + encodeURIComponent(report.xlsx_filename || "");
+            const csvUrl = "/service-reports/download/" + encodeURIComponent(fallbackJobId) + "/" + encodeURIComponent(report.filename || "");
+            return '<tr style="border-bottom:1px solid #c8dbee;background:' + (index % 2 ? "#fff" : "#f7fbff") + ';">'
+              + '<td style="padding:8px 12px;">' + (index + 1) + '</td>'
+              + '<td style="padding:8px 12px;font-weight:600;">' + escapeValue(report.name || "-") + '</td>'
+              + '<td style="padding:8px 12px;color:#005eb8;font-weight:600;">' + escapeValue(report.assignment_group || "-") + '</td>'
+              + '<td style="padding:8px 12px;text-align:center;">' + (report.count || 0) + ' tickets</td>'
+              + '<td style="padding:8px 12px;text-align:center;white-space:nowrap;"><a href="' + xlsxUrl + '" style="margin-right:5px;">Excel</a><a href="' + csvUrl + '">CSV</a></td>'
+              + '<td style="padding:8px 12px;text-align:center;color:#6b7280;">Use Email after reload</td>'
+              + '</tr>';
+          }).join("");
         }
 
         async function uploadFallback() {
@@ -30190,7 +30213,10 @@ __ADMIN_CARD__
             const payload = await response.json();
             if (!response.ok || !payload.ok) throw new Error(payload.error || "Service Reports upload failed.");
             const job = payload.job || {};
+            fallbackJobId = job.job_id || "";
+            fallbackReports = job.managers || [];
             if (resultsCard) resultsCard.style.display = "block";
+            renderFallbackReports(fallbackReports);
             if (metaEl) {
               metaEl.innerHTML = "Source: <strong>" + escapeValue(job.source_filename) + "</strong> &bull; Total Records: <strong>" + Number(job.total_records || 0).toLocaleString() + "</strong> &bull; Report Files: <strong>" + (job.total_reports || 0) + "</strong> &bull; Unique Managers: <strong>" + (job.total_managers || 0) + "</strong>";
             }
