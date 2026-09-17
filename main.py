@@ -29684,6 +29684,9 @@ __ADMIN_CARD__
             <div id="sr-meta-summary" style="font-size:13px; color:#4e6a84;"></div>
           </div>
           <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+            <a id="sr-download-summary-btn" href="#" target="_blank" style="display:inline-flex; align-items:center; gap:6px; background:linear-gradient(180deg,#7a5a13,#4d3809); color:#ffffff; text-decoration:none; padding:9px 16px; border-radius:6px; font-weight:700; font-size:13px; box-shadow:0 2px 6px rgba(122,90,19,0.3);">
+              📋 Download Manager-Assignment Group (Source Intact)
+            </a>
             <a id="sr-download-master-btn" href="#" target="_blank" style="display:inline-flex; align-items:center; gap:6px; background:linear-gradient(180deg,#005eb8,#003d7a); color:#ffffff; text-decoration:none; padding:9px 16px; border-radius:6px; font-weight:700; font-size:13px; box-shadow:0 2px 6px rgba(0,94,184,0.3);">
               📊 Download Master Excel (All Tabs)
             </a>
@@ -29831,6 +29834,10 @@ __ADMIN_CARD__
           if (metaSummary) {
             metaSummary.innerHTML = "Source: <strong>" + escapeHtml(job.source_filename) + "</strong> &bull; Total Records: <strong>" + (job.total_records || 0).toLocaleString() + "</strong> &bull; Report Files: <strong>" + (job.total_reports || currentManagers.length) + "</strong> &bull; Unique Managers: <strong>" + (job.total_managers || 0) + "</strong>";
           }
+          const downloadSummaryBtn = document.getElementById("sr-download-summary-btn");
+          if (downloadSummaryBtn) {
+            downloadSummaryBtn.href = "/service-reports/download-summary/" + encodeURIComponent(currentJobId);
+          }
           const downloadMasterBtn = document.getElementById("sr-download-master-btn");
           if (downloadMasterBtn) {
             downloadMasterBtn.href = "/service-reports/download-master/" + encodeURIComponent(currentJobId);
@@ -29881,6 +29888,7 @@ __ADMIN_CARD__
               html += '<td style="padding:6px 10px; text-align:center;">' + (j.total_managers || 0) + '</td>';
               html += '<td style="padding:6px 10px; text-align:center; white-space:nowrap;">';
               html += '<button type="button" data-load-job="' + i + '" style="background:#005eb8; color:#fff; border:none; border-radius:4px; padding:3px 8px; font-size:11px; font-weight:600; cursor:pointer; margin-right:4px;">Load</button>';
+              html += '<a href="/service-reports/download-summary/' + encodeURIComponent(j.job_id) + '" style="background:#7a5a13; color:#fff; text-decoration:none; border-radius:4px; padding:3px 7px; font-size:11px; font-weight:600; display:inline-block; margin-right:4px;">Source+Summary</a>';
               html += '<a href="/service-reports/download-master/' + encodeURIComponent(j.job_id) + '" style="background:#003d7a; color:#fff; text-decoration:none; border-radius:4px; padding:3px 7px; font-size:11px; font-weight:600; display:inline-block; margin-right:4px;">Master Excel</a>';
               html += '<a href="/service-reports/download-zip/' + encodeURIComponent(j.job_id) + '" style="background:#1f7a3d; color:#fff; text-decoration:none; border-radius:4px; padding:3px 7px; font-size:11px; font-weight:600; display:inline-block;">ZIP</a>';
               html += '</td>';
@@ -50684,7 +50692,7 @@ def _clean_excel_sheet_name(name: str) -> str:
   return (cleaned[:31] if cleaned else 'Sheet1').strip()
 
 
-def _create_multi_sheet_xlsx(sheets_dict: dict) -> bytes:
+def _create_multi_sheet_xlsx(sheets_dict: dict, formulas_dict: dict = None, active_tab_index: int = 1) -> bytes:
   """
   Create a valid multi-sheet .xlsx workbook purely using Python stdlib (zipfile + XML).
   Generates clean OpenXML with dimensions, views, styles, and inlineStr cells that open
@@ -50695,6 +50703,9 @@ def _create_multi_sheet_xlsx(sheets_dict: dict) -> bytes:
   import io
   import zipfile
   import xml.etree.ElementTree as ET
+
+  if formulas_dict is None:
+    formulas_dict = {}
 
   zbuf = io.BytesIO()
   with zipfile.ZipFile(zbuf, 'w', zipfile.ZIP_DEFLATED) as z:
@@ -50742,11 +50753,16 @@ def _create_multi_sheet_xlsx(sheets_dict: dict) -> bytes:
       ws = ET.Element('worksheet', xmlns='http://schemas.openxmlformats.org/spreadsheetml/2006/main', attrib={'xmlns:r': 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'})
       ET.SubElement(ws, 'dimension', ref=dim_ref)
       sheet_views = ET.SubElement(ws, 'sheetViews')
-      ET.SubElement(sheet_views, 'sheetView', tabSelected='1' if idx == 1 else '0', workbookViewId='0')
+      ET.SubElement(sheet_views, 'sheetView', tabSelected='1' if idx == active_tab_index else '0', workbookViewId='0')
       ET.SubElement(ws, 'sheetFormatPr', defaultRowHeight='15')
+
+      sheet_formulas = formulas_dict.get(sname, {})
 
       sheet_data = ET.SubElement(ws, 'sheetData')
       for r_idx, row in enumerate(srows, 1):
+        # Row 1 is header (s='2': bold font + subtle blue fill + thin border)
+        # Rows 2..N are data cells (s='1': thin box borders)
+        row_style = '2' if r_idx == 1 else '1'
         r_el = ET.SubElement(sheet_data, 'row', r=str(r_idx))
         for c_idx, cell in enumerate(row, 1):
           num = c_idx
@@ -50756,22 +50772,28 @@ def _create_multi_sheet_xlsx(sheets_dict: dict) -> bytes:
             col_letters = chr(65 + rem) + col_letters
           ref = f'{col_letters}{r_idx}'
 
-          # Distinguish numbers vs text
-          is_numeric = False
-          if isinstance(cell, (int, float)):
-            is_numeric = True
-          elif isinstance(cell, str) and cell.isdigit() and len(cell) < 10 and not cell.startswith('0'):
-            is_numeric = True
-
-          if is_numeric:
-            c_el = ET.SubElement(r_el, 'c', r=ref)
+          if ref in sheet_formulas:
+            c_el = ET.SubElement(r_el, 'c', r=ref, s=row_style)
+            f_el = ET.SubElement(c_el, 'f')
+            f_el.text = sheet_formulas[ref]
             v_el = ET.SubElement(c_el, 'v')
-            v_el.text = str(cell)
+            v_el.text = str(cell if cell is not None else '')
           else:
-            c_el = ET.SubElement(r_el, 'c', r=ref, t='inlineStr')
-            is_el = ET.SubElement(c_el, 'is')
-            t_el = ET.SubElement(is_el, 't')
-            t_el.text = str(cell if cell is not None else '')
+            is_numeric = False
+            if isinstance(cell, (int, float)):
+              is_numeric = True
+            elif isinstance(cell, str) and cell.isdigit() and len(cell) < 10 and not cell.startswith('0'):
+              is_numeric = True
+
+            if is_numeric:
+              c_el = ET.SubElement(r_el, 'c', r=ref, s=row_style)
+              v_el = ET.SubElement(c_el, 'v')
+              v_el.text = str(cell)
+            else:
+              c_el = ET.SubElement(r_el, 'c', r=ref, s=row_style, t='inlineStr')
+              is_el = ET.SubElement(c_el, 'is')
+              t_el = ET.SubElement(is_el, 't')
+              t_el.text = str(cell if cell is not None else '')
 
       z.writestr(f'xl/worksheets/{sfile}', ET.tostring(ws, encoding='utf-8', xml_declaration=True))
 
@@ -50780,12 +50802,32 @@ def _create_multi_sheet_xlsx(sheets_dict: dict) -> bytes:
 
     styles_xml = (
       '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
-      '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-      '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>'
-      '<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>'
-      '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
-      '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-      '<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>'
+      '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">\n'
+      '  <fonts count="2">\n'
+      '    <font><sz val="11"/><color rgb="FF000000"/><name val="Calibri"/></font>\n'
+      '    <font><b/><sz val="11"/><color rgb="FF000000"/><name val="Calibri"/></font>\n'
+      '  </fonts>\n'
+      '  <fills count="3">\n'
+      '    <fill><patternFill patternType="none"/></fill>\n'
+      '    <fill><patternFill patternType="gray125"/></fill>\n'
+      '    <fill><patternFill patternType="solid"><fgColor rgb="FFBDD7EE"/><bgColor indexed="64"/></patternFill></fill>\n'
+      '  </fills>\n'
+      '  <borders count="2">\n'
+      '    <border><left/><right/><top/><bottom/><diagonal/></border>\n'
+      '    <border>\n'
+      '      <left style="thin"><color rgb="FFD9D9D9"/></left>\n'
+      '      <right style="thin"><color rgb="FFD9D9D9"/></right>\n'
+      '      <top style="thin"><color rgb="FFD9D9D9"/></top>\n'
+      '      <bottom style="thin"><color rgb="FFD9D9D9"/></bottom>\n'
+      '      <diagonal/>\n'
+      '    </border>\n'
+      '  </borders>\n'
+      '  <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>\n'
+      '  <cellXfs count="3">\n'
+      '    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>\n'
+      '    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1"/>\n'
+      '    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1"/>\n'
+      '  </cellXfs>\n'
       '</styleSheet>'
     )
     z.writestr('xl/styles.xml', styles_xml)
@@ -51091,10 +51133,48 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
   with open(master_excel_path, "wb") as mf:
     mf.write(master_bytes)
 
+  # 1B. Build intact source file with "Manager-Assignment group" formula tab
+  max_source_row = len(rows) + 1
+  summary_formula_rows = [["Row Labels", "Count of Assignment group"]]
+  summary_formulas = {}
+  for f_idx, mgr in enumerate(sorted_managers, start=2):
+    calc_cnt = _mgr_total(mgr)
+    summary_formula_rows.append([mgr, calc_cnt])
+    summary_formulas[f"B{f_idx}"] = f"COUNTIF('Page 1'!$B$2:$B${max_source_row},A{f_idx})"
+
+  tot_row_idx = len(sorted_managers) + 2
+  summary_formula_rows.append(["Total Result", grand_total])
+  summary_formulas[f"B{tot_row_idx}"] = f"SUM(B2:B{tot_row_idx-1})"
+
+  page1_source_data = [headers]
+  for r in rows:
+    page1_source_data.append([r.get(h, "") for h in headers])
+
+  manager_assignment_sheets = {
+    "Manager-Assignment group": summary_formula_rows,
+    "Page 1": page1_source_data,
+  }
+  manager_assignment_formulas = {
+    "Manager-Assignment group": summary_formulas,
+  }
+
+  manager_assignment_filename = f"Manager-Assignment_group_{date_str}.xlsx"
+  manager_assignment_path = os.path.join(job_dir, manager_assignment_filename)
+  manager_assignment_bytes = _create_multi_sheet_xlsx(
+    manager_assignment_sheets,
+    formulas_dict=manager_assignment_formulas,
+    active_tab_index=1,
+  )
+  with open(manager_assignment_path, "wb") as maf:
+    maf.write(manager_assignment_bytes)
+
   # 2. Build individual (Manager + Assignment Group) Excel files (.xlsx) and CSV files (.csv)
-  # Each Manager and Assignment Group combination is generated as its own standalone report file.
+  # Each Manager and Assignment Group combination is generated as its own standalone report file with exactly 1 tab.
   manager_entries = []
   zip_files = []
+
+  # Top file in zip is the Manager-Assignment group intact file
+  zip_files.append((manager_assignment_filename, manager_assignment_path))
 
   for mgr in sorted_managers:
     ag_dict = mgr_ag_groups[mgr]
@@ -51113,6 +51193,7 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
       mgr_xlsx_filename = f"Service_Report_{clean_mgr}_{clean_ag_name}.xlsx"
       mgr_csv_filename = f"Service_Report_{clean_mgr}_{clean_ag_name}.csv"
 
+      # Exact 1 sheet per file
       tab_name = _clean_excel_sheet_name(clean_ag_short[:31] if len(ag_dict) > 1 else mgr[:31])
       sheet_data = [headers]
       for r in ag_rows:
@@ -51159,6 +51240,7 @@ def _parse_service_desk_file(file_bytes: bytes, filename: str, manager_col_overr
     "total_records": len(rows),
     "total_managers": len(mgr_ag_groups),
     "total_reports": len(manager_entries),
+    "manager_assignment_filename": manager_assignment_filename,
     "master_excel_filename": master_excel_filename,
     "zip_filename": zip_filename,
     "managers": manager_entries,
@@ -51204,6 +51286,37 @@ async def service_reports_upload_route(
         except Exception:
           pass
     return JSONResponse(res)
+
+
+@app.get("/service-reports/download-summary/{job_id}")
+def service_reports_download_summary(request: Request, job_id: str):
+    session = _get_auth_session(request) or {}
+    if not (session.get("username", "") or "").strip():
+        return Response("Authentication required", status_code=401)
+
+    safe_job_id = re.sub(r'[^a-zA-Z0-9_\-]', '', job_id)
+    job_dir = os.path.abspath(os.path.join(SERVICE_REPORTS_DIR, safe_job_id))
+    info_path = os.path.join(job_dir, "job_info.json")
+
+    if not os.path.exists(info_path):
+        return Response("Report job not found.", status_code=404, media_type="text/plain")
+
+    try:
+        with open(info_path, "r", encoding="utf-8") as f:
+            info = json.load(f)
+        sum_name = info.get("manager_assignment_filename", "Manager-Assignment_group.xlsx")
+        sum_path = os.path.join(job_dir, sum_name)
+        if not os.path.exists(sum_path):
+            return Response("Manager-Assignment group file not found.", status_code=404, media_type="text/plain")
+        with open(sum_path, "rb") as f:
+            data = f.read()
+        return Response(
+            data,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{sum_name}"'}
+        )
+    except Exception as e:
+        return Response(f"Error reading report: {str(e)}", status_code=500, media_type="text/plain")
 
 
 @app.get("/service-reports/download-master/{job_id}")
