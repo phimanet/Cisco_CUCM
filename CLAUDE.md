@@ -108,6 +108,13 @@ Priority keys:
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
 
+### 2026-09-19 (Unity 15.0.1 SU4 PIN compatibility)
+- Confirmed mailbox creation still succeeds after the Unity SU4 upgrade and that the CUPI/API field remains `DtmfAccessId`, matching the GUI's renamed DTMF Access ID label.
+- Fixed standalone PIN reset failure caused by an unrelated Aerialink timeout argument accidentally inserted into the reset helper call on 2026-09-15.
+- Removed the same stray Aerialink block from Unity LDAP-repair lookup and standardized extension-change preview on the session-based Unity host resolver.
+- Updated Unity mailbox import/create and PIN mutations to accept all successful HTTP 2xx responses, including SU4 `202 Accepted` responses.
+- Build Cisco Jabber now reports mailbox creation and PIN initialization independently so a PIN-specific failure no longer obscures a successfully created mailbox.
+
 ### 2026-09-16 (Page 1 Service Reports Framework & AI Agent Menu Removal)
 - Removed "AI Agent - Read Only" menu button from Page 1 Operations Menu per user request.
 - Added new Page 1 Operations Menu item and panel: **Service Reports** (Service Desk Weekly Reports) at the bottom of the menu.

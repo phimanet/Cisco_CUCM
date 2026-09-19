@@ -87,7 +87,7 @@ def _set_user_pin(session, unity_server, object_id, pin, must_change=True):
     }
 
     response = session.put(url, headers=_unity_headers(), json=payload, timeout=120, verify=False)
-    if response.status_code not in {200, 201, 204}:
+    if not 200 <= response.status_code < 300:
         raise RuntimeError(f"Set PIN failed: {_parse_error_text(response)}")
 
 

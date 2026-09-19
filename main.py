@@ -57823,12 +57823,6 @@ def repair_unity_ldap_integration_lookup_route(
     return JSONResponse({"ok": False, "error": str(exc), "rows": []}, status_code=400)
   try:
     cucm_people = search_persons_by_name(cucm_host, cucm_user, cucm_pass, clean_last, clean_first)
-    lookup_deadline = time.monotonic() + 20
-    for attempt_url, attempt_params in attempts:
-      remaining_seconds = lookup_deadline - time.monotonic()
-      if remaining_seconds <= 0:
-        request_errors.append("Aerialink lookup time budget exhausted")
-        break
     response = requests.get(
       f"https://{unity_server}/vmrest/users",
       headers={"Accept": "application/json"},
@@ -57970,7 +57964,6 @@ def reset_unity_voicemail_pin_route(
         unity_pass=unity_pass,
         target_alias=voicemail_user,
         new_pin=new_voicemail_pin,
-        timeout=max(1, min(5, int(remaining_seconds))),
       )
 
     email_status = ""
@@ -59472,8 +59465,7 @@ def change_jabber_extension_preview_route(
       except Exception:
         sms_twilio_amieweb = "Lookup unavailable"
 
-    # Detect which Unity host to use based on CUCM host
-    unity_host = UNITY_ENV_SETTINGS.get("PRODUCTION" if (resolved_host or "").strip().lower() == PROD_CUCM_IP else "LAB", {}).get("server", "")
+    unity_host = _get_unity_server_for_session(request)
 
     return JSONResponse({
       "ok": True,

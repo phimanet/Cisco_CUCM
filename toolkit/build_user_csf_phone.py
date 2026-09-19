@@ -283,7 +283,7 @@ def _import_ldap_user_with_new_vm(session, unity_server, import_pkid, extension,
         timeout=120,
         verify=False,
     )
-    if response.status_code not in {200, 201, 204}:
+    if not 200 <= response.status_code < 300:
         raise RuntimeError(f"Unity LDAP import failed: {_parse_unity_error_text(response)}")
 
     object_id = _extract_object_id_from_location(response)
@@ -313,7 +313,7 @@ def _create_local_unity_user_with_mailbox(
     }
 
     response = session.post(url, headers=_unity_headers(), json=payload, timeout=120, verify=False)
-    if response.status_code not in {200, 201}:
+    if not 200 <= response.status_code < 300:
         retry = session.post(
             url,
             headers=_unity_headers(),
@@ -330,7 +330,7 @@ def _create_local_unity_user_with_mailbox(
             timeout=120,
             verify=False,
         )
-        if retry.status_code not in {200, 201}:
+        if not 200 <= retry.status_code < 300:
             raise RuntimeError(f"Unity local user create failed: {_parse_unity_error_text(retry)}")
         response = retry
 
@@ -362,7 +362,7 @@ def _set_unity_pin(session, unity_server, object_id, pin):
         "CredMustChange": "true",
     }
     response = session.put(url, headers=_unity_headers(), json=payload, timeout=120, verify=False)
-    if response.status_code not in {200, 201, 204}:
+    if not 200 <= response.status_code < 300:
         raise RuntimeError(f"Unity PIN update failed: {_parse_unity_error_text(response)}")
 
 
@@ -1137,12 +1137,19 @@ def build_user_csf_phone_from_template(
                 "User is not LDAP integrated in Unity; verify Integrate with LDAP Directory checkbox manually.",
             ])
         else:
-            _set_unity_pin(unity_session, unity_server, unity_object_id, unity_default_pin)
-            log_writer.writerow([
-                "Unity PIN",
-                "Success",
-                f"Set default PIN ({unity_default_pin}) and forced change for {user_details['userid']}",
-            ])
+            try:
+                _set_unity_pin(unity_session, unity_server, unity_object_id, unity_default_pin)
+                log_writer.writerow([
+                    "Unity PIN",
+                    "Success",
+                    f"Set default PIN ({unity_default_pin}) and forced change for {user_details['userid']}",
+                ])
+            except RuntimeError as exc:
+                log_writer.writerow([
+                    "Unity PIN",
+                    "Failed",
+                    f"Mailbox creation succeeded, but default PIN initialization failed: {exc}",
+                ])
 
     except Exception as e:
         err_msg = str(e)
