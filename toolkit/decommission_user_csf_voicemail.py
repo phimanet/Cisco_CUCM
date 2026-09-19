@@ -340,7 +340,7 @@ def _get_unity_user_by_alias(session, unity_server, alias):
 def _delete_unity_user_by_object_id(session, unity_server, object_id):
     url = _make_unity_url(unity_server, f"/vmrest/users/{object_id}")
     response = session.delete(url, headers=_unity_headers(), timeout=120, verify=False)
-    if response.status_code not in {200, 202, 204}:
+    if not 200 <= response.status_code < 300:
         raise RuntimeError(f"Unity mailbox delete failed: {_parse_unity_error_text(response)}")
 
 

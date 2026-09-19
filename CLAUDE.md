@@ -114,6 +114,9 @@ Priority keys:
 - Removed the same stray Aerialink block from Unity LDAP-repair lookup and standardized extension-change preview on the session-based Unity host resolver.
 - Updated Unity mailbox import/create and PIN mutations to accept all successful HTTP 2xx responses, including SU4 `202 Accepted` responses.
 - Build Cisco Jabber now reports mailbox creation and PIN initialization independently so a PIN-specific failure no longer obscures a successfully created mailbox.
+- Audited every repository `/vmrest` path and extended SU4 2xx handling to Called Name Change, Jabber extension reassignment, LDAP integration repair, mailbox profile updates, and separation deletes.
+- Added bounded post-create ObjectId polling so an asynchronously accepted mailbox creation is not falsely reported as failed before the new mailbox becomes queryable.
+- Noted a pre-existing PROD Unity hostname discrepancy (`SANCUTYP01` in active runtime constants versus documented `LASCUTYP01`); left routing unchanged pending environment confirmation.
 
 ### 2026-09-16 (Page 1 Service Reports Framework & AI Agent Menu Removal)
 - Removed "AI Agent - Read Only" menu button from Page 1 Operations Menu per user request.

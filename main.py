@@ -57787,7 +57787,7 @@ def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pas
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     for label, enabled in (("Do Not Integrate with LDAP Directory", False), ("Integrate with LDAP Directory", True)):
       response = session.put(detail_url, headers=headers, json={"LdapIntegration": enabled}, timeout=60, verify=False)
-      if response.status_code not in {200, 204}:
+      if not 200 <= response.status_code < 300:
         raise RuntimeError(f"{label} save failed HTTP {response.status_code}: {response.text[:300]}")
       verify = session.get(detail_url, headers={"Accept": "application/json"}, timeout=60, verify=False)
       verified = verify.json() if verify.status_code == 200 and verify.text else {}
@@ -58896,7 +58896,7 @@ def _change_ext_unity_update_dtmf(unity_server: str, unity_user: str, unity_pass
   put_url = f"{base}/vmrest/users/{object_id}"
   payload = {"DtmfAccessId": new_extension.strip()}
   put_resp = session.put(put_url, json=payload, headers={"Accept": "application/json", "Content-Type": "application/json"}, timeout=30, verify=False)
-  if put_resp.status_code not in (200, 204):
+  if not 200 <= put_resp.status_code < 300:
     return {"ok": False, "error": f"Unity DtmfAccessId update failed HTTP {put_resp.status_code}: {put_resp.text[:300]}"}
   return {"ok": True, "object_id": object_id}
 

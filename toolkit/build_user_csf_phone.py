@@ -4,6 +4,7 @@ import io
 import json
 import os
 import re
+import time
 import urllib3
 import requests
 import xml.etree.ElementTree as ET
@@ -337,7 +338,7 @@ def _create_local_unity_user_with_mailbox(
     if response.text:
         try:
             data = response.json()
-            return data.get("ObjectId") or _extract_object_id_from_location(response)
+            return data.get("ObjectId") or data.get("objectId") or _extract_object_id_from_location(response)
         except ValueError:
             return _extract_object_id_from_location(response)
 
@@ -351,7 +352,7 @@ def _update_existing_unity_user_mailbox(session, unity_server, object_id, extens
         "EmailAddress": email_address,
     }
     response = session.put(url, headers=_unity_headers(), json=payload, timeout=120, verify=False)
-    if response.status_code not in {200, 204}:
+    if not 200 <= response.status_code < 300:
         raise RuntimeError(f"Unity mailbox update failed: {_parse_unity_error_text(response)}")
 
 
@@ -369,7 +370,7 @@ def _set_unity_pin(session, unity_server, object_id, pin):
 def _delete_unity_user(session, unity_server, object_id):
     url = _make_unity_url(unity_server, f"/vmrest/users/{object_id}")
     response = session.delete(url, headers=_unity_headers(), timeout=120, verify=False)
-    if response.status_code not in {200, 202, 204, 404}:
+    if not (200 <= response.status_code < 300 or response.status_code == 404):
         raise RuntimeError(f"Unity mailbox delete failed: {_parse_unity_error_text(response)}")
 
 
@@ -416,11 +417,16 @@ def _is_stale_unity_user(unity_user_detail, expected_alias, expected_first_name,
     return False
 
 
-def _resolve_unity_object_id_by_alias(session, unity_server, alias):
-    user = _get_unity_user_by_alias(session, unity_server, alias)
-    if not user:
-        return ""
-    return str(user.get("ObjectId", "") or "").strip()
+def _resolve_unity_object_id_by_alias(session, unity_server, alias, attempts=6, delay_seconds=1):
+    for attempt in range(max(1, attempts)):
+        user = _get_unity_user_by_alias(session, unity_server, alias)
+        if user:
+            object_id = str(user.get("ObjectId") or user.get("objectId") or "").strip()
+            if object_id:
+                return object_id
+        if attempt + 1 < attempts:
+            time.sleep(delay_seconds)
+    return ""
 
 
 def _create_or_update_unity_voicemail(

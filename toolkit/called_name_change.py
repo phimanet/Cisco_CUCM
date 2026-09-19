@@ -297,7 +297,7 @@ def _update_unity_user_profile(session, unity_server, object_id, display_name, s
         "SmtpAddress": smtp_address,
     }
     response = session.put(url, headers=_unity_headers(), json=payload, timeout=120, verify=False)
-    if response.status_code not in {200, 204}:
+    if not 200 <= response.status_code < 300:
         raise RuntimeError(f"Unity profile update failed: {_parse_unity_error_text(response)}")
 
 
