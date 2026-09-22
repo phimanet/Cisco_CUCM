@@ -108,6 +108,11 @@ Priority keys:
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
 
+### 2026-09-22 (Embedded JavaScript handler prevention)
+- Root cause confirmed for the Hunt List panel's "handler missing" error: `main.py` stores browser JavaScript in plain Python triple-quoted strings, so JavaScript `\n`, `\r`, and `\t` escapes can be converted into literal control characters before the browser parses the script.
+- Prevention rule: embedded JavaScript must use `String.fromCharCode(10)`/`String.fromCharCode(13)` for generated line breaks, and every new panel must run both Python compilation and an extracted JavaScript parser check before commit.
+- Hunt List fix: replaced `outputText.split("\\n")` with `outputText.split(String.fromCharCode(10))`; keep panel-local handlers and visible missing-JavaScript diagnostics.
+
 ### 2026-09-19 (Unity 15.0.1 SU4 PIN compatibility)
 - Confirmed mailbox creation still succeeds after the Unity SU4 upgrade and that the CUPI/API field remains `DtmfAccessId`, matching the GUI's renamed DTMF Access ID label.
 - Fixed standalone PIN reset failure caused by an unrelated Aerialink timeout argument accidentally inserted into the reset helper call on 2026-09-15.

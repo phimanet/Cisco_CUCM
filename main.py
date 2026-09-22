@@ -42175,10 +42175,6 @@ def menu_admin_page(request: Request):
           const applyStatusEl = document.getElementById("admin-hunt-mirror-apply-status");
           const applyResultsEl = document.getElementById("admin-hunt-mirror-apply-results");
 
-          if (!exampleForm || !targetForm || !exampleStatusEl || !exampleResultsEl || !groupsStatusEl || !groupsResultsEl || !targetStatusEl || !targetResultsEl || !targetDnSelect || !applyStatusEl || !applyResultsEl) {
-            return;
-          }
-
           const state = {
             exampleUserId: "",
             targetUserId: "",
@@ -42526,7 +42522,7 @@ def menu_admin_page(request: Request):
                 rows.push({
                   line_group_name: lineGroupName,
                   status: classifyResult(outputText),
-                  details: outputText.split("\n").slice(0, 3).join(" | "),
+                  details: outputText.split(String.fromCharCode(10)).slice(0, 3).join(" | "),
                 });
               } catch (error) {
                 rows.push({
@@ -42560,8 +42556,12 @@ def menu_admin_page(request: Request):
             return false;
           };
 
-          exampleForm.addEventListener("submit", window.runAdminHuntMirrorExampleSearch);
-          targetForm.addEventListener("submit", window.runAdminHuntMirrorTargetSearch);
+          if (exampleForm) {
+            exampleForm.addEventListener("submit", window.runAdminHuntMirrorExampleSearch);
+          }
+          if (targetForm) {
+            targetForm.addEventListener("submit", window.runAdminHuntMirrorTargetSearch);
+          }
         })();
       </script>
 
