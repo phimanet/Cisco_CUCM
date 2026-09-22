@@ -3412,10 +3412,41 @@ def _genesys_find_division_by_name(api_base: str, access_token: str, division_na
   return {}, f"Genesys division '{division_name}' was not found."
 
 
+def _genesys_scan_external_contacts(api_base: str, access_token: str, division_id: str = "", limit: int = 100, max_pages: int = 500) -> tuple[list[dict], int, str]:
+  # Uses the cursor-based scan endpoint (no 1000-record cap) instead of the pageNumber-based
+  # /api/v2/externalcontacts/contacts list, which errors once pageNumber*pageSize exceeds 1000.
+  entities_all = []
+  pages_scanned = 0
+  cursor = ""
+  clean_division_id = str(division_id or "").strip()
+  for _ in range(max_pages):
+    params = {"limit": max(10, min(int(limit or 100), 200))}
+    if clean_division_id:
+      params["divisionId"] = clean_division_id
+    if cursor:
+      params["cursor"] = cursor
+    ok_page, payload, err_page = _genesys_get_json(api_base, access_token, "/api/v2/externalcontacts/scan/contacts", params)
+    if not ok_page:
+      return entities_all, pages_scanned, err_page
+
+    entities = payload.get("entities", []) if isinstance(payload, dict) else []
+    if not isinstance(entities, list):
+      entities = []
+    entities_all.extend([item for item in entities if isinstance(item, dict)])
+    pages_scanned += 1
+
+    cursors_obj = payload.get("cursors") if isinstance(payload, dict) else {}
+    cursor = str((cursors_obj or {}).get("after", "") or "").strip() if isinstance(cursors_obj, dict) else ""
+    if not cursor:
+      break
+
+  return entities_all, pages_scanned, ""
+
+
 def _genesys_list_external_contacts_in_division(api_base: str, access_token: str, division_name: str, division_id: str = "") -> dict:
   target_name = " ".join(str(division_name or "").strip().lower().split())
   target_id = str(division_id or "").strip()
-  contacts_all, pages_scanned, error = _genesys_collect_paged_entities(api_base, access_token, "/api/v2/externalcontacts/contacts", 100, 50)
+  contacts_all, pages_scanned, error = _genesys_scan_external_contacts(api_base, access_token, target_id, 100, 500)
   if error:
     return {"ok": False, "error": error, "rows": []}
 
