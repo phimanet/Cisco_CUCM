@@ -110,6 +110,8 @@ GENESYS_EXTERNAL_CONTACT_LOAD_JOBS = {}
 GENESYS_EXTERNAL_CONTACT_LOAD_LOCK = threading.Lock()
 GENESYS_EXTERNAL_CONTACT_LOAD_QUEUE = queue.Queue()
 GENESYS_EXTERNAL_CONTACT_LOAD_WORKER_STARTED = False
+GENESYS_CUCM_SYNC_MANUAL_LOCK = threading.Lock()
+GENESYS_CUCM_SYNC_MANUAL_STATE = {"status": "idle", "result": None, "error": ""}
 FORWARDED_CSF_LIST_JOBS = {}
 FORWARDED_CSF_LIST_LOCK = threading.Lock()
 FORWARDED_CSF_LIST_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=2)
@@ -386,6 +388,20 @@ def _start_genesys_cucm_sync_scheduler():
   if not _is_prod_runtime_host_strict():
     return
   threading.Thread(target=_genesys_cucm_sync_scheduler_loop, name="genesys-cucm-sync-scheduler", daemon=True).start()
+
+
+def _run_genesys_cucm_contact_sync_background():
+  # Runs in a worker thread so the manual "Run Sync Now" HTTP request returns immediately
+  # instead of blocking until the full CUCM scan + Genesys create/delete loop finishes,
+  # which previously exceeded the Nginx/gateway timeout and returned an HTML error page.
+  try:
+    result = _run_genesys_cucm_contact_sync(phase="full", triggered_by="manual")
+    with GENESYS_CUCM_SYNC_MANUAL_LOCK:
+      GENESYS_CUCM_SYNC_MANUAL_STATE.update({"status": "completed", "result": result, "error": ""})
+  except Exception as exc:
+    logger.exception("Manual Genesys CUCM sync failed")
+    with GENESYS_CUCM_SYNC_MANUAL_LOCK:
+      GENESYS_CUCM_SYNC_MANUAL_STATE.update({"status": "failed", "result": None, "error": str(exc)})
 
 
 def _unity_user_extract_write_json(path, payload):
@@ -19133,7 +19149,8 @@ def genesys_admin_placeholder(request: Request):
                 function esc(value) { var element = document.createElement("span"); element.textContent = value == null ? "" : value; return element.innerHTML; }
                 fetch("/genesys/external-contacts/sync-settings", { credentials:"same-origin" }).then(function(response){ return response.json(); }).then(function(data){ if(data.ok){ syncEnabled.checked=!!data.enabled; syncState.textContent=(data.enabled ? "Enabled" : "Disabled")+". "+data.schedule+(data.last_run ? " Last run: "+data.last_run : ""); } }).catch(function(){ syncState.textContent="Unable to load sync setting."; });
                 document.getElementById("genesys-cucm-sync-save-btn").onclick = function(){ syncState.textContent="Saving..."; fetch("/genesys/external-contacts/sync-settings",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:!!syncEnabled.checked})}).then(function(response){return response.json();}).then(function(data){if(!data.ok)throw new Error(data.error||"Save failed.");syncState.textContent=(data.enabled?"Enabled":"Disabled")+". Setting saved and will survive restart.";}).catch(function(error){syncState.textContent=error.message;}); };
-                document.getElementById("genesys-cucm-sync-run-btn").onclick = function(){ if(!window.confirm("Run the combined CUCM-to-Genesys sync now?"))return; syncState.textContent="Running sync..."; fetch("/genesys/external-contacts/sync-run",{method:"POST",credentials:"same-origin"}).then(function(response){return response.json();}).then(function(data){if(!data.ok)throw new Error(data.error||"Sync failed.");var r=data.result||{};syncState.textContent="Manual sync complete. Created: "+(r.created||0)+", deleted: "+(r.deleted||0)+", skipped: "+(r.skipped||0)+", failures: "+((r.failures||[]).length);}).catch(function(error){syncState.textContent=error.message;}); };
+                function pollSyncRunStatus(){ fetch("/genesys/external-contacts/sync-run/status",{credentials:"same-origin"}).then(function(response){return response.json();}).then(function(data){ if(!data.ok){ syncState.textContent = data.error || "Unable to check sync status."; return; } if(data.status === "running"){ syncState.textContent = "Sync running... this can take several minutes for large CUCM/Genesys populations."; setTimeout(pollSyncRunStatus, 4000); return; } if(data.status === "failed"){ syncState.textContent = "Manual sync failed: " + (data.error || "unknown error"); return; } var r = data.result || {}; syncState.textContent = "Manual sync complete. Created: "+(r.created||0)+", deleted: "+(r.deleted||0)+", skipped: "+(r.skipped||0)+", failures: "+((r.failures||[]).length); }).catch(function(){ syncState.textContent = "Sync running... this can take several minutes for large CUCM/Genesys populations."; setTimeout(pollSyncRunStatus, 4000); }); }
+                document.getElementById("genesys-cucm-sync-run-btn").onclick = function(){ if(!window.confirm("Run the combined CUCM-to-Genesys sync now?"))return; syncState.textContent="Starting sync..."; fetch("/genesys/external-contacts/sync-run",{method:"POST",credentials:"same-origin"}).then(function(response){return response.json();}).then(function(data){if(!data.ok)throw new Error(data.error||"Sync failed to start.");syncState.textContent="Sync running... this can take several minutes for large CUCM/Genesys populations.";setTimeout(pollSyncRunStatus, 4000);}).catch(function(error){syncState.textContent=error.message;}); };
                 function renderContactList(rows) {
                   if (!rows.length) { listOutput.innerHTML = "<p>No CiscoVoiceUser external contacts found.</p>"; return; }
                   var html = "<table><thead><tr><th>ID</th><th>Name</th><th>Email</th><th>Phone</th><th>Division</th><th>Action</th></tr></thead><tbody>";
@@ -25055,10 +25072,22 @@ def genesys_external_contact_sync_run_route(request: Request):
   session = _get_auth_session(request) or {}
   if not _is_admin_user(str(session.get("username", "") or "").strip()):
     return JSONResponse({"ok": False, "error": "Admin authorization required."}, status_code=403)
-  try:
-    return JSONResponse({"ok": True, "result": _run_genesys_cucm_contact_sync(phase="full", triggered_by="manual")})
-  except Exception as exc:
-    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+  with GENESYS_CUCM_SYNC_MANUAL_LOCK:
+    if GENESYS_CUCM_SYNC_MANUAL_STATE.get("status") == "running":
+      return JSONResponse({"ok": True, "status": "running", "message": "A sync run is already in progress."})
+    GENESYS_CUCM_SYNC_MANUAL_STATE.update({"status": "running", "result": None, "error": ""})
+  threading.Thread(target=_run_genesys_cucm_contact_sync_background, name="genesys-cucm-sync-manual", daemon=True).start()
+  return JSONResponse({"ok": True, "status": "running"})
+
+
+@app.get("/genesys/external-contacts/sync-run/status")
+def genesys_external_contact_sync_run_status_route(request: Request):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", "") or "").strip()):
+    return JSONResponse({"ok": False, "error": "Admin authorization required."}, status_code=403)
+  with GENESYS_CUCM_SYNC_MANUAL_LOCK:
+    state = dict(GENESYS_CUCM_SYNC_MANUAL_STATE)
+  return JSONResponse({"ok": True, **state})
 
 
 @app.post("/genesys/external-contacts/reconcile-cucm")
