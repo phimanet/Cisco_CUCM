@@ -9369,6 +9369,8 @@ def _wants_json_response(request: Request) -> bool:
   if request.url.path in {
     "/line-groups/search",
     "/line-groups/members",
+    "/admin/hunt-list-mirror/line-groups",
+    "/admin/hunt-list-mirror/target-dns",
     "/audit-trail/stats",
     "/healthz",
     "/lookup/person",
@@ -40941,6 +40943,7 @@ def menu_admin_page(request: Request):
             <div style="margin:-4px 0 6px 0;">__DN_DELETE_INDICATOR2__</div>
             <button type="button" class="portal-nav-btn" data-panel="hunt-list-members">Hunt List Members (Search Line Groups)</button>
             <button type="button" class="portal-nav-btn" data-panel="linegroup-admin">Update Hunt List Line Group</button>
+            <button type="button" class="portal-nav-btn" data-panel="add-user-hunt-list">Add User to Hunt List</button>
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
             <button type="button" class="portal-nav-btn" data-panel="ad-user-lookups">Active Directory Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
@@ -41738,6 +41741,58 @@ def menu_admin_page(request: Request):
         </form>
       </section>
 
+      <section class="panel tool-panel" data-panel="add-user-hunt-list">
+        <h3>Add User to Hunt List</h3>
+        <p>Mirror Hunt List membership from an example user: find the example user by name, load their Line Groups, then add a selected DN from the target user to the same Line Group(s).</p>
+
+        <form id="admin-hunt-mirror-example-form" action="javascript:void(0)" method="post" onsubmit="if (window.runAdminHuntMirrorExampleSearch) { return window.runAdminHuntMirrorExampleSearch(event); } var s=document.getElementById('admin-hunt-mirror-example-status'); if (s) { s.textContent='Example search handler missing (JavaScript did not load).'; s.style.color='#b42318'; } return false;">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <div class="compact-inline-row">
+            <span>Example Last Name:</span>
+            <input name="example_last_name" placeholder="Smith" required>
+            <span>First Name (optional):</span>
+            <input name="example_first_name" placeholder="John">
+            <button type="button" onclick="if (window.runAdminHuntMirrorExampleSearch) { return window.runAdminHuntMirrorExampleSearch(event); } var s=document.getElementById('admin-hunt-mirror-example-status'); if (s) { s.textContent='Example search handler missing (JavaScript did not load).'; s.style.color='#b42318'; } return false;">Search Example Person</button>
+          </div>
+        </form>
+        <p id="admin-hunt-mirror-example-status" style="color:#2c5c8a; min-height:18px; margin-top:10px;">Step 1: Search and select an example person.</p>
+        <div id="admin-hunt-mirror-example-results" style="overflow-x:auto;"></div>
+
+        <hr style="margin:16px 0; border:none; border-top:1px solid #d0dce8;">
+
+        <p id="admin-hunt-mirror-groups-status" style="color:#2c5c8a; min-height:18px;">Step 2: Example Line Groups will appear here after you choose an example person.</p>
+        <div id="admin-hunt-mirror-groups-results" style="overflow-x:auto;"></div>
+
+        <hr style="margin:16px 0; border:none; border-top:1px solid #d0dce8;">
+
+        <form id="admin-hunt-mirror-target-form" action="javascript:void(0)" method="post" onsubmit="if (window.runAdminHuntMirrorTargetSearch) { return window.runAdminHuntMirrorTargetSearch(event); } var s=document.getElementById('admin-hunt-mirror-target-status'); if (s) { s.textContent='Target search handler missing (JavaScript did not load).'; s.style.color='#b42318'; } return false;">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <div class="compact-inline-row">
+            <span>Target Last Name:</span>
+            <input name="target_last_name" placeholder="Doe" required>
+            <span>First Name (optional):</span>
+            <input name="target_first_name" placeholder="Jane">
+            <button type="button" onclick="if (window.runAdminHuntMirrorTargetSearch) { return window.runAdminHuntMirrorTargetSearch(event); } var s=document.getElementById('admin-hunt-mirror-target-status'); if (s) { s.textContent='Target search handler missing (JavaScript did not load).'; s.style.color='#b42318'; } return false;">Search Target Person</button>
+          </div>
+        </form>
+        <p id="admin-hunt-mirror-target-status" style="color:#2c5c8a; min-height:18px; margin-top:10px;">Step 3: Search and select the target person.</p>
+        <div id="admin-hunt-mirror-target-results" style="overflow-x:auto;"></div>
+
+        <div class="compact-inline-row" style="margin-top:12px;">
+          <span>Target DN to Add:</span>
+          <select id="admin-hunt-mirror-target-dn" style="min-width:340px;" disabled>
+            <option value="">Select target user first...</option>
+          </select>
+          <button type="button" id="admin-hunt-mirror-apply-btn" onclick="if (window.runAdminHuntMirrorApply) { return window.runAdminHuntMirrorApply(event); } var s=document.getElementById('admin-hunt-mirror-apply-status'); if (s) { s.textContent='Apply handler missing (JavaScript did not load).'; s.style.color='#b42318'; } return false;">Add Target User to Selected Line Group(s)</button>
+        </div>
+        <p id="admin-hunt-mirror-apply-status" style="color:#2c5c8a; min-height:18px; margin-top:10px;">Step 4: Select one or more line groups and click Add.</p>
+        <div id="admin-hunt-mirror-apply-results" style="overflow-x:auto;"></div>
+      </section>
+
       <script src="/assets/page2-linegroup-search.js"></script>
 
       <script>
@@ -42103,6 +42158,410 @@ def menu_admin_page(request: Request):
           }
 
           searchBtn.addEventListener("click", searchLineGroupsForEdit);
+        })();
+      </script>
+
+      <script>
+        (function () {
+          const exampleForm = document.getElementById("admin-hunt-mirror-example-form");
+          const targetForm = document.getElementById("admin-hunt-mirror-target-form");
+          const exampleStatusEl = document.getElementById("admin-hunt-mirror-example-status");
+          const exampleResultsEl = document.getElementById("admin-hunt-mirror-example-results");
+          const groupsStatusEl = document.getElementById("admin-hunt-mirror-groups-status");
+          const groupsResultsEl = document.getElementById("admin-hunt-mirror-groups-results");
+          const targetStatusEl = document.getElementById("admin-hunt-mirror-target-status");
+          const targetResultsEl = document.getElementById("admin-hunt-mirror-target-results");
+          const targetDnSelect = document.getElementById("admin-hunt-mirror-target-dn");
+          const applyStatusEl = document.getElementById("admin-hunt-mirror-apply-status");
+          const applyResultsEl = document.getElementById("admin-hunt-mirror-apply-results");
+
+          if (!exampleForm || !targetForm || !exampleStatusEl || !exampleResultsEl || !groupsStatusEl || !groupsResultsEl || !targetStatusEl || !targetResultsEl || !targetDnSelect || !applyStatusEl || !applyResultsEl) {
+            return;
+          }
+
+          const state = {
+            exampleUserId: "",
+            targetUserId: "",
+            lineGroups: [],
+          };
+
+          function escapeHtml(value) {
+            return String(value == null ? "" : value).replace(/[&<>"']/g, function (character) {
+              return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[character];
+            });
+          }
+
+          function buildPersonRows(results, buttonLabel, dataAttr) {
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left;">Name</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">User ID</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Primary Extension</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Devices</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Action</th>';
+            html += '</tr></thead><tbody>';
+            results.forEach(function (row, index) {
+              const bg = index % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const name = row.display_name || (((row.first_name || "") + " " + (row.last_name || "")).trim()) || row.userid || "";
+              const primaryExtension = row.primary_extension || "-";
+              const devices = (row.devices || []).map(function (device) {
+                const exts = (device.extensions || []).join(", ") || "-";
+                return escapeHtml((device.name || "") + " (" + exts + ")");
+              }).join("<br>") || "-";
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px;">' + escapeHtml(name) + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + escapeHtml(row.userid || "") + '</td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + escapeHtml(primaryExtension) + '</td>';
+              html += '<td style="padding:7px 10px;">' + devices + '</td>';
+              html += '<td style="padding:7px 10px;"><button type="button" ' + dataAttr + '="' + escapeHtml(row.userid || "") + '">' + escapeHtml(buttonLabel) + '</button></td>';
+              html += '</tr>';
+            });
+            html += '</tbody></table>';
+            return html;
+          }
+
+          async function searchPeople(lastName, firstName, form, statusEl, resultsEl, buttonLabel, dataAttr) {
+            const cleanLast = String(lastName || "").trim();
+            if (!cleanLast) {
+              throw new Error("Last Name is required.");
+            }
+
+            statusEl.textContent = "Searching...";
+            statusEl.style.color = "#2c5c8a";
+            resultsEl.innerHTML = "";
+
+            const formData = new FormData();
+            formData.set("cucm_host", String(new FormData(form).get("cucm_host") || ""));
+            formData.set("cucm_user", String(new FormData(form).get("cucm_user") || ""));
+            formData.set("cucm_pass", String(new FormData(form).get("cucm_pass") || ""));
+            formData.set("last_name", cleanLast);
+            formData.set("first_name", String(firstName || "").trim());
+
+            const response = await fetch("/lookup/person", {
+              method: "POST",
+              body: formData,
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error && payload.error.message) || payload.detail || "Person lookup failed.");
+            }
+
+            const results = payload.results || [];
+            if (!results.length) {
+              statusEl.textContent = "No users found matching that name.";
+              return [];
+            }
+
+            statusEl.textContent = "Found " + String(results.length) + " user(s).";
+            resultsEl.innerHTML = buildPersonRows(results, buttonLabel, dataAttr);
+            return results;
+          }
+
+          async function loadExampleLineGroups(userid) {
+            groupsStatusEl.textContent = "Loading example user line groups...";
+            groupsStatusEl.style.color = "#2c5c8a";
+            groupsResultsEl.innerHTML = "";
+            state.lineGroups = [];
+
+            const fd = new FormData();
+            fd.set("cucm_host", String(new FormData(exampleForm).get("cucm_host") || ""));
+            fd.set("cucm_user", String(new FormData(exampleForm).get("cucm_user") || ""));
+            fd.set("cucm_pass", String(new FormData(exampleForm).get("cucm_pass") || ""));
+            fd.set("userid", String(userid || "").trim());
+
+            const response = await fetch("/admin/hunt-list-mirror/line-groups", {
+              method: "POST",
+              body: fd,
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Could not load line groups.");
+            }
+
+            const groups = payload.line_groups || [];
+            state.lineGroups = groups;
+            if (!groups.length) {
+              groupsStatusEl.textContent = "Example user has no line-group memberships to mirror.";
+              return;
+            }
+
+            groupsStatusEl.textContent = "Found " + String(groups.length) + " line group(s) for example user " + String(payload.userid || userid) + ".";
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left;">Use</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Line Group</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Example Source DN(s)</th>';
+            html += '</tr></thead><tbody>';
+            groups.forEach(function (group, index) {
+              const bg = index % 2 === 0 ? "#f7fbff" : "#ffffff";
+              const sourceDns = (group.source_dns || []).map(function (row) {
+                const device = row.device_name ? " on " + row.device_name : "";
+                return escapeHtml((row.pattern || "") + " / " + (row.route_partition || "<None>") + device);
+              }).join("<br>") || "-";
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px;"><input type="checkbox" name="hunt_mirror_group" value="' + escapeHtml(group.line_group_name || "") + '" checked></td>';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + escapeHtml(group.line_group_name || "") + '</td>';
+              html += '<td style="padding:7px 10px;">' + sourceDns + '</td>';
+              html += '</tr>';
+            });
+            html += '</tbody></table>';
+            groupsResultsEl.innerHTML = html;
+          }
+
+          async function loadTargetDns(userid) {
+            targetDnSelect.disabled = true;
+            targetDnSelect.innerHTML = '<option value="">Loading target DNs...</option>';
+
+            const fd = new FormData();
+            fd.set("cucm_host", String(new FormData(targetForm).get("cucm_host") || ""));
+            fd.set("cucm_user", String(new FormData(targetForm).get("cucm_user") || ""));
+            fd.set("cucm_pass", String(new FormData(targetForm).get("cucm_pass") || ""));
+            fd.set("userid", String(userid || "").trim());
+
+            const response = await fetch("/admin/hunt-list-mirror/target-dns", {
+              method: "POST",
+              body: fd,
+              credentials: "same-origin",
+              headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+            });
+            const payload = await response.json();
+            if (!response.ok || !payload.ok) {
+              throw new Error((payload && payload.error) || "Could not load target user DNs.");
+            }
+
+            const dns = payload.dns || [];
+            targetDnSelect.innerHTML = "";
+            if (!dns.length) {
+              targetDnSelect.innerHTML = '<option value="">No DNs found for selected target user.</option>';
+              targetDnSelect.disabled = true;
+              return;
+            }
+
+            dns.forEach(function (row, index) {
+              const option = document.createElement("option");
+              option.value = String(row.pattern || "") + "|" + String(row.route_partition || "");
+              const deviceText = row.device_name ? " on " + row.device_name : "";
+              option.textContent = String(row.pattern || "") + " / " + String(row.route_partition || "<None>") + deviceText;
+              if (index === 0) {
+                option.selected = true;
+              }
+              targetDnSelect.appendChild(option);
+            });
+            targetDnSelect.disabled = false;
+          }
+
+          window.runAdminHuntMirrorExampleSearch = async function (event) {
+            if (event) {
+              event.preventDefault();
+            }
+            try {
+              const fd = new FormData(exampleForm);
+              const results = await searchPeople(
+                fd.get("example_last_name"),
+                fd.get("example_first_name"),
+                exampleForm,
+                exampleStatusEl,
+                exampleResultsEl,
+                "Use as Example",
+                "data-example-user"
+              );
+
+              const buttons = exampleResultsEl.querySelectorAll("button[data-example-user]");
+              buttons.forEach(function (button) {
+                button.addEventListener("click", async function () {
+                  const userId = String(button.getAttribute("data-example-user") || "").trim();
+                  if (!userId) {
+                    return;
+                  }
+                  state.exampleUserId = userId;
+                  exampleStatusEl.textContent = "Selected example user: " + userId;
+                  try {
+                    await loadExampleLineGroups(userId);
+                  } catch (error) {
+                    groupsStatusEl.textContent = "Failed to load example line groups: " + ((error && error.message) || "Unknown error.");
+                    groupsStatusEl.style.color = "#b42318";
+                  }
+                });
+              });
+
+              if (!results.length) {
+                groupsResultsEl.innerHTML = "";
+                groupsStatusEl.textContent = "Step 2: Example Line Groups will appear here after you choose an example person.";
+              }
+            } catch (error) {
+              exampleStatusEl.textContent = "Example lookup failed: " + ((error && error.message) || "Unknown error.");
+              exampleStatusEl.style.color = "#b42318";
+            }
+            return false;
+          };
+
+          window.runAdminHuntMirrorTargetSearch = async function (event) {
+            if (event) {
+              event.preventDefault();
+            }
+            try {
+              const fd = new FormData(targetForm);
+              const results = await searchPeople(
+                fd.get("target_last_name"),
+                fd.get("target_first_name"),
+                targetForm,
+                targetStatusEl,
+                targetResultsEl,
+                "Use as Target",
+                "data-target-user"
+              );
+
+              const buttons = targetResultsEl.querySelectorAll("button[data-target-user]");
+              buttons.forEach(function (button) {
+                button.addEventListener("click", async function () {
+                  const userId = String(button.getAttribute("data-target-user") || "").trim();
+                  if (!userId) {
+                    return;
+                  }
+                  state.targetUserId = userId;
+                  targetStatusEl.textContent = "Selected target user: " + userId;
+                  try {
+                    await loadTargetDns(userId);
+                  } catch (error) {
+                    targetStatusEl.textContent = "Failed to load target DNs: " + ((error && error.message) || "Unknown error.");
+                    targetStatusEl.style.color = "#b42318";
+                  }
+                });
+              });
+
+              if (!results.length) {
+                targetDnSelect.innerHTML = '<option value="">Select target user first...</option>';
+                targetDnSelect.disabled = true;
+              }
+            } catch (error) {
+              targetStatusEl.textContent = "Target lookup failed: " + ((error && error.message) || "Unknown error.");
+              targetStatusEl.style.color = "#b42318";
+            }
+            return false;
+          };
+
+          function classifyResult(outputText) {
+            const text = String(outputText || "");
+            if (/\b(Failed|Error)\b/i.test(text)) {
+              return "Failed";
+            }
+            if (/\bSkipped\b/i.test(text)) {
+              return "Skipped";
+            }
+            return "Added";
+          }
+
+          window.runAdminHuntMirrorApply = async function (event) {
+            if (event) {
+              event.preventDefault();
+            }
+
+            applyStatusEl.style.color = "#2c5c8a";
+            applyResultsEl.innerHTML = "";
+
+            const selectedGroups = Array.from(groupsResultsEl.querySelectorAll('input[name="hunt_mirror_group"]:checked')).map(function (checkbox) {
+              return String(checkbox.value || "").trim();
+            }).filter(Boolean);
+
+            if (!state.exampleUserId) {
+              applyStatusEl.textContent = "Select an example user first.";
+              return false;
+            }
+            if (!selectedGroups.length) {
+              applyStatusEl.textContent = "Select at least one line group to mirror.";
+              return false;
+            }
+            if (!state.targetUserId) {
+              applyStatusEl.textContent = "Select a target user first.";
+              return false;
+            }
+
+            const dnValue = String(targetDnSelect.value || "").trim();
+            if (!dnValue || dnValue.indexOf("|") < 0) {
+              applyStatusEl.textContent = "Select a valid target DN first.";
+              return false;
+            }
+
+            const dnParts = dnValue.split("|");
+            const dnPattern = String(dnParts[0] || "").trim();
+            const dnPartition = String(dnParts[1] || "").trim();
+            if (!dnPattern) {
+              applyStatusEl.textContent = "Target DN pattern is required.";
+              return false;
+            }
+
+            applyStatusEl.textContent = "Applying line-group updates...";
+
+            const cucmHost = String(new FormData(exampleForm).get("cucm_host") || "");
+            const cucmUser = String(new FormData(exampleForm).get("cucm_user") || "");
+            const cucmPass = String(new FormData(exampleForm).get("cucm_pass") || "");
+
+            const rows = [];
+            for (const lineGroupName of selectedGroups) {
+              const fd = new FormData();
+              fd.set("cucm_host", cucmHost);
+              fd.set("cucm_user", cucmUser);
+              fd.set("cucm_pass", cucmPass);
+              fd.set("line_group_name", lineGroupName);
+              fd.set("membership_action", "add");
+              fd.set("dn_pattern", dnPattern);
+              fd.set("dn_partition", dnPartition || "ENT_DEVICE_PT");
+
+              try {
+                const response = await fetch("/line-groups/edit-members?inline=1", {
+                  method: "POST",
+                  body: fd,
+                  credentials: "same-origin",
+                  headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
+                });
+                const payload = await response.json();
+                if (!response.ok) {
+                  throw new Error((payload && payload.detail) || "Update request failed.");
+                }
+                const outputText = String(payload.output_text || "");
+                rows.push({
+                  line_group_name: lineGroupName,
+                  status: classifyResult(outputText),
+                  details: outputText.split("\n").slice(0, 3).join(" | "),
+                });
+              } catch (error) {
+                rows.push({
+                  line_group_name: lineGroupName,
+                  status: "Failed",
+                  details: (error && error.message) || "Unknown error.",
+                });
+              }
+            }
+
+            const successCount = rows.filter(function (row) { return row.status === "Added" || row.status === "Skipped"; }).length;
+            applyStatusEl.textContent = "Completed " + String(rows.length) + " update(s). Successful or skipped: " + String(successCount) + ".";
+            applyStatusEl.style.color = successCount === rows.length ? "#166534" : "#b45309";
+
+            let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
+            html += '<thead><tr style="background:#005eb8; color:#fff;">';
+            html += '<th style="padding:8px 10px; text-align:left;">Line Group</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Status</th>';
+            html += '<th style="padding:8px 10px; text-align:left;">Details</th>';
+            html += '</tr></thead><tbody>';
+            rows.forEach(function (row, index) {
+              const bg = index % 2 === 0 ? "#f7fbff" : "#ffffff";
+              html += '<tr style="background:' + bg + '; border-bottom:1px solid #c8dbee;">';
+              html += '<td style="padding:7px 10px; font-family:Consolas,monospace;">' + escapeHtml(row.line_group_name) + '</td>';
+              html += '<td style="padding:7px 10px; font-weight:700;">' + escapeHtml(row.status) + '</td>';
+              html += '<td style="padding:7px 10px;">' + escapeHtml(row.details) + '</td>';
+              html += '</tr>';
+            });
+            html += '</tbody></table>';
+            applyResultsEl.innerHTML = html;
+            return false;
+          };
+
+          exampleForm.addEventListener("submit", window.runAdminHuntMirrorExampleSearch);
+          targetForm.addEventListener("submit", window.runAdminHuntMirrorTargetSearch);
         })();
       </script>
 
@@ -60360,6 +60819,191 @@ def _resolve_hunt_member_owner_name(cucm_host: str, cucm_user: str, cucm_pass: s
 
   alerting_name = _axl_lookup_line_alerting_name(cucm_host, cucm_user, cucm_pass, clean_pattern, clean_partition)
   return alerting_name or "Unknown"
+
+
+def _sql_escape_literal(value: str) -> str:
+  return str(value or "").replace("'", "''")
+
+
+def _axl_execute_sql_rows(cucm_host: str, cucm_user: str, cucm_pass: str, sql: str) -> list[dict]:
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+
+  soap = f"""<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:executeSQLQuery>
+      <sql>{xml_escape(sql)}</sql>
+    </axl:executeSQLQuery>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+
+  xml_text = _axl_post_raw_text(session, cucm_host, soap, "executeSQLQuery")
+  root = ET.fromstring(xml_text)
+  rows: list[dict] = []
+  for elem in root.iter():
+    if _xml_local_name(elem.tag) != "row":
+      continue
+    row_data: dict = {}
+    for child in list(elem):
+      row_data[_xml_local_name(child.tag).lower()] = (child.text or "").strip()
+    rows.append(row_data)
+  return rows
+
+
+def _lookup_user_line_groups_for_hunt_mirror(cucm_host: str, cucm_user: str, cucm_pass: str, userid: str) -> list[dict]:
+  clean_userid = str(userid or "").strip()
+  if not clean_userid:
+    raise ValueError("userid is required")
+
+  sql = (
+    "SELECT lg.name AS line_group_name, n.dnorpattern AS pattern, "
+    "COALESCE(r.name, '') AS route_partition, d.name AS device_name "
+    "FROM enduser u "
+    "INNER JOIN enduserdevicemap edm ON edm.fkenduser = u.pkid "
+    "INNER JOIN device d ON d.pkid = edm.fkdevice "
+    "INNER JOIN devicenumplanmap dnm ON dnm.fkdevice = d.pkid "
+    "INNER JOIN numplan n ON n.pkid = dnm.fknumplan "
+    "LEFT OUTER JOIN routepartition r ON r.pkid = n.fkroutepartition "
+    "INNER JOIN linegroupnumplanmap lgnpm ON lgnpm.fknumplan = n.pkid "
+    "INNER JOIN linegroup lg ON lg.pkid = lgnpm.fklinegroup "
+    f"WHERE LOWER(u.userid) = LOWER('{_sql_escape_literal(clean_userid)}') "
+    "ORDER BY lg.name, n.dnorpattern, d.name"
+  )
+
+  rows = _axl_execute_sql_rows(cucm_host, cucm_user, cucm_pass, sql)
+  groups_by_name: dict[str, dict] = {}
+  seen_source_keys: dict[str, set] = {}
+
+  for row in rows:
+    line_group_name = str(row.get("line_group_name", "") or "").strip()
+    pattern = str(row.get("pattern", "") or "").strip()
+    route_partition = str(row.get("route_partition", "") or "").strip()
+    device_name = str(row.get("device_name", "") or "").strip()
+    if not line_group_name or not pattern:
+      continue
+
+    if line_group_name not in groups_by_name:
+      groups_by_name[line_group_name] = {
+        "line_group_name": line_group_name,
+        "source_dns": [],
+      }
+      seen_source_keys[line_group_name] = set()
+
+    source_key = (pattern, route_partition, device_name)
+    if source_key in seen_source_keys[line_group_name]:
+      continue
+    seen_source_keys[line_group_name].add(source_key)
+
+    groups_by_name[line_group_name]["source_dns"].append({
+      "pattern": pattern,
+      "route_partition": route_partition,
+      "device_name": device_name,
+    })
+
+  return [groups_by_name[name] for name in sorted(groups_by_name.keys())]
+
+
+def _lookup_user_dns_for_hunt_mirror(cucm_host: str, cucm_user: str, cucm_pass: str, userid: str) -> list[dict]:
+  clean_userid = str(userid or "").strip()
+  if not clean_userid:
+    raise ValueError("userid is required")
+
+  sql = (
+    "SELECT n.dnorpattern AS pattern, COALESCE(r.name, '') AS route_partition, d.name AS device_name "
+    "FROM enduser u "
+    "INNER JOIN enduserdevicemap edm ON edm.fkenduser = u.pkid "
+    "INNER JOIN device d ON d.pkid = edm.fkdevice "
+    "INNER JOIN devicenumplanmap dnm ON dnm.fkdevice = d.pkid "
+    "INNER JOIN numplan n ON n.pkid = dnm.fknumplan "
+    "LEFT OUTER JOIN routepartition r ON r.pkid = n.fkroutepartition "
+    f"WHERE LOWER(u.userid) = LOWER('{_sql_escape_literal(clean_userid)}') "
+    "AND n.tkpatternusage = 2 "
+    "ORDER BY n.dnorpattern, d.name"
+  )
+
+  rows = _axl_execute_sql_rows(cucm_host, cucm_user, cucm_pass, sql)
+  dns: list[dict] = []
+  seen = set()
+  for row in rows:
+    pattern = str(row.get("pattern", "") or "").strip()
+    route_partition = str(row.get("route_partition", "") or "").strip()
+    device_name = str(row.get("device_name", "") or "").strip()
+    if not pattern:
+      continue
+    key = (pattern, route_partition, device_name)
+    if key in seen:
+      continue
+    seen.add(key)
+    dns.append({
+      "pattern": pattern,
+      "route_partition": route_partition,
+      "device_name": device_name,
+    })
+  return dns
+
+
+@app.post("/admin/hunt-list-mirror/line-groups")
+def admin_hunt_list_mirror_line_groups_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  userid: str = Form(...),
+):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Not authorized."}, status_code=403)
+
+  try:
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+    clean_userid = str(userid or "").strip()
+    line_groups = _lookup_user_line_groups_for_hunt_mirror(cucm_host, cucm_user, cucm_pass, clean_userid)
+    return JSONResponse({
+      "ok": True,
+      "userid": clean_userid,
+      "count": len(line_groups),
+      "line_groups": line_groups,
+    })
+  except ValueError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": f"Example line-group lookup failed: {exc}"}, status_code=502)
+
+
+@app.post("/admin/hunt-list-mirror/target-dns")
+def admin_hunt_list_mirror_target_dns_route(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  userid: str = Form(...),
+):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Not authorized."}, status_code=403)
+
+  try:
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+    clean_userid = str(userid or "").strip()
+    dns = _lookup_user_dns_for_hunt_mirror(cucm_host, cucm_user, cucm_pass, clean_userid)
+    return JSONResponse({
+      "ok": True,
+      "userid": clean_userid,
+      "count": len(dns),
+      "dns": dns,
+    })
+  except ValueError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": f"Target DN lookup failed: {exc}"}, status_code=502)
 
 
 @app.post("/line-groups/members")
