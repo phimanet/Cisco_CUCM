@@ -19400,12 +19400,14 @@ def genesys_admin_placeholder(request: Request):
                     return matchesQuery && matchesRoles;
                   });
                   summary.style.display = "block";
-                  summary.innerHTML = "<strong>Showing:</strong> " + rows.length + " of " + loadedRows.length + " active AMN user(s). <strong>Reason:</strong> Unknown.";
+                  var inactiveCount = loadedRows.filter(function (row) { return row.state === "inactive"; }).length;
+                  summary.innerHTML = "<strong>Showing:</strong> " + rows.length + " of " + loadedRows.length + " loaded AMN user(s). <strong>Just set Inactive:</strong> " + inactiveCount + ". <strong>Reason:</strong> Unknown.";
                   if (!rows.length) { output.innerHTML = "<p>No users match the current filters.</p>"; return; }
                   output.innerHTML = "<table><thead><tr><th>Name</th><th>Username</th><th>State</th><th>Division</th><th>Roles</th><th>Action</th></tr></thead><tbody>" + rows.map(function (row) {
                     var countKnown = typeof row.role_count === "number";
-                    var action = countKnown && row.id && row.email ? "<button type='button' data-set-inactive-user='" + esc(row.id) + "' data-set-inactive-email='" + esc(row.email) + "' data-set-inactive-name='" + esc(row.name) + "' data-set-inactive-roles='" + esc(row.role_count) + "' style='background:#a56a00;padding:5px 9px;'>Set Inactive</button>" : "Role count unavailable";
-                    return "<tr><td>" + esc(row.name) + "</td><td>" + esc(row.username) + "</td><td>" + esc(row.state) + "</td><td>" + esc(row.division_name) + "</td><td><strong>" + esc(countKnown ? row.role_count : "Unavailable") + "</strong></td><td>" + action + "</td></tr>";
+                    var isInactive = row.state === "inactive";
+                    var action = isInactive ? "<button type='button' disabled style='background:#146c2e;padding:5px 9px;opacity:1;'>Inactive</button>" : (countKnown && row.id && row.email ? "<button type='button' data-set-inactive-user='" + esc(row.id) + "' data-set-inactive-email='" + esc(row.email) + "' data-set-inactive-name='" + esc(row.name) + "' data-set-inactive-roles='" + esc(row.role_count) + "' style='background:#a56a00;padding:5px 9px;'>Set Inactive</button>" : "Role count unavailable");
+                    return "<tr" + (isInactive ? " style='background:#eef9f1;'" : "") + "><td>" + esc(row.name) + "</td><td>" + esc(row.username) + "</td><td style='font-weight:700;color:" + (isInactive ? "#146c2e" : "#12304a") + ";'>" + esc(row.state) + "</td><td>" + esc(row.division_name) + "</td><td><strong>" + esc(countKnown ? row.role_count : "Unavailable") + "</strong></td><td>" + action + "</td></tr>";
                   }).join("") + "</tbody></table>";
                   Array.prototype.forEach.call(output.querySelectorAll("[data-set-inactive-user]"), function (button) {
                     button.addEventListener("click", async function () {
@@ -19420,7 +19422,7 @@ def genesys_admin_placeholder(request: Request):
                         var response = await fetch("/genesys/users/set-inactive", { method:"POST", body:data, credentials:"same-origin", headers:{"Accept":"application/json"} });
                         var payload = await response.json();
                         if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
-                        loadedRows = loadedRows.filter(function (row) { return row.id !== userId; });
+                        loadedRows.forEach(function (row) { if (row.id === userId) row.state = "inactive"; });
                         renderRows(); status.style.color = "#146c2e"; status.textContent = name + " is now Inactive. Reason: Unknown.";
                       } catch (error) {
                         button.disabled = false; button.textContent = "Set Inactive"; status.style.color = "#b42318"; status.textContent = "Update failed: " + ((error && error.message) || "Unknown error.");
@@ -25987,8 +25989,16 @@ def genesys_user_set_inactive_route(
   if not updated:
     return JSONResponse({"ok": False, "error": update_error or f"Genesys user update failed (HTTP {status_code})."}, status_code=400)
 
-  ok_verify, verify_payload, verify_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}")
-  verified_state = str(verify_payload.get("state", "") or "").strip().lower() if ok_verify else ""
+  ok_verify = False
+  verify_error = ""
+  verified_state = ""
+  for verify_attempt in range(1, 7):
+    ok_verify, verify_payload, verify_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}")
+    verified_state = str(verify_payload.get("state", "") or "").strip().lower() if ok_verify else ""
+    if ok_verify and verified_state == "inactive":
+      break
+    if verify_attempt < 6:
+      time.sleep(0.5)
   if not ok_verify or verified_state != "inactive":
     return JSONResponse({"ok": False, "error": f"Genesys user update was not verified as inactive: {verify_error or ('returned state ' + (verified_state or 'blank'))}"}, status_code=409)
 

@@ -113,6 +113,7 @@ Priority keys:
 - Candidate loading uses one paged Genesys users scan with expanded authorization data; name/email/username and role-count filters are applied locally.
 - Each row has a one-user confirmation action. The backend revalidates email, active state, AMN division, and unchanged role count before setting only that user to Inactive.
 - Manual inactive actions use reason `Unknown`, verify the resulting Genesys state, and write an audit event.
+- Successful updates remain visible as a green Inactive row with a disabled Inactive button and completion count; backend verification polls briefly to tolerate Genesys read-after-write delay.
 
 ### 2026-09-22 (Embedded JavaScript handler prevention)
 - Root cause confirmed for the Hunt List panel's "handler missing" error: `main.py` stores browser JavaScript in plain Python triple-quoted strings, so JavaScript `\n`, `\r`, and `\t` escapes can be converted into literal control characters before the browser parses the script.
