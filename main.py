@@ -3295,7 +3295,12 @@ def _genesys_list_phone_management_inventory(api_base: str, access_token: str) -
       api_base,
       access_token,
       "/api/v2/telephony/providers/edges/phones",
-      params={"pageSize": 100, "pageNumber": page_number},
+      params={
+        "pageSize": 100,
+        "pageNumber": page_number,
+        "expand": ["site", "phoneBaseSettings", "lines"],
+        "fields": ["webRtcUser", "lines.defaultForUser"],
+      },
     )
     if not ok_phones:
       return {}, err_phones
@@ -3325,70 +3330,6 @@ def _genesys_list_unassigned_webrtc_phones(region: str, access_token: str) -> di
   if phone_error:
     return {"ok": False, "error": f"Phone Management inventory failed: {phone_error}"}
 
-  users, user_pages, user_error = _genesys_collect_paged_entities(
-    api_base,
-    access_token,
-    "/api/v2/users",
-    max(25, min(GENESYS_USERS_PAGE_SIZE, 200)),
-    300,
-    query_params={"expand": "station"},
-  )
-  if user_error:
-    return {"ok": False, "error": f"Genesys user inventory failed: {user_error}"}
-
-  stations, station_pages, station_error = _genesys_collect_paged_entities(
-    api_base,
-    access_token,
-    "/api/v2/stations",
-    100,
-    300,
-  )
-  if station_error:
-    return {"ok": False, "error": f"Genesys station inventory failed: {station_error}"}
-
-  associated_ids = set()
-  associated_names = set()
-  user_names = set()
-
-  def _collect_station_ref(value):
-    if not isinstance(value, dict):
-      return
-    for key in ["id", "phoneId", "stationId"]:
-      clean_id = str(value.get(key, "") or "").strip().lower()
-      if clean_id:
-        associated_ids.add(clean_id)
-    for key in ["name", "phoneName", "stationName", "displayName"]:
-      clean_name = " ".join(str(value.get(key, "") or "").strip().lower().split())
-      if clean_name:
-        associated_names.add(clean_name)
-    for key in ["phone", "station", "defaultStation", "defaultPhone"]:
-      nested = value.get(key)
-      if isinstance(nested, dict):
-        _collect_station_ref(nested)
-
-  for user in users:
-    if not isinstance(user, dict):
-      continue
-    for key in ["name", "displayName"]:
-      clean_user_name = " ".join(str(user.get(key, "") or "").strip().lower().split())
-      if clean_user_name:
-        user_names.add(clean_user_name)
-    for key in ["station", "defaultStation", "defaultPhone", "phone"]:
-      _collect_station_ref(user.get(key))
-
-  for station in stations:
-    if not isinstance(station, dict):
-      continue
-    station_owner_refs = []
-    for key in ["user", "owner", "webRtcUser", "associatedUser", "primaryUser", "effectiveOwner"]:
-      owner = station.get(key)
-      if isinstance(owner, dict):
-        station_owner_refs.extend([str(owner.get("id", "") or "").strip(), str(owner.get("name", "") or "").strip(), str(owner.get("email", "") or "").strip()])
-    for key in ["userId", "ownerUserId", "ownerId", "associatedUserId", "webRtcUserId", "username", "email"]:
-      station_owner_refs.append(str(station.get(key, "") or "").strip())
-    if any(station_owner_refs):
-      _collect_station_ref(station)
-
   template = _load_genesys_webrtc_template()
   template_base_settings_id = str(template.get("phone_base_settings_id", "") or "").strip().lower()
   candidates = []
@@ -3398,7 +3339,6 @@ def _genesys_list_unassigned_webrtc_phones(region: str, access_token: str) -> di
       continue
     phone_id = str(phone.get("id", "") or "").strip()
     phone_name = str(phone.get("name", "") or phone.get("phoneName", "") or phone.get("displayName", "") or "").strip()
-    phone_name_key = " ".join(phone_name.lower().split())
     base_settings = phone.get("phoneBaseSettings") if isinstance(phone.get("phoneBaseSettings"), dict) else {}
     base_settings_id = str(phone.get("phoneBaseSettingsId", "") or base_settings.get("id", "") or "").strip()
     base_settings_name = str(base_settings.get("name", "") or phone.get("phoneBaseSettingsName", "") or "").strip()
@@ -3410,20 +3350,9 @@ def _genesys_list_unassigned_webrtc_phones(region: str, access_token: str) -> di
     if not is_webrtc:
       continue
 
-    owner_refs = []
-    for key in ["user", "owner", "webRtcUser", "associatedUser", "primaryUser", "effectiveOwner"]:
-      owner = phone.get(key)
-      if isinstance(owner, dict):
-        owner_refs.extend([str(owner.get("id", "") or "").strip(), str(owner.get("name", "") or "").strip(), str(owner.get("email", "") or "").strip()])
-    for key in ["userId", "ownerUserId", "ownerId", "associatedUserId", "webRtcUserId", "username", "email"]:
-      owner_refs.append(str(phone.get(key, "") or "").strip())
-    has_explicit_owner = any(owner_refs)
-    tied_by_user_inventory = bool(
-      (phone_id and phone_id.lower() in associated_ids)
-      or (phone_name_key and phone_name_key in associated_names)
-      or (phone_name_key and phone_name_key in user_names)
-    )
-    if has_explicit_owner or tied_by_user_inventory:
+    web_rtc_user = phone.get("webRtcUser") if isinstance(phone.get("webRtcUser"), dict) else {}
+    web_rtc_person = str(web_rtc_user.get("name", "") or web_rtc_user.get("id", "") or "").strip()
+    if web_rtc_person:
       continue
 
     site = phone.get("site") if isinstance(phone.get("site"), dict) else {}
@@ -3435,7 +3364,8 @@ def _genesys_list_unassigned_webrtc_phones(region: str, access_token: str) -> di
       "base_settings_id": base_settings_id,
       "base_settings_name": base_settings_name,
       "line_count": len(phone.get("lines", [])) if isinstance(phone.get("lines"), list) else 0,
-      "candidate_reason": "No explicit phone owner, owned-station match, user station/default-phone match, or exact user display-name match",
+      "web_rtc_person": "",
+      "candidate_reason": "WebRTC Person is blank in Genesys Phone Management",
     })
 
   candidates.sort(key=lambda item: ((item.get("phone_name") or "").casefold(), item.get("phone_id") or ""))
@@ -3443,10 +3373,6 @@ def _genesys_list_unassigned_webrtc_phones(region: str, access_token: str) -> di
     "ok": True,
     "region": clean_region,
     "phones_scanned": len(phones) if isinstance(phones, list) else 0,
-    "users_scanned": len(users),
-    "user_pages_scanned": user_pages,
-    "stations_scanned": len(stations),
-    "station_pages_scanned": station_pages,
     "rows": candidates,
   }
 
@@ -19513,7 +19439,7 @@ def genesys_admin_placeholder(request: Request):
         <section class="portal-main">
           <div id="genesys-webrtc-cleanup-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Genesys WebRTC Cleanup</h3>
-            <p style="color:#4e6a84;font-size:12px;">Read-only lookup of WebRTC phones with no explicit owner and no matching Genesys user station/default-phone association. Results are candidates for review before deletion.</p>
+            <p style="color:#4e6a84;font-size:12px;">Read-only lookup of WebRTC phones whose WebRTC Person is blank in Genesys Phone Management. Results are candidates for review before deletion.</p>
             <div class="search-filter-row">
               <input id="genesys-webrtc-cleanup-filter" placeholder="Filter by phone name, ID, site, or base settings" style="width:420px;">
               <button type="button" id="genesys-webrtc-cleanup-load-btn" onclick="if(window.loadGenesysWebRTCCleanup){window.loadGenesysWebRTCCleanup();}else{document.getElementById('genesys-webrtc-cleanup-status').textContent='Genesys WebRTC Cleanup JavaScript handler is missing.';}return false;" style="background:#385977;">Load Cleanup Candidates</button>
@@ -19536,12 +19462,12 @@ def genesys_admin_placeholder(request: Request):
                   var query = String(filterInput.value || "").trim().toLowerCase();
                   var rows = loadedRows.filter(function (row) { return !query || [row.phone_name,row.phone_id,row.site_name,row.site_id,row.base_settings_name,row.base_settings_id].join(" ").toLowerCase().indexOf(query) >= 0; });
                   summary.style.display = "block";
-                  summary.innerHTML = "<strong>Candidates:</strong> " + rows.length + " of " + loadedRows.length + " &nbsp; <strong>Phones scanned:</strong> " + Number(scanInfo.phones_scanned || 0) + " &nbsp; <strong>Users scanned:</strong> " + Number(scanInfo.users_scanned || 0) + " &nbsp; <strong>Stations scanned:</strong> " + Number(scanInfo.stations_scanned || 0) + ".";
+                  summary.innerHTML = "<strong>Candidates:</strong> " + rows.length + " of " + loadedRows.length + " &nbsp; <strong>Phones scanned:</strong> " + Number(scanInfo.phones_scanned || 0) + ".";
                   if (!rows.length) { output.innerHTML = "<p>No unassigned WebRTC phone candidates match the current filter.</p>"; return; }
-                  output.innerHTML = "<table><thead><tr><th>Phone Name</th><th>Phone ID</th><th>Site</th><th>Base Settings</th><th>Lines</th><th>Review Status</th></tr></thead><tbody>" + rows.map(function (row) { return "<tr><td><strong>" + esc(row.phone_name || "(unnamed)") + "</strong></td><td>" + esc(row.phone_id) + "</td><td>" + esc(row.site_name || row.site_id || "(none)") + "</td><td>" + esc(row.base_settings_name || row.base_settings_id || "(unknown)") + "</td><td>" + Number(row.line_count || 0) + "</td><td><strong style='color:#9a4b00;'>Candidate to Delete</strong><div style='font-size:11px;color:#4e6a84;margin-top:3px;'>" + esc(row.candidate_reason) + "</div></td></tr>"; }).join("") + "</tbody></table>";
+                  output.innerHTML = "<table><thead><tr><th>Phone Name</th><th>Phone ID</th><th>Site</th><th>Base Settings</th><th>WebRTC Person</th><th>Lines</th><th>Review Status</th></tr></thead><tbody>" + rows.map(function (row) { return "<tr><td><strong>" + esc(row.phone_name || "(unnamed)") + "</strong></td><td>" + esc(row.phone_id) + "</td><td>" + esc(row.site_name || row.site_id || "(none)") + "</td><td>" + esc(row.base_settings_name || row.base_settings_id || "(unknown)") + "</td><td>" + esc(row.web_rtc_person || "-") + "</td><td>" + Number(row.line_count || 0) + "</td><td><strong style='color:#9a4b00;'>Candidate to Delete</strong><div style='font-size:11px;color:#4e6a84;margin-top:3px;'>" + esc(row.candidate_reason) + "</div></td></tr>"; }).join("") + "</tbody></table>";
                 }
                 window.loadGenesysWebRTCCleanup = async function () {
-                  loadButton.disabled = true; status.style.color = "#2c5c8a"; status.textContent = "Loading phone and user inventories for read-only comparison..."; summary.style.display = "none"; output.innerHTML = "";
+                  loadButton.disabled = true; status.style.color = "#2c5c8a"; status.textContent = "Loading WebRTC Person data from Phone Management..."; summary.style.display = "none"; output.innerHTML = "";
                   try {
                     var response = await fetch("/genesys/webrtc-cleanup/candidates", { credentials:"same-origin", headers:{"Accept":"application/json"} });
                     var payload = await response.json();

@@ -119,8 +119,8 @@ Priority keys:
 - Inactive queue processing is rate-limited to 2 user operations per second by default (`GENESYS_INACTIVE_QUEUE_USERS_PER_SECOND`) to reduce Genesys throttling/timeouts; the active rate is shown in the progress banner.
 
 ### 2026-09-23 (Genesys WebRTC Cleanup)
-- Added a read-only Genesys Admin function named **Genesys WebRTC Cleanup** that inventories WebRTC phones and returns only phones with no explicit owner, owned-station match, user station/default-phone association, or exact Genesys user display-name match.
-- Cleanup candidate detection uses one paged Phone Management inventory, one paged users inventory, and one paged stations inventory with local ID/name joins, avoiding per-phone API calls and failing closed if an authoritative inventory cannot be read.
+- Added a read-only Genesys Admin function named **Genesys WebRTC Cleanup** that requests the authoritative `webRtcUser` phone field and returns WebRTC phones whose WebRTC Person is blank.
+- Cleanup candidate detection uses one paged Phone Management inventory with `fields=webRtcUser,lines.defaultForUser`; it does not infer association from a matching phone/person name.
 - Results show phone ID/name, site, base settings, line count, and candidate evidence. No delete action is included; operators must review candidates before any future removal workflow is approved.
 
 ### 2026-09-22 (Embedded JavaScript handler prevention)
