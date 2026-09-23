@@ -19402,10 +19402,10 @@ def genesys_admin_placeholder(request: Request):
                   summary.style.display = "block";
                   summary.innerHTML = "<strong>Showing:</strong> " + rows.length + " of " + loadedRows.length + " active AMN user(s). <strong>Reason:</strong> Unknown.";
                   if (!rows.length) { output.innerHTML = "<p>No users match the current filters.</p>"; return; }
-                  output.innerHTML = "<table><thead><tr><th>Name</th><th>Email</th><th>Username</th><th>State</th><th>Division</th><th>Roles</th><th>Action</th></tr></thead><tbody>" + rows.map(function (row) {
+                  output.innerHTML = "<table><thead><tr><th>Name</th><th>Username</th><th>State</th><th>Division</th><th>Roles</th><th>Action</th></tr></thead><tbody>" + rows.map(function (row) {
                     var countKnown = typeof row.role_count === "number";
                     var action = countKnown && row.id && row.email ? "<button type='button' data-set-inactive-user='" + esc(row.id) + "' data-set-inactive-email='" + esc(row.email) + "' data-set-inactive-name='" + esc(row.name) + "' data-set-inactive-roles='" + esc(row.role_count) + "' style='background:#a56a00;padding:5px 9px;'>Set Inactive</button>" : "Role count unavailable";
-                    return "<tr><td>" + esc(row.name) + "</td><td>" + esc(row.email) + "</td><td>" + esc(row.username) + "</td><td>" + esc(row.state) + "</td><td>" + esc(row.division_name) + "</td><td><strong>" + esc(countKnown ? row.role_count : "Unavailable") + "</strong></td><td>" + action + "</td></tr>";
+                    return "<tr><td>" + esc(row.name) + "</td><td>" + esc(row.username) + "</td><td>" + esc(row.state) + "</td><td>" + esc(row.division_name) + "</td><td><strong>" + esc(countKnown ? row.role_count : "Unavailable") + "</strong></td><td>" + action + "</td></tr>";
                   }).join("") + "</tbody></table>";
                   Array.prototype.forEach.call(output.querySelectorAll("[data-set-inactive-user]"), function (button) {
                     button.addEventListener("click", async function () {

@@ -109,7 +109,7 @@ Priority keys:
 - Keep this section concise with short chronological notes after significant updates.
 
 ### 2026-09-23 (Genesys Set User to Inactive)
-- Added an isolated Genesys Admin menu function that lists active users in the AMN division with name, email, username, state, division, and role count.
+- Added an isolated Genesys Admin menu function that lists active users in the AMN division with name, username, state, division, and role count; email remains internal for action validation and auditing.
 - Candidate loading uses one paged Genesys users scan with expanded authorization data; name/email/username and role-count filters are applied locally.
 - Each row has a one-user confirmation action. The backend revalidates email, active state, AMN division, and unchanged role count before setting only that user to Inactive.
 - Manual inactive actions use reason `Unknown`, verify the resulting Genesys state, and write an audit event.
