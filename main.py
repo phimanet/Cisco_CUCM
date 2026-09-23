@@ -3317,18 +3317,21 @@ def _genesys_collect_paged_entities(
   path: str,
   page_size: int,
   max_pages: int,
+  query_params: dict | None = None,
 ) -> tuple[list[dict], int, str]:
   entities_all = []
   pages_scanned = 0
   for page_number in range(1, max_pages + 1):
+    page_params = dict(query_params or {})
+    page_params.update({
+      "pageSize": page_size,
+      "pageNumber": page_number,
+    })
     ok_page, payload, err_page = _genesys_get_json(
       api_base,
       access_token,
       path,
-      {
-        "pageSize": page_size,
-        "pageNumber": page_number,
-      },
+      page_params,
     )
     if not ok_page:
       return entities_all, pages_scanned, err_page
@@ -3355,6 +3358,73 @@ def _genesys_collect_paged_entities(
     break
 
   return entities_all, pages_scanned, ""
+
+
+def _genesys_expanded_user_role_count(user: dict) -> int | None:
+  if not isinstance(user, dict):
+    return None
+  authorization = user.get("authorization") if isinstance(user.get("authorization"), dict) else {}
+  roles = authorization.get("roles")
+  if not isinstance(roles, list):
+    roles = user.get("roles")
+  if not isinstance(roles, list):
+    return None
+
+  role_keys = set()
+  for role in roles:
+    if isinstance(role, dict):
+      role_key = str(role.get("id", "") or role.get("name", "") or "").strip()
+    else:
+      role_key = str(role or "").strip()
+    if role_key:
+      role_keys.add(role_key.casefold())
+  return len(role_keys)
+
+
+def _genesys_list_active_amn_users_with_roles(region: str, access_token: str) -> dict:
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+  users_all, pages_scanned, users_error = _genesys_collect_paged_entities(
+    api_base,
+    access_token,
+    "/api/v2/users",
+    max(25, min(GENESYS_USERS_PAGE_SIZE, 200)),
+    300,
+    query_params={"expand": "authorization", "state": "active"},
+  )
+  if users_error:
+    return {"ok": False, "error": users_error}
+
+  rows = []
+  missing_role_counts = 0
+  for user in users_all:
+    division = user.get("division") if isinstance(user.get("division"), dict) else {}
+    division_name = str(division.get("name", "") or "").strip()
+    state = str(user.get("state", "") or "").strip().lower()
+    if division_name.casefold() != "amn" or state != "active":
+      continue
+    role_count = _genesys_expanded_user_role_count(user)
+    if role_count is None:
+      missing_role_counts += 1
+    rows.append({
+      "id": str(user.get("id", "") or "").strip(),
+      "name": str(user.get("name", "") or "").strip(),
+      "email": str(user.get("email", "") or "").strip(),
+      "username": str(user.get("username", "") or "").strip(),
+      "state": state,
+      "division_id": str(division.get("id", "") or "").strip(),
+      "division_name": division_name,
+      "role_count": role_count,
+    })
+
+  rows.sort(key=lambda item: ((item.get("name") or "").casefold(), (item.get("email") or "").casefold()))
+  return {
+    "ok": True,
+    "region": clean_region,
+    "pages_scanned": pages_scanned,
+    "users_scanned": len(users_all),
+    "missing_role_counts": missing_role_counts,
+    "rows": rows,
+  }
 
 
 def _genesys_list_users_in_division_by_name(
@@ -19085,6 +19155,7 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-blocked-caller-panel" onclick="(function(){var id='genesys-blocked-caller-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Block Incoming Calls</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-role-groups-panel" onclick="(function(){var id='genesys-role-groups-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Inspect Genesys Role Groups</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-group-user-audit-panel" onclick="(function(){var id='genesys-group-user-audit-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Groups and User Cleanup</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-set-inactive-panel" onclick="(function(){var id='genesys-set-inactive-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Set User to Inactive</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-external-contact-panel" onclick="(function(){var id='genesys-external-contact-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">External Contact Creation/Removal</button>
         </aside>
 
@@ -19285,6 +19356,93 @@ def genesys_admin_placeholder(request: Request):
                   }, 2000);
                 });
                 observer.observe(status, { childList:true, characterData:true, subtree:true });
+              })();
+            </script>
+          </div>
+          <div id="genesys-set-inactive-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+            <h3 style="margin-top:0;">Set User to Inactive</h3>
+            <p style="color:#4e6a84;font-size:12px;">Lists active Genesys users in the AMN division with their role count. Each action changes only the selected user to Inactive and records reason Unknown.</p>
+            <div class="search-filter-row">
+              <input id="genesys-inactive-filter" placeholder="Filter by name, email, or username" style="width:360px;">
+              <label for="genesys-inactive-role-filter" style="font-size:12px;font-weight:700;">Roles</label>
+              <select id="genesys-inactive-role-filter" style="width:150px;">
+                <option value="1" selected>Exactly 1</option>
+                <option value="">All counts</option>
+                <option value="0">Exactly 0</option>
+                <option value="2">Exactly 2</option>
+                <option value="3">Exactly 3</option>
+                <option value="4">Exactly 4</option>
+                <option value="5">Exactly 5</option>
+              </select>
+              <button type="button" id="genesys-inactive-load-btn" onclick="if(window.loadGenesysInactiveCandidates){window.loadGenesysInactiveCandidates();}else{document.getElementById('genesys-inactive-status').textContent='Set User to Inactive JavaScript handler is missing.';}return false;" style="background:#385977;">Load AMN Active Users</button>
+            </div>
+            <p id="genesys-inactive-status" style="color:#2c5c8a;min-height:18px;">Ready. No users have been changed.</p>
+            <div id="genesys-inactive-summary" style="display:none;margin:8px 0;padding:8px;background:#f8fcff;border:1px solid #c8dbee;"></div>
+            <div id="genesys-inactive-output" style="overflow-x:auto;"></div>
+            <script>
+              (function () {
+                var loadButton = document.getElementById("genesys-inactive-load-btn");
+                var filterInput = document.getElementById("genesys-inactive-filter");
+                var roleFilter = document.getElementById("genesys-inactive-role-filter");
+                var status = document.getElementById("genesys-inactive-status");
+                var summary = document.getElementById("genesys-inactive-summary");
+                var output = document.getElementById("genesys-inactive-output");
+                var loadedRows = [];
+                if (!loadButton || !filterInput || !roleFilter || !status || !summary || !output) return;
+                function esc(value) { return String(value == null ? "" : value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;"); }
+                function renderRows() {
+                  var query = String(filterInput.value || "").trim().toLowerCase();
+                  var selectedRoleCount = String(roleFilter.value || "").trim();
+                  var rows = loadedRows.filter(function (row) {
+                    var haystack = [row.name, row.email, row.username].join(" ").toLowerCase();
+                    var matchesQuery = !query || haystack.indexOf(query) >= 0;
+                    var matchesRoles = selectedRoleCount === "" || String(row.role_count) === selectedRoleCount;
+                    return matchesQuery && matchesRoles;
+                  });
+                  summary.style.display = "block";
+                  summary.innerHTML = "<strong>Showing:</strong> " + rows.length + " of " + loadedRows.length + " active AMN user(s). <strong>Reason:</strong> Unknown.";
+                  if (!rows.length) { output.innerHTML = "<p>No users match the current filters.</p>"; return; }
+                  output.innerHTML = "<table><thead><tr><th>Name</th><th>Email</th><th>Username</th><th>State</th><th>Division</th><th>Roles</th><th>Action</th></tr></thead><tbody>" + rows.map(function (row) {
+                    var countKnown = typeof row.role_count === "number";
+                    var action = countKnown && row.id && row.email ? "<button type='button' data-set-inactive-user='" + esc(row.id) + "' data-set-inactive-email='" + esc(row.email) + "' data-set-inactive-name='" + esc(row.name) + "' data-set-inactive-roles='" + esc(row.role_count) + "' style='background:#a56a00;padding:5px 9px;'>Set Inactive</button>" : "Role count unavailable";
+                    return "<tr><td>" + esc(row.name) + "</td><td>" + esc(row.email) + "</td><td>" + esc(row.username) + "</td><td>" + esc(row.state) + "</td><td>" + esc(row.division_name) + "</td><td><strong>" + esc(countKnown ? row.role_count : "Unavailable") + "</strong></td><td>" + action + "</td></tr>";
+                  }).join("") + "</tbody></table>";
+                  Array.prototype.forEach.call(output.querySelectorAll("[data-set-inactive-user]"), function (button) {
+                    button.addEventListener("click", async function () {
+                      var userId = button.getAttribute("data-set-inactive-user") || "";
+                      var email = button.getAttribute("data-set-inactive-email") || "";
+                      var name = button.getAttribute("data-set-inactive-name") || email;
+                      var roleCount = button.getAttribute("data-set-inactive-roles") || "0";
+                      if (!window.confirm("Set " + name + " (" + email + ") to Inactive in Genesys? Division: AMN. Roles: " + roleCount + ". Reason: Unknown.")) return;
+                      button.disabled = true; button.textContent = "Updating..."; status.style.color = "#2c5c8a"; status.textContent = "Revalidating and updating " + email + "...";
+                      try {
+                        var data = new FormData(); data.append("user_id", userId); data.append("user_email", email); data.append("expected_role_count", roleCount);
+                        var response = await fetch("/genesys/users/set-inactive", { method:"POST", body:data, credentials:"same-origin", headers:{"Accept":"application/json"} });
+                        var payload = await response.json();
+                        if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
+                        loadedRows = loadedRows.filter(function (row) { return row.id !== userId; });
+                        renderRows(); status.style.color = "#146c2e"; status.textContent = name + " is now Inactive. Reason: Unknown.";
+                      } catch (error) {
+                        button.disabled = false; button.textContent = "Set Inactive"; status.style.color = "#b42318"; status.textContent = "Update failed: " + ((error && error.message) || "Unknown error.");
+                      }
+                    });
+                  });
+                }
+                window.loadGenesysInactiveCandidates = async function () {
+                  loadButton.disabled = true; status.style.color = "#2c5c8a"; status.textContent = "Loading active AMN users and role counts..."; output.innerHTML = ""; summary.style.display = "none";
+                  try {
+                    var response = await fetch("/genesys/users/inactive-candidates", { credentials:"same-origin", headers:{"Accept":"application/json"} });
+                    var payload = await response.json();
+                    if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
+                    loadedRows = Array.isArray(payload.rows) ? payload.rows : [];
+                    renderRows();
+                    status.style.color = payload.missing_role_counts ? "#9a4b00" : "#146c2e";
+                    status.textContent = loadedRows.length + " active AMN user(s) loaded from " + Number(payload.pages_scanned || 0) + " page(s)." + (payload.missing_role_counts ? " " + payload.missing_role_counts + " user(s) have unavailable role counts and cannot be changed." : " No changes were made.");
+                  } catch (error) { status.style.color = "#b42318"; status.textContent = "Candidate load failed: " + ((error && error.message) || "Unknown error."); }
+                  finally { loadButton.disabled = false; }
+                };
+                filterInput.addEventListener("input", renderRows);
+                roleFilter.addEventListener("change", renderRows);
               })();
             </script>
           </div>
@@ -25760,6 +25918,98 @@ def genesys_user_mark_inactive_route(
     account=clean_email,
   )
   return JSONResponse({"ok": True, "user_id": clean_user_id, "user_email": clean_email, "reason": clean_reason, "state": "inactive", "message": "Genesys user marked inactive and audit event recorded."})
+
+
+@app.get("/genesys/users/inactive-candidates")
+def genesys_user_inactive_candidates_route():
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  result = _genesys_list_active_amn_users_with_roles(
+    token_result.get("region", clean_region),
+    token_result.get("access_token", ""),
+  )
+  if not result.get("ok"):
+    return JSONResponse({"ok": False, "error": result.get("error", "Genesys user list failed.")}, status_code=400)
+  return JSONResponse(result)
+
+
+@app.post("/genesys/users/set-inactive")
+def genesys_user_set_inactive_route(
+  request: Request,
+  user_id: str = Form(""),
+  user_email: str = Form(""),
+  expected_role_count: int = Form(...),
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, _ = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  clean_user_id = str(user_id or "").strip()
+  clean_email = str(user_email or "").strip().lower()
+  if not clean_user_id or not clean_email or "@" not in clean_email:
+    return JSONResponse({"ok": False, "error": "Genesys user ID and email are required."}, status_code=400)
+  if expected_role_count < 0:
+    return JSONResponse({"ok": False, "error": "Expected role count must be zero or greater."}, status_code=400)
+
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  region = token_result.get("region", clean_region)
+  access_token = token_result.get("access_token", "")
+  _, _, api_base = _genesys_region_to_urls(region)
+
+  ok_user, user_payload, user_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}")
+  if not ok_user:
+    return JSONResponse({"ok": False, "error": f"Genesys user recheck failed: {user_error or 'Unknown error.'}"}, status_code=400)
+  genesys_email = str(user_payload.get("email", "") or "").strip().lower()
+  division = user_payload.get("division") if isinstance(user_payload.get("division"), dict) else {}
+  division_name = str(division.get("name", "") or "").strip()
+  current_state = str(user_payload.get("state", "") or "").strip().lower()
+  if genesys_email != clean_email:
+    return JSONResponse({"ok": False, "error": "Update blocked: Genesys user email changed since the list was loaded."}, status_code=409)
+  if division_name.casefold() != "amn":
+    return JSONResponse({"ok": False, "error": f"Update blocked: user division is '{division_name or '(none)'}', not AMN."}, status_code=409)
+  if current_state != "active":
+    return JSONResponse({"ok": False, "error": f"Update blocked: user state is already '{current_state or '(blank)'}'."}, status_code=409)
+
+  role_ids, role_error = _genesys_get_user_role_ids(api_base, access_token, clean_user_id)
+  if role_error:
+    return JSONResponse({"ok": False, "error": f"Update blocked: role count could not be verified: {role_error}"}, status_code=400)
+  if len(role_ids) != expected_role_count:
+    return JSONResponse({"ok": False, "error": f"Update blocked: role count changed from {expected_role_count} to {len(role_ids)}. Reload the list."}, status_code=409)
+
+  updated, _, update_error, status_code = _genesys_send_json(
+    "PATCH", api_base, access_token, f"/api/v2/users/{clean_user_id}", payload={"state": "inactive"}
+  )
+  if not updated:
+    return JSONResponse({"ok": False, "error": update_error or f"Genesys user update failed (HTTP {status_code})."}, status_code=400)
+
+  ok_verify, verify_payload, verify_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{clean_user_id}")
+  verified_state = str(verify_payload.get("state", "") or "").strip().lower() if ok_verify else ""
+  if not ok_verify or verified_state != "inactive":
+    return JSONResponse({"ok": False, "error": f"Genesys user update was not verified as inactive: {verify_error or ('returned state ' + (verified_state or 'blank'))}"}, status_code=409)
+
+  _append_audit_event(
+    action="genesys_user_set_inactive_manual",
+    cucm_host=resolved_host,
+    operator=resolved_user,
+    target=f"{clean_user_id};reason=Unknown;state=inactive;division=AMN;roles={len(role_ids)}",
+    output_filename="",
+    inline_mode=True,
+    account=clean_email,
+  )
+  return JSONResponse({
+    "ok": True,
+    "user_id": clean_user_id,
+    "user_email": clean_email,
+    "reason": "Unknown",
+    "state": "inactive",
+    "role_count": len(role_ids),
+    "message": "Genesys user marked inactive and audit event recorded.",
+  })
 
 
 @app.get("/genesys/ad-webrtc/groups/inspect")

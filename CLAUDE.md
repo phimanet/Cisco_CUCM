@@ -108,6 +108,12 @@ Priority keys:
 ## Conversation Notes
 - Keep this section concise with short chronological notes after significant updates.
 
+### 2026-09-23 (Genesys Set User to Inactive)
+- Added an isolated Genesys Admin menu function that lists active users in the AMN division with name, email, username, state, division, and role count.
+- Candidate loading uses one paged Genesys users scan with expanded authorization data; name/email/username and role-count filters are applied locally.
+- Each row has a one-user confirmation action. The backend revalidates email, active state, AMN division, and unchanged role count before setting only that user to Inactive.
+- Manual inactive actions use reason `Unknown`, verify the resulting Genesys state, and write an audit event.
+
 ### 2026-09-22 (Embedded JavaScript handler prevention)
 - Root cause confirmed for the Hunt List panel's "handler missing" error: `main.py` stores browser JavaScript in plain Python triple-quoted strings, so JavaScript `\n`, `\r`, and `\t` escapes can be converted into literal control characters before the browser parses the script.
 - Prevention rule: embedded JavaScript must use `String.fromCharCode(10)`/`String.fromCharCode(13)` for generated line breaks, and every new panel must run both Python compilation and an extracted JavaScript parser check before commit.
