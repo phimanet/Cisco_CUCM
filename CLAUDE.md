@@ -118,6 +118,11 @@ Priority keys:
 - Inactive queue state is stored outside the repository under the configured Genesys queue data directory, reloads after service restart, and resumes unfinished users without repeating already completed changes.
 - Inactive queue processing is rate-limited to 2 user operations per second by default (`GENESYS_INACTIVE_QUEUE_USERS_PER_SECOND`) to reduce Genesys throttling/timeouts; the active rate is shown in the progress banner.
 
+### 2026-09-23 (Genesys WebRTC Cleanup)
+- Added a read-only Genesys Admin function named **Genesys WebRTC Cleanup** that inventories WebRTC phones and returns only phones with no explicit owner and no matching Genesys user station/default-phone association.
+- Cleanup candidate detection uses one paged Phone Management inventory plus one paged users inventory and local ID/name joins, avoiding per-phone API calls.
+- Results show phone ID/name, site, base settings, line count, and candidate evidence. No delete action is included; operators must review candidates before any future removal workflow is approved.
+
 ### 2026-09-22 (Embedded JavaScript handler prevention)
 - Root cause confirmed for the Hunt List panel's "handler missing" error: `main.py` stores browser JavaScript in plain Python triple-quoted strings, so JavaScript `\n`, `\r`, and `\t` escapes can be converted into literal control characters before the browser parses the script.
 - Prevention rule: embedded JavaScript must use `String.fromCharCode(10)`/`String.fromCharCode(13)` for generated line breaks, and every new panel must run both Python compilation and an extracted JavaScript parser check before commit.

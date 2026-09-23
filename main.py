@@ -3319,6 +3319,107 @@ def _genesys_lookup_phone_management_name(api_base: str, access_token: str, user
   return phone_name, matched_phone, payload, ""
 
 
+def _genesys_list_unassigned_webrtc_phones(region: str, access_token: str) -> dict:
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+  phone_payload, phone_error = _genesys_list_phone_management_inventory(api_base, access_token)
+  if phone_error:
+    return {"ok": False, "error": f"Phone Management inventory failed: {phone_error}"}
+
+  users, user_pages, user_error = _genesys_collect_paged_entities(
+    api_base,
+    access_token,
+    "/api/v2/users",
+    max(25, min(GENESYS_USERS_PAGE_SIZE, 200)),
+    300,
+    query_params={"expand": "station"},
+  )
+  if user_error:
+    return {"ok": False, "error": f"Genesys user inventory failed: {user_error}"}
+
+  associated_ids = set()
+  associated_names = set()
+
+  def _collect_station_ref(value):
+    if not isinstance(value, dict):
+      return
+    for key in ["id", "phoneId", "stationId"]:
+      clean_id = str(value.get(key, "") or "").strip().lower()
+      if clean_id:
+        associated_ids.add(clean_id)
+    for key in ["name", "phoneName", "stationName", "displayName"]:
+      clean_name = " ".join(str(value.get(key, "") or "").strip().lower().split())
+      if clean_name:
+        associated_names.add(clean_name)
+    for key in ["phone", "station", "defaultStation", "defaultPhone"]:
+      nested = value.get(key)
+      if isinstance(nested, dict):
+        _collect_station_ref(nested)
+
+  for user in users:
+    if not isinstance(user, dict):
+      continue
+    for key in ["station", "defaultStation", "defaultPhone", "phone"]:
+      _collect_station_ref(user.get(key))
+
+  template = _load_genesys_webrtc_template()
+  template_base_settings_id = str(template.get("phone_base_settings_id", "") or "").strip().lower()
+  candidates = []
+  phones = phone_payload.get("entities", []) if isinstance(phone_payload, dict) else []
+  for phone in phones if isinstance(phones, list) else []:
+    if not isinstance(phone, dict):
+      continue
+    phone_id = str(phone.get("id", "") or "").strip()
+    phone_name = str(phone.get("name", "") or phone.get("phoneName", "") or phone.get("displayName", "") or "").strip()
+    phone_name_key = " ".join(phone_name.lower().split())
+    base_settings = phone.get("phoneBaseSettings") if isinstance(phone.get("phoneBaseSettings"), dict) else {}
+    base_settings_id = str(phone.get("phoneBaseSettingsId", "") or base_settings.get("id", "") or "").strip()
+    base_settings_name = str(base_settings.get("name", "") or phone.get("phoneBaseSettingsName", "") or "").strip()
+    is_webrtc = bool(
+      (template_base_settings_id and base_settings_id.lower() == template_base_settings_id)
+      or "webrtc" in base_settings_name.lower()
+      or "webrtc" in phone_name.lower()
+    )
+    if not is_webrtc:
+      continue
+
+    owner_refs = []
+    for key in ["user", "owner", "webRtcUser", "associatedUser", "primaryUser", "effectiveOwner"]:
+      owner = phone.get(key)
+      if isinstance(owner, dict):
+        owner_refs.extend([str(owner.get("id", "") or "").strip(), str(owner.get("name", "") or "").strip(), str(owner.get("email", "") or "").strip()])
+    for key in ["userId", "ownerUserId", "ownerId", "associatedUserId", "webRtcUserId", "username", "email"]:
+      owner_refs.append(str(phone.get(key, "") or "").strip())
+    has_explicit_owner = any(owner_refs)
+    tied_by_user_inventory = bool(
+      (phone_id and phone_id.lower() in associated_ids)
+      or (phone_name_key and phone_name_key in associated_names)
+    )
+    if has_explicit_owner or tied_by_user_inventory:
+      continue
+
+    site = phone.get("site") if isinstance(phone.get("site"), dict) else {}
+    candidates.append({
+      "phone_id": phone_id,
+      "phone_name": phone_name,
+      "site_id": str(site.get("id", "") or phone.get("siteId", "") or "").strip(),
+      "site_name": str(site.get("name", "") or phone.get("siteName", "") or "").strip(),
+      "base_settings_id": base_settings_id,
+      "base_settings_name": base_settings_name,
+      "line_count": len(phone.get("lines", [])) if isinstance(phone.get("lines"), list) else 0,
+      "candidate_reason": "No explicit phone owner and no matching user station/default-phone association",
+    })
+
+  candidates.sort(key=lambda item: ((item.get("phone_name") or "").casefold(), item.get("phone_id") or ""))
+  return {
+    "ok": True,
+    "region": clean_region,
+    "phones_scanned": len(phones) if isinstance(phones, list) else 0,
+    "users_scanned": len(users),
+    "user_pages_scanned": user_pages,
+    "rows": candidates,
+  }
+
+
 def _genesys_collect_paged_entities(
   api_base: str,
   access_token: str,
@@ -19367,6 +19468,7 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn active" data-panel-target="genesys-ad-webrtc-panel" onclick="(function(){var id='genesys-ad-webrtc-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Add Genesys User</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-update-panel" onclick="(function(){var id='genesys-user-update-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Search and Update</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-panel" onclick="(function(){var id='genesys-user-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User WebRTC Lookup</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-webrtc-cleanup-panel" onclick="(function(){var id='genesys-webrtc-cleanup-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys WebRTC Cleanup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-bulk-email-panel" onclick="(function(){var id='genesys-bulk-email-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Bulk WebRTC build</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-queue-remove-panel" onclick="(function(){var id='genesys-user-queue-remove-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Lookup + Remove (User)</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel" onclick="(function(){var id='genesys-queue-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Info</button>
@@ -19378,6 +19480,50 @@ def genesys_admin_placeholder(request: Request):
         </aside>
 
         <section class="portal-main">
+          <div id="genesys-webrtc-cleanup-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+            <h3 style="margin-top:0;">Genesys WebRTC Cleanup</h3>
+            <p style="color:#4e6a84;font-size:12px;">Read-only lookup of WebRTC phones with no explicit owner and no matching Genesys user station/default-phone association. Results are candidates for review before deletion.</p>
+            <div class="search-filter-row">
+              <input id="genesys-webrtc-cleanup-filter" placeholder="Filter by phone name, ID, site, or base settings" style="width:420px;">
+              <button type="button" id="genesys-webrtc-cleanup-load-btn" onclick="if(window.loadGenesysWebRTCCleanup){window.loadGenesysWebRTCCleanup();}else{document.getElementById('genesys-webrtc-cleanup-status').textContent='Genesys WebRTC Cleanup JavaScript handler is missing.';}return false;" style="background:#385977;">Load Cleanup Candidates</button>
+            </div>
+            <p id="genesys-webrtc-cleanup-status" style="color:#2c5c8a;min-height:18px;">Ready. This lookup does not delete or modify phones.</p>
+            <div id="genesys-webrtc-cleanup-summary" style="display:none;margin:8px 0;padding:8px;background:#f8fcff;border:1px solid #c8dbee;"></div>
+            <div id="genesys-webrtc-cleanup-output" style="overflow-x:auto;"></div>
+            <script>
+              (function () {
+                var loadButton = document.getElementById("genesys-webrtc-cleanup-load-btn");
+                var filterInput = document.getElementById("genesys-webrtc-cleanup-filter");
+                var status = document.getElementById("genesys-webrtc-cleanup-status");
+                var summary = document.getElementById("genesys-webrtc-cleanup-summary");
+                var output = document.getElementById("genesys-webrtc-cleanup-output");
+                var loadedRows = [];
+                var scanInfo = {};
+                if (!loadButton || !filterInput || !status || !summary || !output) return;
+                function esc(value) { return String(value == null ? "" : value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;"); }
+                function renderRows() {
+                  var query = String(filterInput.value || "").trim().toLowerCase();
+                  var rows = loadedRows.filter(function (row) { return !query || [row.phone_name,row.phone_id,row.site_name,row.site_id,row.base_settings_name,row.base_settings_id].join(" ").toLowerCase().indexOf(query) >= 0; });
+                  summary.style.display = "block";
+                  summary.innerHTML = "<strong>Candidates:</strong> " + rows.length + " of " + loadedRows.length + " &nbsp; <strong>Phones scanned:</strong> " + Number(scanInfo.phones_scanned || 0) + " &nbsp; <strong>Users scanned:</strong> " + Number(scanInfo.users_scanned || 0) + ".";
+                  if (!rows.length) { output.innerHTML = "<p>No unassigned WebRTC phone candidates match the current filter.</p>"; return; }
+                  output.innerHTML = "<table><thead><tr><th>Phone Name</th><th>Phone ID</th><th>Site</th><th>Base Settings</th><th>Lines</th><th>Review Status</th></tr></thead><tbody>" + rows.map(function (row) { return "<tr><td><strong>" + esc(row.phone_name || "(unnamed)") + "</strong></td><td>" + esc(row.phone_id) + "</td><td>" + esc(row.site_name || row.site_id || "(none)") + "</td><td>" + esc(row.base_settings_name || row.base_settings_id || "(unknown)") + "</td><td>" + Number(row.line_count || 0) + "</td><td><strong style='color:#9a4b00;'>Candidate to Delete</strong><div style='font-size:11px;color:#4e6a84;margin-top:3px;'>" + esc(row.candidate_reason) + "</div></td></tr>"; }).join("") + "</tbody></table>";
+                }
+                window.loadGenesysWebRTCCleanup = async function () {
+                  loadButton.disabled = true; status.style.color = "#2c5c8a"; status.textContent = "Loading phone and user inventories for read-only comparison..."; summary.style.display = "none"; output.innerHTML = "";
+                  try {
+                    var response = await fetch("/genesys/webrtc-cleanup/candidates", { credentials:"same-origin", headers:{"Accept":"application/json"} });
+                    var payload = await response.json();
+                    if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
+                    loadedRows = Array.isArray(payload.rows) ? payload.rows : []; scanInfo = payload; renderRows();
+                    status.style.color = "#146c2e"; status.textContent = loadedRows.length + " cleanup candidate(s) found. Read-only; no phones were changed.";
+                  } catch (error) { status.style.color = "#b42318"; status.textContent = "Cleanup lookup failed: " + ((error && error.message) || "Unknown error."); }
+                  finally { loadButton.disabled = false; }
+                };
+                filterInput.addEventListener("input", renderRows);
+              })();
+            </script>
+          </div>
           <div id="genesys-external-contact-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">External Contact Creation/Removal</h3>
             <p style="color:#4e6a84;font-size:12px;">Load all CUCM users with a populated Telephone field. Add or remove their Genesys External Contact in the CiscoVoiceUser division.</p>
@@ -26198,6 +26344,21 @@ def genesys_user_inactive_candidates_route():
   )
   if not result.get("ok"):
     return JSONResponse({"ok": False, "error": result.get("error", "Genesys user list failed.")}, status_code=400)
+  return JSONResponse(result)
+
+
+@app.get("/genesys/webrtc-cleanup/candidates")
+def genesys_webrtc_cleanup_candidates_route():
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  result = _genesys_list_unassigned_webrtc_phones(
+    token_result.get("region", clean_region),
+    token_result.get("access_token", ""),
+  )
+  if not result.get("ok"):
+    return JSONResponse({"ok": False, "error": result.get("error", "Genesys WebRTC cleanup lookup failed.")}, status_code=400)
   return JSONResponse(result)
 
 
