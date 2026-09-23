@@ -474,6 +474,8 @@ def _unity_user_extract_start_worker():
     UNITY_USER_EXTRACT_WORKER = concurrent.futures.ThreadPoolExecutor(max_workers=2)
   _load_genesys_ad_webrtc_queue()
   _start_genesys_ad_webrtc_queue_worker()
+  _load_genesys_inactive_queue()
+  _start_genesys_inactive_queue_worker()
   _start_genesys_group_audit_scheduler()
   if _is_lab_runtime_host() and SIP_CALL_SEARCH_ENABLED and SIP_CALL_SEARCH_LAB_ONLY:
     _start_sip_call_search_listener()
@@ -898,6 +900,11 @@ if not _genesys_queue_data_root:
   _genesys_queue_data_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data") if os.name == "nt" else "/opt/cucm-web-data"
 GENESYS_AD_WEBRTC_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue.json")
 GENESYS_AD_WEBRTC_QUEUE_HISTORY_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue_history.json")
+GENESYS_INACTIVE_QUEUE_JOBS = {}
+GENESYS_INACTIVE_QUEUE_LOCK = threading.Lock()
+GENESYS_INACTIVE_QUEUE_WORKER_STARTED = False
+GENESYS_INACTIVE_QUEUE_MAX_HISTORY = max(5, int((os.getenv("GENESYS_INACTIVE_QUEUE_MAX_HISTORY", "20") or "20").strip()))
+GENESYS_INACTIVE_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_inactive_queue.json")
 _genesys_default_filter_path = (os.getenv("GENESYS_DIVISION_FILTERS_PATH", "") or "").strip()
 if not _genesys_default_filter_path:
   if os.name == "nt":
@@ -10214,6 +10221,208 @@ def _start_genesys_ad_webrtc_queue_worker():
   threading.Thread(target=worker, name="genesys-ad-webrtc-queue", daemon=True).start()
 
 
+def _persist_genesys_inactive_queue_locked():
+  jobs = sorted(
+    [dict(job) for job in GENESYS_INACTIVE_QUEUE_JOBS.values() if isinstance(job, dict)],
+    key=lambda job: float(job.get("created_epoch", 0) or 0),
+    reverse=True,
+  )
+  active_jobs = [job for job in jobs if str(job.get("status", "") or "") in {"queued", "running"}]
+  completed_jobs = [job for job in jobs if str(job.get("status", "") or "") not in {"queued", "running"}]
+  kept_jobs = active_jobs + completed_jobs[:GENESYS_INACTIVE_QUEUE_MAX_HISTORY]
+  GENESYS_INACTIVE_QUEUE_JOBS.clear()
+  GENESYS_INACTIVE_QUEUE_JOBS.update({str(job.get("job_id", "")): job for job in kept_jobs if str(job.get("job_id", ""))})
+  try:
+    parent = os.path.dirname(GENESYS_INACTIVE_QUEUE_PATH)
+    if parent:
+      os.makedirs(parent, exist_ok=True)
+    temp_path = GENESYS_INACTIVE_QUEUE_PATH + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+      json.dump({"version": 1, "jobs": kept_jobs}, handle, indent=2)
+    os.replace(temp_path, GENESYS_INACTIVE_QUEUE_PATH)
+  except OSError as exc:
+    logger.warning("Genesys inactive queue persistence failed: %s", exc)
+
+
+def _load_genesys_inactive_queue():
+  try:
+    with open(GENESYS_INACTIVE_QUEUE_PATH, "r", encoding="utf-8") as handle:
+      payload = json.load(handle)
+    jobs = payload.get("jobs", []) if isinstance(payload, dict) else []
+    with GENESYS_INACTIVE_QUEUE_LOCK:
+      for job in jobs if isinstance(jobs, list) else []:
+        if not isinstance(job, dict) or not str(job.get("job_id", "") or "").strip():
+          continue
+        if str(job.get("status", "") or "") in {"queued", "running"}:
+          job["status"] = "queued"
+          job["started_at"] = ""
+          for user in job.get("users", []) if isinstance(job.get("users"), list) else []:
+            if isinstance(user, dict) and str(user.get("status", "") or "") == "running":
+              user["status"] = "queued"
+        GENESYS_INACTIVE_QUEUE_JOBS[str(job["job_id"]).strip()] = job
+      _persist_genesys_inactive_queue_locked()
+  except FileNotFoundError:
+    return
+  except (OSError, ValueError, TypeError) as exc:
+    logger.warning("Genesys inactive queue load failed: %s", exc)
+
+
+def _genesys_inactive_queue_payload(job: dict, include_users: bool = True) -> dict:
+  clean_job = dict(job or {})
+  payload = {
+    "ok": True,
+    "job_id": str(clean_job.get("job_id", "") or ""),
+    "status": str(clean_job.get("status", "queued") or "queued"),
+    "queued": str(clean_job.get("status", "queued") or "queued") in {"queued", "running"},
+    "requested": int(clean_job.get("requested", 0) or 0),
+    "processed": int(clean_job.get("processed", 0) or 0),
+    "success_count": int(clean_job.get("success_count", 0) or 0),
+    "failure_count": int(clean_job.get("failure_count", 0) or 0),
+    "created_at": str(clean_job.get("created_at", "") or ""),
+    "started_at": str(clean_job.get("started_at", "") or ""),
+    "finished_at": str(clean_job.get("finished_at", "") or ""),
+    "error": str(clean_job.get("error", "") or ""),
+  }
+  if include_users:
+    payload["users"] = clean_job.get("users", []) if isinstance(clean_job.get("users"), list) else []
+  return payload
+
+
+def _genesys_inactive_queue_update(job_id: str, **updates):
+  with GENESYS_INACTIVE_QUEUE_LOCK:
+    job = GENESYS_INACTIVE_QUEUE_JOBS.get(str(job_id or "").strip())
+    if not isinstance(job, dict):
+      return
+    job.update(updates)
+    _persist_genesys_inactive_queue_locked()
+
+
+def _genesys_set_inactive_queued_user(api_base: str, access_token: str, user: dict) -> dict:
+  user_id = str(user.get("user_id", "") or "").strip()
+  email = str(user.get("user_email", "") or "").strip().lower()
+  expected_role_count = int(user.get("expected_role_count", -1) or 0)
+  ok_user, user_payload, user_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}")
+  if not ok_user:
+    return {"ok": False, "error": f"Genesys user recheck failed: {user_error or 'Unknown error.'}"}
+  current_email = str(user_payload.get("email", "") or "").strip().lower()
+  division = user_payload.get("division") if isinstance(user_payload.get("division"), dict) else {}
+  division_name = str(division.get("name", "") or "").strip()
+  current_state = str(user_payload.get("state", "") or "").strip().lower()
+  if current_email != email:
+    return {"ok": False, "error": "Genesys user email changed since the list was loaded."}
+  if division_name.casefold() != "amn":
+    return {"ok": False, "error": f"User division is '{division_name or '(none)'}', not AMN."}
+
+  role_ids, role_error = _genesys_get_user_role_ids(api_base, access_token, user_id)
+  if role_error:
+    return {"ok": False, "error": f"Role count could not be verified: {role_error}"}
+  if len(role_ids) != expected_role_count:
+    return {"ok": False, "error": f"Role count changed from {expected_role_count} to {len(role_ids)}."}
+  if current_state == "inactive":
+    return {"ok": True, "already_inactive": True, "role_count": len(role_ids)}
+  if current_state != "active":
+    return {"ok": False, "error": f"User state is '{current_state or '(blank)'}', not active."}
+
+  updated, _, update_error, status_code = _genesys_send_json(
+    "PATCH", api_base, access_token, f"/api/v2/users/{user_id}", payload={"state": "inactive"}
+  )
+  if not updated:
+    return {"ok": False, "error": update_error or f"Genesys user update failed (HTTP {status_code})."}
+  verified_state = ""
+  verify_error = ""
+  for verify_attempt in range(1, 7):
+    ok_verify, verify_payload, verify_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}")
+    verified_state = str(verify_payload.get("state", "") or "").strip().lower() if ok_verify else ""
+    if ok_verify and verified_state == "inactive":
+      return {"ok": True, "already_inactive": False, "role_count": len(role_ids)}
+    if verify_attempt < 6:
+      time.sleep(0.5)
+  return {"ok": False, "error": f"Update was not verified as inactive: {verify_error or ('returned state ' + (verified_state or 'blank'))}"}
+
+
+def _run_genesys_inactive_queue_job(job_id: str):
+  with GENESYS_INACTIVE_QUEUE_LOCK:
+    job = GENESYS_INACTIVE_QUEUE_JOBS.get(job_id)
+    if not isinstance(job, dict):
+      return
+    job["status"] = "running"
+    job["started_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+    _persist_genesys_inactive_queue_locked()
+    job = dict(job)
+  try:
+    region = str(job.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION).strip().lower()
+    token_result = _genesys_get_access_token(region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+    if not token_result.get("ok"):
+      raise RuntimeError(token_result.get("error", "Genesys token request failed."))
+    _, _, api_base = _genesys_region_to_urls(token_result.get("region", region))
+    access_token = token_result.get("access_token", "")
+    while True:
+      with GENESYS_INACTIVE_QUEUE_LOCK:
+        live_job = GENESYS_INACTIVE_QUEUE_JOBS.get(job_id)
+        users = live_job.get("users", []) if isinstance(live_job, dict) and isinstance(live_job.get("users"), list) else []
+        next_user = next((user for user in users if isinstance(user, dict) and str(user.get("status", "queued") or "queued") == "queued"), None)
+        if next_user is None:
+          break
+        next_user["status"] = "running"
+        _persist_genesys_inactive_queue_locked()
+        user_copy = dict(next_user)
+      result = _genesys_set_inactive_queued_user(api_base, access_token, user_copy)
+      with GENESYS_INACTIVE_QUEUE_LOCK:
+        live_job = GENESYS_INACTIVE_QUEUE_JOBS.get(job_id)
+        users = live_job.get("users", []) if isinstance(live_job, dict) and isinstance(live_job.get("users"), list) else []
+        target = next((user for user in users if str(user.get("user_id", "")) == str(user_copy.get("user_id", ""))), None)
+        if isinstance(target, dict):
+          target["status"] = "inactive" if result.get("ok") else "failed"
+          target["error"] = str(result.get("error", "") or "")
+          target["already_inactive"] = bool(result.get("already_inactive", False))
+        live_job["processed"] = sum(1 for user in users if str(user.get("status", "")) in {"inactive", "failed"})
+        live_job["success_count"] = sum(1 for user in users if str(user.get("status", "")) == "inactive")
+        live_job["failure_count"] = sum(1 for user in users if str(user.get("status", "")) == "failed")
+        _persist_genesys_inactive_queue_locked()
+      if result.get("ok") and not result.get("already_inactive"):
+        _append_audit_event(
+          action="genesys_user_set_inactive_queued",
+          cucm_host=str(job.get("cucm_host", "") or ""),
+          operator=str(job.get("operator", "") or ""),
+          target=f"{user_copy.get('user_id', '')};reason=Unknown;state=inactive;division=AMN;roles={user_copy.get('expected_role_count', '')};job={job_id}",
+          output_filename="",
+          inline_mode=True,
+          account=str(user_copy.get("user_email", "") or ""),
+        )
+    with GENESYS_INACTIVE_QUEUE_LOCK:
+      live_job = GENESYS_INACTIVE_QUEUE_JOBS.get(job_id)
+      if isinstance(live_job, dict):
+        live_job["status"] = "completed" if int(live_job.get("failure_count", 0) or 0) == 0 else "completed_with_failures"
+        live_job["finished_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+        _persist_genesys_inactive_queue_locked()
+  except Exception as exc:
+    _genesys_inactive_queue_update(
+      job_id,
+      status="failed",
+      error=str(exc or "Queued Genesys inactive job failed."),
+      finished_at=_audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+    )
+
+
+def _start_genesys_inactive_queue_worker():
+  global GENESYS_INACTIVE_QUEUE_WORKER_STARTED
+  with GENESYS_INACTIVE_QUEUE_LOCK:
+    if GENESYS_INACTIVE_QUEUE_WORKER_STARTED:
+      return
+    GENESYS_INACTIVE_QUEUE_WORKER_STARTED = True
+
+  def worker():
+    while True:
+      with GENESYS_INACTIVE_QUEUE_LOCK:
+        next_job_id = next((job_id for job_id, job in GENESYS_INACTIVE_QUEUE_JOBS.items() if str(job.get("status", "") or "") == "queued"), "")
+      if next_job_id:
+        _run_genesys_inactive_queue_job(next_job_id)
+      else:
+        time.sleep(2)
+
+  threading.Thread(target=worker, name="genesys-inactive-queue", daemon=True).start()
+
+
 # ---------------------------------------------------------------------------
 # Separation SMS Report - scheduled email for offboarded employees
 # ---------------------------------------------------------------------------
@@ -19375,8 +19584,10 @@ def genesys_admin_placeholder(request: Request):
                 <option value="5">Exactly 5</option>
               </select>
               <button type="button" id="genesys-inactive-load-btn" onclick="if(window.loadGenesysInactiveCandidates){window.loadGenesysInactiveCandidates();}else{document.getElementById('genesys-inactive-status').textContent='Set User to Inactive JavaScript handler is missing.';}return false;" style="background:#385977;">Load AMN Active Users</button>
+              <button type="button" id="genesys-inactive-queue-btn" style="background:#a56a00;" disabled>Queue Selected (<span id="genesys-inactive-selected-count">0</span>)</button>
             </div>
             <p id="genesys-inactive-status" style="color:#2c5c8a;min-height:18px;">Ready. No users have been changed.</p>
+            <div id="genesys-inactive-queue-progress" style="display:none;margin:8px 0;padding:8px;background:#fff8e8;border:1px solid #e3c77a;"></div>
             <div id="genesys-inactive-summary" style="display:none;margin:8px 0;padding:8px;background:#f8fcff;border:1px solid #c8dbee;"></div>
             <div id="genesys-inactive-output" style="overflow-x:auto;"></div>
             <script>
@@ -19384,12 +19595,23 @@ def genesys_admin_placeholder(request: Request):
                 var loadButton = document.getElementById("genesys-inactive-load-btn");
                 var filterInput = document.getElementById("genesys-inactive-filter");
                 var roleFilter = document.getElementById("genesys-inactive-role-filter");
+                var queueButton = document.getElementById("genesys-inactive-queue-btn");
+                var selectedCount = document.getElementById("genesys-inactive-selected-count");
+                var queueProgress = document.getElementById("genesys-inactive-queue-progress");
                 var status = document.getElementById("genesys-inactive-status");
                 var summary = document.getElementById("genesys-inactive-summary");
                 var output = document.getElementById("genesys-inactive-output");
                 var loadedRows = [];
-                if (!loadButton || !filterInput || !roleFilter || !status || !summary || !output) return;
+                var selectedIds = {};
+                var activeJobId = "";
+                if (!loadButton || !filterInput || !roleFilter || !queueButton || !selectedCount || !queueProgress || !status || !summary || !output) return;
                 function esc(value) { return String(value == null ? "" : value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;"); }
+                function eligible(row) { return row && row.state !== "inactive" && row.queue_status !== "queued" && row.queue_status !== "running" && typeof row.role_count === "number" && row.id && row.email; }
+                function updateSelectedCount() {
+                  var count = loadedRows.filter(function (row) { return eligible(row) && !!selectedIds[row.id]; }).length;
+                  selectedCount.textContent = String(count);
+                  queueButton.disabled = count === 0 || !!activeJobId;
+                }
                 function renderRows() {
                   var query = String(filterInput.value || "").trim().toLowerCase();
                   var selectedRoleCount = String(roleFilter.value || "").trim();
@@ -19402,13 +19624,20 @@ def genesys_admin_placeholder(request: Request):
                   summary.style.display = "block";
                   var inactiveCount = loadedRows.filter(function (row) { return row.state === "inactive"; }).length;
                   summary.innerHTML = "<strong>Showing:</strong> " + rows.length + " of " + loadedRows.length + " loaded AMN user(s). <strong>Just set Inactive:</strong> " + inactiveCount + ". <strong>Reason:</strong> Unknown.";
-                  if (!rows.length) { output.innerHTML = "<p>No users match the current filters.</p>"; return; }
-                  output.innerHTML = "<table><thead><tr><th>Name</th><th>Username</th><th>State</th><th>Division</th><th>Roles</th><th>Action</th></tr></thead><tbody>" + rows.map(function (row) {
+                  if (!rows.length) { output.innerHTML = "<p>No users match the current filters.</p>"; updateSelectedCount(); return; }
+                  output.innerHTML = "<table><thead><tr><th><input type='checkbox' id='genesys-inactive-select-all' title='Select all currently filtered eligible users'></th><th>Name</th><th>Username</th><th>State</th><th>Division</th><th>Roles</th><th>Action</th></tr></thead><tbody>" + rows.map(function (row) {
                     var countKnown = typeof row.role_count === "number";
                     var isInactive = row.state === "inactive";
-                    var action = isInactive ? "<button type='button' disabled style='background:#146c2e;padding:5px 9px;opacity:1;'>Inactive</button>" : (countKnown && row.id && row.email ? "<button type='button' data-set-inactive-user='" + esc(row.id) + "' data-set-inactive-email='" + esc(row.email) + "' data-set-inactive-name='" + esc(row.name) + "' data-set-inactive-roles='" + esc(row.role_count) + "' style='background:#a56a00;padding:5px 9px;'>Set Inactive</button>" : "Role count unavailable");
-                    return "<tr" + (isInactive ? " style='background:#eef9f1;'" : "") + "><td>" + esc(row.name) + "</td><td>" + esc(row.username) + "</td><td style='font-weight:700;color:" + (isInactive ? "#146c2e" : "#12304a") + ";'>" + esc(row.state) + "</td><td>" + esc(row.division_name) + "</td><td><strong>" + esc(countKnown ? row.role_count : "Unavailable") + "</strong></td><td>" + action + "</td></tr>";
+                    var isQueued = row.queue_status === "queued" || row.queue_status === "running";
+                    var action = isInactive ? "<button type='button' disabled style='background:#146c2e;padding:5px 9px;opacity:1;'>Inactive</button>" : (isQueued ? "<button type='button' disabled style='background:#7a5a13;padding:5px 9px;opacity:1;'>" + esc(row.queue_status === "running" ? "Processing" : "Queued") + "</button>" : (countKnown && row.id && row.email ? "<button type='button' data-set-inactive-user='" + esc(row.id) + "' data-set-inactive-email='" + esc(row.email) + "' data-set-inactive-name='" + esc(row.name) + "' data-set-inactive-roles='" + esc(row.role_count) + "' style='background:#a56a00;padding:5px 9px;'>Set Inactive</button>" : "Role count unavailable"));
+                    var checkbox = eligible(row) ? "<input type='checkbox' data-inactive-select='" + esc(row.id) + "'" + (selectedIds[row.id] ? " checked" : "") + ">" : "";
+                    var rowStyle = isInactive ? " style='background:#eef9f1;'" : (row.queue_status === "failed" ? " style='background:#fff1ef;'" : "");
+                    var stateText = isInactive ? "inactive" : (isQueued ? row.queue_status : (row.queue_status === "failed" ? "failed" : row.state));
+                    return "<tr" + rowStyle + "><td>" + checkbox + "</td><td>" + esc(row.name) + "</td><td>" + esc(row.username) + "</td><td style='font-weight:700;color:" + (isInactive ? "#146c2e" : (row.queue_status === "failed" ? "#b42318" : "#12304a")) + ";' title='" + esc(row.queue_error || "") + "'>" + esc(stateText) + "</td><td>" + esc(row.division_name) + "</td><td><strong>" + esc(countKnown ? row.role_count : "Unavailable") + "</strong></td><td>" + action + "</td></tr>";
                   }).join("") + "</tbody></table>";
+                  Array.prototype.forEach.call(output.querySelectorAll("[data-inactive-select]"), function (checkbox) { checkbox.addEventListener("change", function () { var id=checkbox.getAttribute("data-inactive-select") || ""; if(checkbox.checked) selectedIds[id]=true; else delete selectedIds[id]; updateSelectedCount(); }); });
+                  var selectAll = document.getElementById("genesys-inactive-select-all");
+                  if (selectAll) { selectAll.addEventListener("change", function () { rows.forEach(function (row) { if (eligible(row)) { if(selectAll.checked) selectedIds[row.id]=true; else delete selectedIds[row.id]; } }); renderRows(); }); }
                   Array.prototype.forEach.call(output.querySelectorAll("[data-set-inactive-user]"), function (button) {
                     button.addEventListener("click", async function () {
                       var userId = button.getAttribute("data-set-inactive-user") || "";
@@ -19429,7 +19658,31 @@ def genesys_admin_placeholder(request: Request):
                       }
                     });
                   });
+                  updateSelectedCount();
                 }
+                function applyQueueUsers(users) {
+                  var byId = {};
+                  (Array.isArray(users) ? users : []).forEach(function (user) { byId[user.user_id] = user; });
+                  loadedRows.forEach(function (row) { var queuedUser=byId[row.id]; if(!queuedUser)return; row.queue_status=queuedUser.status || ""; row.queue_error=queuedUser.error || ""; if(queuedUser.status === "inactive") row.state="inactive"; if(queuedUser.status === "inactive" || queuedUser.status === "failed") delete selectedIds[row.id]; });
+                }
+                async function pollQueue(jobId) {
+                  try {
+                    var response = await fetch("/genesys/users/inactive-queue/status?job_id=" + encodeURIComponent(jobId), { credentials:"same-origin", headers:{"Accept":"application/json"} });
+                    var payload = await response.json();
+                    if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
+                    applyQueueUsers(payload.users || []); renderRows();
+                    queueProgress.style.display="block"; queueProgress.innerHTML="<strong>Queue:</strong> " + esc(payload.status) + " &nbsp; <strong>Processed:</strong> " + Number(payload.processed || 0) + "/" + Number(payload.requested || 0) + " &nbsp; <strong>Inactive:</strong> " + Number(payload.success_count || 0) + " &nbsp; <strong>Failed:</strong> " + Number(payload.failure_count || 0);
+                    if (payload.queued) { window.setTimeout(function(){ pollQueue(jobId); }, 2000); return; }
+                    activeJobId=""; localStorage.removeItem("genesysInactiveQueueJobId"); updateSelectedCount(); status.style.color=payload.failure_count ? "#9a4b00" : "#146c2e"; status.textContent="Inactive queue complete: " + Number(payload.success_count || 0) + " succeeded, " + Number(payload.failure_count || 0) + " failed.";
+                  } catch (error) { activeJobId=""; updateSelectedCount(); status.style.color="#b42318"; status.textContent="Queue status failed: " + ((error && error.message) || "Unknown error."); }
+                }
+                queueButton.addEventListener("click", async function () {
+                  var users=loadedRows.filter(function(row){return eligible(row) && !!selectedIds[row.id];}).map(function(row){return {user_id:row.id,user_email:row.email,user_name:row.name,expected_role_count:row.role_count};});
+                  if(!users.length){status.textContent="Select at least one eligible user.";return;}
+                  if(!window.confirm("Queue " + users.length + " selected AMN user(s) to be set Inactive? Reason: Unknown."))return;
+                  queueButton.disabled=true; status.style.color="#2c5c8a"; status.textContent="Submitting " + users.length + " selected user(s) to the persistent queue...";
+                  try { var data=new FormData(); data.append("users_json",JSON.stringify(users)); var response=await fetch("/genesys/users/inactive-queue",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}}); var payload=await response.json(); if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status)); activeJobId=payload.job_id; localStorage.setItem("genesysInactiveQueueJobId",activeJobId); users.forEach(function(user){var row=loadedRows.find(function(item){return item.id===user.user_id;});if(row)row.queue_status="queued";}); renderRows(); status.textContent=users.length+" user(s) queued. Processing continues if you leave this page."; pollQueue(activeJobId); } catch(error){activeJobId="";updateSelectedCount();status.style.color="#b42318";status.textContent="Queue submission failed: "+((error&&error.message)||"Unknown error.");}
+                });
                 window.loadGenesysInactiveCandidates = async function () {
                   loadButton.disabled = true; status.style.color = "#2c5c8a"; status.textContent = "Loading active AMN users and role counts..."; output.innerHTML = ""; summary.style.display = "none";
                   try {
@@ -19445,6 +19698,8 @@ def genesys_admin_placeholder(request: Request):
                 };
                 filterInput.addEventListener("input", renderRows);
                 roleFilter.addEventListener("change", renderRows);
+                var savedJobId=localStorage.getItem("genesysInactiveQueueJobId") || "";
+                if(savedJobId){activeJobId=savedJobId;pollQueue(savedJobId);}
               })();
             </script>
           </div>
@@ -26020,6 +26275,94 @@ def genesys_user_set_inactive_route(
     "role_count": len(role_ids),
     "message": "Genesys user marked inactive and audit event recorded.",
   })
+
+
+@app.post("/genesys/users/inactive-queue")
+def genesys_user_inactive_queue_route(
+  request: Request,
+  users_json: str = Form(""),
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, _ = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  try:
+    parsed_users = json.loads(users_json or "[]")
+  except (TypeError, ValueError):
+    return JSONResponse({"ok": False, "error": "Selected users payload must be valid JSON."}, status_code=400)
+  if not isinstance(parsed_users, list) or not parsed_users:
+    return JSONResponse({"ok": False, "error": "Select at least one active AMN user."}, status_code=400)
+  if len(parsed_users) > 5000:
+    return JSONResponse({"ok": False, "error": "A maximum of 5,000 users can be queued at once."}, status_code=400)
+
+  users = []
+  seen_ids = set()
+  for entry in parsed_users:
+    if not isinstance(entry, dict):
+      continue
+    user_id = str(entry.get("user_id", "") or "").strip()
+    email = str(entry.get("user_email", "") or "").strip().lower()
+    name = str(entry.get("user_name", "") or "").strip()
+    try:
+      role_count = int(entry.get("expected_role_count", -1))
+    except (TypeError, ValueError):
+      role_count = -1
+    if not user_id or user_id in seen_ids or not email or "@" not in email or role_count < 0:
+      continue
+    seen_ids.add(user_id)
+    users.append({
+      "user_id": user_id,
+      "user_email": email,
+      "user_name": name,
+      "expected_role_count": role_count,
+      "status": "queued",
+      "error": "",
+    })
+  if not users:
+    return JSONResponse({"ok": False, "error": "No valid selected users were provided."}, status_code=400)
+
+  job_id = str(uuid4())
+  now_text = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+  job = {
+    "job_id": job_id,
+    "status": "queued",
+    "created_epoch": time.time(),
+    "created_at": now_text,
+    "started_at": "",
+    "finished_at": "",
+    "region": (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2",
+    "cucm_host": resolved_host,
+    "operator": resolved_user,
+    "requested": len(users),
+    "processed": 0,
+    "success_count": 0,
+    "failure_count": 0,
+    "error": "",
+    "users": users,
+  }
+  with GENESYS_INACTIVE_QUEUE_LOCK:
+    GENESYS_INACTIVE_QUEUE_JOBS[job_id] = job
+    _persist_genesys_inactive_queue_locked()
+  _append_audit_event(
+    action="genesys_inactive_batch_queued",
+    cucm_host=resolved_host,
+    operator=resolved_user,
+    target=f"job={job_id};users={len(users)};reason=Unknown",
+    output_filename="",
+    inline_mode=True,
+  )
+  return JSONResponse(_genesys_inactive_queue_payload(job), status_code=202)
+
+
+@app.get("/genesys/users/inactive-queue/status")
+def genesys_user_inactive_queue_status_route(job_id: str = ""):
+  clean_job_id = str(job_id or "").strip()
+  with GENESYS_INACTIVE_QUEUE_LOCK:
+    job = GENESYS_INACTIVE_QUEUE_JOBS.get(clean_job_id)
+    payload = _genesys_inactive_queue_payload(job) if isinstance(job, dict) else None
+  if payload is None:
+    return JSONResponse({"ok": False, "error": "Inactive queue job was not found."}, status_code=404)
+  return JSONResponse(payload)
 
 
 @app.get("/genesys/ad-webrtc/groups/inspect")

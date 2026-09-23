@@ -114,6 +114,8 @@ Priority keys:
 - Each row has a one-user confirmation action. The backend revalidates email, active state, AMN division, and unchanged role count before setting only that user to Inactive.
 - Manual inactive actions use reason `Unknown`, verify the resulting Genesys state, and write an audit event.
 - Successful updates remain visible as a green Inactive row with a disabled Inactive button and completion count; backend verification polls briefly to tolerate Genesys read-after-write delay.
+- Added row checkboxes, filtered select-all, and a Queue Selected action for up to 5,000 users. One durable batch job processes users sequentially with per-user safeguards and progress/results persisted after every user.
+- Inactive queue state is stored outside the repository under the configured Genesys queue data directory, reloads after service restart, and resumes unfinished users without repeating already completed changes.
 
 ### 2026-09-22 (Embedded JavaScript handler prevention)
 - Root cause confirmed for the Hunt List panel's "handler missing" error: `main.py` stores browser JavaScript in plain Python triple-quoted strings, so JavaScript `\n`, `\r`, and `\t` escapes can be converted into literal control characters before the browser parses the script.
