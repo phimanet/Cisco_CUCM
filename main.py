@@ -904,6 +904,7 @@ GENESYS_INACTIVE_QUEUE_JOBS = {}
 GENESYS_INACTIVE_QUEUE_LOCK = threading.Lock()
 GENESYS_INACTIVE_QUEUE_WORKER_STARTED = False
 GENESYS_INACTIVE_QUEUE_MAX_HISTORY = max(5, int((os.getenv("GENESYS_INACTIVE_QUEUE_MAX_HISTORY", "20") or "20").strip()))
+GENESYS_INACTIVE_QUEUE_USERS_PER_SECOND = min(10.0, max(0.1, float((os.getenv("GENESYS_INACTIVE_QUEUE_USERS_PER_SECOND", "2") or "2").strip())))
 GENESYS_INACTIVE_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_inactive_queue.json")
 _genesys_default_filter_path = (os.getenv("GENESYS_DIVISION_FILTERS_PATH", "") or "").strip()
 if not _genesys_default_filter_path:
@@ -10278,6 +10279,7 @@ def _genesys_inactive_queue_payload(job: dict, include_users: bool = True) -> di
     "processed": int(clean_job.get("processed", 0) or 0),
     "success_count": int(clean_job.get("success_count", 0) or 0),
     "failure_count": int(clean_job.get("failure_count", 0) or 0),
+    "users_per_second": float(clean_job.get("users_per_second", GENESYS_INACTIVE_QUEUE_USERS_PER_SECOND) or GENESYS_INACTIVE_QUEUE_USERS_PER_SECOND),
     "created_at": str(clean_job.get("created_at", "") or ""),
     "started_at": str(clean_job.get("started_at", "") or ""),
     "finished_at": str(clean_job.get("finished_at", "") or ""),
@@ -10356,6 +10358,9 @@ def _run_genesys_inactive_queue_job(job_id: str):
       raise RuntimeError(token_result.get("error", "Genesys token request failed."))
     _, _, api_base = _genesys_region_to_urls(token_result.get("region", region))
     access_token = token_result.get("access_token", "")
+    users_per_second = min(10.0, max(0.1, float(job.get("users_per_second", GENESYS_INACTIVE_QUEUE_USERS_PER_SECOND) or GENESYS_INACTIVE_QUEUE_USERS_PER_SECOND)))
+    user_interval_seconds = 1.0 / users_per_second
+    next_user_start = time.monotonic()
     while True:
       with GENESYS_INACTIVE_QUEUE_LOCK:
         live_job = GENESYS_INACTIVE_QUEUE_JOBS.get(job_id)
@@ -10366,6 +10371,10 @@ def _run_genesys_inactive_queue_job(job_id: str):
         next_user["status"] = "running"
         _persist_genesys_inactive_queue_locked()
         user_copy = dict(next_user)
+      wait_seconds = next_user_start - time.monotonic()
+      if wait_seconds > 0:
+        time.sleep(wait_seconds)
+      next_user_start = time.monotonic() + user_interval_seconds
       result = _genesys_set_inactive_queued_user(api_base, access_token, user_copy)
       with GENESYS_INACTIVE_QUEUE_LOCK:
         live_job = GENESYS_INACTIVE_QUEUE_JOBS.get(job_id)
@@ -19671,7 +19680,7 @@ def genesys_admin_placeholder(request: Request):
                     var payload = await response.json();
                     if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
                     applyQueueUsers(payload.users || []); renderRows();
-                    queueProgress.style.display="block"; queueProgress.innerHTML="<strong>Queue:</strong> " + esc(payload.status) + " &nbsp; <strong>Processed:</strong> " + Number(payload.processed || 0) + "/" + Number(payload.requested || 0) + " &nbsp; <strong>Inactive:</strong> " + Number(payload.success_count || 0) + " &nbsp; <strong>Failed:</strong> " + Number(payload.failure_count || 0);
+                    queueProgress.style.display="block"; queueProgress.innerHTML="<strong>Queue:</strong> " + esc(payload.status) + " &nbsp; <strong>Rate:</strong> " + Number(payload.users_per_second || 2) + " users/sec &nbsp; <strong>Processed:</strong> " + Number(payload.processed || 0) + "/" + Number(payload.requested || 0) + " &nbsp; <strong>Inactive:</strong> " + Number(payload.success_count || 0) + " &nbsp; <strong>Failed:</strong> " + Number(payload.failure_count || 0);
                     if (payload.queued) { window.setTimeout(function(){ pollQueue(jobId); }, 2000); return; }
                     activeJobId=""; localStorage.removeItem("genesysInactiveQueueJobId"); updateSelectedCount(); status.style.color=payload.failure_count ? "#9a4b00" : "#146c2e"; status.textContent="Inactive queue complete: " + Number(payload.success_count || 0) + " succeeded, " + Number(payload.failure_count || 0) + " failed.";
                   } catch (error) { activeJobId=""; updateSelectedCount(); status.style.color="#b42318"; status.textContent="Queue status failed: " + ((error && error.message) || "Unknown error."); }
@@ -26337,6 +26346,7 @@ def genesys_user_inactive_queue_route(
     "processed": 0,
     "success_count": 0,
     "failure_count": 0,
+    "users_per_second": GENESYS_INACTIVE_QUEUE_USERS_PER_SECOND,
     "error": "",
     "users": users,
   }
