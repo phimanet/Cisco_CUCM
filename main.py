@@ -10834,6 +10834,8 @@ def _genesys_user_cleanup_queue_payload(job: dict) -> dict:
     "processed": int(clean_job.get("processed", 0) or 0),
     "inactive_count": int(clean_job.get("inactive_count", 0) or 0),
     "failure_count": int(clean_job.get("failure_count", 0) or 0),
+    "phone_deleted_count": int(clean_job.get("phone_deleted_count", 0) or 0),
+    "phone_failure_count": int(clean_job.get("phone_failure_count", 0) or 0),
     "users_per_second": float(clean_job.get("users_per_second", GENESYS_USER_CLEANUP_QUEUE_USERS_PER_SECOND) or GENESYS_USER_CLEANUP_QUEUE_USERS_PER_SECOND),
     "created_at": str(clean_job.get("created_at", "") or ""),
     "started_at": str(clean_job.get("started_at", "") or ""),
@@ -10899,6 +10901,58 @@ def _genesys_set_cleanup_user_inactive(api_base: str, access_token: str, user: d
   return {"ok": False, "error": f"Update was not verified as inactive: {verify_error or ('returned state ' + (verified_state or 'blank'))}"}
 
 
+def _genesys_delete_cleanup_user_webrtc_phones(api_base: str, access_token: str, user_id: str, phones: list[dict]) -> dict:
+  template = _load_genesys_webrtc_template()
+  template_base_id = str(template.get("phone_base_settings_id", "") or "").strip().lower()
+  deleted = []
+  already_deleted = []
+  failures = []
+  for phone in phones if isinstance(phones, list) else []:
+    phone_id = str(phone.get("id", "") or "").strip() if isinstance(phone, dict) else ""
+    expected_name = str(phone.get("name", "") or "").strip() if isinstance(phone, dict) else ""
+    if not phone_id:
+      failures.append("Phone inventory entry had no ID.")
+      continue
+    ok_phone, current_phone, phone_error = _genesys_get_json(api_base, access_token, f"/api/v2/telephony/providers/edges/phones/{phone_id}")
+    if not ok_phone:
+      if "404" in str(phone_error or "") or "not found" in str(phone_error or "").lower():
+        already_deleted.append({"phone_id": phone_id, "phone_name": expected_name})
+        continue
+      failures.append(f"{expected_name or phone_id}: safety recheck failed: {phone_error or 'Unknown error.'}")
+      continue
+
+    current_name = str(current_phone.get("name", "") or "").strip()
+    if expected_name and current_name != expected_name:
+      failures.append(f"{expected_name}: phone name changed to '{current_name or '(blank)'}'.")
+      continue
+    web_rtc_user = current_phone.get("webRtcUser") if isinstance(current_phone.get("webRtcUser"), dict) else {}
+    current_user_id = str(web_rtc_user.get("id", "") or "").strip()
+    if current_user_id != user_id:
+      failures.append(f"{current_name or phone_id}: WebRTC Person no longer matches the target user.")
+      continue
+    base_settings = current_phone.get("phoneBaseSettings") if isinstance(current_phone.get("phoneBaseSettings"), dict) else {}
+    base_id = str(base_settings.get("id", "") or current_phone.get("phoneBaseSettingsId", "") or "").strip().lower()
+    base_name = str(base_settings.get("name", "") or current_phone.get("phoneBaseSettingsName", "") or "").strip()
+    if not ((template_base_id and base_id == template_base_id) or "webrtc" in base_name.lower()):
+      failures.append(f"{current_name or phone_id}: phone is no longer classified as WebRTC.")
+      continue
+
+    removed, _, remove_error, status_code = _genesys_send_json(
+      "DELETE", api_base, access_token, f"/api/v2/telephony/providers/edges/phones/{phone_id}"
+    )
+    if not removed:
+      failures.append(f"{current_name or phone_id}: deletion failed: {remove_error or ('HTTP ' + str(status_code))}")
+      continue
+    deleted.append({"phone_id": phone_id, "phone_name": current_name})
+
+  return {
+    "ok": not failures,
+    "deleted": deleted,
+    "already_deleted": already_deleted,
+    "failures": failures,
+  }
+
+
 def _run_genesys_user_cleanup_queue_job(job_id: str):
   with GENESYS_USER_CLEANUP_QUEUE_LOCK:
     job = GENESYS_USER_CLEANUP_QUEUE_JOBS.get(job_id)
@@ -10915,6 +10969,17 @@ def _run_genesys_user_cleanup_queue_job(job_id: str):
       raise RuntimeError(token_result.get("error", "Genesys token request failed."))
     _, _, api_base = _genesys_region_to_urls(token_result.get("region", region))
     access_token = token_result.get("access_token", "")
+    phone_payload, phone_inventory_error = _genesys_list_phone_management_inventory(api_base, access_token)
+    if phone_inventory_error:
+      raise RuntimeError(f"WebRTC phone inventory failed before user updates: {phone_inventory_error}")
+    phones_by_user = {}
+    for phone in phone_payload.get("entities", []) if isinstance(phone_payload, dict) else []:
+      if not isinstance(phone, dict):
+        continue
+      web_rtc_user = phone.get("webRtcUser") if isinstance(phone.get("webRtcUser"), dict) else {}
+      phone_user_id = str(web_rtc_user.get("id", "") or "").strip()
+      if phone_user_id:
+        phones_by_user.setdefault(phone_user_id, []).append(phone)
     ldap_password = ""
     with GENESYS_USER_CLEANUP_QUEUE_LOCK:
       ldap_password = str(GENESYS_USER_CLEANUP_QUEUE_SECRETS.get(job_id, "") or "").strip()
@@ -10946,17 +11011,29 @@ def _run_genesys_user_cleanup_queue_job(job_id: str):
         time.sleep(wait_seconds)
       next_user_start = time.monotonic() + interval_seconds
       result = _genesys_set_cleanup_user_inactive(api_base, access_token, user_copy, auth_context=ldap_auth_context)
+      phone_result = {"ok": True, "deleted": [], "already_deleted": [], "failures": []}
+      if result.get("ok"):
+        phone_result = _genesys_delete_cleanup_user_webrtc_phones(
+          api_base,
+          access_token,
+          str(user_copy.get("user_id", "") or "").strip(),
+          phones_by_user.get(str(user_copy.get("user_id", "") or "").strip(), []),
+        )
       with GENESYS_USER_CLEANUP_QUEUE_LOCK:
         live_job = GENESYS_USER_CLEANUP_QUEUE_JOBS.get(job_id)
         users = live_job.get("users", []) if isinstance(live_job, dict) and isinstance(live_job.get("users"), list) else []
         target = next((item for item in users if str(item.get("user_id", "")) == str(user_copy.get("user_id", ""))), None)
         if isinstance(target, dict):
           target["status"] = "inactive" if result.get("ok") else "failed"
-          target["error"] = str(result.get("error", "") or "")
+          target["error"] = str(result.get("error", "") or "") or " | ".join(phone_result.get("failures", []))
           target["already_inactive"] = bool(result.get("already_inactive", False))
+          target["phone_deleted_count"] = len(phone_result.get("deleted", []))
+          target["phone_failure_count"] = len(phone_result.get("failures", []))
         live_job["processed"] = sum(1 for item in users if str(item.get("status", "")) in {"inactive", "failed"})
         live_job["inactive_count"] = sum(1 for item in users if str(item.get("status", "")) == "inactive")
-        live_job["failure_count"] = sum(1 for item in users if str(item.get("status", "")) == "failed")
+        live_job["failure_count"] = sum(1 for item in users if str(item.get("status", "")) == "failed") + sum(1 for item in users if int(item.get("phone_failure_count", 0) or 0) > 0)
+        live_job["phone_deleted_count"] = sum(int(item.get("phone_deleted_count", 0) or 0) for item in users if isinstance(item, dict))
+        live_job["phone_failure_count"] = sum(int(item.get("phone_failure_count", 0) or 0) for item in users if isinstance(item, dict))
         _persist_genesys_user_cleanup_queue_locked()
       if result.get("ok") and not result.get("already_inactive"):
         _append_audit_event(
@@ -10964,6 +11041,16 @@ def _run_genesys_user_cleanup_queue_job(job_id: str):
           cucm_host=str(job.get("cucm_host", "") or ""),
           operator=str(job.get("operator", "") or ""),
           target=f"user_id={user_copy.get('user_id', '')};name={user_copy.get('name', '')};email={user_copy.get('email', '')};ad_status={user_copy.get('ad_status', '')};reason=Unknown;job={job_id}",
+          output_filename="",
+          inline_mode=True,
+          account=str(user_copy.get("email", "") or ""),
+        )
+      for deleted_phone in phone_result.get("deleted", []):
+        _append_audit_event(
+          action="genesys_user_cleanup_webrtc_phone_deleted",
+          cucm_host=str(job.get("cucm_host", "") or ""),
+          operator=str(job.get("operator", "") or ""),
+          target=f"user_id={user_copy.get('user_id', '')};phone_id={deleted_phone.get('phone_id', '')};phone_name={deleted_phone.get('phone_name', '')};job={job_id}",
           output_filename="",
           inline_mode=True,
           account=str(user_copy.get("email", "") or ""),
@@ -19955,7 +20042,7 @@ def genesys_admin_placeholder(request: Request):
         <section class="portal-main">
           <div id="genesys-user-cleanup-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Genesys User Cleanup</h3>
-            <p style="color:#4e6a84;font-size:12px;">Compare Genesys end-user emails against Active Directory, review invalid candidates, then select approved active users for queued Inactive status. Emails beginning with zz are excluded from lookup and display.</p>
+            <p style="color:#4e6a84;font-size:12px;">Compare Genesys end-user emails against Active Directory, then queue approved active users for Inactive status and guarded deletion of WebRTC phones still tied to that user. Emails beginning with zz are excluded.</p>
             <div class="search-filter-row">
               <input id="genesys-user-cleanup-filter" placeholder="Filter by name, email, division, or status" style="width:420px;">
               <select id="genesys-user-cleanup-status-filter" style="width:190px;"><option value="">All invalid statuses</option><option value="not_found">Not found in LDAP</option><option value="missing_email">Missing email</option><option value="invalid_email">Invalid email format</option></select>
@@ -19986,8 +20073,8 @@ def genesys_admin_placeholder(request: Request):
                 function updateSelectedCount(){var count=loadedRows.filter(function(row){return eligible(row)&&!!selectedIds[row.user_id];}).length;selectedCount.textContent=String(count);queueButton.disabled=count===0||!!activeJobId;}
                 function renderRows(){var query=String(filterInput.value||"").trim().toLowerCase();var selectedStatus=String(statusFilter.value||"");var rows=loadedRows.filter(function(row){var haystack=[row.name,row.email,row.username,row.division_name,row.state,row.ad_status].join(" ").toLowerCase();return(!query||haystack.indexOf(query)>=0)&&(!selectedStatus||row.ad_status===selectedStatus);});summary.style.display="block";summary.innerHTML="<strong>Candidates:</strong> "+rows.length+" of "+loadedRows.length+" &nbsp; <strong>Genesys users scanned:</strong> "+Number(scanInfo.users_scanned||0)+" &nbsp; <strong>Emails checked in LDAP:</strong> "+Number(scanInfo.emails_checked||0)+" &nbsp; <strong>LDAP source:</strong> "+esc((scanInfo.ldap_sources||[]).join(", ")||"none");if(!rows.length){output.innerHTML="<p>No invalid Genesys user candidates match the current filters.</p>";updateSelectedCount();return;}output.innerHTML="<table><thead><tr><th><input type='checkbox' id='genesys-user-cleanup-select-all' title='Select all filtered active candidates'></th><th>Name</th><th>Email</th><th>Username</th><th>State</th><th>Division</th><th>AD Status</th><th>Review Status</th></tr></thead><tbody>"+rows.map(function(row){var queueState=row.queue_status||"";var isInactive=String(row.state||"").toLowerCase()==="inactive"||queueState==="inactive";var checkbox=eligible(row)?"<input type='checkbox' data-user-cleanup-select='"+esc(row.user_id)+"'"+(selectedIds[row.user_id]?" checked":"")+">":"";var review=isInactive?"<strong style='color:#146c2e;'>Inactive</strong>":(queueState==="failed"?"<strong style='color:#b42318;'>Failed</strong><div style='font-size:11px;color:#b42318;margin-top:3px;'>"+esc(row.queue_error||"")+"</div>":(queueState==="running"?"<strong style='color:#7a5a13;'>Updating</strong>":(queueState==="queued"?"<strong style='color:#7a5a13;'>Queued</strong>":"<strong style='color:#9a4b00;'>Candidate to Set Inactive</strong><div style='font-size:11px;color:#4e6a84;margin-top:3px;'>"+esc(row.candidate_reason)+"</div>")));return "<tr"+(isInactive?" style='background:#eef9f1;'":(queueState==="failed"?" style='background:#fff1ef;'":""))+"><td>"+checkbox+"</td><td><strong>"+esc(row.name||"(unnamed)")+"</strong><div style='font-size:11px;color:#4e6a84;'>"+esc(row.user_id)+"</div></td><td>"+esc(row.email||"(missing)")+"</td><td>"+esc(row.username||"-")+"</td><td>"+esc(isInactive?"inactive":(queueState||row.state||"-"))+"</td><td>"+esc(row.division_name||"-")+"</td><td><strong style='color:#b42318;'>"+esc(statusLabel(row.ad_status))+"</strong></td><td>"+review+"</td></tr>";}).join("")+"</tbody></table>";Array.prototype.forEach.call(output.querySelectorAll("[data-user-cleanup-select]"),function(checkbox){checkbox.addEventListener("change",function(){var id=checkbox.getAttribute("data-user-cleanup-select")||"";if(checkbox.checked)selectedIds[id]=true;else delete selectedIds[id];updateSelectedCount();});});var selectAll=document.getElementById("genesys-user-cleanup-select-all");if(selectAll)selectAll.addEventListener("change",function(){rows.forEach(function(row){if(eligible(row)){if(selectAll.checked)selectedIds[row.user_id]=true;else delete selectedIds[row.user_id];}});renderRows();});updateSelectedCount();}
                 function applyQueueUsers(users){var byId={};(Array.isArray(users)?users:[]).forEach(function(user){byId[user.user_id]=user;});loadedRows.forEach(function(row){var user=byId[row.user_id];if(!user)return;row.queue_status=user.status||"";row.queue_error=user.error||"";if(user.status==="inactive")row.state="inactive";if(user.status==="inactive"||user.status==="failed")delete selectedIds[row.user_id];});}
-                async function pollQueue(jobId){try{var response=await fetch("/genesys/user-cleanup/inactive-queue/status?job_id="+encodeURIComponent(jobId),{credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));applyQueueUsers(payload.users||[]);renderRows();progress.style.display="block";progress.innerHTML="<strong>Inactive Queue:</strong> "+esc(payload.status)+" &nbsp; <strong>Rate:</strong> "+Number(payload.users_per_second||2)+" users/sec &nbsp; <strong>Processed:</strong> "+Number(payload.processed||0)+"/"+Number(payload.requested||0)+" &nbsp; <strong>Inactive:</strong> "+Number(payload.inactive_count||0)+" &nbsp; <strong>Failed:</strong> "+Number(payload.failure_count||0);if(payload.queued){window.setTimeout(function(){pollQueue(jobId);},2000);return;}activeJobId="";localStorage.removeItem("genesysUserCleanupInactiveJobId");updateSelectedCount();status.style.color=payload.failure_count?"#9a4b00":"#146c2e";status.textContent="User cleanup queue complete: "+Number(payload.inactive_count||0)+" set Inactive, "+Number(payload.failure_count||0)+" failed.";}catch(error){activeJobId="";updateSelectedCount();status.style.color="#b42318";status.textContent="Inactive queue status failed: "+((error&&error.message)||"Unknown error.");}}
-                queueButton.addEventListener("click",async function(){var users=loadedRows.filter(function(row){return eligible(row)&&!!selectedIds[row.user_id];}).map(function(row){return {user_id:row.user_id,name:row.name,email:row.email,username:row.username,ad_status:row.ad_status};});if(!users.length){status.textContent="Select at least one active cleanup candidate.";return;}if(window.prompt("This will set "+users.length+" Genesys user(s) to Inactive after LDAP revalidation. Type INACTIVE to continue:")!=="INACTIVE"){status.textContent="Inactive queue cancelled. No users were changed.";return;}queueButton.disabled=true;status.style.color="#2c5c8a";status.textContent="Submitting "+users.length+" user(s) to the persistent Inactive queue...";try{var data=new FormData();data.append("users_json",JSON.stringify(users));var response=await fetch("/genesys/user-cleanup/inactive-queue",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));activeJobId=payload.job_id;localStorage.setItem("genesysUserCleanupInactiveJobId",activeJobId);users.forEach(function(user){var row=loadedRows.find(function(item){return item.user_id===user.user_id;});if(row)row.queue_status="queued";});renderRows();status.textContent=users.length+" user(s) queued. Processing continues if you leave this page.";pollQueue(activeJobId);}catch(error){activeJobId="";updateSelectedCount();status.style.color="#b42318";status.textContent="Inactive queue submission failed: "+((error&&error.message)||"Unknown error.");}});
+                async function pollQueue(jobId){try{var response=await fetch("/genesys/user-cleanup/inactive-queue/status?job_id="+encodeURIComponent(jobId),{credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));applyQueueUsers(payload.users||[]);renderRows();progress.style.display="block";progress.innerHTML="<strong>Inactive Queue:</strong> "+esc(payload.status)+" &nbsp; <strong>Rate:</strong> "+Number(payload.users_per_second||2)+" users/sec &nbsp; <strong>Processed:</strong> "+Number(payload.processed||0)+"/"+Number(payload.requested||0)+" &nbsp; <strong>Inactive:</strong> "+Number(payload.inactive_count||0)+" &nbsp; <strong>Phones Deleted:</strong> "+Number(payload.phone_deleted_count||0)+" &nbsp; <strong>Phone Failures:</strong> "+Number(payload.phone_failure_count||0)+" &nbsp; <strong>Failed:</strong> "+Number(payload.failure_count||0);if(payload.queued){window.setTimeout(function(){pollQueue(jobId);},2000);return;}activeJobId="";localStorage.removeItem("genesysUserCleanupInactiveJobId");updateSelectedCount();status.style.color=payload.failure_count?"#9a4b00":"#146c2e";status.textContent="User cleanup queue complete: "+Number(payload.inactive_count||0)+" set Inactive, "+Number(payload.phone_deleted_count||0)+" WebRTC phone(s) deleted, "+Number(payload.failure_count||0)+" failure(s).";}catch(error){activeJobId="";updateSelectedCount();status.style.color="#b42318";status.textContent="Inactive queue status failed: "+((error&&error.message)||"Unknown error.");}}
+                queueButton.addEventListener("click",async function(){var users=loadedRows.filter(function(row){return eligible(row)&&!!selectedIds[row.user_id];}).map(function(row){return {user_id:row.user_id,name:row.name,email:row.email,username:row.username,ad_status:row.ad_status};});if(!users.length){status.textContent="Select at least one active cleanup candidate.";return;}if(window.prompt("This will set "+users.length+" Genesys user(s) to Inactive after LDAP revalidation, then permanently delete WebRTC phones still tied to those users. Type INACTIVE to continue:")!=="INACTIVE"){status.textContent="Inactive queue cancelled. No users or phones were changed.";return;}queueButton.disabled=true;status.style.color="#2c5c8a";status.textContent="Submitting "+users.length+" user(s) to the persistent Inactive and WebRTC cleanup queue...";try{var data=new FormData();data.append("users_json",JSON.stringify(users));var response=await fetch("/genesys/user-cleanup/inactive-queue",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));activeJobId=payload.job_id;localStorage.setItem("genesysUserCleanupInactiveJobId",activeJobId);users.forEach(function(user){var row=loadedRows.find(function(item){return item.user_id===user.user_id;});if(row)row.queue_status="queued";});renderRows();status.textContent=users.length+" user(s) queued. Processing continues if you leave this page.";pollQueue(activeJobId);}catch(error){activeJobId="";updateSelectedCount();status.style.color="#b42318";status.textContent="Inactive queue submission failed: "+((error&&error.message)||"Unknown error.");}});
                 window.loadGenesysUserCleanup=async function(){loadButton.disabled=true;status.style.color="#2c5c8a";status.textContent="Loading Genesys users and validating emails in LDAP...";summary.style.display="none";output.innerHTML="";try{var response=await fetch("/genesys/user-cleanup/candidates",{credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));loadedRows=Array.isArray(payload.rows)?payload.rows:[];selectedIds={};scanInfo=payload;renderRows();status.style.color="#146c2e";status.textContent=loadedRows.length+" invalid Genesys user candidate(s) found. Select active users approved to set Inactive.";}catch(error){status.style.color="#b42318";status.textContent="User cleanup lookup failed: "+((error&&error.message)||"Unknown error.");}finally{loadButton.disabled=false;}};
                 filterInput.addEventListener("input",renderRows);statusFilter.addEventListener("change",renderRows);
                 var savedJobId=localStorage.getItem("genesysUserCleanupInactiveJobId")||"";if(savedJobId){activeJobId=savedJobId;pollQueue(savedJobId);}
@@ -26969,6 +27056,8 @@ def genesys_user_cleanup_inactive_queue_route(
     "processed": 0,
     "inactive_count": 0,
     "failure_count": 0,
+    "phone_deleted_count": 0,
+    "phone_failure_count": 0,
     "users_per_second": GENESYS_USER_CLEANUP_QUEUE_USERS_PER_SECOND,
     "error": "",
     "users": users,
