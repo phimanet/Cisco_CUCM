@@ -130,6 +130,7 @@ Priority keys:
 - Emails beginning with `zz` are excluded before LDAP lookup and are never displayed or admitted to the queue.
 - Operators can select active candidates or all filtered active candidates and queue them to be set Inactive after typing `INACTIVE`; users are not deleted.
 - The persistent worker re-reads each Genesys user, requires unchanged name/email/username and unchanged invalid AD status, reruns LDAP for well-formed emails, and blocks the update if LDAP is unavailable or the account becomes valid. Jobs run at 2 users per second, survive restarts, and audit successful Inactive updates with reason `Unknown`.
+- Queue submission securely hands the cached LDAP bind context to the worker: passwords remain memory-only when no cipher is configured, or persist encrypted with `CUCM_WEB_CREDENTIAL_FERNET_KEY`. Plaintext credentials are never written to queue files; after restart the worker can also use configured `AD_LDAP_BIND_USER`/`AD_LDAP_BIND_PASSWORD` service credentials.
 
 ### 2026-09-22 (Embedded JavaScript handler prevention)
 - Root cause confirmed for the Hunt List panel's "handler missing" error: `main.py` stores browser JavaScript in plain Python triple-quoted strings, so JavaScript `\n`, `\r`, and `\t` escapes can be converted into literal control characters before the browser parses the script.

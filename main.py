@@ -917,6 +917,7 @@ GENESYS_WEBRTC_CLEANUP_QUEUE_MAX_HISTORY = max(5, int((os.getenv("GENESYS_WEBRTC
 GENESYS_WEBRTC_CLEANUP_QUEUE_PHONES_PER_SECOND = min(10.0, max(0.1, float((os.getenv("GENESYS_WEBRTC_CLEANUP_QUEUE_PHONES_PER_SECOND", "2") or "2").strip())))
 GENESYS_WEBRTC_CLEANUP_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_webrtc_cleanup_queue.json")
 GENESYS_USER_CLEANUP_QUEUE_JOBS = {}
+GENESYS_USER_CLEANUP_QUEUE_SECRETS = {}
 GENESYS_USER_CLEANUP_QUEUE_LOCK = threading.Lock()
 GENESYS_USER_CLEANUP_QUEUE_WORKER_STARTED = False
 GENESYS_USER_CLEANUP_QUEUE_MAX_HISTORY = max(5, int((os.getenv("GENESYS_USER_CLEANUP_QUEUE_MAX_HISTORY", "20") or "20").strip()))
@@ -10842,7 +10843,7 @@ def _genesys_user_cleanup_queue_payload(job: dict) -> dict:
   }
 
 
-def _genesys_set_cleanup_user_inactive(api_base: str, access_token: str, user: dict) -> dict:
+def _genesys_set_cleanup_user_inactive(api_base: str, access_token: str, user: dict, auth_context: dict | None = None) -> dict:
   user_id = str(user.get("user_id", "") or "").strip()
   expected_name = str(user.get("name", "") or "").strip()
   expected_email = str(user.get("email", "") or "").strip().lower()
@@ -10866,7 +10867,7 @@ def _genesys_set_cleanup_user_inactive(api_base: str, access_token: str, user: d
   elif not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", current_email):
     current_ad_status = "invalid_email"
   else:
-    lookup = lookup_ad_identities_by_email([current_email], auth_context={})
+    lookup = lookup_ad_identities_by_email([current_email], auth_context=auth_context or {})
     if not lookup.get("ok"):
       return {"ok": False, "error": f"Inactivation blocked: LDAP recheck failed: {lookup.get('error', 'Unknown error.')}"}
     identities = lookup.get("results", []) if isinstance(lookup.get("results"), list) else []
@@ -10914,6 +10915,19 @@ def _run_genesys_user_cleanup_queue_job(job_id: str):
       raise RuntimeError(token_result.get("error", "Genesys token request failed."))
     _, _, api_base = _genesys_region_to_urls(token_result.get("region", region))
     access_token = token_result.get("access_token", "")
+    ldap_password = ""
+    with GENESYS_USER_CLEANUP_QUEUE_LOCK:
+      ldap_password = str(GENESYS_USER_CLEANUP_QUEUE_SECRETS.get(job_id, "") or "").strip()
+    encrypted_password = str(job.get("ldap_password_enc", "") or "").strip()
+    if not ldap_password and encrypted_password and _CREDENTIAL_CIPHER:
+      try:
+        ldap_password = _CREDENTIAL_CIPHER.decrypt(encrypted_password.encode("utf-8")).decode("utf-8").strip()
+      except (InvalidToken, ValueError, TypeError):
+        ldap_password = ""
+    ldap_auth_context = {
+      "username": str(job.get("ldap_username", "") or "").strip(),
+      "password": ldap_password,
+    }
     users_per_second = min(10.0, max(0.1, float(job.get("users_per_second", GENESYS_USER_CLEANUP_QUEUE_USERS_PER_SECOND) or GENESYS_USER_CLEANUP_QUEUE_USERS_PER_SECOND)))
     interval_seconds = 1.0 / users_per_second
     next_user_start = time.monotonic()
@@ -10931,7 +10945,7 @@ def _run_genesys_user_cleanup_queue_job(job_id: str):
       if wait_seconds > 0:
         time.sleep(wait_seconds)
       next_user_start = time.monotonic() + interval_seconds
-      result = _genesys_set_cleanup_user_inactive(api_base, access_token, user_copy)
+      result = _genesys_set_cleanup_user_inactive(api_base, access_token, user_copy, auth_context=ldap_auth_context)
       with GENESYS_USER_CLEANUP_QUEUE_LOCK:
         live_job = GENESYS_USER_CLEANUP_QUEUE_JOBS.get(job_id)
         users = live_job.get("users", []) if isinstance(live_job, dict) and isinstance(live_job.get("users"), list) else []
@@ -10959,13 +10973,17 @@ def _run_genesys_user_cleanup_queue_job(job_id: str):
       if isinstance(live_job, dict):
         live_job["status"] = "completed" if int(live_job.get("failure_count", 0) or 0) == 0 else "completed_with_failures"
         live_job["finished_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+        live_job.pop("ldap_password_enc", None)
         _persist_genesys_user_cleanup_queue_locked()
+        GENESYS_USER_CLEANUP_QUEUE_SECRETS.pop(job_id, None)
   except Exception as exc:
     with GENESYS_USER_CLEANUP_QUEUE_LOCK:
       live_job = GENESYS_USER_CLEANUP_QUEUE_JOBS.get(job_id)
       if isinstance(live_job, dict):
         live_job.update({"status": "failed", "error": str(exc or "Queued Genesys user cleanup failed."), "finished_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)})
+        live_job.pop("ldap_password_enc", None)
         _persist_genesys_user_cleanup_queue_locked()
+        GENESYS_USER_CLEANUP_QUEUE_SECRETS.pop(job_id, None)
 
 
 def _start_genesys_user_cleanup_queue_worker():
@@ -26899,7 +26917,7 @@ def genesys_user_cleanup_inactive_queue_route(
   cucm_user: str = Form(""),
   cucm_pass: str = Form(""),
 ):
-  resolved_host, resolved_user, _ = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  resolved_host, resolved_user, resolved_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
   try:
     parsed_users = json.loads(users_json or "[]")
   except (TypeError, ValueError):
@@ -26946,6 +26964,7 @@ def genesys_user_cleanup_inactive_queue_route(
     "region": (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2",
     "cucm_host": resolved_host,
     "operator": resolved_user,
+    "ldap_username": resolved_user,
     "requested": len(users),
     "processed": 0,
     "inactive_count": 0,
@@ -26954,8 +26973,12 @@ def genesys_user_cleanup_inactive_queue_route(
     "error": "",
     "users": users,
   }
+  if resolved_pass and _CREDENTIAL_CIPHER:
+    job["ldap_password_enc"] = _CREDENTIAL_CIPHER.encrypt(resolved_pass.encode("utf-8")).decode("utf-8")
   with GENESYS_USER_CLEANUP_QUEUE_LOCK:
     GENESYS_USER_CLEANUP_QUEUE_JOBS[job_id] = job
+    if resolved_pass and not _CREDENTIAL_CIPHER:
+      GENESYS_USER_CLEANUP_QUEUE_SECRETS[job_id] = resolved_pass
     _persist_genesys_user_cleanup_queue_locked()
   _append_audit_event(
     action="genesys_user_cleanup_inactive_queued",
