@@ -120,6 +120,10 @@ Priority keys:
 - Inactive queue state is stored outside the repository under the configured Genesys queue data directory, reloads after service restart, and resumes unfinished users without repeating already completed changes.
 - Inactive queue processing is rate-limited to 2 user operations per second by default (`GENESYS_INACTIVE_QUEUE_USERS_PER_SECOND`) to reduce Genesys throttling/timeouts; the active rate is shown in the progress banner.
 
+### 2026-09-24 (Genesys WebRTC account activation guard)
+- Before any Genesys WebRTC phone creation, the workflow now reads the resolved Genesys user account, PATCHes `state=active` when the account is inactive or blank, re-reads the account, and blocks phone creation unless the verified state is `active`.
+- The delayed AD role-group WebRTC queue applies the same activation check during email-based user resolution, so existing inactive Genesys accounts are reactivated before group membership, phone creation, and filter application.
+
 ### 2026-09-23 (Genesys WebRTC Cleanup)
 - Added a read-only Genesys Admin function named **Genesys WebRTC Cleanup** that requests the authoritative `webRtcUser` phone field and returns WebRTC phones whose WebRTC Person is blank.
 - Cleanup candidate detection uses one paged Phone Management inventory with `fields=webRtcUser,lines.defaultForUser`; it does not infer association from a matching phone/person name.

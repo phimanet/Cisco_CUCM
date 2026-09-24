@@ -2575,6 +2575,14 @@ def _genesys_build_webrtc_phone_for_user(
       "region": clean_region,
     }
 
+  active_result = _genesys_ensure_user_active(clean_region, access_token, resolved_user_id)
+  if not active_result.get("ok"):
+    return {
+      "ok": False,
+      "error": active_result.get("error", "Genesys user is not active; WebRTC phone creation was blocked."),
+      "region": clean_region,
+    }
+
   if not resolved_user_name and clean_user_email:
     resolved_user_name = clean_user_email.split("@", 1)[0]
 
@@ -4048,6 +4056,47 @@ def _genesys_search_queues_by_name(api_base: str, access_token: str, queue_name:
   return sorted(matched, key=_rank), ""
 
 
+def _genesys_ensure_user_active(region: str, access_token: str, user_id: str) -> dict:
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+  clean_user_id = str(user_id or "").strip()
+  if not clean_user_id:
+    return {"ok": False, "error": "Genesys user ID is required to verify account state."}
+
+  ok_user, user_payload, user_error = _genesys_get_json(
+    api_base,
+    access_token,
+    f"/api/v2/users/{clean_user_id}",
+  )
+  if not ok_user or not isinstance(user_payload, dict):
+    return {"ok": False, "error": f"Could not read Genesys user state: {user_error or 'user lookup returned no record.'}"}
+
+  current_state = str(user_payload.get("state", "") or "").strip().lower()
+  if current_state != "active":
+    ok_update, _, update_error, _ = _genesys_send_json(
+      "PATCH",
+      api_base,
+      access_token,
+      f"/api/v2/users/{clean_user_id}",
+      payload={"state": "active"},
+    )
+    if not ok_update:
+      return {"ok": False, "error": f"Genesys user could not be marked active: {update_error or 'state update failed.'}"}
+
+    ok_user, user_payload, user_error = _genesys_get_json(
+      api_base,
+      access_token,
+      f"/api/v2/users/{clean_user_id}",
+    )
+    if not ok_user or not isinstance(user_payload, dict):
+      return {"ok": False, "error": f"Genesys user activation was accepted but verification failed: {user_error or 'user lookup failed.'}"}
+
+  verified_state = str(user_payload.get("state", "") or "").strip().lower()
+  if verified_state != "active":
+    return {"ok": False, "error": f"Genesys user state is '{verified_state or '(blank)'}' after activation; WebRTC creation was blocked."}
+
+  return {"ok": True, "state": "active", "user": user_payload}
+
+
 def _genesys_get_queue_members(api_base: str, access_token: str, queue_id: str) -> tuple[list[dict], str]:
   members, _, err = _genesys_get_queue_members_with_diagnostics(api_base, access_token, queue_id)
   return members, err
@@ -4067,7 +4116,15 @@ def _genesys_ensure_user_by_email(
 
   existing = _genesys_lookup_user_by_email(clean_region, access_token, clean_email)
   if existing.get("ok") and str(existing.get("user_id", "") or "").strip():
+    active_result = _genesys_ensure_user_active(
+      clean_region,
+      access_token,
+      str(existing.get("user_id", "") or "").strip(),
+    )
+    if not active_result.get("ok"):
+      return {"ok": False, "error": active_result.get("error", "Genesys user could not be marked active.")}
     existing["created_now"] = False
+    existing["state"] = "active"
     return existing
 
   clean_first = str(first_name or "").strip()
@@ -4114,11 +4171,20 @@ def _genesys_ensure_user_by_email(
   created_id = str((create_body or {}).get("id", "") or "").strip() if isinstance(create_body, dict) else ""
   verified = _genesys_lookup_user_by_email(clean_region, access_token, clean_email)
   if verified.get("ok") and str(verified.get("user_id", "") or "").strip():
+    active_result = _genesys_ensure_user_active(
+      clean_region,
+      access_token,
+      str(verified.get("user_id", "") or "").strip(),
+    )
+    if not active_result.get("ok"):
+      return {"ok": False, "error": active_result.get("error", "New Genesys user could not be verified as active.")}
     verified["created_now"] = True
+    verified["state"] = "active"
     return verified
   if created_id:
-    ok_user, user_payload, user_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{created_id}")
-    if ok_user and isinstance(user_payload, dict):
+    active_result = _genesys_ensure_user_active(clean_region, access_token, created_id)
+    if active_result.get("ok") and isinstance(active_result.get("user"), dict):
+      user_payload = active_result.get("user", {})
       return {
         "ok": True,
         "user_id": created_id,
@@ -4128,8 +4194,9 @@ def _genesys_ensure_user_by_email(
         "display_name": str(user_payload.get("name", "") or full_name).strip(),
         "email": clean_email,
         "created_now": True,
+        "state": "active",
       }
-    return {"ok": False, "error": f"Genesys user was created but verification failed: {user_error or 'user lookup returned no record.'}"}
+    return {"ok": False, "error": f"Genesys user was created but activation verification failed: {active_result.get('error', 'user lookup returned no record.') }"}
   return {"ok": False, "error": f"Genesys user creation was accepted but the user could not be verified by email: {verified.get('error', 'unknown error')}"}
 
 
