@@ -57108,8 +57108,8 @@ def verasmart_lab_template_builder_generate_from_cucm_route(
       return output.getvalue().encode("utf-8")
 
     personnel_bytes = _pipe_csv(
-      ["Email", "WindowsDomainAccount", "CostCenter", "EZBurstOption", "LoginDisabled"],
-      [[row["email"], row["windows_domain_account"], row["cost_center"], "E-mail links to EZ-Burst reports", "No"] for row in targets],
+      ["Email", "CostCenter", "EZBurstOption", "WindowsDomainAccount", "LoginDisabled"],
+      [[row["email"], row["cost_center"], "E-mail links to EZ-Burst reports", row["windows_domain_account"], "No"] for row in targets],
     )
     distribution_lists = [
       "1 All Sales 6 Daily",
