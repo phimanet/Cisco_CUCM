@@ -127,6 +127,9 @@ UNITY_USER_EXTRACT_HISTORY_LIMIT = max(20, int((os.getenv("UNITY_USER_EXTRACT_HI
 VERASMART_QUEUE_RUNS = {}
 VERASMART_QUEUE_LOCK = threading.Lock()
 VERASMART_QUEUE_MAX_RUNS = 50
+VERASMART_PERSONNEL_EXPORTS = {}
+VERASMART_PERSONNEL_EXPORTS_LOCK = threading.Lock()
+VERASMART_PERSONNEL_EXPORT_TTL_SECONDS = 60 * 60
 GREENLIGHT_LOOKUP_RUNS = {}
 GREENLIGHT_LOOKUP_RUNS_LOCK = threading.Lock()
 GREENLIGHT_LOOKUP_MAX_RUNS = 20
@@ -16966,6 +16969,147 @@ def _parse_verasmart_queue_rows(csv_text: str) -> list[dict]:
     )
 
   return rows
+
+
+def _parse_verasmart_personnel_export(file_bytes: bytes, filename: str) -> dict:
+  def _normalize_header(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").strip().lower())
+
+  grid = []
+  if str(filename or "").lower().endswith(".xlsx"):
+    try:
+      with zipfile.ZipFile(io.BytesIO(file_bytes)) as workbook:
+        shared_strings = []
+        if "xl/sharedStrings.xml" in workbook.namelist():
+          shared_root = ET.fromstring(workbook.read("xl/sharedStrings.xml"))
+          for item in shared_root.findall(".//{*}si"):
+            shared_strings.append("".join(node.text or "" for node in item.findall(".//{*}t")))
+        sheets = sorted(name for name in workbook.namelist() if name.startswith("xl/worksheets/sheet") and name.endswith(".xml"))
+        if not sheets:
+          return {"ok": False, "error": "No worksheet was found in the XLSX export."}
+        sheet_root = ET.fromstring(workbook.read(sheets[0]))
+        for row_node in sheet_root.findall(".//{*}row"):
+          values = {}
+          max_index = -1
+          for cell in row_node.findall("{*}c"):
+            ref = str(cell.attrib.get("r", "") or "")
+            letters = "".join(ch for ch in ref if ch.isalpha())
+            column_index = 0
+            for letter in letters.upper():
+              column_index = (column_index * 26) + ord(letter) - 64
+            column_index = max(0, column_index - 1)
+            value_node = cell.find("{*}v")
+            inline_node = cell.find(".//{*}t")
+            value = inline_node.text if inline_node is not None else (value_node.text if value_node is not None else "")
+            if cell.attrib.get("t") == "s" and str(value or "").isdigit():
+              shared_index = int(value)
+              value = shared_strings[shared_index] if shared_index < len(shared_strings) else ""
+            values[column_index] = str(value or "").strip()
+            max_index = max(max_index, column_index)
+          if max_index >= 0:
+            grid.append([values.get(index, "") for index in range(max_index + 1)])
+    except (OSError, ValueError, zipfile.BadZipFile, ET.ParseError) as exc:
+      return {"ok": False, "error": f"Could not read the XLSX Personnel export: {exc}"}
+  else:
+    try:
+      text = file_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+      text = file_bytes.decode("windows-1252")
+    sample = text[:8192]
+    try:
+      dialect = csv.Sniffer().sniff(sample, delimiters=",|\t;^")
+      delimiter = dialect.delimiter
+    except csv.Error:
+      delimiter = ","
+    grid = [[str(value or "").strip() for value in row] for row in csv.reader(io.StringIO(text), delimiter=delimiter)]
+
+  grid = [row for row in grid if any(str(value or "").strip() for value in row)]
+  if len(grid) < 2:
+    return {"ok": False, "error": "The Personnel export must include a header row and at least one data row."}
+  headers = [str(value or "").strip() for value in grid[0]]
+  header_indexes = {_normalize_header(header): index for index, header in enumerate(headers) if _normalize_header(header)}
+
+  def _find_index(*aliases):
+    for alias in aliases:
+      normalized = _normalize_header(alias)
+      if normalized in header_indexes:
+        return header_indexes[normalized]
+    return None
+
+  indexes = {
+    "email": _find_index("E-mail address", "Email address", "Email"),
+    "cost_center": _find_index("Cost center", "CostCenter"),
+    "name": _find_index("Personnel", "Personnel name", "Name", "Display name"),
+    "first_name": _find_index("First name", "FirstName"),
+    "last_name": _find_index("Last name", "LastName"),
+    "employee_number": _find_index("Employee number", "EmployeeNumber"),
+    "windows_domain_account": _find_index("Windows domain account", "WindowsDomainAccount"),
+    "login_id": _find_index("Login ID", "LoginID"),
+    "login_disabled": _find_index("Login disabled", "LoginDisabled"),
+  }
+  missing = [label for key, label in [("email", "E-mail address"), ("cost_center", "Cost center"), ("windows_domain_account", "Windows domain account")] if indexes[key] is None]
+  if missing:
+    return {"ok": False, "error": "Personnel export is missing required column(s): " + ", ".join(missing), "headers": headers}
+
+  def _value(row, key):
+    index = indexes.get(key)
+    return str(row[index] if index is not None and index < len(row) else "").strip()
+
+  rows = []
+  duplicate_emails = set()
+  seen_emails = set()
+  for source_row in grid[1:50001]:
+    email = _value(source_row, "email").lower()
+    if not email:
+      continue
+    if email in seen_emails:
+      duplicate_emails.add(email)
+      continue
+    seen_emails.add(email)
+    name = _value(source_row, "name")
+    if not name:
+      name = " ".join(part for part in [_value(source_row, "first_name"), _value(source_row, "last_name")] if part).strip()
+    rows.append({
+      "email": email,
+      "name": name or email,
+      "cost_center": _value(source_row, "cost_center"),
+      "employee_number": _value(source_row, "employee_number"),
+      "windows_domain_account": _value(source_row, "windows_domain_account"),
+      "login_id": _value(source_row, "login_id"),
+      "login_disabled": _value(source_row, "login_disabled"),
+    })
+  if duplicate_emails:
+    return {"ok": False, "error": "Personnel export contains duplicate email address(es): " + ", ".join(sorted(duplicate_emails)[:10])}
+  if not rows:
+    return {"ok": False, "error": "No Personnel rows with email addresses were found."}
+  return {"ok": True, "rows": rows, "headers": headers}
+
+
+def _store_verasmart_personnel_export(operator: str, filename: str, rows: list[dict]) -> str:
+  now_epoch = time.time()
+  export_id = str(uuid4())
+  with VERASMART_PERSONNEL_EXPORTS_LOCK:
+    expired = [key for key, value in VERASMART_PERSONNEL_EXPORTS.items() if now_epoch - float(value.get("created_epoch", 0) or 0) > VERASMART_PERSONNEL_EXPORT_TTL_SECONDS]
+    for key in expired:
+      VERASMART_PERSONNEL_EXPORTS.pop(key, None)
+    VERASMART_PERSONNEL_EXPORTS[export_id] = {
+      "created_epoch": now_epoch,
+      "operator": operator,
+      "filename": filename,
+      "rows": [dict(row) for row in rows],
+    }
+  return export_id
+
+
+def _get_verasmart_personnel_export(export_id: str, operator: str) -> dict | None:
+  with VERASMART_PERSONNEL_EXPORTS_LOCK:
+    export_data = VERASMART_PERSONNEL_EXPORTS.get(str(export_id or "").strip())
+    if not isinstance(export_data, dict) or str(export_data.get("operator", "") or "") != str(operator or ""):
+      return None
+    if time.time() - float(export_data.get("created_epoch", 0) or 0) > VERASMART_PERSONNEL_EXPORT_TTL_SECONDS:
+      VERASMART_PERSONNEL_EXPORTS.pop(str(export_id or "").strip(), None)
+      return None
+    return {**export_data, "rows": [dict(row) for row in export_data.get("rows", [])]}
 
 
 def _store_verasmart_queue_run(operator: str, source_filename: str, rows: list[dict]) -> dict:
@@ -42502,6 +42646,7 @@ def menu_admin_page(request: Request):
           <h4>Administrative Menu</h4>
           <div class="portal-nav">
             <button type="button" class="portal-nav-btn start-here-btn active" data-panel="personlookup">Start Here!<br>Employee Lookup By Name</button>
+            <button type="button" class="portal-nav-btn" data-panel="verasmart-lab">VeraSMART / Calero (v1.01 LAB)</button>
             <button type="button" class="portal-nav-btn" data-panel="strike">Strike Mode - Add iPhone and Android</button>
             <button type="button" class="portal-nav-btn" data-panel="strikemask">Strike Mask - Masked Calling</button>
             <button type="button" class="portal-nav-btn" data-panel="mobiledelete">Remove Jabber Mobile only</button>
@@ -42515,7 +42660,6 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="transtemplate">Translation Pattern Template</button>
             <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
             <button type="button" class="portal-nav-btn" data-panel="strikemask-template">Add Translation for Strike Mask Use (CSV Template)</button>
-            <button type="button" class="portal-nav-btn" data-panel="verasmart-lab">VeraSMART / Calero (v1.01 LAB)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=teams-telephony'">Create Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=teams-telephony-remove'">Remove Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM (Main Ops)</button>
@@ -43197,6 +43341,46 @@ def menu_admin_page(request: Request):
           <a href="/download/verasmart-queue-template" class="mini-btn" style="text-decoration:none;">Download Queue CSV Template</a>
         </div>
         <p style="padding:8px;background:#fff8e8;border:1px solid #e3c77a;color:#6f5000;"><strong>Login Disabled template is provisional:</strong> do not import it until the VeraSMART mapping wizard confirms the field and accepts <strong>No</strong>.</p>
+        <div style="margin:14px 0;padding:12px;border:1px solid #c8dbee;background:#f8fcff;">
+          <h4 style="margin-top:0;">Build Manual Test Files from Personnel Export</h4>
+          <p style="color:#4e6a84;font-size:12px;">Upload a current VeraSMART Personnel CSV/TXT/XLSX export. The export stays in memory for one hour and is not written to disk.</p>
+          <div class="search-filter-row">
+            <input type="file" id="verasmart-personnel-export-file" accept=".csv,.txt,.xlsx">
+            <button type="button" id="verasmart-personnel-export-upload" onclick="if(window.uploadVeraSmartPersonnelExport){window.uploadVeraSmartPersonnelExport();}else{document.getElementById('verasmart-builder-status').textContent='VeraSMART builder JavaScript handler is missing.';}return false;">Load Personnel Export</button>
+          </div>
+          <p id="verasmart-builder-status" style="color:#2c5c8a;min-height:18px;">Upload a current Personnel export to begin.</p>
+          <div id="verasmart-builder-controls" style="display:none;">
+            <div class="search-filter-row">
+              <input id="verasmart-builder-filter" placeholder="Filter by name, email, Cost Center, or Windows account" style="width:420px;">
+              <button type="button" id="verasmart-builder-generate" disabled>Generate Selected Files</button>
+            </div>
+            <div id="verasmart-builder-selection" style="margin:8px 0;padding:8px;background:#fff;border:1px solid #c8dbee;"></div>
+            <div id="verasmart-builder-users" style="overflow-x:auto;max-height:480px;overflow-y:auto;"></div>
+            <div id="verasmart-builder-downloads" style="display:none;margin-top:12px;padding:10px;background:#eef9f1;border:1px solid #9dccaa;"></div>
+          </div>
+        </div>
+        <script>
+          (function () {
+            var fileInput=document.getElementById("verasmart-personnel-export-file");
+            var uploadButton=document.getElementById("verasmart-personnel-export-upload");
+            var generateButton=document.getElementById("verasmart-builder-generate");
+            var filterInput=document.getElementById("verasmart-builder-filter");
+            var status=document.getElementById("verasmart-builder-status");
+            var controls=document.getElementById("verasmart-builder-controls");
+            var selection=document.getElementById("verasmart-builder-selection");
+            var usersOutput=document.getElementById("verasmart-builder-users");
+            var downloads=document.getElementById("verasmart-builder-downloads");
+            var rows=[];var exportId="";var templateEmail="";var targetEmails={};
+            if(!fileInput||!uploadButton||!generateButton||!filterInput||!status||!controls||!selection||!usersOutput||!downloads)return;
+            function esc(value){return String(value==null?"":value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;");}
+            function selectedTargets(){return rows.filter(function(row){return !!targetEmails[row.email]&&row.email!==templateEmail;});}
+            function updateSelection(){var template=rows.find(function(row){return row.email===templateEmail;});var targets=selectedTargets();selection.innerHTML="<strong>Template:</strong> "+esc(template?(template.name+" | "+template.cost_center):"Not selected")+" &nbsp; <strong>Targets:</strong> "+targets.length+" &nbsp; <strong>Output:</strong> Cost Center="+esc(template?template.cost_center:"-")+", EZ-Burst=Linked, Login disabled=No (provisional)";generateButton.disabled=!template||!template.cost_center||!targets.length||targets.some(function(row){return !row.windows_domain_account||!row.email;});}
+            function renderRows(){var query=String(filterInput.value||"").trim().toLowerCase();var visible=rows.filter(function(row){return !query||[row.name,row.email,row.cost_center,row.windows_domain_account].join(" ").toLowerCase().indexOf(query)>=0;});if(!visible.length){usersOutput.innerHTML="<p>No Personnel rows match the filter.</p>";updateSelection();return;}usersOutput.innerHTML="<table><thead><tr><th>Template</th><th>Target</th><th>Name</th><th>Email (EZ-Burst only)</th><th>Cost Center</th><th>Windows Domain Account</th><th>Login Disabled</th></tr></thead><tbody>"+visible.map(function(row){return "<tr><td><input type='radio' name='verasmart-template-person' data-verasmart-template='"+esc(row.email)+"'"+(row.email===templateEmail?" checked":"")+"></td><td><input type='checkbox' data-verasmart-target='"+esc(row.email)+"'"+(targetEmails[row.email]?" checked":"")+(row.email===templateEmail?" disabled":"")+"></td><td><strong>"+esc(row.name)+"</strong></td><td>"+esc(row.email)+"</td><td>"+esc(row.cost_center||"(missing)")+"</td><td>"+esc(row.windows_domain_account||"(missing)")+"</td><td>"+esc(row.login_disabled||"(unknown)")+"</td></tr>";}).join("")+"</tbody></table>";Array.prototype.forEach.call(usersOutput.querySelectorAll("[data-verasmart-template]"),function(input){input.addEventListener("change",function(){templateEmail=input.getAttribute("data-verasmart-template")||"";delete targetEmails[templateEmail];renderRows();});});Array.prototype.forEach.call(usersOutput.querySelectorAll("[data-verasmart-target]"),function(input){input.addEventListener("change",function(){var email=input.getAttribute("data-verasmart-target")||"";if(input.checked)targetEmails[email]=true;else delete targetEmails[email];updateSelection();});});updateSelection();}
+            window.uploadVeraSmartPersonnelExport=async function(){if(!fileInput.files||!fileInput.files[0]){status.style.color="#b42318";status.textContent="Choose a Personnel export first.";return;}uploadButton.disabled=true;status.style.color="#2c5c8a";status.textContent="Reading Personnel export...";downloads.style.display="none";try{var data=new FormData();data.append("personnel_file",fileInput.files[0]);var response=await fetch("/verasmart/lab/personnel-export/upload",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));rows=Array.isArray(payload.rows)?payload.rows:[];exportId=payload.export_id||"";templateEmail="";targetEmails={};controls.style.display="block";renderRows();status.style.color="#146c2e";status.textContent=rows.length+" Personnel row(s) loaded from "+String(payload.filename||"export")+". Select one template and one or more targets.";}catch(error){controls.style.display="none";status.style.color="#b42318";status.textContent="Personnel export failed: "+((error&&error.message)||"Unknown error.");}finally{uploadButton.disabled=false;}};
+            generateButton.addEventListener("click",async function(){var targets=selectedTargets();var template=rows.find(function(row){return row.email===templateEmail;});if(!template||!targets.length)return;if(!window.confirm("Generate manual VeraSMART files for "+targets.length+" target(s) using Cost Center '"+template.cost_center+"' from "+template.name+"? No files will be sent by SFTP."))return;generateButton.disabled=true;status.style.color="#2c5c8a";status.textContent="Generating manual-test files...";try{var data=new FormData();data.append("export_id",exportId);data.append("template_email",templateEmail);data.append("target_emails_json",JSON.stringify(targets.map(function(row){return row.email;})));var response=await fetch("/verasmart/lab/template-builder/generate",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));downloads.style.display="block";downloads.innerHTML="<strong>Manual-test files ready. Nothing was sent by SFTP.</strong><div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;'><a class='mini-btn' href='"+esc(payload.downloads.personnel)+"'>Download Personnel Update</a><a class='mini-btn' href='"+esc(payload.downloads.ezburst)+"'>Download EZ-Burst Update</a><a class='mini-btn' href='"+esc(payload.downloads.login_disabled)+"'>Download Login Disabled = No</a></div>";status.style.color="#146c2e";status.textContent="Generated files for "+targets.length+" target(s). Validate Personnel first, then EZ-Burst, then the provisional Login Disabled mapping.";}catch(error){status.style.color="#b42318";status.textContent="File generation failed: "+((error&&error.message)||"Unknown error.");}finally{updateSelection();}});
+            filterInput.addEventListener("input",renderRows);
+          })();
+        </script>
         <form id="verasmart-lab-queue-form" enctype="multipart/form-data">
           CSV File:<br>
           <input type="file" name="csv_file" accept=".csv" required><br><br>
@@ -56668,6 +56852,141 @@ async def verasmart_lab_queue_upload_route(
       "total_rows": entry.get("total_rows", 0),
       "status": entry.get("status", ""),
       "note": entry.get("note", ""),
+    })
+
+
+@app.post("/verasmart/lab/personnel-export/upload")
+async def verasmart_lab_personnel_export_upload_route(
+    request: Request,
+    personnel_file: UploadFile = File(...),
+):
+    _session, operator = _require_admin_session(request)
+    filename = str(personnel_file.filename or "verasmart_personnel_export.csv").strip()
+    if not filename.lower().endswith((".csv", ".txt", ".xlsx")):
+      return JSONResponse({"ok": False, "error": "Upload a VeraSMART Personnel export in CSV, TXT, or XLSX format."}, status_code=400)
+    raw = await personnel_file.read()
+    if not raw:
+      return JSONResponse({"ok": False, "error": "The Personnel export is empty."}, status_code=400)
+    if len(raw) > 20 * 1024 * 1024:
+      return JSONResponse({"ok": False, "error": "The Personnel export exceeds the 20 MB LAB limit."}, status_code=400)
+    parsed = _parse_verasmart_personnel_export(raw, filename)
+    if not parsed.get("ok"):
+      return JSONResponse(parsed, status_code=400)
+    rows = parsed.get("rows", [])
+    export_id = _store_verasmart_personnel_export(operator, filename, rows)
+    return JSONResponse({
+      "ok": True,
+      "export_id": export_id,
+      "filename": filename,
+      "count": len(rows),
+      "expires_in_seconds": VERASMART_PERSONNEL_EXPORT_TTL_SECONDS,
+      "rows": rows,
+    })
+
+
+@app.post("/verasmart/lab/template-builder/generate")
+def verasmart_lab_template_builder_generate_route(
+    request: Request,
+    export_id: str = Form(""),
+    template_email: str = Form(""),
+    target_emails_json: str = Form(""),
+):
+    _session, operator = _require_admin_session(request)
+    export_data = _get_verasmart_personnel_export(export_id, operator)
+    if not export_data:
+      return JSONResponse({"ok": False, "error": "Personnel export expired or was not found. Upload it again."}, status_code=404)
+    try:
+      target_emails = json.loads(target_emails_json or "[]")
+    except (TypeError, ValueError):
+      return JSONResponse({"ok": False, "error": "Target user selection is invalid."}, status_code=400)
+    if not isinstance(target_emails, list) or not target_emails:
+      return JSONResponse({"ok": False, "error": "Select at least one target employee."}, status_code=400)
+    if len(target_emails) > 500:
+      return JSONResponse({"ok": False, "error": "A maximum of 500 targets can be generated at once."}, status_code=400)
+
+    by_email = {str(row.get("email", "") or "").strip().lower(): row for row in export_data.get("rows", []) if isinstance(row, dict)}
+    clean_template_email = str(template_email or "").strip().lower()
+    template = by_email.get(clean_template_email)
+    if not template:
+      return JSONResponse({"ok": False, "error": "Select a valid template employee from the uploaded export."}, status_code=400)
+    template_cost_center = str(template.get("cost_center", "") or "").strip()
+    if not template_cost_center:
+      return JSONResponse({"ok": False, "error": "The selected template employee has no Cost Center."}, status_code=400)
+
+    targets = []
+    missing_accounts = []
+    seen = set()
+    for email_value in target_emails:
+      email = str(email_value or "").strip().lower()
+      if not email or email in seen:
+        continue
+      seen.add(email)
+      row = by_email.get(email)
+      if not row:
+        continue
+      windows_account = str(row.get("windows_domain_account", "") or "").strip()
+      if not windows_account:
+        missing_accounts.append(str(row.get("name", "") or email))
+        continue
+      targets.append({**row, "windows_domain_account": windows_account})
+    if missing_accounts:
+      return JSONResponse({"ok": False, "error": "Target(s) missing Windows domain account: " + ", ".join(missing_accounts[:10])}, status_code=400)
+    if not targets:
+      return JSONResponse({"ok": False, "error": "No valid target employees were selected."}, status_code=400)
+
+    def _pipe_csv(headers: list[str], data_rows: list[list[str]]) -> bytes:
+      output = io.StringIO(newline="")
+      writer = csv.writer(output, delimiter="|", lineterminator="\n")
+      writer.writerow(headers)
+      writer.writerows(data_rows)
+      return output.getvalue().encode("utf-8")
+
+    personnel_bytes = _pipe_csv(
+      ["WindowsDomainAccount", "CostCenter", "EZBurstOption"],
+      [[row["windows_domain_account"], template_cost_center, "Linked"] for row in targets],
+    )
+    login_bytes = _pipe_csv(
+      ["WindowsDomainAccount", "LoginDisabled"],
+      [[row["windows_domain_account"], "No"] for row in targets],
+    )
+    distribution_lists = [
+      "1 All Sales 6 Daily",
+      "1 All Sales 6 Hourly - USR Custom",
+      "1 All Sales 6 Weekly",
+      "1 All Sales East 6 Hourly",
+    ]
+    ezburst_rows = [
+      [list_name, str(row.get("email", "") or ""), template_cost_center, ""]
+      for row in targets
+      for list_name in distribution_lists
+    ]
+    ezburst_bytes = _pipe_csv(
+      ["DistributionListName", "EmailAddress", "CostCenter", "Department"],
+      ezburst_rows,
+    )
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    personnel_job = _store_job_output(personnel_bytes, f"verasmart_personnel_update_{timestamp}.csv", "text/csv")
+    ezburst_job = _store_job_output(ezburst_bytes, f"verasmart_ezburst_update_{timestamp}.csv", "text/csv")
+    login_job = _store_job_output(login_bytes, f"verasmart_login_disabled_no_{timestamp}.csv", "text/csv")
+    _append_audit_event(
+      action="verasmart_lab_manual_files_generated",
+      cucm_host=str((_session or {}).get("cucm_host", "") or ""),
+      operator=operator,
+      target=f"template={clean_template_email};targets={len(targets)};cost_center={template_cost_center};sftp=false",
+      output_filename=f"verasmart_personnel_update_{timestamp}.csv",
+      inline_mode=True,
+    )
+    return JSONResponse({
+      "ok": True,
+      "template": {"name": template.get("name", ""), "email": clean_template_email, "cost_center": template_cost_center},
+      "targets": [{"name": row.get("name", ""), "email": row.get("email", ""), "windows_domain_account": row.get("windows_domain_account", "")} for row in targets],
+      "downloads": {
+        "personnel": f"/download/job-output/{personnel_job}",
+        "ezburst": f"/download/job-output/{ezburst_job}",
+        "login_disabled": f"/download/job-output/{login_job}",
+      },
+      "manual_only": True,
+      "login_disabled_provisional": True,
     })
 
 
