@@ -124,6 +124,11 @@ Priority keys:
 - Results show phone ID/name, site, base settings, WebRTC Person, line count, and candidate evidence. Operators can select rows or all filtered candidates and queue durable deletion after typing `DELETE`.
 - The deletion worker re-reads each phone by ID, blocks deletion if the name changed, `webRtcUser` is populated, or the phone is no longer WebRTC, then deletes through the official Genesys phone endpoint at 2 phones per second (`GENESYS_WEBRTC_CLEANUP_QUEUE_PHONES_PER_SECOND`). Progress and per-phone outcomes persist across service restarts and successful deletions are audited.
 
+### 2026-09-23 (Genesys User Cleanup)
+- Added a read-only Genesys Admin function named **Genesys User Cleanup** that loads the paged Genesys user inventory and validates unique, well-formed emails through bounded batched LDAP lookups.
+- Results include only missing email, malformed email, and authoritative LDAP-not-found users, with name, Genesys ID, email, username, state, division, AD status, and candidate reason.
+- LDAP bind/query failures abort the report instead of producing deletion candidates. No user deletion action is included in this phase.
+
 ### 2026-09-22 (Embedded JavaScript handler prevention)
 - Root cause confirmed for the Hunt List panel's "handler missing" error: `main.py` stores browser JavaScript in plain Python triple-quoted strings, so JavaScript `\n`, `\r`, and `\t` escapes can be converted into literal control characters before the browser parses the script.
 - Prevention rule: embedded JavaScript must use `String.fromCharCode(10)`/`String.fromCharCode(13)` for generated line breaks, and every new panel must run both Python compilation and an extracted JavaScript parser check before commit.

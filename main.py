@@ -3501,6 +3501,86 @@ def _genesys_list_active_amn_users_with_roles(region: str, access_token: str) ->
   }
 
 
+def _genesys_list_user_cleanup_candidates(region: str, access_token: str, auth_context: dict | None = None) -> dict:
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+  users, pages_scanned, users_error = _genesys_collect_paged_entities(
+    api_base,
+    access_token,
+    "/api/v2/users",
+    max(25, min(GENESYS_USERS_PAGE_SIZE, 200)),
+    300,
+  )
+  if users_error:
+    return {"ok": False, "error": f"Genesys user inventory failed: {users_error}"}
+
+  valid_emails = []
+  seen_emails = set()
+  for user in users:
+    email = str(user.get("email", "") or "").strip().lower() if isinstance(user, dict) else ""
+    if email and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) and email not in seen_emails:
+      seen_emails.add(email)
+      valid_emails.append(email)
+
+  ad_by_email = {}
+  ldap_sources = set()
+  for offset in range(0, len(valid_emails), 200):
+    batch = valid_emails[offset:offset + 200]
+    lookup = lookup_ad_identities_by_email(batch, auth_context=auth_context)
+    if not lookup.get("ok"):
+      return {"ok": False, "error": f"LDAP validation failed: {lookup.get('error', 'Unknown error.')}"}
+    source = str(lookup.get("source", "ldap") or "ldap").strip()
+    if source:
+      ldap_sources.add(source)
+    for identity in lookup.get("results", []) if isinstance(lookup.get("results"), list) else []:
+      input_email = str(identity.get("input_email", "") or "").strip().lower() if isinstance(identity, dict) else ""
+      if input_email:
+        ad_by_email[input_email] = identity
+
+  rows = []
+  for user in users:
+    if not isinstance(user, dict):
+      continue
+    email = str(user.get("email", "") or "").strip().lower()
+    if not email:
+      ad_status = "missing_email"
+      reason = "Genesys user has no email address"
+      identity = {}
+    elif not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+      ad_status = "invalid_email"
+      reason = "Genesys email format is invalid"
+      identity = {}
+    else:
+      identity = ad_by_email.get(email, {}) if isinstance(ad_by_email.get(email, {}), dict) else {}
+      if identity.get("found"):
+        continue
+      ad_status = "not_found"
+      reason = "Email was not found in Active Directory"
+
+    division = user.get("division") if isinstance(user.get("division"), dict) else {}
+    rows.append({
+      "user_id": str(user.get("id", "") or "").strip(),
+      "name": str(user.get("name", "") or "").strip(),
+      "email": email,
+      "username": str(user.get("username", "") or "").strip(),
+      "state": str(user.get("state", "") or "").strip(),
+      "division_name": str(division.get("name", "") or "").strip(),
+      "ad_status": ad_status,
+      "ad_user_id": str(identity.get("samAccountName", "") or "").strip(),
+      "candidate_reason": reason,
+    })
+
+  rows.sort(key=lambda item: ((item.get("name") or "").casefold(), (item.get("email") or "").casefold()))
+  return {
+    "ok": True,
+    "region": clean_region,
+    "pages_scanned": pages_scanned,
+    "users_scanned": len(users),
+    "emails_checked": len(valid_emails),
+    "ldap_sources": sorted(ldap_sources),
+    "rows": rows,
+  }
+
+
 def _genesys_list_users_in_division_by_name(
   region: str,
   access_token: str,
@@ -19621,6 +19701,7 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn active" data-panel-target="genesys-ad-webrtc-panel" onclick="(function(){var id='genesys-ad-webrtc-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Add Genesys User</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-update-panel" onclick="(function(){var id='genesys-user-update-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Search and Update</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-panel" onclick="(function(){var id='genesys-user-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User WebRTC Lookup</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-cleanup-panel" onclick="(function(){var id='genesys-user-cleanup-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Cleanup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-webrtc-cleanup-panel" onclick="(function(){var id='genesys-webrtc-cleanup-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys WebRTC Cleanup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-bulk-email-panel" onclick="(function(){var id='genesys-bulk-email-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Bulk WebRTC build</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-queue-remove-panel" onclick="(function(){var id='genesys-user-queue-remove-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Lookup + Remove (User)</button>
@@ -19633,6 +19714,42 @@ def genesys_admin_placeholder(request: Request):
         </aside>
 
         <section class="portal-main">
+          <div id="genesys-user-cleanup-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+            <h3 style="margin-top:0;">Genesys User Cleanup</h3>
+            <p style="color:#4e6a84;font-size:12px;">Read-only comparison of Genesys end-user email addresses against Active Directory. Only missing, malformed, or LDAP-not-found email records are shown as deletion candidates.</p>
+            <div class="search-filter-row">
+              <input id="genesys-user-cleanup-filter" placeholder="Filter by name, email, username, division, or status" style="width:420px;">
+              <select id="genesys-user-cleanup-status-filter" style="width:190px;">
+                <option value="">All invalid statuses</option>
+                <option value="not_found">Not found in LDAP</option>
+                <option value="missing_email">Missing email</option>
+                <option value="invalid_email">Invalid email format</option>
+              </select>
+              <button type="button" id="genesys-user-cleanup-load-btn" onclick="if(window.loadGenesysUserCleanup){window.loadGenesysUserCleanup();}else{document.getElementById('genesys-user-cleanup-status').textContent='Genesys User Cleanup JavaScript handler is missing.';}return false;" style="background:#385977;">Load Invalid Users</button>
+            </div>
+            <p id="genesys-user-cleanup-status" style="color:#2c5c8a;min-height:18px;">Ready. This lookup does not delete or modify users.</p>
+            <div id="genesys-user-cleanup-summary" style="display:none;margin:8px 0;padding:8px;background:#f8fcff;border:1px solid #c8dbee;"></div>
+            <div id="genesys-user-cleanup-output" style="overflow-x:auto;"></div>
+            <script>
+              (function () {
+                var loadButton=document.getElementById("genesys-user-cleanup-load-btn");
+                var filterInput=document.getElementById("genesys-user-cleanup-filter");
+                var statusFilter=document.getElementById("genesys-user-cleanup-status-filter");
+                var status=document.getElementById("genesys-user-cleanup-status");
+                var summary=document.getElementById("genesys-user-cleanup-summary");
+                var output=document.getElementById("genesys-user-cleanup-output");
+                var loadedRows=[];
+                var scanInfo={};
+                if(!loadButton||!filterInput||!statusFilter||!status||!summary||!output)return;
+                function esc(value){return String(value==null?"":value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;");}
+                function statusLabel(value){if(value==="not_found")return "Not Found in LDAP";if(value==="missing_email")return "Missing Email";if(value==="invalid_email")return "Invalid Email";return value||"Invalid";}
+                function renderRows(){var query=String(filterInput.value||"").trim().toLowerCase();var selectedStatus=String(statusFilter.value||"");var rows=loadedRows.filter(function(row){var haystack=[row.name,row.email,row.username,row.division_name,row.state,row.ad_status].join(" ").toLowerCase();return(!query||haystack.indexOf(query)>=0)&&(!selectedStatus||row.ad_status===selectedStatus);});summary.style.display="block";summary.innerHTML="<strong>Candidates:</strong> "+rows.length+" of "+loadedRows.length+" &nbsp; <strong>Genesys users scanned:</strong> "+Number(scanInfo.users_scanned||0)+" &nbsp; <strong>Emails checked in LDAP:</strong> "+Number(scanInfo.emails_checked||0)+" &nbsp; <strong>LDAP source:</strong> "+esc((scanInfo.ldap_sources||[]).join(", ")||"none");if(!rows.length){output.innerHTML="<p>No invalid Genesys user candidates match the current filters.</p>";return;}output.innerHTML="<table><thead><tr><th>Name</th><th>Email</th><th>Username</th><th>State</th><th>Division</th><th>AD Status</th><th>Review Status</th></tr></thead><tbody>"+rows.map(function(row){return "<tr><td><strong>"+esc(row.name||"(unnamed)")+"</strong><div style='font-size:11px;color:#4e6a84;'>"+esc(row.user_id)+"</div></td><td>"+esc(row.email||"(missing)")+"</td><td>"+esc(row.username||"-")+"</td><td>"+esc(row.state||"-")+"</td><td>"+esc(row.division_name||"-")+"</td><td><strong style='color:#b42318;'>"+esc(statusLabel(row.ad_status))+"</strong></td><td><strong style='color:#9a4b00;'>Candidate to Delete</strong><div style='font-size:11px;color:#4e6a84;margin-top:3px;'>"+esc(row.candidate_reason)+"</div></td></tr>";}).join("")+"</tbody></table>";}
+                window.loadGenesysUserCleanup=async function(){loadButton.disabled=true;status.style.color="#2c5c8a";status.textContent="Loading Genesys users and validating emails in LDAP...";summary.style.display="none";output.innerHTML="";try{var response=await fetch("/genesys/user-cleanup/candidates",{credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));loadedRows=Array.isArray(payload.rows)?payload.rows:[];scanInfo=payload;renderRows();status.style.color="#146c2e";status.textContent=loadedRows.length+" invalid Genesys user candidate(s) found. Read-only; no users were changed.";}catch(error){status.style.color="#b42318";status.textContent="User cleanup lookup failed: "+((error&&error.message)||"Unknown error.");}finally{loadButton.disabled=false;}};
+                filterInput.addEventListener("input",renderRows);
+                statusFilter.addEventListener("change",renderRows);
+              })();
+            </script>
+          </div>
           <div id="genesys-webrtc-cleanup-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Genesys WebRTC Cleanup</h3>
             <p style="color:#4e6a84;font-size:12px;">Load WebRTC phones whose WebRTC Person is blank, review the candidates, then select approved phones for queued deletion. Every phone is rechecked immediately before deletion.</p>
@@ -26528,6 +26645,23 @@ def genesys_webrtc_cleanup_candidates_route():
   )
   if not result.get("ok"):
     return JSONResponse({"ok": False, "error": result.get("error", "Genesys WebRTC cleanup lookup failed.")}, status_code=400)
+  return JSONResponse(result)
+
+
+@app.get("/genesys/user-cleanup/candidates")
+def genesys_user_cleanup_candidates_route(request: Request):
+  _, resolved_user, resolved_pass = _resolve_cucm_credentials(request, "", "", "")
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  result = _genesys_list_user_cleanup_candidates(
+    token_result.get("region", clean_region),
+    token_result.get("access_token", ""),
+    auth_context={"username": resolved_user, "password": resolved_pass},
+  )
+  if not result.get("ok"):
+    return JSONResponse({"ok": False, "error": result.get("error", "Genesys user cleanup lookup failed.")}, status_code=400)
   return JSONResponse(result)
 
 
