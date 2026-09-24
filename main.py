@@ -57072,24 +57072,31 @@ def verasmart_lab_template_builder_generate_from_cucm_route(
 
     targets = []
     seen = set()
+    missing_emails = []
     for entry in entries:
       if not isinstance(entry, dict):
         continue
       userid = str(entry.get("userid", "") or "").strip()
+      email = str(entry.get("email", "") or "").strip()
       cost_center = str(entry.get("cost_center", "") or "").strip()
       windows_account = str(entry.get("windows_domain_account", "") or "").strip()
       if not windows_account and userid:
         windows_account = f"AHS\\{userid}"
-      if not userid or not cost_center or not windows_account or userid in seen:
+      if not userid or not cost_center or userid in seen:
+        continue
+      if not email:
+        missing_emails.append(str(entry.get("name", "") or userid).strip())
         continue
       seen.add(userid)
       targets.append({
         "userid": userid,
         "name": str(entry.get("name", "") or userid).strip(),
-        "email": str(entry.get("email", "") or "").strip(),
+        "email": email,
         "windows_domain_account": windows_account,
         "cost_center": cost_center,
       })
+    if missing_emails:
+      return JSONResponse({"ok": False, "error": "Email (the VeraSMART match field) is missing for: " + ", ".join(missing_emails[:10])}, status_code=400)
     if not targets:
       return JSONResponse({"ok": False, "error": "No valid queued employees with a Cost Center were found."}, status_code=400)
 
@@ -57101,8 +57108,8 @@ def verasmart_lab_template_builder_generate_from_cucm_route(
       return output.getvalue().encode("utf-8")
 
     personnel_bytes = _pipe_csv(
-      ["WindowsDomainAccount", "CostCenter", "EZBurstOption"],
-      [[row["windows_domain_account"], row["cost_center"], "Linked"] for row in targets],
+      ["Email", "WindowsDomainAccount", "CostCenter", "EZBurstOption", "LoginDisabled"],
+      [[row["email"], row["windows_domain_account"], row["cost_center"], "Linked", "No"] for row in targets],
     )
     distribution_lists = [
       "1 All Sales 6 Daily",
