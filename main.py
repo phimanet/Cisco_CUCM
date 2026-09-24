@@ -43414,21 +43414,21 @@ def menu_admin_page(request: Request):
             <button type="button" id="verasmart-personnel-export-upload" onclick="if(window.uploadVeraSmartPersonnelExport){window.uploadVeraSmartPersonnelExport();}else{document.getElementById('verasmart-builder-status').textContent='VeraSMART builder JavaScript handler is missing.';}return false;">Load Personnel Export</button>
           </div>
           <p id="verasmart-builder-status" style="color:#2c5c8a;min-height:18px;">Upload a current Personnel export to begin.</p>
-          <div id="verasmart-builder-controls" style="display:none;">
-            <input type="hidden" id="verasmart-cucm-host" value="__AUTH_CUCM_HOST__">
-            <input type="hidden" id="verasmart-cucm-user" value="__AUTH_USER__">
-            <input type="hidden" id="verasmart-cucm-pass" value="">
-            <div style="margin:0 0 12px 0;padding:10px;border:1px solid #c8dbee;background:#fff;">
-              <strong>Live CUCM Search (avoids manual typing)</strong>
-              <p style="color:#4e6a84;font-size:12px;margin:4px 0 8px 0;">Search CUCM by last name, then add the matched employee straight into the queue below. The employee must already exist in the uploaded Personnel export to be added.</p>
-              <div class="search-filter-row">
-                <input id="verasmart-cucm-last-name" placeholder="Last name" style="width:160px;">
-                <input id="verasmart-cucm-first-name" placeholder="First name (optional)" style="width:160px;">
-                <button type="button" id="verasmart-cucm-search-btn">Search CUCM</button>
-              </div>
-              <p id="verasmart-cucm-search-status" style="color:#2c5c8a;min-height:16px;font-size:12px;margin-top:6px;">Enter a last name and click Search CUCM.</p>
-              <div id="verasmart-cucm-search-results" style="overflow-x:auto;"></div>
+          <input type="hidden" id="verasmart-cucm-host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" id="verasmart-cucm-user" value="__AUTH_USER__">
+          <input type="hidden" id="verasmart-cucm-pass" value="">
+          <div style="margin:12px 0;padding:10px;border:1px solid #c8dbee;background:#fff;">
+            <strong>Live CUCM Search (avoids manual typing)</strong>
+            <p style="color:#4e6a84;font-size:12px;margin:4px 0 8px 0;">Search CUCM by last name, then add the matched employee straight into the queue below. Load the Personnel export above first; the employee must already exist in it to be added.</p>
+            <div class="search-filter-row">
+              <input id="verasmart-cucm-last-name" placeholder="Last name" style="width:160px;">
+              <input id="verasmart-cucm-first-name" placeholder="First name (optional)" style="width:160px;">
+              <button type="button" id="verasmart-cucm-search-btn">Search CUCM</button>
             </div>
+            <p id="verasmart-cucm-search-status" style="color:#2c5c8a;min-height:16px;font-size:12px;margin-top:6px;">Load the Personnel export above, then enter a last name and click Search CUCM.</p>
+            <div id="verasmart-cucm-search-results" style="overflow-x:auto;"></div>
+          </div>
+          <div id="verasmart-builder-controls" style="display:none;">
             <div class="search-filter-row">
               <input id="verasmart-builder-filter" placeholder="Filter by name, email, Cost Center, or Windows account" style="width:420px;">
               <button type="button" id="verasmart-builder-generate" disabled>Generate Queued CSV Files</button>
