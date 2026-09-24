@@ -43407,6 +43407,50 @@ def menu_admin_page(request: Request):
           <a href="/download/verasmart-queue-template" class="mini-btn" style="text-decoration:none;">Download Queue CSV Template</a>
         </div>
         <div style="margin:14px 0;padding:12px;border:1px solid #c8dbee;background:#f8fcff;">
+          <h4 style="margin-top:0;">Live CUCM Search - Build Template Without a Personnel Export</h4>
+          <p style="color:#4e6a84;font-size:12px;">Search CUCM by last name to find a person, enter their Cost Center when prompted, and add them to the queue below. Repeat for as many people as needed, then generate the Personnel Cost Center and EZ-Burst files. No Personnel export upload is required for this flow.</p>
+          <input type="hidden" id="verasmart-cucm-host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" id="verasmart-cucm-user" value="__AUTH_USER__">
+          <input type="hidden" id="verasmart-cucm-pass" value="">
+          <div class="search-filter-row">
+            <input id="verasmart-cucm-last-name" placeholder="Last name" style="width:160px;">
+            <input id="verasmart-cucm-first-name" placeholder="First name (optional)" style="width:160px;">
+            <button type="button" id="verasmart-cucm-search-btn">Search CUCM</button>
+          </div>
+          <p id="verasmart-cucm-search-status" style="color:#2c5c8a;min-height:16px;font-size:12px;margin-top:6px;">Enter a last name and click Search CUCM.</p>
+          <div id="verasmart-cucm-search-results" style="overflow-x:auto;"></div>
+          <div style="margin-top:14px;">
+            <strong>Queued Employees (from CUCM)</strong>
+            <div id="verasmart-cucm-queue" style="overflow-x:auto;margin:8px 0;"></div>
+            <button type="button" id="verasmart-cucm-generate" disabled>Generate Queued CSV Files</button>
+            <div id="verasmart-cucm-downloads" style="display:none;margin-top:10px;padding:10px;background:#eef9f1;border:1px solid #9dccaa;"></div>
+          </div>
+        </div>
+        <script>
+          (function () {
+            var hostInput=document.getElementById("verasmart-cucm-host");
+            var userInput=document.getElementById("verasmart-cucm-user");
+            var passInput=document.getElementById("verasmart-cucm-pass");
+            var lastNameInput=document.getElementById("verasmart-cucm-last-name");
+            var firstNameInput=document.getElementById("verasmart-cucm-first-name");
+            var searchButton=document.getElementById("verasmart-cucm-search-btn");
+            var searchStatus=document.getElementById("verasmart-cucm-search-status");
+            var searchResults=document.getElementById("verasmart-cucm-search-results");
+            var queueOutput=document.getElementById("verasmart-cucm-queue");
+            var generateButton=document.getElementById("verasmart-cucm-generate");
+            var downloads=document.getElementById("verasmart-cucm-downloads");
+            var queue=[];var lastResults=[];
+            if(!lastNameInput||!searchButton||!searchStatus||!searchResults||!queueOutput||!generateButton||!downloads)return;
+            function esc(value){return String(value==null?"":value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;");}
+            function isQueued(userid){return queue.some(function(item){return item.userid===userid;});}
+            function renderQueue(){if(!queue.length){queueOutput.innerHTML="<p>No employees queued yet.</p>";generateButton.disabled=true;return;}queueOutput.innerHTML="<table><thead><tr><th>Name</th><th>Email</th><th>Windows Domain Account</th><th>Cost Center</th><th>Action</th></tr></thead><tbody>"+queue.map(function(item){return "<tr><td>"+esc(item.name)+"</td><td>"+esc(item.email||"(none)")+"</td><td>"+esc(item.windows_domain_account)+"</td><td>"+esc(item.cost_center)+"</td><td><button type='button' data-remove-userid='"+esc(item.userid)+"'>Remove</button></td></tr>";}).join("")+"</tbody></table>";Array.prototype.forEach.call(queueOutput.querySelectorAll("[data-remove-userid]"),function(button){button.addEventListener("click",function(){var userid=button.getAttribute("data-remove-userid")||"";queue=queue.filter(function(item){return item.userid!==userid;});renderQueue();renderResults(lastResults);});});generateButton.disabled=!queue.length;}
+            function renderResults(list){lastResults=list||[];if(!lastResults.length){searchResults.innerHTML="<p>No CUCM matches found.</p>";return;}searchResults.innerHTML="<table><thead><tr><th>Name</th><th>CUCM User ID</th><th>Email</th><th>Action</th></tr></thead><tbody>"+lastResults.map(function(person){var queued=isQueued(person.userid);return "<tr><td>"+esc(person.name)+"</td><td>"+esc(person.userid)+"</td><td>"+esc(person.email||"(none)")+"</td><td><button type='button' data-add-userid='"+esc(person.userid)+"'"+(queued?" disabled":"")+">"+(queued?"Queued":"Add to Template")+"</button></td></tr>";}).join("")+"</tbody></table>";Array.prototype.forEach.call(searchResults.querySelectorAll("[data-add-userid]"),function(button){button.addEventListener("click",function(){var userid=button.getAttribute("data-add-userid")||"";var person=lastResults.find(function(item){return item.userid===userid;});if(!person||isQueued(userid))return;var costCenter=window.prompt("Enter the Cost Center for "+person.name+":","");if(costCenter===null)return;costCenter=String(costCenter||"").trim();if(!costCenter){window.alert("Cost Center is required to add this employee.");return;}queue.push({userid:person.userid,name:person.name,email:person.email||"",windows_domain_account:"AHS"+String.fromCharCode(92)+person.userid,cost_center:costCenter});renderQueue();renderResults(lastResults);});});}
+            searchButton.addEventListener("click",async function(){var lastName=String(lastNameInput.value||"").trim();if(!lastName){searchStatus.style.color="#b42318";searchStatus.textContent="Enter a last name to search CUCM.";return;}searchButton.disabled=true;searchStatus.style.color="#2c5c8a";searchStatus.textContent="Searching CUCM...";try{var data=new FormData();data.append("cucm_host",hostInput?hostInput.value:"");data.append("cucm_user",userInput?userInput.value:"");data.append("cucm_pass",passInput?passInput.value:"");data.append("last_name",lastName);data.append("first_name",String(firstNameInput.value||"").trim());var response=await fetch("/verasmart/lab/template-builder/search-cucm",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));renderResults(payload.results||[]);searchStatus.style.color="#146c2e";searchStatus.textContent="Found "+(payload.count||0)+" CUCM match(es). Click Add to Template to enter a Cost Center and queue them.";}catch(error){searchResults.innerHTML="";searchStatus.style.color="#b42318";searchStatus.textContent="CUCM search failed: "+((error&&error.message)||"Unknown error.");}finally{searchButton.disabled=false;}});
+            generateButton.addEventListener("click",async function(){if(!queue.length)return;if(!window.confirm("Generate Personnel Cost Center and EZ-Burst files for "+queue.length+" queued employee(s)? No files will be sent by SFTP."))return;generateButton.disabled=true;downloads.style.display="none";try{var data=new FormData();data.append("entries_json",JSON.stringify(queue));var response=await fetch("/verasmart/lab/template-builder/generate-from-cucm",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));downloads.style.display="block";downloads.innerHTML="<strong>Two manual-test CSV files ready. Nothing was sent by SFTP.</strong><div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;'><a class='mini-btn' href='"+esc(payload.downloads.personnel)+"'>Download Personnel Cost Center CSV</a><a class='mini-btn' href='"+esc(payload.downloads.ezburst)+"'>Download EZ-Burst Distribution CSV</a></div>";}catch(error){searchStatus.style.color="#b42318";searchStatus.textContent="File generation failed: "+((error&&error.message)||"Unknown error.");}finally{generateButton.disabled=!queue.length;}});
+            renderQueue();
+          })();
+        </script>
+        <div style="margin:14px 0;padding:12px;border:1px solid #c8dbee;background:#f8fcff;">
           <h4 style="margin-top:0;">Build Manual Cost Center Files from Personnel Export</h4>
           <p style="color:#4e6a84;font-size:12px;">Upload a current VeraSMART Personnel CSV/TXT/XLSX export. Search one employee at a time, add each target to the queue, then generate the Personnel Cost Center and EZ-Burst files. The export stays in memory for one hour and is not written to disk.</p>
           <div class="search-filter-row">
@@ -43414,20 +43458,6 @@ def menu_admin_page(request: Request):
             <button type="button" id="verasmart-personnel-export-upload" onclick="if(window.uploadVeraSmartPersonnelExport){window.uploadVeraSmartPersonnelExport();}else{document.getElementById('verasmart-builder-status').textContent='VeraSMART builder JavaScript handler is missing.';}return false;">Load Personnel Export</button>
           </div>
           <p id="verasmart-builder-status" style="color:#2c5c8a;min-height:18px;">Upload a current Personnel export to begin.</p>
-          <input type="hidden" id="verasmart-cucm-host" value="__AUTH_CUCM_HOST__">
-          <input type="hidden" id="verasmart-cucm-user" value="__AUTH_USER__">
-          <input type="hidden" id="verasmart-cucm-pass" value="">
-          <div style="margin:12px 0;padding:10px;border:1px solid #c8dbee;background:#fff;">
-            <strong>Live CUCM Search (avoids manual typing)</strong>
-            <p style="color:#4e6a84;font-size:12px;margin:4px 0 8px 0;">Search CUCM by last name, then add the matched employee straight into the queue below. Load the Personnel export above first; the employee must already exist in it to be added.</p>
-            <div class="search-filter-row">
-              <input id="verasmart-cucm-last-name" placeholder="Last name" style="width:160px;">
-              <input id="verasmart-cucm-first-name" placeholder="First name (optional)" style="width:160px;">
-              <button type="button" id="verasmart-cucm-search-btn">Search CUCM</button>
-            </div>
-            <p id="verasmart-cucm-search-status" style="color:#2c5c8a;min-height:16px;font-size:12px;margin-top:6px;">Load the Personnel export above, then enter a last name and click Search CUCM.</p>
-            <div id="verasmart-cucm-search-results" style="overflow-x:auto;"></div>
-          </div>
           <div id="verasmart-builder-controls" style="display:none;">
             <div class="search-filter-row">
               <input id="verasmart-builder-filter" placeholder="Filter by name, email, Cost Center, or Windows account" style="width:420px;">
@@ -43449,26 +43479,14 @@ def menu_admin_page(request: Request):
             var selection=document.getElementById("verasmart-builder-selection");
             var usersOutput=document.getElementById("verasmart-builder-users");
             var downloads=document.getElementById("verasmart-builder-downloads");
-            var cucmHostInput=document.getElementById("verasmart-cucm-host");
-            var cucmUserInput=document.getElementById("verasmart-cucm-user");
-            var cucmPassInput=document.getElementById("verasmart-cucm-pass");
-            var cucmLastNameInput=document.getElementById("verasmart-cucm-last-name");
-            var cucmFirstNameInput=document.getElementById("verasmart-cucm-first-name");
-            var cucmSearchButton=document.getElementById("verasmart-cucm-search-btn");
-            var cucmSearchStatus=document.getElementById("verasmart-cucm-search-status");
-            var cucmSearchResults=document.getElementById("verasmart-cucm-search-results");
-            var rows=[];var exportId="";var templateEmail="";var targetEmails={};var lastCucmResults=[];
-            if(!fileInput||!uploadButton||!generateButton||!filterInput||!status||!controls||!selection||!usersOutput||!downloads||!cucmLastNameInput||!cucmSearchButton||!cucmSearchStatus||!cucmSearchResults)return;
+            var rows=[];var exportId="";var templateEmail="";var targetEmails={};
+            if(!fileInput||!uploadButton||!generateButton||!filterInput||!status||!controls||!selection||!usersOutput||!downloads)return;
             function esc(value){return String(value==null?"":value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;");}
             function selectedTargets(){return rows.filter(function(row){return !!targetEmails[row.email]&&row.email!==templateEmail;});}
-            function updateSelection(){var template=rows.find(function(row){return row.email===templateEmail;});var targets=selectedTargets();var queued=targets.map(function(row){return "<li>"+esc(row.name)+" | "+esc(row.email)+" | "+esc(row.windows_domain_account||"missing Windows account")+" <button type='button' data-remove-queued='"+esc(row.email)+"' style='padding:2px 7px;font-size:11px;'>Remove</button></li>";}).join("");selection.innerHTML="<strong>Cost Center template:</strong> "+esc(template?(template.name+" | "+template.cost_center):"Not selected")+"<br><strong>Queued employees:</strong> "+targets.length+(targets.length?"<ul style='margin:6px 0 0 18px;'>"+queued+"</ul>":"<span> None yet.</span>");Array.prototype.forEach.call(selection.querySelectorAll("[data-remove-queued]"),function(button){button.addEventListener("click",function(){delete targetEmails[button.getAttribute("data-remove-queued")||""];renderRows();});});generateButton.disabled=!template||!template.cost_center||!targets.length||targets.some(function(row){return !row.windows_domain_account||!row.email;});if(lastCucmResults.length)renderCucmResults(lastCucmResults);}
+            function updateSelection(){var template=rows.find(function(row){return row.email===templateEmail;});var targets=selectedTargets();var queued=targets.map(function(row){return "<li>"+esc(row.name)+" | "+esc(row.email)+" | "+esc(row.windows_domain_account||"missing Windows account")+" <button type='button' data-remove-queued='"+esc(row.email)+"' style='padding:2px 7px;font-size:11px;'>Remove</button></li>";}).join("");selection.innerHTML="<strong>Cost Center template:</strong> "+esc(template?(template.name+" | "+template.cost_center):"Not selected")+"<br><strong>Queued employees:</strong> "+targets.length+(targets.length?"<ul style='margin:6px 0 0 18px;'>"+queued+"</ul>":"<span> None yet.</span>");Array.prototype.forEach.call(selection.querySelectorAll("[data-remove-queued]"),function(button){button.addEventListener("click",function(){delete targetEmails[button.getAttribute("data-remove-queued")||""];renderRows();});});generateButton.disabled=!template||!template.cost_center||!targets.length||targets.some(function(row){return !row.windows_domain_account||!row.email;});}
             function renderRows(){var query=String(filterInput.value||"").trim().toLowerCase();var visible=rows.filter(function(row){return !query||[row.name,row.email,row.cost_center,row.windows_domain_account].join(" ").toLowerCase().indexOf(query)>=0;});if(!visible.length){usersOutput.innerHTML="<p>No Personnel rows match the search.</p>";updateSelection();return;}usersOutput.innerHTML="<table><thead><tr><th>Cost Center template</th><th>Queue employee</th><th>Name</th><th>Email (EZ-Burst only)</th><th>Current Cost Center</th><th>Windows Domain Account</th></tr></thead><tbody>"+visible.map(function(row){var queued=!!targetEmails[row.email];return "<tr><td><input type='radio' name='verasmart-template-person' data-verasmart-template='"+esc(row.email)+"'"+(row.email===templateEmail?" checked":"")+"></td><td><button type='button' data-verasmart-target='"+esc(row.email)+"'"+(row.email===templateEmail?" disabled":"")+">"+(queued?"Queued - Remove":"Add to queue")+"</button></td><td><strong>"+esc(row.name)+"</strong></td><td>"+esc(row.email)+"</td><td>"+esc(row.cost_center||"(missing)")+"</td><td>"+esc(row.windows_domain_account||"(missing)")+"</td></tr>";}).join("")+"</tbody></table>";Array.prototype.forEach.call(usersOutput.querySelectorAll("[data-verasmart-template]"),function(input){input.addEventListener("change",function(){templateEmail=input.getAttribute("data-verasmart-template")||"";delete targetEmails[templateEmail];renderRows();});});Array.prototype.forEach.call(usersOutput.querySelectorAll("[data-verasmart-target]"),function(button){button.addEventListener("click",function(){var email=button.getAttribute("data-verasmart-target")||"";if(targetEmails[email])delete targetEmails[email];else targetEmails[email]=true;renderRows();});});updateSelection();}
             window.uploadVeraSmartPersonnelExport=async function(){if(!fileInput.files||!fileInput.files[0]){status.style.color="#b42318";status.textContent="Choose a Personnel export first.";return;}uploadButton.disabled=true;status.style.color="#2c5c8a";status.textContent="Reading Personnel export...";downloads.style.display="none";try{var data=new FormData();data.append("personnel_file",fileInput.files[0]);var response=await fetch("/verasmart/lab/personnel-export/upload",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));rows=Array.isArray(payload.rows)?payload.rows:[];exportId=payload.export_id||"";templateEmail="";targetEmails={};controls.style.display="block";renderRows();status.style.color="#146c2e";status.textContent=rows.length+" Personnel row(s) loaded from "+String(payload.filename||"export")+". Select one template and one or more targets.";}catch(error){controls.style.display="none";status.style.color="#b42318";status.textContent="Personnel export failed: "+((error&&error.message)||"Unknown error.");}finally{uploadButton.disabled=false;}};
             generateButton.addEventListener("click",async function(){var targets=selectedTargets();var template=rows.find(function(row){return row.email===templateEmail;});if(!template||!targets.length)return;if(!window.confirm("Generate Personnel Cost Center and EZ-Burst files for "+targets.length+" queued employee(s) using Cost Center '"+template.cost_center+"' from "+template.name+"? No files will be sent by SFTP."))return;generateButton.disabled=true;status.style.color="#2c5c8a";status.textContent="Generating queued CSV files...";try{var data=new FormData();data.append("export_id",exportId);data.append("template_email",templateEmail);data.append("target_emails_json",JSON.stringify(targets.map(function(row){return row.email;})));var response=await fetch("/verasmart/lab/template-builder/generate",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));downloads.style.display="block";downloads.innerHTML="<strong>Two manual-test CSV files ready. Nothing was sent by SFTP.</strong><div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;'><a class='mini-btn' href='"+esc(payload.downloads.personnel)+"'>Download Personnel Cost Center CSV</a><a class='mini-btn' href='"+esc(payload.downloads.ezburst)+"'>Download EZ-Burst Distribution CSV</a></div>";status.style.color="#146c2e";status.textContent="Generated two files for "+targets.length+" queued employee(s). Validate the Personnel Edited log, then EZ-Burst.";}catch(error){status.style.color="#b42318";status.textContent="File generation failed: "+((error&&error.message)||"Unknown error.");}finally{updateSelection();}});
-            function stripDomainPrefix(value){var text=String(value||"").trim();var backslash=String.fromCharCode(92);var idx=Math.max(text.lastIndexOf(backslash),text.lastIndexOf("/"));return idx>=0?text.slice(idx+1):text;}
-            function findPersonnelRowByUserid(userid){var clean=String(userid||"").trim().toLowerCase();if(!clean)return null;return rows.find(function(row){return stripDomainPrefix(row.windows_domain_account).toLowerCase()===clean;})||null;}
-            function renderCucmResults(list){lastCucmResults=list||[];if(!lastCucmResults.length){cucmSearchResults.innerHTML="<p>No CUCM matches found.</p>";return;}cucmSearchResults.innerHTML="<table><thead><tr><th>Name</th><th>CUCM User ID</th><th>Email</th><th>Personnel Match</th><th>Action</th></tr></thead><tbody>"+lastCucmResults.map(function(person){var match=findPersonnelRowByUserid(person.userid);var matchLabel=match?("<span style='color:#146c2e;'>"+esc(match.name)+" | "+esc(match.cost_center||"(no cost center)")+"</span>"):"<span style='color:#b42318;'>No matching Personnel row</span>";var isTemplate=!!(match&&match.email===templateEmail);var queued=!!(match&&targetEmails[match.email]);var actionHtml=!match?"<em>Add to Personnel export first</em>":(isTemplate?"<em>Set as template</em>":"<button type='button' data-cucm-add='"+esc(match.email)+"'>"+(queued?"Queued - Remove":"Add to queue")+"</button>");return "<tr><td>"+esc(person.name)+"</td><td>"+esc(person.userid)+"</td><td>"+esc(person.email)+"</td><td>"+matchLabel+"</td><td>"+actionHtml+"</td></tr>";}).join("")+"</tbody></table>";Array.prototype.forEach.call(cucmSearchResults.querySelectorAll("[data-cucm-add]"),function(button){button.addEventListener("click",function(){var email=button.getAttribute("data-cucm-add")||"";if(targetEmails[email])delete targetEmails[email];else targetEmails[email]=true;renderRows();});});}
-            cucmSearchButton.addEventListener("click",async function(){var lastName=String(cucmLastNameInput.value||"").trim();if(!lastName){cucmSearchStatus.style.color="#b42318";cucmSearchStatus.textContent="Enter a last name to search CUCM.";return;}if(!rows.length){cucmSearchStatus.style.color="#b42318";cucmSearchStatus.textContent="Load the Personnel export first.";return;}cucmSearchButton.disabled=true;cucmSearchStatus.style.color="#2c5c8a";cucmSearchStatus.textContent="Searching CUCM...";try{var data=new FormData();data.append("cucm_host",cucmHostInput?cucmHostInput.value:"");data.append("cucm_user",cucmUserInput?cucmUserInput.value:"");data.append("cucm_pass",cucmPassInput?cucmPassInput.value:"");data.append("last_name",lastName);data.append("first_name",String(cucmFirstNameInput.value||"").trim());var response=await fetch("/verasmart/lab/template-builder/search-cucm",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));renderCucmResults(payload.results||[]);cucmSearchStatus.style.color="#146c2e";cucmSearchStatus.textContent="Found "+(payload.count||0)+" CUCM match(es). Add matched employees straight into the queue.";}catch(error){cucmSearchResults.innerHTML="";cucmSearchStatus.style.color="#b42318";cucmSearchStatus.textContent="CUCM search failed: "+((error&&error.message)||"Unknown error.");}finally{cucmSearchButton.disabled=false;}});
             filterInput.addEventListener("input",renderRows);
           })();
         </script>
@@ -57019,6 +57037,95 @@ def verasmart_lab_template_builder_search_cucm_route(
       inline_mode=True,
     )
     return JSONResponse({"ok": True, "results": results, "count": len(results)})
+
+
+@app.post("/verasmart/lab/template-builder/generate-from-cucm")
+def verasmart_lab_template_builder_generate_from_cucm_route(
+    request: Request,
+    entries_json: str = Form(""),
+):
+    _session, operator = _require_admin_session(request)
+    try:
+      entries = json.loads(entries_json or "[]")
+    except (TypeError, ValueError):
+      return JSONResponse({"ok": False, "error": "Queued employee data is invalid."}, status_code=400)
+    if not isinstance(entries, list) or not entries:
+      return JSONResponse({"ok": False, "error": "Queue at least one employee from CUCM search first."}, status_code=400)
+    if len(entries) > 500:
+      return JSONResponse({"ok": False, "error": "A maximum of 500 employees can be generated at once."}, status_code=400)
+
+    targets = []
+    seen = set()
+    for entry in entries:
+      if not isinstance(entry, dict):
+        continue
+      userid = str(entry.get("userid", "") or "").strip()
+      cost_center = str(entry.get("cost_center", "") or "").strip()
+      windows_account = str(entry.get("windows_domain_account", "") or "").strip()
+      if not windows_account and userid:
+        windows_account = f"AHS\\{userid}"
+      if not userid or not cost_center or not windows_account or userid in seen:
+        continue
+      seen.add(userid)
+      targets.append({
+        "userid": userid,
+        "name": str(entry.get("name", "") or userid).strip(),
+        "email": str(entry.get("email", "") or "").strip(),
+        "windows_domain_account": windows_account,
+        "cost_center": cost_center,
+      })
+    if not targets:
+      return JSONResponse({"ok": False, "error": "No valid queued employees with a Cost Center were found."}, status_code=400)
+
+    def _pipe_csv(headers: list[str], data_rows: list[list[str]]) -> bytes:
+      output = io.StringIO(newline="")
+      writer = csv.writer(output, delimiter="|", lineterminator="\n")
+      writer.writerow(headers)
+      writer.writerows(data_rows)
+      return output.getvalue().encode("utf-8")
+
+    personnel_bytes = _pipe_csv(
+      ["WindowsDomainAccount", "CostCenter", "EZBurstOption"],
+      [[row["windows_domain_account"], row["cost_center"], "Linked"] for row in targets],
+    )
+    distribution_lists = [
+      "1 All Sales 6 Daily",
+      "1 All Sales 6 Hourly - USR Custom",
+      "1 All Sales 6 Weekly",
+      "1 All Sales East 6 Hourly",
+    ]
+    ezburst_rows = [
+      [list_name, row["email"], row["cost_center"], ""]
+      for row in targets
+      for list_name in distribution_lists
+    ]
+    ezburst_bytes = _pipe_csv(
+      ["DistributionListName", "EmailAddress", "CostCenter", "Department"],
+      ezburst_rows,
+    )
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    personnel_job = _store_job_output(personnel_bytes, f"verasmart_personnel_update_{timestamp}.csv", "text/csv")
+    ezburst_job = _store_job_output(ezburst_bytes, f"verasmart_ezburst_update_{timestamp}.csv", "text/csv")
+    _append_audit_event(
+      action="verasmart_lab_manual_files_generated_from_cucm",
+      cucm_host=str((_session or {}).get("cucm_host", "") or ""),
+      operator=operator,
+      target=f"targets={len(targets)};sftp=false",
+      output_filename=f"verasmart_personnel_update_{timestamp}.csv",
+      inline_mode=True,
+    )
+    return JSONResponse({
+      "ok": True,
+      "targets": [
+        {"name": row["name"], "email": row["email"], "windows_domain_account": row["windows_domain_account"], "cost_center": row["cost_center"]}
+        for row in targets
+      ],
+      "downloads": {
+        "personnel": f"/download/job-output/{personnel_job}",
+        "ezburst": f"/download/job-output/{ezburst_job}",
+      },
+      "manual_only": True,
+    })
 
 
 @app.post("/verasmart/lab/template-builder/generate")
