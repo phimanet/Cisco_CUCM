@@ -126,7 +126,7 @@ Priority keys:
 
 ### 2026-09-23 (Genesys User Cleanup)
 - Added a read-only Genesys Admin function named **Genesys User Cleanup** that loads the paged Genesys user inventory and validates unique, well-formed emails through bounded batched LDAP lookups.
-- Results include only missing email, malformed email, and authoritative LDAP-not-found users, with name, Genesys ID, email, username, state, division, AD status, and candidate reason.
+- Results include only missing email, malformed email, and authoritative LDAP-not-found users, with name, Genesys ID, email, state, division, AD status, and candidate reason; username remains internal for pre-update identity validation.
 - Emails beginning with `zz` are excluded before LDAP lookup and are never displayed or admitted to the queue.
 - Operators can select active candidates or all filtered active candidates and queue them to be set Inactive after typing `INACTIVE`; users are not deleted.
 - The persistent worker re-reads each Genesys user, requires unchanged name/email/username and unchanged invalid AD status, reruns LDAP for well-formed emails, and blocks the update if LDAP is unavailable or the account becomes valid. Jobs run at 2 users per second, survive restarts, and audit successful Inactive updates with reason `Unknown`.

@@ -19939,7 +19939,7 @@ def genesys_admin_placeholder(request: Request):
             <h3 style="margin-top:0;">Genesys User Cleanup</h3>
             <p style="color:#4e6a84;font-size:12px;">Compare Genesys end-user emails against Active Directory, review invalid candidates, then select approved active users for queued Inactive status. Emails beginning with zz are excluded from lookup and display.</p>
             <div class="search-filter-row">
-              <input id="genesys-user-cleanup-filter" placeholder="Filter by name, email, username, division, or status" style="width:420px;">
+              <input id="genesys-user-cleanup-filter" placeholder="Filter by name, email, division, or status" style="width:420px;">
               <select id="genesys-user-cleanup-status-filter" style="width:190px;"><option value="">All invalid statuses</option><option value="not_found">Not found in LDAP</option><option value="missing_email">Missing email</option><option value="invalid_email">Invalid email format</option></select>
               <button type="button" id="genesys-user-cleanup-load-btn" onclick="if(window.loadGenesysUserCleanup){window.loadGenesysUserCleanup();}else{document.getElementById('genesys-user-cleanup-status').textContent='Genesys User Cleanup JavaScript handler is missing.';}return false;" style="background:#385977;">Load Invalid Users</button>
               <button type="button" id="genesys-user-cleanup-queue-btn" style="background:#a56a00;" disabled>Queue Set Inactive (<span id="genesys-user-cleanup-selected-count">0</span>)</button>
@@ -19948,6 +19948,7 @@ def genesys_admin_placeholder(request: Request):
             <div id="genesys-user-cleanup-progress" style="display:none;margin:8px 0;padding:8px;background:#fff8e8;border:1px solid #e3c77a;"></div>
             <div id="genesys-user-cleanup-summary" style="display:none;margin:8px 0;padding:8px;background:#f8fcff;border:1px solid #c8dbee;"></div>
             <div id="genesys-user-cleanup-output" style="overflow-x:auto;"></div>
+            <style>#genesys-user-cleanup-output th:nth-child(4),#genesys-user-cleanup-output td:nth-child(4){display:none;}</style>
             <script>
               (function () {
                 var loadButton=document.getElementById("genesys-user-cleanup-load-btn");
