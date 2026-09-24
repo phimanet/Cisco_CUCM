@@ -10927,8 +10927,8 @@ def _genesys_delete_cleanup_user_webrtc_phones(api_base: str, access_token: str,
       continue
     web_rtc_user = current_phone.get("webRtcUser") if isinstance(current_phone.get("webRtcUser"), dict) else {}
     current_user_id = str(web_rtc_user.get("id", "") or "").strip()
-    if current_user_id != user_id:
-      failures.append(f"{current_name or phone_id}: WebRTC Person no longer matches the target user.")
+    if current_user_id and current_user_id != user_id:
+      failures.append(f"{current_name or phone_id}: WebRTC Person was reassigned to another user.")
       continue
     base_settings = current_phone.get("phoneBaseSettings") if isinstance(current_phone.get("phoneBaseSettings"), dict) else {}
     base_id = str(base_settings.get("id", "") or current_phone.get("phoneBaseSettingsId", "") or "").strip().lower()
