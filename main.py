@@ -42515,7 +42515,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="transtemplate">Translation Pattern Template</button>
             <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
             <button type="button" class="portal-nav-btn" data-panel="strikemask-template">Add Translation for Strike Mask Use (CSV Template)</button>
-            <button type="button" class="portal-nav-btn" data-panel="verasmart-lab">VeraSMART Automation (v1.01 LAB)</button>
+            <button type="button" class="portal-nav-btn" data-panel="verasmart-lab">VeraSMART / Calero (v1.01 LAB)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=teams-telephony'">Create Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=teams-telephony-remove'">Remove Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM (Main Ops)</button>
@@ -43188,9 +43188,15 @@ def menu_admin_page(request: Request):
       </section>
 
       <section class="panel tool-panel" data-panel="verasmart-lab">
-        <h3>VeraSMART Automation (v1.01 LAB-Only Scaffold)</h3>
-        <p>This is a lab scaffold only. Upload a queue CSV, review run status, and validate intake/audit flow. No VeraSMART write action executes yet.</p>
-        <p><a href="/download/verasmart-queue-template" style="font-weight:700;">Download Queue CSV Template</a></p>
+        <h3>VeraSMART / Calero (v1.01 LAB)</h3>
+        <p>Download the manual-test files below and validate each VeraSMART import before enabling SFTP delivery. This page does not send files to VeraSMART.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px 0;">
+          <a href="/download/verasmart-personnel-update-example" class="mini-btn" style="text-decoration:none;">Download Personnel Update CSV</a>
+          <a href="/download/verasmart-ezburst-update-example" class="mini-btn" style="text-decoration:none;">Download EZ-Burst Update CSV</a>
+          <a href="/download/verasmart-login-disabled-example" class="mini-btn" style="text-decoration:none;">Download Login Disabled = No CSV</a>
+          <a href="/download/verasmart-queue-template" class="mini-btn" style="text-decoration:none;">Download Queue CSV Template</a>
+        </div>
+        <p style="padding:8px;background:#fff8e8;border:1px solid #e3c77a;color:#6f5000;"><strong>Login Disabled template is provisional:</strong> do not import it until the VeraSMART mapping wizard confirms the field and accepts <strong>No</strong>.</p>
         <form id="verasmart-lab-queue-form" enctype="multipart/form-data">
           CSV File:<br>
           <input type="file" name="csv_file" accept=".csv" required><br><br>
@@ -52730,6 +52736,32 @@ def download_verasmart_queue_template():
     media_type="text/csv",
     headers={"Content-Disposition": 'attachment; filename="verasmart_queue_template.csv"'}
   )
+
+
+def _download_verasmart_example(filename: str):
+  template_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", filename)
+  with open(template_path, "rb") as handle:
+    content = handle.read()
+  return Response(
+    content,
+    media_type="text/csv",
+    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+  )
+
+
+@app.get("/download/verasmart-personnel-update-example")
+def download_verasmart_personnel_update_example():
+  return _download_verasmart_example("verasmart_personnel_update_example.csv")
+
+
+@app.get("/download/verasmart-ezburst-update-example")
+def download_verasmart_ezburst_update_example():
+  return _download_verasmart_example("verasmart_ezburst_distribution_update_example.csv")
+
+
+@app.get("/download/verasmart-login-disabled-example")
+def download_verasmart_login_disabled_example():
+  return _download_verasmart_example("verasmart_login_disabled_no_example.csv")
 
 
 @app.get("/download/strike-mask-translation-template")
