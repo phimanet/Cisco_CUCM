@@ -478,6 +478,8 @@ def _unity_user_extract_start_worker():
   _start_genesys_inactive_queue_worker()
   _load_genesys_webrtc_cleanup_queue()
   _start_genesys_webrtc_cleanup_queue_worker()
+  _load_genesys_user_cleanup_queue()
+  _start_genesys_user_cleanup_queue_worker()
   _start_genesys_group_audit_scheduler()
   if _is_lab_runtime_host() and SIP_CALL_SEARCH_ENABLED and SIP_CALL_SEARCH_LAB_ONLY:
     _start_sip_call_search_listener()
@@ -914,6 +916,12 @@ GENESYS_WEBRTC_CLEANUP_QUEUE_WORKER_STARTED = False
 GENESYS_WEBRTC_CLEANUP_QUEUE_MAX_HISTORY = max(5, int((os.getenv("GENESYS_WEBRTC_CLEANUP_QUEUE_MAX_HISTORY", "20") or "20").strip()))
 GENESYS_WEBRTC_CLEANUP_QUEUE_PHONES_PER_SECOND = min(10.0, max(0.1, float((os.getenv("GENESYS_WEBRTC_CLEANUP_QUEUE_PHONES_PER_SECOND", "2") or "2").strip())))
 GENESYS_WEBRTC_CLEANUP_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_webrtc_cleanup_queue.json")
+GENESYS_USER_CLEANUP_QUEUE_JOBS = {}
+GENESYS_USER_CLEANUP_QUEUE_LOCK = threading.Lock()
+GENESYS_USER_CLEANUP_QUEUE_WORKER_STARTED = False
+GENESYS_USER_CLEANUP_QUEUE_MAX_HISTORY = max(5, int((os.getenv("GENESYS_USER_CLEANUP_QUEUE_MAX_HISTORY", "20") or "20").strip()))
+GENESYS_USER_CLEANUP_QUEUE_USERS_PER_SECOND = min(10.0, max(0.1, float((os.getenv("GENESYS_USER_CLEANUP_QUEUE_USERS_PER_SECOND", "2") or "2").strip())))
+GENESYS_USER_CLEANUP_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_user_cleanup_queue.json")
 _genesys_default_filter_path = (os.getenv("GENESYS_DIVISION_FILTERS_PATH", "") or "").strip()
 if not _genesys_default_filter_path:
   if os.name == "nt":
@@ -3517,7 +3525,7 @@ def _genesys_list_user_cleanup_candidates(region: str, access_token: str, auth_c
   seen_emails = set()
   for user in users:
     email = str(user.get("email", "") or "").strip().lower() if isinstance(user, dict) else ""
-    if email and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) and email not in seen_emails:
+    if email and not email.startswith("zz") and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) and email not in seen_emails:
       seen_emails.add(email)
       valid_emails.append(email)
 
@@ -3541,6 +3549,8 @@ def _genesys_list_user_cleanup_candidates(region: str, access_token: str, auth_c
     if not isinstance(user, dict):
       continue
     email = str(user.get("email", "") or "").strip().lower()
+    if email.startswith("zz"):
+      continue
     if not email:
       ad_status = "missing_email"
       reason = "Genesys user has no email address"
@@ -10764,6 +10774,217 @@ def _start_genesys_webrtc_cleanup_queue_worker():
         time.sleep(2)
 
   threading.Thread(target=worker, name="genesys-webrtc-cleanup-queue", daemon=True).start()
+
+
+def _persist_genesys_user_cleanup_queue_locked():
+  jobs = sorted(
+    [dict(job) for job in GENESYS_USER_CLEANUP_QUEUE_JOBS.values() if isinstance(job, dict)],
+    key=lambda job: float(job.get("created_epoch", 0) or 0),
+    reverse=True,
+  )
+  active_jobs = [job for job in jobs if str(job.get("status", "") or "") in {"queued", "running"}]
+  completed_jobs = [job for job in jobs if str(job.get("status", "") or "") not in {"queued", "running"}]
+  kept_jobs = active_jobs + completed_jobs[:GENESYS_USER_CLEANUP_QUEUE_MAX_HISTORY]
+  GENESYS_USER_CLEANUP_QUEUE_JOBS.clear()
+  GENESYS_USER_CLEANUP_QUEUE_JOBS.update({str(job.get("job_id", "")): job for job in kept_jobs if str(job.get("job_id", ""))})
+  try:
+    parent = os.path.dirname(GENESYS_USER_CLEANUP_QUEUE_PATH)
+    if parent:
+      os.makedirs(parent, exist_ok=True)
+    temp_path = GENESYS_USER_CLEANUP_QUEUE_PATH + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+      json.dump({"version": 1, "jobs": kept_jobs}, handle, indent=2)
+    os.replace(temp_path, GENESYS_USER_CLEANUP_QUEUE_PATH)
+  except OSError as exc:
+    logger.warning("Genesys user cleanup queue persistence failed: %s", exc)
+
+
+def _load_genesys_user_cleanup_queue():
+  try:
+    with open(GENESYS_USER_CLEANUP_QUEUE_PATH, "r", encoding="utf-8") as handle:
+      payload = json.load(handle)
+    jobs = payload.get("jobs", []) if isinstance(payload, dict) else []
+    with GENESYS_USER_CLEANUP_QUEUE_LOCK:
+      for job in jobs if isinstance(jobs, list) else []:
+        if not isinstance(job, dict) or not str(job.get("job_id", "") or "").strip():
+          continue
+        if str(job.get("status", "") or "") in {"queued", "running"}:
+          job["status"] = "queued"
+          job["started_at"] = ""
+          for user in job.get("users", []) if isinstance(job.get("users"), list) else []:
+            if isinstance(user, dict) and str(user.get("status", "") or "") == "running":
+              user["status"] = "queued"
+        GENESYS_USER_CLEANUP_QUEUE_JOBS[str(job["job_id"]).strip()] = job
+      _persist_genesys_user_cleanup_queue_locked()
+  except FileNotFoundError:
+    return
+  except (OSError, ValueError, TypeError) as exc:
+    logger.warning("Genesys user cleanup queue load failed: %s", exc)
+
+
+def _genesys_user_cleanup_queue_payload(job: dict) -> dict:
+  clean_job = dict(job or {})
+  return {
+    "ok": True,
+    "job_id": str(clean_job.get("job_id", "") or ""),
+    "status": str(clean_job.get("status", "queued") or "queued"),
+    "queued": str(clean_job.get("status", "queued") or "queued") in {"queued", "running"},
+    "requested": int(clean_job.get("requested", 0) or 0),
+    "processed": int(clean_job.get("processed", 0) or 0),
+    "inactive_count": int(clean_job.get("inactive_count", 0) or 0),
+    "failure_count": int(clean_job.get("failure_count", 0) or 0),
+    "users_per_second": float(clean_job.get("users_per_second", GENESYS_USER_CLEANUP_QUEUE_USERS_PER_SECOND) or GENESYS_USER_CLEANUP_QUEUE_USERS_PER_SECOND),
+    "created_at": str(clean_job.get("created_at", "") or ""),
+    "started_at": str(clean_job.get("started_at", "") or ""),
+    "finished_at": str(clean_job.get("finished_at", "") or ""),
+    "error": str(clean_job.get("error", "") or ""),
+    "users": clean_job.get("users", []) if isinstance(clean_job.get("users"), list) else [],
+  }
+
+
+def _genesys_set_cleanup_user_inactive(api_base: str, access_token: str, user: dict) -> dict:
+  user_id = str(user.get("user_id", "") or "").strip()
+  expected_name = str(user.get("name", "") or "").strip()
+  expected_email = str(user.get("email", "") or "").strip().lower()
+  expected_username = str(user.get("username", "") or "").strip()
+  expected_ad_status = str(user.get("ad_status", "") or "").strip()
+  ok_user, user_payload, user_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}")
+  if not ok_user:
+    return {"ok": False, "error": f"User safety recheck failed: {user_error or 'Unknown error.'}"}
+
+  current_name = str(user_payload.get("name", "") or "").strip()
+  current_email = str(user_payload.get("email", "") or "").strip().lower()
+  current_username = str(user_payload.get("username", "") or "").strip()
+  current_state = str(user_payload.get("state", "") or "").strip().lower()
+  if current_name != expected_name or current_email != expected_email or current_username != expected_username:
+    return {"ok": False, "error": "Inactivation blocked: Genesys name, email, or username changed after candidate review."}
+  if current_email.startswith("zz"):
+    return {"ok": False, "error": "Inactivation blocked: zz-prefixed emails are excluded from this workflow."}
+
+  if not current_email:
+    current_ad_status = "missing_email"
+  elif not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", current_email):
+    current_ad_status = "invalid_email"
+  else:
+    lookup = lookup_ad_identities_by_email([current_email], auth_context={})
+    if not lookup.get("ok"):
+      return {"ok": False, "error": f"Inactivation blocked: LDAP recheck failed: {lookup.get('error', 'Unknown error.')}"}
+    identities = lookup.get("results", []) if isinstance(lookup.get("results"), list) else []
+    identity = identities[0] if identities and isinstance(identities[0], dict) else {}
+    if identity.get("found"):
+      return {"ok": False, "error": f"Inactivation blocked: {current_email} is now valid in Active Directory."}
+    current_ad_status = "not_found"
+  if current_ad_status != expected_ad_status:
+    return {"ok": False, "error": f"Inactivation blocked: candidate status changed from {expected_ad_status} to {current_ad_status}."}
+  if current_state == "inactive":
+    return {"ok": True, "already_inactive": True}
+  if current_state != "active":
+    return {"ok": False, "error": f"Inactivation blocked: Genesys state is '{current_state or '(blank)'}', not active."}
+
+  updated, _, update_error, status_code = _genesys_send_json(
+    "PATCH", api_base, access_token, f"/api/v2/users/{user_id}", payload={"state": "inactive"}
+  )
+  if not updated:
+    return {"ok": False, "error": update_error or f"Genesys user update failed (HTTP {status_code})."}
+  verified_state = ""
+  verify_error = ""
+  for verify_attempt in range(1, 7):
+    ok_verify, verify_payload, verify_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}")
+    verified_state = str(verify_payload.get("state", "") or "").strip().lower() if ok_verify else ""
+    if ok_verify and verified_state == "inactive":
+      return {"ok": True, "already_inactive": False}
+    if verify_attempt < 6:
+      time.sleep(0.5)
+  return {"ok": False, "error": f"Update was not verified as inactive: {verify_error or ('returned state ' + (verified_state or 'blank'))}"}
+
+
+def _run_genesys_user_cleanup_queue_job(job_id: str):
+  with GENESYS_USER_CLEANUP_QUEUE_LOCK:
+    job = GENESYS_USER_CLEANUP_QUEUE_JOBS.get(job_id)
+    if not isinstance(job, dict):
+      return
+    job["status"] = "running"
+    job["started_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+    _persist_genesys_user_cleanup_queue_locked()
+    job = dict(job)
+  try:
+    region = str(job.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION).strip().lower()
+    token_result = _genesys_get_access_token(region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+    if not token_result.get("ok"):
+      raise RuntimeError(token_result.get("error", "Genesys token request failed."))
+    _, _, api_base = _genesys_region_to_urls(token_result.get("region", region))
+    access_token = token_result.get("access_token", "")
+    users_per_second = min(10.0, max(0.1, float(job.get("users_per_second", GENESYS_USER_CLEANUP_QUEUE_USERS_PER_SECOND) or GENESYS_USER_CLEANUP_QUEUE_USERS_PER_SECOND)))
+    interval_seconds = 1.0 / users_per_second
+    next_user_start = time.monotonic()
+    while True:
+      with GENESYS_USER_CLEANUP_QUEUE_LOCK:
+        live_job = GENESYS_USER_CLEANUP_QUEUE_JOBS.get(job_id)
+        users = live_job.get("users", []) if isinstance(live_job, dict) and isinstance(live_job.get("users"), list) else []
+        next_user = next((item for item in users if isinstance(item, dict) and str(item.get("status", "queued") or "queued") == "queued"), None)
+        if next_user is None:
+          break
+        next_user["status"] = "running"
+        _persist_genesys_user_cleanup_queue_locked()
+        user_copy = dict(next_user)
+      wait_seconds = next_user_start - time.monotonic()
+      if wait_seconds > 0:
+        time.sleep(wait_seconds)
+      next_user_start = time.monotonic() + interval_seconds
+      result = _genesys_set_cleanup_user_inactive(api_base, access_token, user_copy)
+      with GENESYS_USER_CLEANUP_QUEUE_LOCK:
+        live_job = GENESYS_USER_CLEANUP_QUEUE_JOBS.get(job_id)
+        users = live_job.get("users", []) if isinstance(live_job, dict) and isinstance(live_job.get("users"), list) else []
+        target = next((item for item in users if str(item.get("user_id", "")) == str(user_copy.get("user_id", ""))), None)
+        if isinstance(target, dict):
+          target["status"] = "inactive" if result.get("ok") else "failed"
+          target["error"] = str(result.get("error", "") or "")
+          target["already_inactive"] = bool(result.get("already_inactive", False))
+        live_job["processed"] = sum(1 for item in users if str(item.get("status", "")) in {"inactive", "failed"})
+        live_job["inactive_count"] = sum(1 for item in users if str(item.get("status", "")) == "inactive")
+        live_job["failure_count"] = sum(1 for item in users if str(item.get("status", "")) == "failed")
+        _persist_genesys_user_cleanup_queue_locked()
+      if result.get("ok") and not result.get("already_inactive"):
+        _append_audit_event(
+          action="genesys_user_cleanup_set_inactive_queued",
+          cucm_host=str(job.get("cucm_host", "") or ""),
+          operator=str(job.get("operator", "") or ""),
+          target=f"user_id={user_copy.get('user_id', '')};name={user_copy.get('name', '')};email={user_copy.get('email', '')};ad_status={user_copy.get('ad_status', '')};reason=Unknown;job={job_id}",
+          output_filename="",
+          inline_mode=True,
+          account=str(user_copy.get("email", "") or ""),
+        )
+    with GENESYS_USER_CLEANUP_QUEUE_LOCK:
+      live_job = GENESYS_USER_CLEANUP_QUEUE_JOBS.get(job_id)
+      if isinstance(live_job, dict):
+        live_job["status"] = "completed" if int(live_job.get("failure_count", 0) or 0) == 0 else "completed_with_failures"
+        live_job["finished_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+        _persist_genesys_user_cleanup_queue_locked()
+  except Exception as exc:
+    with GENESYS_USER_CLEANUP_QUEUE_LOCK:
+      live_job = GENESYS_USER_CLEANUP_QUEUE_JOBS.get(job_id)
+      if isinstance(live_job, dict):
+        live_job.update({"status": "failed", "error": str(exc or "Queued Genesys user cleanup failed."), "finished_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)})
+        _persist_genesys_user_cleanup_queue_locked()
+
+
+def _start_genesys_user_cleanup_queue_worker():
+  global GENESYS_USER_CLEANUP_QUEUE_WORKER_STARTED
+  with GENESYS_USER_CLEANUP_QUEUE_LOCK:
+    if GENESYS_USER_CLEANUP_QUEUE_WORKER_STARTED:
+      return
+    GENESYS_USER_CLEANUP_QUEUE_WORKER_STARTED = True
+
+  def worker():
+    while True:
+      with GENESYS_USER_CLEANUP_QUEUE_LOCK:
+        next_job_id = next((job_id for job_id, job in GENESYS_USER_CLEANUP_QUEUE_JOBS.items() if str(job.get("status", "") or "") == "queued"), "")
+      if next_job_id:
+        _run_genesys_user_cleanup_queue_job(next_job_id)
+      else:
+        time.sleep(2)
+
+  threading.Thread(target=worker, name="genesys-user-cleanup-queue", daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -19716,37 +19937,41 @@ def genesys_admin_placeholder(request: Request):
         <section class="portal-main">
           <div id="genesys-user-cleanup-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Genesys User Cleanup</h3>
-            <p style="color:#4e6a84;font-size:12px;">Read-only comparison of Genesys end-user email addresses against Active Directory. Only missing, malformed, or LDAP-not-found email records are shown as deletion candidates.</p>
+            <p style="color:#4e6a84;font-size:12px;">Compare Genesys end-user emails against Active Directory, review invalid candidates, then select approved active users for queued Inactive status. Emails beginning with zz are excluded from lookup and display.</p>
             <div class="search-filter-row">
               <input id="genesys-user-cleanup-filter" placeholder="Filter by name, email, username, division, or status" style="width:420px;">
-              <select id="genesys-user-cleanup-status-filter" style="width:190px;">
-                <option value="">All invalid statuses</option>
-                <option value="not_found">Not found in LDAP</option>
-                <option value="missing_email">Missing email</option>
-                <option value="invalid_email">Invalid email format</option>
-              </select>
+              <select id="genesys-user-cleanup-status-filter" style="width:190px;"><option value="">All invalid statuses</option><option value="not_found">Not found in LDAP</option><option value="missing_email">Missing email</option><option value="invalid_email">Invalid email format</option></select>
               <button type="button" id="genesys-user-cleanup-load-btn" onclick="if(window.loadGenesysUserCleanup){window.loadGenesysUserCleanup();}else{document.getElementById('genesys-user-cleanup-status').textContent='Genesys User Cleanup JavaScript handler is missing.';}return false;" style="background:#385977;">Load Invalid Users</button>
+              <button type="button" id="genesys-user-cleanup-queue-btn" style="background:#a56a00;" disabled>Queue Set Inactive (<span id="genesys-user-cleanup-selected-count">0</span>)</button>
             </div>
-            <p id="genesys-user-cleanup-status" style="color:#2c5c8a;min-height:18px;">Ready. This lookup does not delete or modify users.</p>
+            <p id="genesys-user-cleanup-status" style="color:#2c5c8a;min-height:18px;">Ready. Load and review candidates before selecting active users to set Inactive.</p>
+            <div id="genesys-user-cleanup-progress" style="display:none;margin:8px 0;padding:8px;background:#fff8e8;border:1px solid #e3c77a;"></div>
             <div id="genesys-user-cleanup-summary" style="display:none;margin:8px 0;padding:8px;background:#f8fcff;border:1px solid #c8dbee;"></div>
             <div id="genesys-user-cleanup-output" style="overflow-x:auto;"></div>
             <script>
               (function () {
                 var loadButton=document.getElementById("genesys-user-cleanup-load-btn");
+                var queueButton=document.getElementById("genesys-user-cleanup-queue-btn");
+                var selectedCount=document.getElementById("genesys-user-cleanup-selected-count");
+                var progress=document.getElementById("genesys-user-cleanup-progress");
                 var filterInput=document.getElementById("genesys-user-cleanup-filter");
                 var statusFilter=document.getElementById("genesys-user-cleanup-status-filter");
                 var status=document.getElementById("genesys-user-cleanup-status");
                 var summary=document.getElementById("genesys-user-cleanup-summary");
                 var output=document.getElementById("genesys-user-cleanup-output");
-                var loadedRows=[];
-                var scanInfo={};
-                if(!loadButton||!filterInput||!statusFilter||!status||!summary||!output)return;
+                var loadedRows=[];var selectedIds={};var scanInfo={};var activeJobId="";
+                if(!loadButton||!queueButton||!selectedCount||!progress||!filterInput||!statusFilter||!status||!summary||!output)return;
                 function esc(value){return String(value==null?"":value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;");}
                 function statusLabel(value){if(value==="not_found")return "Not Found in LDAP";if(value==="missing_email")return "Missing Email";if(value==="invalid_email")return "Invalid Email";return value||"Invalid";}
-                function renderRows(){var query=String(filterInput.value||"").trim().toLowerCase();var selectedStatus=String(statusFilter.value||"");var rows=loadedRows.filter(function(row){var haystack=[row.name,row.email,row.username,row.division_name,row.state,row.ad_status].join(" ").toLowerCase();return(!query||haystack.indexOf(query)>=0)&&(!selectedStatus||row.ad_status===selectedStatus);});summary.style.display="block";summary.innerHTML="<strong>Candidates:</strong> "+rows.length+" of "+loadedRows.length+" &nbsp; <strong>Genesys users scanned:</strong> "+Number(scanInfo.users_scanned||0)+" &nbsp; <strong>Emails checked in LDAP:</strong> "+Number(scanInfo.emails_checked||0)+" &nbsp; <strong>LDAP source:</strong> "+esc((scanInfo.ldap_sources||[]).join(", ")||"none");if(!rows.length){output.innerHTML="<p>No invalid Genesys user candidates match the current filters.</p>";return;}output.innerHTML="<table><thead><tr><th>Name</th><th>Email</th><th>Username</th><th>State</th><th>Division</th><th>AD Status</th><th>Review Status</th></tr></thead><tbody>"+rows.map(function(row){return "<tr><td><strong>"+esc(row.name||"(unnamed)")+"</strong><div style='font-size:11px;color:#4e6a84;'>"+esc(row.user_id)+"</div></td><td>"+esc(row.email||"(missing)")+"</td><td>"+esc(row.username||"-")+"</td><td>"+esc(row.state||"-")+"</td><td>"+esc(row.division_name||"-")+"</td><td><strong style='color:#b42318;'>"+esc(statusLabel(row.ad_status))+"</strong></td><td><strong style='color:#9a4b00;'>Candidate to Delete</strong><div style='font-size:11px;color:#4e6a84;margin-top:3px;'>"+esc(row.candidate_reason)+"</div></td></tr>";}).join("")+"</tbody></table>";}
-                window.loadGenesysUserCleanup=async function(){loadButton.disabled=true;status.style.color="#2c5c8a";status.textContent="Loading Genesys users and validating emails in LDAP...";summary.style.display="none";output.innerHTML="";try{var response=await fetch("/genesys/user-cleanup/candidates",{credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));loadedRows=Array.isArray(payload.rows)?payload.rows:[];scanInfo=payload;renderRows();status.style.color="#146c2e";status.textContent=loadedRows.length+" invalid Genesys user candidate(s) found. Read-only; no users were changed.";}catch(error){status.style.color="#b42318";status.textContent="User cleanup lookup failed: "+((error&&error.message)||"Unknown error.");}finally{loadButton.disabled=false;}};
-                filterInput.addEventListener("input",renderRows);
-                statusFilter.addEventListener("change",renderRows);
+                function eligible(row){return row&&String(row.state||"").toLowerCase()==="active"&&!row.queue_status&&row.user_id&&row.name;}
+                function updateSelectedCount(){var count=loadedRows.filter(function(row){return eligible(row)&&!!selectedIds[row.user_id];}).length;selectedCount.textContent=String(count);queueButton.disabled=count===0||!!activeJobId;}
+                function renderRows(){var query=String(filterInput.value||"").trim().toLowerCase();var selectedStatus=String(statusFilter.value||"");var rows=loadedRows.filter(function(row){var haystack=[row.name,row.email,row.username,row.division_name,row.state,row.ad_status].join(" ").toLowerCase();return(!query||haystack.indexOf(query)>=0)&&(!selectedStatus||row.ad_status===selectedStatus);});summary.style.display="block";summary.innerHTML="<strong>Candidates:</strong> "+rows.length+" of "+loadedRows.length+" &nbsp; <strong>Genesys users scanned:</strong> "+Number(scanInfo.users_scanned||0)+" &nbsp; <strong>Emails checked in LDAP:</strong> "+Number(scanInfo.emails_checked||0)+" &nbsp; <strong>LDAP source:</strong> "+esc((scanInfo.ldap_sources||[]).join(", ")||"none");if(!rows.length){output.innerHTML="<p>No invalid Genesys user candidates match the current filters.</p>";updateSelectedCount();return;}output.innerHTML="<table><thead><tr><th><input type='checkbox' id='genesys-user-cleanup-select-all' title='Select all filtered active candidates'></th><th>Name</th><th>Email</th><th>Username</th><th>State</th><th>Division</th><th>AD Status</th><th>Review Status</th></tr></thead><tbody>"+rows.map(function(row){var queueState=row.queue_status||"";var isInactive=String(row.state||"").toLowerCase()==="inactive"||queueState==="inactive";var checkbox=eligible(row)?"<input type='checkbox' data-user-cleanup-select='"+esc(row.user_id)+"'"+(selectedIds[row.user_id]?" checked":"")+">":"";var review=isInactive?"<strong style='color:#146c2e;'>Inactive</strong>":(queueState==="failed"?"<strong style='color:#b42318;'>Failed</strong><div style='font-size:11px;color:#b42318;margin-top:3px;'>"+esc(row.queue_error||"")+"</div>":(queueState==="running"?"<strong style='color:#7a5a13;'>Updating</strong>":(queueState==="queued"?"<strong style='color:#7a5a13;'>Queued</strong>":"<strong style='color:#9a4b00;'>Candidate to Set Inactive</strong><div style='font-size:11px;color:#4e6a84;margin-top:3px;'>"+esc(row.candidate_reason)+"</div>")));return "<tr"+(isInactive?" style='background:#eef9f1;'":(queueState==="failed"?" style='background:#fff1ef;'":""))+"><td>"+checkbox+"</td><td><strong>"+esc(row.name||"(unnamed)")+"</strong><div style='font-size:11px;color:#4e6a84;'>"+esc(row.user_id)+"</div></td><td>"+esc(row.email||"(missing)")+"</td><td>"+esc(row.username||"-")+"</td><td>"+esc(isInactive?"inactive":(queueState||row.state||"-"))+"</td><td>"+esc(row.division_name||"-")+"</td><td><strong style='color:#b42318;'>"+esc(statusLabel(row.ad_status))+"</strong></td><td>"+review+"</td></tr>";}).join("")+"</tbody></table>";Array.prototype.forEach.call(output.querySelectorAll("[data-user-cleanup-select]"),function(checkbox){checkbox.addEventListener("change",function(){var id=checkbox.getAttribute("data-user-cleanup-select")||"";if(checkbox.checked)selectedIds[id]=true;else delete selectedIds[id];updateSelectedCount();});});var selectAll=document.getElementById("genesys-user-cleanup-select-all");if(selectAll)selectAll.addEventListener("change",function(){rows.forEach(function(row){if(eligible(row)){if(selectAll.checked)selectedIds[row.user_id]=true;else delete selectedIds[row.user_id];}});renderRows();});updateSelectedCount();}
+                function applyQueueUsers(users){var byId={};(Array.isArray(users)?users:[]).forEach(function(user){byId[user.user_id]=user;});loadedRows.forEach(function(row){var user=byId[row.user_id];if(!user)return;row.queue_status=user.status||"";row.queue_error=user.error||"";if(user.status==="inactive")row.state="inactive";if(user.status==="inactive"||user.status==="failed")delete selectedIds[row.user_id];});}
+                async function pollQueue(jobId){try{var response=await fetch("/genesys/user-cleanup/inactive-queue/status?job_id="+encodeURIComponent(jobId),{credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));applyQueueUsers(payload.users||[]);renderRows();progress.style.display="block";progress.innerHTML="<strong>Inactive Queue:</strong> "+esc(payload.status)+" &nbsp; <strong>Rate:</strong> "+Number(payload.users_per_second||2)+" users/sec &nbsp; <strong>Processed:</strong> "+Number(payload.processed||0)+"/"+Number(payload.requested||0)+" &nbsp; <strong>Inactive:</strong> "+Number(payload.inactive_count||0)+" &nbsp; <strong>Failed:</strong> "+Number(payload.failure_count||0);if(payload.queued){window.setTimeout(function(){pollQueue(jobId);},2000);return;}activeJobId="";localStorage.removeItem("genesysUserCleanupInactiveJobId");updateSelectedCount();status.style.color=payload.failure_count?"#9a4b00":"#146c2e";status.textContent="User cleanup queue complete: "+Number(payload.inactive_count||0)+" set Inactive, "+Number(payload.failure_count||0)+" failed.";}catch(error){activeJobId="";updateSelectedCount();status.style.color="#b42318";status.textContent="Inactive queue status failed: "+((error&&error.message)||"Unknown error.");}}
+                queueButton.addEventListener("click",async function(){var users=loadedRows.filter(function(row){return eligible(row)&&!!selectedIds[row.user_id];}).map(function(row){return {user_id:row.user_id,name:row.name,email:row.email,username:row.username,ad_status:row.ad_status};});if(!users.length){status.textContent="Select at least one active cleanup candidate.";return;}if(window.prompt("This will set "+users.length+" Genesys user(s) to Inactive after LDAP revalidation. Type INACTIVE to continue:")!=="INACTIVE"){status.textContent="Inactive queue cancelled. No users were changed.";return;}queueButton.disabled=true;status.style.color="#2c5c8a";status.textContent="Submitting "+users.length+" user(s) to the persistent Inactive queue...";try{var data=new FormData();data.append("users_json",JSON.stringify(users));var response=await fetch("/genesys/user-cleanup/inactive-queue",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));activeJobId=payload.job_id;localStorage.setItem("genesysUserCleanupInactiveJobId",activeJobId);users.forEach(function(user){var row=loadedRows.find(function(item){return item.user_id===user.user_id;});if(row)row.queue_status="queued";});renderRows();status.textContent=users.length+" user(s) queued. Processing continues if you leave this page.";pollQueue(activeJobId);}catch(error){activeJobId="";updateSelectedCount();status.style.color="#b42318";status.textContent="Inactive queue submission failed: "+((error&&error.message)||"Unknown error.");}});
+                window.loadGenesysUserCleanup=async function(){loadButton.disabled=true;status.style.color="#2c5c8a";status.textContent="Loading Genesys users and validating emails in LDAP...";summary.style.display="none";output.innerHTML="";try{var response=await fetch("/genesys/user-cleanup/candidates",{credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));loadedRows=Array.isArray(payload.rows)?payload.rows:[];selectedIds={};scanInfo=payload;renderRows();status.style.color="#146c2e";status.textContent=loadedRows.length+" invalid Genesys user candidate(s) found. Select active users approved to set Inactive.";}catch(error){status.style.color="#b42318";status.textContent="User cleanup lookup failed: "+((error&&error.message)||"Unknown error.");}finally{loadButton.disabled=false;}};
+                filterInput.addEventListener("input",renderRows);statusFilter.addEventListener("change",renderRows);
+                var savedJobId=localStorage.getItem("genesysUserCleanupInactiveJobId")||"";if(savedJobId){activeJobId=savedJobId;pollQueue(savedJobId);}
               })();
             </script>
           </div>
@@ -26663,6 +26888,94 @@ def genesys_user_cleanup_candidates_route(request: Request):
   if not result.get("ok"):
     return JSONResponse({"ok": False, "error": result.get("error", "Genesys user cleanup lookup failed.")}, status_code=400)
   return JSONResponse(result)
+
+
+@app.post("/genesys/user-cleanup/inactive-queue")
+def genesys_user_cleanup_inactive_queue_route(
+  request: Request,
+  users_json: str = Form(""),
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, _ = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  try:
+    parsed_users = json.loads(users_json or "[]")
+  except (TypeError, ValueError):
+    return JSONResponse({"ok": False, "error": "Selected users payload must be valid JSON."}, status_code=400)
+  if not isinstance(parsed_users, list) or not parsed_users:
+    return JSONResponse({"ok": False, "error": "Select at least one Genesys user cleanup candidate."}, status_code=400)
+  if len(parsed_users) > 5000:
+    return JSONResponse({"ok": False, "error": "A maximum of 5,000 users can be queued at once."}, status_code=400)
+
+  users = []
+  seen_ids = set()
+  allowed_statuses = {"not_found", "missing_email", "invalid_email"}
+  for entry in parsed_users:
+    if not isinstance(entry, dict):
+      continue
+    user_id = str(entry.get("user_id", "") or "").strip()
+    name = str(entry.get("name", "") or "").strip()
+    email = str(entry.get("email", "") or "").strip().lower()
+    username = str(entry.get("username", "") or "").strip()
+    ad_status = str(entry.get("ad_status", "") or "").strip()
+    if not user_id or user_id in seen_ids or not name or email.startswith("zz") or ad_status not in allowed_statuses:
+      continue
+    seen_ids.add(user_id)
+    users.append({
+      "user_id": user_id,
+      "name": name,
+      "email": email,
+      "username": username,
+      "ad_status": ad_status,
+      "status": "queued",
+      "error": "",
+    })
+  if not users:
+    return JSONResponse({"ok": False, "error": "No valid selected users were provided."}, status_code=400)
+
+  job_id = str(uuid4())
+  job = {
+    "job_id": job_id,
+    "status": "queued",
+    "created_epoch": time.time(),
+    "created_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+    "started_at": "",
+    "finished_at": "",
+    "region": (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2",
+    "cucm_host": resolved_host,
+    "operator": resolved_user,
+    "requested": len(users),
+    "processed": 0,
+    "inactive_count": 0,
+    "failure_count": 0,
+    "users_per_second": GENESYS_USER_CLEANUP_QUEUE_USERS_PER_SECOND,
+    "error": "",
+    "users": users,
+  }
+  with GENESYS_USER_CLEANUP_QUEUE_LOCK:
+    GENESYS_USER_CLEANUP_QUEUE_JOBS[job_id] = job
+    _persist_genesys_user_cleanup_queue_locked()
+  _append_audit_event(
+    action="genesys_user_cleanup_inactive_queued",
+    cucm_host=resolved_host,
+    operator=resolved_user,
+    target=f"job={job_id};users={len(users)};reason=Unknown;ldap_recheck=required",
+    output_filename="",
+    inline_mode=True,
+  )
+  return JSONResponse(_genesys_user_cleanup_queue_payload(job), status_code=202)
+
+
+@app.get("/genesys/user-cleanup/inactive-queue/status")
+def genesys_user_cleanup_inactive_queue_status_route(job_id: str = ""):
+  clean_job_id = str(job_id or "").strip()
+  with GENESYS_USER_CLEANUP_QUEUE_LOCK:
+    job = GENESYS_USER_CLEANUP_QUEUE_JOBS.get(clean_job_id)
+    payload = _genesys_user_cleanup_queue_payload(job) if isinstance(job, dict) else None
+  if payload is None:
+    return JSONResponse({"ok": False, "error": "Genesys user cleanup job was not found."}, status_code=404)
+  return JSONResponse(payload)
 
 
 @app.post("/genesys/webrtc-cleanup/delete-queue")
