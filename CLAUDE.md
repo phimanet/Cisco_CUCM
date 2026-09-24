@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-08-06
+- Date: 2026-09-24
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -108,6 +108,16 @@ Priority keys:
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
+
+### 2026-09-24 (VeraSMART live CUCM search builder)
+- Added a standalone "Live CUCM Search" flow at the top of the VeraSMART / Calero (v1.01 LAB) panel: search CUCM by last name (backed by `search_persons_by_name`, no personnel export needed), select a Cost Center from a dropdown per person, queue as many as needed, then generate the Personnel + EZ-Burst CSVs. New routes: `/verasmart/lab/template-builder/search-cucm`, `/verasmart/lab/template-builder/generate-from-cucm`, `/verasmart/lab/cost-centers`.
+- Cost Center dropdown is sourced from [toolkit/verasmart_cost_centers.txt](toolkit/verasmart_cost_centers.txt) (currently trimmed to the operator-approved subset); edit that file directly to add/remove options, no code change needed.
+- Windows Domain Account is auto-built as `AHS\<CUCM userid>` (no manual typing).
+- Generated Personnel CSV columns/order: `Email|WindowsDomainAccount|CostCenter|EZBurstOption|LoginDisabled`. Email is the required VeraSMART match field (confirmed via a real VeraSMART record where Windows domain account was blank but Email was populated) and generation is blocked if any queued person is missing it. `EZBurstOption` is set to the exact VeraSMART value `E-mail links to EZ-Burst reports` (corrected from a placeholder `Linked`). `LoginDisabled` is always forced to `No`.
+- The original Personnel-export-driven "Build Manual Cost Center Files from Personnel Export" section (template-employee cloning) is unchanged and still available below the new search flow.
+- Fixed a real bug during this work: an embedded-JS backslash literal (`"\\\\"`) was being collapsed by Python's string escaping into an unterminated JS string, throwing a syntax error that silently disabled every handler in the panel's script block. Fixed using `String.fromCharCode(92)` instead of a literal backslash — same category as the 2026-09-22 Hunt List incident. Recorded in repo memory (`/memories/repo/embedded-js-pitfalls.md`).
+- Still LAB-only; no PROD rollout for this workflow yet, per existing v1.01 gating.
+
 - Keep this section concise with short chronological notes after significant updates.
 
 ### 2026-09-23 (Genesys Set User to Inactive)
