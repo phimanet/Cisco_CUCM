@@ -476,6 +476,8 @@ def _unity_user_extract_start_worker():
   _start_genesys_ad_webrtc_queue_worker()
   _load_genesys_inactive_queue()
   _start_genesys_inactive_queue_worker()
+  _load_genesys_webrtc_cleanup_queue()
+  _start_genesys_webrtc_cleanup_queue_worker()
   _start_genesys_group_audit_scheduler()
   if _is_lab_runtime_host() and SIP_CALL_SEARCH_ENABLED and SIP_CALL_SEARCH_LAB_ONLY:
     _start_sip_call_search_listener()
@@ -906,6 +908,12 @@ GENESYS_INACTIVE_QUEUE_WORKER_STARTED = False
 GENESYS_INACTIVE_QUEUE_MAX_HISTORY = max(5, int((os.getenv("GENESYS_INACTIVE_QUEUE_MAX_HISTORY", "20") or "20").strip()))
 GENESYS_INACTIVE_QUEUE_USERS_PER_SECOND = min(10.0, max(0.1, float((os.getenv("GENESYS_INACTIVE_QUEUE_USERS_PER_SECOND", "2") or "2").strip())))
 GENESYS_INACTIVE_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_inactive_queue.json")
+GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS = {}
+GENESYS_WEBRTC_CLEANUP_QUEUE_LOCK = threading.Lock()
+GENESYS_WEBRTC_CLEANUP_QUEUE_WORKER_STARTED = False
+GENESYS_WEBRTC_CLEANUP_QUEUE_MAX_HISTORY = max(5, int((os.getenv("GENESYS_WEBRTC_CLEANUP_QUEUE_MAX_HISTORY", "20") or "20").strip()))
+GENESYS_WEBRTC_CLEANUP_QUEUE_PHONES_PER_SECOND = min(10.0, max(0.1, float((os.getenv("GENESYS_WEBRTC_CLEANUP_QUEUE_PHONES_PER_SECOND", "2") or "2").strip())))
+GENESYS_WEBRTC_CLEANUP_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_webrtc_cleanup_queue.json")
 _genesys_default_filter_path = (os.getenv("GENESYS_DIVISION_FILTERS_PATH", "") or "").strip()
 if not _genesys_default_filter_path:
   if os.name == "nt":
@@ -10490,6 +10498,194 @@ def _start_genesys_inactive_queue_worker():
   threading.Thread(target=worker, name="genesys-inactive-queue", daemon=True).start()
 
 
+def _persist_genesys_webrtc_cleanup_queue_locked():
+  jobs = sorted(
+    [dict(job) for job in GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS.values() if isinstance(job, dict)],
+    key=lambda job: float(job.get("created_epoch", 0) or 0),
+    reverse=True,
+  )
+  active_jobs = [job for job in jobs if str(job.get("status", "") or "") in {"queued", "running"}]
+  completed_jobs = [job for job in jobs if str(job.get("status", "") or "") not in {"queued", "running"}]
+  kept_jobs = active_jobs + completed_jobs[:GENESYS_WEBRTC_CLEANUP_QUEUE_MAX_HISTORY]
+  GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS.clear()
+  GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS.update({str(job.get("job_id", "")): job for job in kept_jobs if str(job.get("job_id", ""))})
+  try:
+    parent = os.path.dirname(GENESYS_WEBRTC_CLEANUP_QUEUE_PATH)
+    if parent:
+      os.makedirs(parent, exist_ok=True)
+    temp_path = GENESYS_WEBRTC_CLEANUP_QUEUE_PATH + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+      json.dump({"version": 1, "jobs": kept_jobs}, handle, indent=2)
+    os.replace(temp_path, GENESYS_WEBRTC_CLEANUP_QUEUE_PATH)
+  except OSError as exc:
+    logger.warning("Genesys WebRTC cleanup queue persistence failed: %s", exc)
+
+
+def _load_genesys_webrtc_cleanup_queue():
+  try:
+    with open(GENESYS_WEBRTC_CLEANUP_QUEUE_PATH, "r", encoding="utf-8") as handle:
+      payload = json.load(handle)
+    jobs = payload.get("jobs", []) if isinstance(payload, dict) else []
+    with GENESYS_WEBRTC_CLEANUP_QUEUE_LOCK:
+      for job in jobs if isinstance(jobs, list) else []:
+        if not isinstance(job, dict) or not str(job.get("job_id", "") or "").strip():
+          continue
+        if str(job.get("status", "") or "") in {"queued", "running"}:
+          job["status"] = "queued"
+          job["started_at"] = ""
+          for phone in job.get("phones", []) if isinstance(job.get("phones"), list) else []:
+            if isinstance(phone, dict) and str(phone.get("status", "") or "") == "running":
+              phone["status"] = "queued"
+        GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS[str(job["job_id"]).strip()] = job
+      _persist_genesys_webrtc_cleanup_queue_locked()
+  except FileNotFoundError:
+    return
+  except (OSError, ValueError, TypeError) as exc:
+    logger.warning("Genesys WebRTC cleanup queue load failed: %s", exc)
+
+
+def _genesys_webrtc_cleanup_queue_payload(job: dict) -> dict:
+  clean_job = dict(job or {})
+  return {
+    "ok": True,
+    "job_id": str(clean_job.get("job_id", "") or ""),
+    "status": str(clean_job.get("status", "queued") or "queued"),
+    "queued": str(clean_job.get("status", "queued") or "queued") in {"queued", "running"},
+    "requested": int(clean_job.get("requested", 0) or 0),
+    "processed": int(clean_job.get("processed", 0) or 0),
+    "deleted_count": int(clean_job.get("deleted_count", 0) or 0),
+    "failure_count": int(clean_job.get("failure_count", 0) or 0),
+    "phones_per_second": float(clean_job.get("phones_per_second", GENESYS_WEBRTC_CLEANUP_QUEUE_PHONES_PER_SECOND) or GENESYS_WEBRTC_CLEANUP_QUEUE_PHONES_PER_SECOND),
+    "created_at": str(clean_job.get("created_at", "") or ""),
+    "started_at": str(clean_job.get("started_at", "") or ""),
+    "finished_at": str(clean_job.get("finished_at", "") or ""),
+    "error": str(clean_job.get("error", "") or ""),
+    "phones": clean_job.get("phones", []) if isinstance(clean_job.get("phones"), list) else [],
+  }
+
+
+def _genesys_delete_queued_webrtc_phone(api_base: str, access_token: str, phone: dict) -> dict:
+  phone_id = str(phone.get("phone_id", "") or "").strip()
+  expected_name = str(phone.get("phone_name", "") or "").strip()
+  ok_phone, phone_payload, phone_error = _genesys_get_json(api_base, access_token, f"/api/v2/telephony/providers/edges/phones/{phone_id}")
+  if not ok_phone:
+    if "404" in str(phone_error or "") or "not found" in str(phone_error or "").lower():
+      return {"ok": True, "already_deleted": True}
+    return {"ok": False, "error": f"Phone safety recheck failed: {phone_error or 'Unknown error.'}"}
+
+  current_name = str(phone_payload.get("name", "") or "").strip()
+  if expected_name and current_name != expected_name:
+    return {"ok": False, "error": f"Phone name changed from '{expected_name}' to '{current_name or '(blank)'}'."}
+  web_rtc_user = phone_payload.get("webRtcUser") if isinstance(phone_payload.get("webRtcUser"), dict) else {}
+  web_rtc_person = str(web_rtc_user.get("name", "") or web_rtc_user.get("id", "") or "").strip()
+  if web_rtc_person:
+    return {"ok": False, "error": f"Deletion blocked: WebRTC Person is now '{web_rtc_person}'."}
+
+  template = _load_genesys_webrtc_template()
+  template_base_id = str(template.get("phone_base_settings_id", "") or "").strip().lower()
+  base_settings = phone_payload.get("phoneBaseSettings") if isinstance(phone_payload.get("phoneBaseSettings"), dict) else {}
+  base_id = str(base_settings.get("id", "") or phone_payload.get("phoneBaseSettingsId", "") or "").strip().lower()
+  base_name = str(base_settings.get("name", "") or phone_payload.get("phoneBaseSettingsName", "") or "").strip()
+  is_webrtc = bool((template_base_id and base_id == template_base_id) or "webrtc" in base_name.lower())
+  if not is_webrtc:
+    return {"ok": False, "error": "Deletion blocked: phone is no longer classified as WebRTC."}
+
+  deleted, _, delete_error, status_code = _genesys_send_json(
+    "DELETE", api_base, access_token, f"/api/v2/telephony/providers/edges/phones/{phone_id}"
+  )
+  if not deleted:
+    return {"ok": False, "error": delete_error or f"Genesys phone deletion failed (HTTP {status_code})."}
+  return {"ok": True, "already_deleted": False}
+
+
+def _run_genesys_webrtc_cleanup_queue_job(job_id: str):
+  with GENESYS_WEBRTC_CLEANUP_QUEUE_LOCK:
+    job = GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS.get(job_id)
+    if not isinstance(job, dict):
+      return
+    job["status"] = "running"
+    job["started_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+    _persist_genesys_webrtc_cleanup_queue_locked()
+    job = dict(job)
+  try:
+    region = str(job.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION).strip().lower()
+    token_result = _genesys_get_access_token(region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+    if not token_result.get("ok"):
+      raise RuntimeError(token_result.get("error", "Genesys token request failed."))
+    _, _, api_base = _genesys_region_to_urls(token_result.get("region", region))
+    access_token = token_result.get("access_token", "")
+    phones_per_second = min(10.0, max(0.1, float(job.get("phones_per_second", GENESYS_WEBRTC_CLEANUP_QUEUE_PHONES_PER_SECOND) or GENESYS_WEBRTC_CLEANUP_QUEUE_PHONES_PER_SECOND)))
+    interval_seconds = 1.0 / phones_per_second
+    next_phone_start = time.monotonic()
+    while True:
+      with GENESYS_WEBRTC_CLEANUP_QUEUE_LOCK:
+        live_job = GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS.get(job_id)
+        phones = live_job.get("phones", []) if isinstance(live_job, dict) and isinstance(live_job.get("phones"), list) else []
+        next_phone = next((item for item in phones if isinstance(item, dict) and str(item.get("status", "queued") or "queued") == "queued"), None)
+        if next_phone is None:
+          break
+        next_phone["status"] = "running"
+        _persist_genesys_webrtc_cleanup_queue_locked()
+        phone_copy = dict(next_phone)
+      wait_seconds = next_phone_start - time.monotonic()
+      if wait_seconds > 0:
+        time.sleep(wait_seconds)
+      next_phone_start = time.monotonic() + interval_seconds
+      result = _genesys_delete_queued_webrtc_phone(api_base, access_token, phone_copy)
+      with GENESYS_WEBRTC_CLEANUP_QUEUE_LOCK:
+        live_job = GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS.get(job_id)
+        phones = live_job.get("phones", []) if isinstance(live_job, dict) and isinstance(live_job.get("phones"), list) else []
+        target = next((item for item in phones if str(item.get("phone_id", "")) == str(phone_copy.get("phone_id", ""))), None)
+        if isinstance(target, dict):
+          target["status"] = "deleted" if result.get("ok") else "failed"
+          target["error"] = str(result.get("error", "") or "")
+          target["already_deleted"] = bool(result.get("already_deleted", False))
+        live_job["processed"] = sum(1 for item in phones if str(item.get("status", "")) in {"deleted", "failed"})
+        live_job["deleted_count"] = sum(1 for item in phones if str(item.get("status", "")) == "deleted")
+        live_job["failure_count"] = sum(1 for item in phones if str(item.get("status", "")) == "failed")
+        _persist_genesys_webrtc_cleanup_queue_locked()
+      if result.get("ok") and not result.get("already_deleted"):
+        _append_audit_event(
+          action="genesys_webrtc_phone_deleted_queued",
+          cucm_host=str(job.get("cucm_host", "") or ""),
+          operator=str(job.get("operator", "") or ""),
+          target=f"phone_id={phone_copy.get('phone_id', '')};phone_name={phone_copy.get('phone_name', '')};job={job_id};webRtcUser=blank",
+          output_filename="",
+          inline_mode=True,
+        )
+    with GENESYS_WEBRTC_CLEANUP_QUEUE_LOCK:
+      live_job = GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS.get(job_id)
+      if isinstance(live_job, dict):
+        live_job["status"] = "completed" if int(live_job.get("failure_count", 0) or 0) == 0 else "completed_with_failures"
+        live_job["finished_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+        _persist_genesys_webrtc_cleanup_queue_locked()
+  except Exception as exc:
+    with GENESYS_WEBRTC_CLEANUP_QUEUE_LOCK:
+      live_job = GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS.get(job_id)
+      if isinstance(live_job, dict):
+        live_job.update({"status": "failed", "error": str(exc or "Queued WebRTC cleanup failed."), "finished_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)})
+        _persist_genesys_webrtc_cleanup_queue_locked()
+
+
+def _start_genesys_webrtc_cleanup_queue_worker():
+  global GENESYS_WEBRTC_CLEANUP_QUEUE_WORKER_STARTED
+  with GENESYS_WEBRTC_CLEANUP_QUEUE_LOCK:
+    if GENESYS_WEBRTC_CLEANUP_QUEUE_WORKER_STARTED:
+      return
+    GENESYS_WEBRTC_CLEANUP_QUEUE_WORKER_STARTED = True
+
+  def worker():
+    while True:
+      with GENESYS_WEBRTC_CLEANUP_QUEUE_LOCK:
+        next_job_id = next((job_id for job_id, job in GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS.items() if str(job.get("status", "") or "") == "queued"), "")
+      if next_job_id:
+        _run_genesys_webrtc_cleanup_queue_job(next_job_id)
+      else:
+        time.sleep(2)
+
+  threading.Thread(target=worker, name="genesys-webrtc-cleanup-queue", daemon=True).start()
+
+
 # ---------------------------------------------------------------------------
 # Separation SMS Report - scheduled email for offboarded employees
 # ---------------------------------------------------------------------------
@@ -19439,45 +19635,61 @@ def genesys_admin_placeholder(request: Request):
         <section class="portal-main">
           <div id="genesys-webrtc-cleanup-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Genesys WebRTC Cleanup</h3>
-            <p style="color:#4e6a84;font-size:12px;">Read-only lookup of WebRTC phones whose WebRTC Person is blank in Genesys Phone Management. Results are candidates for review before deletion.</p>
+            <p style="color:#4e6a84;font-size:12px;">Load WebRTC phones whose WebRTC Person is blank, review the candidates, then select approved phones for queued deletion. Every phone is rechecked immediately before deletion.</p>
             <div class="search-filter-row">
               <input id="genesys-webrtc-cleanup-filter" placeholder="Filter by phone name, ID, site, or base settings" style="width:420px;">
               <button type="button" id="genesys-webrtc-cleanup-load-btn" onclick="if(window.loadGenesysWebRTCCleanup){window.loadGenesysWebRTCCleanup();}else{document.getElementById('genesys-webrtc-cleanup-status').textContent='Genesys WebRTC Cleanup JavaScript handler is missing.';}return false;" style="background:#385977;">Load Cleanup Candidates</button>
+              <button type="button" id="genesys-webrtc-cleanup-queue-btn" style="background:#9f2f24;" disabled>Queue Delete Selected (<span id="genesys-webrtc-cleanup-selected-count">0</span>)</button>
             </div>
-            <p id="genesys-webrtc-cleanup-status" style="color:#2c5c8a;min-height:18px;">Ready. This lookup does not delete or modify phones.</p>
+            <p id="genesys-webrtc-cleanup-status" style="color:#2c5c8a;min-height:18px;">Ready. Load and review candidates before selecting phones for deletion.</p>
+            <div id="genesys-webrtc-cleanup-progress" style="display:none;margin:8px 0;padding:8px;background:#fff1ef;border:1px solid #e0a39a;"></div>
             <div id="genesys-webrtc-cleanup-summary" style="display:none;margin:8px 0;padding:8px;background:#f8fcff;border:1px solid #c8dbee;"></div>
             <div id="genesys-webrtc-cleanup-output" style="overflow-x:auto;"></div>
             <script>
               (function () {
                 var loadButton = document.getElementById("genesys-webrtc-cleanup-load-btn");
+                var queueButton = document.getElementById("genesys-webrtc-cleanup-queue-btn");
+                var selectedCount = document.getElementById("genesys-webrtc-cleanup-selected-count");
+                var progress = document.getElementById("genesys-webrtc-cleanup-progress");
                 var filterInput = document.getElementById("genesys-webrtc-cleanup-filter");
                 var status = document.getElementById("genesys-webrtc-cleanup-status");
                 var summary = document.getElementById("genesys-webrtc-cleanup-summary");
                 var output = document.getElementById("genesys-webrtc-cleanup-output");
                 var loadedRows = [];
                 var scanInfo = {};
-                if (!loadButton || !filterInput || !status || !summary || !output) return;
+                var selectedIds = {};
+                var activeJobId = "";
+                if (!loadButton || !queueButton || !selectedCount || !progress || !filterInput || !status || !summary || !output) return;
                 function esc(value) { return String(value == null ? "" : value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;"); }
+                function eligible(row) { return row && row.phone_id && row.phone_name && !row.queue_status; }
+                function updateSelectedCount() { var count=loadedRows.filter(function(row){return eligible(row)&&!!selectedIds[row.phone_id];}).length; selectedCount.textContent=String(count); queueButton.disabled=count===0||!!activeJobId; }
                 function renderRows() {
                   var query = String(filterInput.value || "").trim().toLowerCase();
                   var rows = loadedRows.filter(function (row) { return !query || [row.phone_name,row.phone_id,row.site_name,row.site_id,row.base_settings_name,row.base_settings_id].join(" ").toLowerCase().indexOf(query) >= 0; });
                   summary.style.display = "block";
                   summary.innerHTML = "<strong>Candidates:</strong> " + rows.length + " of " + loadedRows.length + " &nbsp; <strong>Phones scanned:</strong> " + Number(scanInfo.phones_scanned || 0) + ".";
-                  if (!rows.length) { output.innerHTML = "<p>No unassigned WebRTC phone candidates match the current filter.</p>"; return; }
-                  output.innerHTML = "<table><thead><tr><th>Phone Name</th><th>Phone ID</th><th>Site</th><th>Base Settings</th><th>WebRTC Person</th><th>Lines</th><th>Review Status</th></tr></thead><tbody>" + rows.map(function (row) { return "<tr><td><strong>" + esc(row.phone_name || "(unnamed)") + "</strong></td><td>" + esc(row.phone_id) + "</td><td>" + esc(row.site_name || row.site_id || "(none)") + "</td><td>" + esc(row.base_settings_name || row.base_settings_id || "(unknown)") + "</td><td>" + esc(row.web_rtc_person || "-") + "</td><td>" + Number(row.line_count || 0) + "</td><td><strong style='color:#9a4b00;'>Candidate to Delete</strong><div style='font-size:11px;color:#4e6a84;margin-top:3px;'>" + esc(row.candidate_reason) + "</div></td></tr>"; }).join("") + "</tbody></table>";
+                  if (!rows.length) { output.innerHTML = "<p>No unassigned WebRTC phone candidates match the current filter.</p>"; updateSelectedCount(); return; }
+                  output.innerHTML = "<table><thead><tr><th><input type='checkbox' id='genesys-webrtc-cleanup-select-all' title='Select all filtered candidates'></th><th>Phone Name</th><th>Phone ID</th><th>Site</th><th>Base Settings</th><th>WebRTC Person</th><th>Lines</th><th>Review Status</th></tr></thead><tbody>" + rows.map(function (row) { var state=row.queue_status||""; var checkbox=eligible(row)?"<input type='checkbox' data-cleanup-select='"+esc(row.phone_id)+"'"+(selectedIds[row.phone_id]?" checked":"")+">":""; var review=state==="deleted"?"<strong style='color:#146c2e;'>Deleted</strong>":(state==="failed"?"<strong style='color:#b42318;'>Failed</strong><div style='font-size:11px;color:#b42318;margin-top:3px;'>"+esc(row.queue_error||"")+"</div>":(state==="running"?"<strong style='color:#7a5a13;'>Deleting</strong>":(state==="queued"?"<strong style='color:#7a5a13;'>Queued</strong>":"<strong style='color:#9a4b00;'>Candidate to Delete</strong><div style='font-size:11px;color:#4e6a84;margin-top:3px;'>"+esc(row.candidate_reason)+"</div>"))); return "<tr"+(state==="deleted"?" style='background:#eef9f1;'":(state==="failed"?" style='background:#fff1ef;'":""))+"><td>"+checkbox+"</td><td><strong>"+esc(row.phone_name||"(unnamed)")+"</strong></td><td>"+esc(row.phone_id)+"</td><td>"+esc(row.site_name||row.site_id||"(none)")+"</td><td>"+esc(row.base_settings_name||row.base_settings_id||"(unknown)")+"</td><td>"+esc(row.web_rtc_person||"-")+"</td><td>"+Number(row.line_count||0)+"</td><td>"+review+"</td></tr>"; }).join("") + "</tbody></table>";
+                  Array.prototype.forEach.call(output.querySelectorAll("[data-cleanup-select]"),function(checkbox){checkbox.addEventListener("change",function(){var id=checkbox.getAttribute("data-cleanup-select")||"";if(checkbox.checked)selectedIds[id]=true;else delete selectedIds[id];updateSelectedCount();});});
+                  var selectAll=document.getElementById("genesys-webrtc-cleanup-select-all"); if(selectAll)selectAll.addEventListener("change",function(){rows.forEach(function(row){if(eligible(row)){if(selectAll.checked)selectedIds[row.phone_id]=true;else delete selectedIds[row.phone_id];}});renderRows();});
+                  updateSelectedCount();
                 }
+                function applyQueuePhones(phones){var byId={};(Array.isArray(phones)?phones:[]).forEach(function(phone){byId[phone.phone_id]=phone;});loadedRows.forEach(function(row){var phone=byId[row.phone_id];if(!phone)return;row.queue_status=phone.status||"";row.queue_error=phone.error||"";if(phone.status==="deleted"||phone.status==="failed")delete selectedIds[row.phone_id];});}
+                async function pollDeleteQueue(jobId){try{var response=await fetch("/genesys/webrtc-cleanup/delete-queue/status?job_id="+encodeURIComponent(jobId),{credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));applyQueuePhones(payload.phones||[]);renderRows();progress.style.display="block";progress.innerHTML="<strong>Deletion Queue:</strong> "+esc(payload.status)+" &nbsp; <strong>Rate:</strong> "+Number(payload.phones_per_second||2)+" phones/sec &nbsp; <strong>Processed:</strong> "+Number(payload.processed||0)+"/"+Number(payload.requested||0)+" &nbsp; <strong>Deleted:</strong> "+Number(payload.deleted_count||0)+" &nbsp; <strong>Failed:</strong> "+Number(payload.failure_count||0);if(payload.queued){window.setTimeout(function(){pollDeleteQueue(jobId);},2000);return;}activeJobId="";localStorage.removeItem("genesysWebRTCCleanupDeleteJobId");updateSelectedCount();status.style.color=payload.failure_count?"#9a4b00":"#146c2e";status.textContent="Cleanup deletion queue complete: "+Number(payload.deleted_count||0)+" deleted, "+Number(payload.failure_count||0)+" failed.";}catch(error){activeJobId="";updateSelectedCount();status.style.color="#b42318";status.textContent="Deletion queue status failed: "+((error&&error.message)||"Unknown error.");}}
+                queueButton.addEventListener("click",async function(){var phones=loadedRows.filter(function(row){return eligible(row)&&!!selectedIds[row.phone_id];}).map(function(row){return {phone_id:row.phone_id,phone_name:row.phone_name};});if(!phones.length){status.textContent="Select at least one cleanup candidate.";return;}if(window.prompt("This will permanently delete "+phones.length+" WebRTC phone(s). Type DELETE to continue:")!=="DELETE"){status.textContent="Deletion queue cancelled. No phones were changed.";return;}queueButton.disabled=true;status.style.color="#2c5c8a";status.textContent="Submitting "+phones.length+" phone(s) to the persistent deletion queue...";try{var data=new FormData();data.append("phones_json",JSON.stringify(phones));var response=await fetch("/genesys/webrtc-cleanup/delete-queue",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));activeJobId=payload.job_id;localStorage.setItem("genesysWebRTCCleanupDeleteJobId",activeJobId);phones.forEach(function(phone){var row=loadedRows.find(function(item){return item.phone_id===phone.phone_id;});if(row)row.queue_status="queued";});renderRows();status.textContent=phones.length+" phone(s) queued. Processing continues if you leave this page.";pollDeleteQueue(activeJobId);}catch(error){activeJobId="";updateSelectedCount();status.style.color="#b42318";status.textContent="Deletion queue submission failed: "+((error&&error.message)||"Unknown error.");}});
                 window.loadGenesysWebRTCCleanup = async function () {
                   loadButton.disabled = true; status.style.color = "#2c5c8a"; status.textContent = "Loading WebRTC Person data from Phone Management..."; summary.style.display = "none"; output.innerHTML = "";
                   try {
                     var response = await fetch("/genesys/webrtc-cleanup/candidates", { credentials:"same-origin", headers:{"Accept":"application/json"} });
                     var payload = await response.json();
                     if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
-                    loadedRows = Array.isArray(payload.rows) ? payload.rows : []; scanInfo = payload; renderRows();
-                    status.style.color = "#146c2e"; status.textContent = loadedRows.length + " cleanup candidate(s) found. Read-only; no phones were changed.";
+                    loadedRows = Array.isArray(payload.rows) ? payload.rows : []; selectedIds={}; scanInfo = payload; renderRows();
+                    status.style.color = "#146c2e"; status.textContent = loadedRows.length + " cleanup candidate(s) found. Select only phones approved for deletion.";
                   } catch (error) { status.style.color = "#b42318"; status.textContent = "Cleanup lookup failed: " + ((error && error.message) || "Unknown error."); }
                   finally { loadButton.disabled = false; }
                 };
                 filterInput.addEventListener("input", renderRows);
+                var savedJobId=localStorage.getItem("genesysWebRTCCleanupDeleteJobId")||"";if(savedJobId){activeJobId=savedJobId;pollDeleteQueue(savedJobId);}
               })();
             </script>
           </div>
@@ -26317,6 +26529,82 @@ def genesys_webrtc_cleanup_candidates_route():
   if not result.get("ok"):
     return JSONResponse({"ok": False, "error": result.get("error", "Genesys WebRTC cleanup lookup failed.")}, status_code=400)
   return JSONResponse(result)
+
+
+@app.post("/genesys/webrtc-cleanup/delete-queue")
+def genesys_webrtc_cleanup_delete_queue_route(
+  request: Request,
+  phones_json: str = Form(""),
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+):
+  resolved_host, resolved_user, _ = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  try:
+    parsed_phones = json.loads(phones_json or "[]")
+  except (TypeError, ValueError):
+    return JSONResponse({"ok": False, "error": "Selected phones payload must be valid JSON."}, status_code=400)
+  if not isinstance(parsed_phones, list) or not parsed_phones:
+    return JSONResponse({"ok": False, "error": "Select at least one WebRTC cleanup candidate."}, status_code=400)
+  if len(parsed_phones) > 5000:
+    return JSONResponse({"ok": False, "error": "A maximum of 5,000 phones can be queued at once."}, status_code=400)
+
+  phones = []
+  seen_ids = set()
+  for entry in parsed_phones:
+    if not isinstance(entry, dict):
+      continue
+    phone_id = str(entry.get("phone_id", "") or "").strip()
+    phone_name = str(entry.get("phone_name", "") or "").strip()
+    if not phone_id or phone_id in seen_ids or not phone_name:
+      continue
+    seen_ids.add(phone_id)
+    phones.append({"phone_id": phone_id, "phone_name": phone_name, "status": "queued", "error": ""})
+  if not phones:
+    return JSONResponse({"ok": False, "error": "No valid selected phones were provided."}, status_code=400)
+
+  job_id = str(uuid4())
+  job = {
+    "job_id": job_id,
+    "status": "queued",
+    "created_epoch": time.time(),
+    "created_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT),
+    "started_at": "",
+    "finished_at": "",
+    "region": (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2",
+    "cucm_host": resolved_host,
+    "operator": resolved_user,
+    "requested": len(phones),
+    "processed": 0,
+    "deleted_count": 0,
+    "failure_count": 0,
+    "phones_per_second": GENESYS_WEBRTC_CLEANUP_QUEUE_PHONES_PER_SECOND,
+    "error": "",
+    "phones": phones,
+  }
+  with GENESYS_WEBRTC_CLEANUP_QUEUE_LOCK:
+    GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS[job_id] = job
+    _persist_genesys_webrtc_cleanup_queue_locked()
+  _append_audit_event(
+    action="genesys_webrtc_cleanup_delete_queued",
+    cucm_host=resolved_host,
+    operator=resolved_user,
+    target=f"job={job_id};phones={len(phones)};criterion=blank_webRtcUser",
+    output_filename="",
+    inline_mode=True,
+  )
+  return JSONResponse(_genesys_webrtc_cleanup_queue_payload(job), status_code=202)
+
+
+@app.get("/genesys/webrtc-cleanup/delete-queue/status")
+def genesys_webrtc_cleanup_delete_queue_status_route(job_id: str = ""):
+  clean_job_id = str(job_id or "").strip()
+  with GENESYS_WEBRTC_CLEANUP_QUEUE_LOCK:
+    job = GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS.get(clean_job_id)
+    payload = _genesys_webrtc_cleanup_queue_payload(job) if isinstance(job, dict) else None
+  if payload is None:
+    return JSONResponse({"ok": False, "error": "WebRTC cleanup deletion job was not found."}, status_code=404)
+  return JSONResponse(payload)
 
 
 @app.post("/genesys/users/set-inactive")

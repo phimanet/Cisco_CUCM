@@ -121,7 +121,8 @@ Priority keys:
 ### 2026-09-23 (Genesys WebRTC Cleanup)
 - Added a read-only Genesys Admin function named **Genesys WebRTC Cleanup** that requests the authoritative `webRtcUser` phone field and returns WebRTC phones whose WebRTC Person is blank.
 - Cleanup candidate detection uses one paged Phone Management inventory with `fields=webRtcUser,lines.defaultForUser`; it does not infer association from a matching phone/person name.
-- Results show phone ID/name, site, base settings, line count, and candidate evidence. No delete action is included; operators must review candidates before any future removal workflow is approved.
+- Results show phone ID/name, site, base settings, WebRTC Person, line count, and candidate evidence. Operators can select rows or all filtered candidates and queue durable deletion after typing `DELETE`.
+- The deletion worker re-reads each phone by ID, blocks deletion if the name changed, `webRtcUser` is populated, or the phone is no longer WebRTC, then deletes through the official Genesys phone endpoint at 2 phones per second (`GENESYS_WEBRTC_CLEANUP_QUEUE_PHONES_PER_SECOND`). Progress and per-phone outcomes persist across service restarts and successful deletions are audited.
 
 ### 2026-09-22 (Embedded JavaScript handler prevention)
 - Root cause confirmed for the Hunt List panel's "handler missing" error: `main.py` stores browser JavaScript in plain Python triple-quoted strings, so JavaScript `\n`, `\r`, and `\t` escapes can be converted into literal control characters before the browser parses the script.
