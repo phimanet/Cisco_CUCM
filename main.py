@@ -10449,7 +10449,14 @@ def _start_genesys_ad_webrtc_queue_worker():
             due_job_id = job_id
             break
       if due_job_id:
-        _run_genesys_ad_webrtc_queue_job(due_job_id)
+        try:
+          _run_genesys_ad_webrtc_queue_job(due_job_id)
+        except Exception as exc:
+          logger.error("genesys_ad_webrtc queue worker crashed on job %s: %s", due_job_id, exc, exc_info=True)
+          try:
+            _genesys_ad_webrtc_queue_update(due_job_id, status="failed", error=f"Worker crashed: {exc}", finished_at=_audit_now().strftime(AUDIT_TIMESTAMP_FORMAT))
+          except Exception:
+            pass
         time.sleep(5)
       else:
         time.sleep(5)
@@ -10661,7 +10668,14 @@ def _start_genesys_inactive_queue_worker():
       with GENESYS_INACTIVE_QUEUE_LOCK:
         next_job_id = next((job_id for job_id, job in GENESYS_INACTIVE_QUEUE_JOBS.items() if str(job.get("status", "") or "") == "queued"), "")
       if next_job_id:
-        _run_genesys_inactive_queue_job(next_job_id)
+        try:
+          _run_genesys_inactive_queue_job(next_job_id)
+        except Exception as exc:
+          logger.error("genesys_inactive_queue worker crashed on job %s: %s", next_job_id, exc, exc_info=True)
+          try:
+            _genesys_inactive_queue_update(next_job_id, status="failed", error=f"Worker crashed: {exc}", finished_at=_audit_now().strftime(AUDIT_TIMESTAMP_FORMAT))
+          except Exception:
+            pass
       else:
         time.sleep(2)
 
@@ -10849,7 +10863,15 @@ def _start_genesys_webrtc_cleanup_queue_worker():
       with GENESYS_WEBRTC_CLEANUP_QUEUE_LOCK:
         next_job_id = next((job_id for job_id, job in GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS.items() if str(job.get("status", "") or "") == "queued"), "")
       if next_job_id:
-        _run_genesys_webrtc_cleanup_queue_job(next_job_id)
+        try:
+          _run_genesys_webrtc_cleanup_queue_job(next_job_id)
+        except Exception as exc:
+          logger.error("genesys_webrtc_cleanup_queue worker crashed on job %s: %s", next_job_id, exc, exc_info=True)
+          with GENESYS_WEBRTC_CLEANUP_QUEUE_LOCK:
+            live_job = GENESYS_WEBRTC_CLEANUP_QUEUE_JOBS.get(next_job_id)
+            if isinstance(live_job, dict):
+              live_job.update({"status": "failed", "error": f"Worker crashed: {exc}", "finished_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)})
+              _persist_genesys_webrtc_cleanup_queue_locked()
       else:
         time.sleep(2)
 
@@ -11164,7 +11186,16 @@ def _start_genesys_user_cleanup_queue_worker():
       with GENESYS_USER_CLEANUP_QUEUE_LOCK:
         next_job_id = next((job_id for job_id, job in GENESYS_USER_CLEANUP_QUEUE_JOBS.items() if str(job.get("status", "") or "") == "queued"), "")
       if next_job_id:
-        _run_genesys_user_cleanup_queue_job(next_job_id)
+        try:
+          _run_genesys_user_cleanup_queue_job(next_job_id)
+        except Exception as exc:
+          logger.error("genesys_user_cleanup_queue worker crashed on job %s: %s", next_job_id, exc, exc_info=True)
+          with GENESYS_USER_CLEANUP_QUEUE_LOCK:
+            live_job = GENESYS_USER_CLEANUP_QUEUE_JOBS.get(next_job_id)
+            if isinstance(live_job, dict):
+              live_job.update({"status": "failed", "error": f"Worker crashed: {exc}", "finished_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)})
+              _persist_genesys_user_cleanup_queue_locked()
+            GENESYS_USER_CLEANUP_QUEUE_SECRETS.pop(next_job_id, None)
       else:
         time.sleep(2)
 
