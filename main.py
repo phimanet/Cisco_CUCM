@@ -130,6 +130,10 @@ VERASMART_QUEUE_MAX_RUNS = 50
 VERASMART_PERSONNEL_EXPORTS = {}
 VERASMART_PERSONNEL_EXPORTS_LOCK = threading.Lock()
 VERASMART_PERSONNEL_EXPORT_TTL_SECONDS = 60 * 60
+VERASMART_EZBURST_PENDING_PATH = os.path.join(os.path.dirname(__file__), "data", "verasmart_ezburst_pending.json")
+VERASMART_EZBURST_PENDING_LOCK = threading.Lock()
+VERASMART_EZBURST_CUTOFF_HOUR = 23
+VERASMART_EZBURST_CUTOFF_MINUTE = 30
 GREENLIGHT_LOOKUP_RUNS = {}
 GREENLIGHT_LOOKUP_RUNS_LOCK = threading.Lock()
 GREENLIGHT_LOOKUP_MAX_RUNS = 20
@@ -17010,6 +17014,117 @@ def _greenlight_run_queued_lookup(job_id: str, cucm_host: str, cucm_user: str, c
       error=str(exc),
     )
     _greenlight_save_state()
+
+
+def _verasmart_sftp_settings() -> dict:
+  return {
+    "host": os.environ.get("VERASMART_SFTP_HOST", "").strip(),
+    "port": int((os.environ.get("VERASMART_SFTP_PORT", "22") or "22").strip() or "22"),
+    "user": os.environ.get("VERASMART_SFTP_USER", "").strip(),
+    "password": os.environ.get("VERASMART_SFTP_PASSWORD", ""),
+    "personnel_dir": (os.environ.get("VERASMART_SFTP_PERSONNEL_DIR", "/personnel") or "/personnel").strip() or "/personnel",
+    "ezburst_dir": (os.environ.get("VERASMART_SFTP_EZBURST_DIR", "/ezburst") or "/ezburst").strip() or "/ezburst",
+  }
+
+
+def _verasmart_sftp_upload(file_bytes: bytes, remote_dir: str, filename: str) -> None:
+  try:
+    import paramiko
+  except ImportError as exc:
+    raise RuntimeError("paramiko is not installed on this server. Run: pip install paramiko") from exc
+
+  settings = _verasmart_sftp_settings()
+  if not settings["host"] or not settings["user"] or not settings["password"]:
+    raise RuntimeError("VeraSMART SFTP is not configured (set VERASMART_SFTP_HOST/VERASMART_SFTP_USER/VERASMART_SFTP_PASSWORD in .env).")
+
+  transport = paramiko.Transport((settings["host"], settings["port"]))
+  try:
+    transport.connect(username=settings["user"], password=settings["password"])
+    sftp = paramiko.SFTPClient.from_transport(transport)
+    try:
+      remote_path = remote_dir.rstrip("/") + "/" + filename
+      temp_remote_path = remote_dir.rstrip("/") + "/." + filename + ".uploading"
+      with sftp.open(temp_remote_path, "wb") as handle:
+        handle.write(file_bytes)
+      try:
+        sftp.rename(temp_remote_path, remote_path)
+      except OSError:
+        # Some SFTP servers refuse rename onto an existing filename; clear it and retry.
+        try:
+          sftp.remove(remote_path)
+        except OSError:
+          pass
+        sftp.rename(temp_remote_path, remote_path)
+    finally:
+      sftp.close()
+  finally:
+    transport.close()
+
+
+def _load_verasmart_ezburst_pending() -> list[dict]:
+  try:
+    with open(VERASMART_EZBURST_PENDING_PATH, "r", encoding="utf-8") as handle:
+      payload = json.load(handle)
+    items = payload.get("items", []) if isinstance(payload, dict) else []
+    return items if isinstance(items, list) else []
+  except (FileNotFoundError, OSError, ValueError, TypeError):
+    return []
+
+
+def _save_verasmart_ezburst_pending_locked(items: list[dict]) -> None:
+  try:
+    parent = os.path.dirname(VERASMART_EZBURST_PENDING_PATH)
+    if parent:
+      os.makedirs(parent, exist_ok=True)
+    temp_path = VERASMART_EZBURST_PENDING_PATH + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+      json.dump({"version": 1, "items": items}, handle, indent=2)
+    os.replace(temp_path, VERASMART_EZBURST_PENDING_PATH)
+  except OSError as exc:
+    logger.warning("VeraSMART EZ-Burst pending store persistence failed: %s", exc)
+
+
+def _queue_verasmart_ezburst_pending(filename: str, file_bytes: bytes, operator: str) -> None:
+  with VERASMART_EZBURST_PENDING_LOCK:
+    items = _load_verasmart_ezburst_pending()
+    items.append({
+      "id": str(uuid4()),
+      "filename": filename,
+      "content_b64": base64.b64encode(file_bytes).decode("ascii"),
+      "operator": operator,
+      "created_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+    })
+    _save_verasmart_ezburst_pending_locked(items)
+
+
+def _verasmart_ezburst_delivery_scheduler_loop():
+  tz = ZoneInfo("America/Los_Angeles")
+  while True:
+    try:
+      time.sleep(60)
+      now = datetime.datetime.now(tz=tz)
+      if now.hour > VERASMART_EZBURST_CUTOFF_HOUR or (now.hour == VERASMART_EZBURST_CUTOFF_HOUR and now.minute >= VERASMART_EZBURST_CUTOFF_MINUTE):
+        continue  # still inside tonight's blocked window; wait for tomorrow's safe window
+      with VERASMART_EZBURST_PENDING_LOCK:
+        items = _load_verasmart_ezburst_pending()
+        if not items:
+          continue
+        settings = _verasmart_sftp_settings()
+        remaining = []
+        for item in items:
+          try:
+            file_bytes = base64.b64decode(str(item.get("content_b64", "") or ""))
+            _verasmart_sftp_upload(file_bytes, settings["ezburst_dir"], str(item.get("filename", "") or "verasmart_ezburst_update.csv"))
+            logger.info("verasmart_ezburst_pending: delivered held file %s", item.get("filename", ""))
+          except Exception as exc:
+            logger.warning("verasmart_ezburst_pending: delivery failed for %s: %s", item.get("filename", ""), exc)
+            remaining.append(item)
+        _save_verasmart_ezburst_pending_locked(remaining)
+    except Exception as exc:
+      logger.error("verasmart_ezburst_delivery_scheduler_loop error: %s", exc, exc_info=True)
+
+
+threading.Thread(target=_verasmart_ezburst_delivery_scheduler_loop, name="verasmart-ezburst-delivery-scheduler", daemon=True).start()
 
 
 def _parse_verasmart_queue_rows(csv_text: str) -> list[dict]:
@@ -43408,7 +43523,7 @@ def menu_admin_page(request: Request):
         </div>
         <div style="margin:14px 0;padding:12px;border:1px solid #c8dbee;background:#f8fcff;">
           <h4 style="margin-top:0;">Live CUCM Search - Build Template Without a Personnel Export</h4>
-          <p style="color:#4e6a84;font-size:12px;">Search CUCM by last name to find a person, enter their Cost Center when prompted, and add them to the queue below. Repeat for as many people as needed, then generate the Personnel Cost Center and EZ-Burst files. No Personnel export upload is required for this flow.</p>
+          <p style="color:#4e6a84;font-size:12px;">Search CUCM by last name to find a person, enter their Cost Center when prompted, and add them to the queue below. Repeat for as many people as needed, then generate the Personnel Cost Center and EZ-Burst files. No Personnel export upload is required for this flow. Files are delivered via SFTP automatically on generation; the EZ-Burst file is held until the next safe delivery window if generated after 11:30 PM Pacific.</p>
           <input type="hidden" id="verasmart-cucm-host" value="__AUTH_CUCM_HOST__">
           <input type="hidden" id="verasmart-cucm-user" value="__AUTH_USER__">
           <input type="hidden" id="verasmart-cucm-pass" value="">
@@ -43448,7 +43563,7 @@ def menu_admin_page(request: Request):
             function renderQueue(){if(!queue.length){queueOutput.innerHTML="<p>No employees queued yet.</p>";generateButton.disabled=true;return;}queueOutput.innerHTML="<table><thead><tr><th>Name</th><th>Email</th><th>Windows Domain Account</th><th>Cost Center</th><th>Action</th></tr></thead><tbody>"+queue.map(function(item){return "<tr><td>"+esc(item.name)+"</td><td>"+esc(item.email||"(none)")+"</td><td>"+esc(item.windows_domain_account)+"</td><td>"+esc(item.cost_center)+"</td><td><button type='button' data-remove-userid='"+esc(item.userid)+"'>Remove</button></td></tr>";}).join("")+"</tbody></table>";Array.prototype.forEach.call(queueOutput.querySelectorAll("[data-remove-userid]"),function(button){button.addEventListener("click",function(){var userid=button.getAttribute("data-remove-userid")||"";queue=queue.filter(function(item){return item.userid!==userid;});renderQueue();renderResults(lastResults);});});generateButton.disabled=!queue.length;}
             function renderResults(list){lastResults=list||[];if(!lastResults.length){searchResults.innerHTML="<p>No CUCM matches found.</p>";return;}searchResults.innerHTML="<table><thead><tr><th>Name</th><th>CUCM User ID</th><th>Email</th><th>Action</th></tr></thead><tbody>"+lastResults.map(function(person){var queued=isQueued(person.userid);return "<tr><td>"+esc(person.name)+"</td><td>"+esc(person.userid)+"</td><td>"+esc(person.email||"(none)")+"</td><td><button type='button' data-add-userid='"+esc(person.userid)+"'"+(queued?" disabled":"")+">"+(queued?"Queued":"Add to Template")+"</button></td></tr>";}).join("")+"</tbody></table>";Array.prototype.forEach.call(searchResults.querySelectorAll("[data-add-userid]"),function(button){button.addEventListener("click",function(){var userid=button.getAttribute("data-add-userid")||"";var person=lastResults.find(function(item){return item.userid===userid;});if(!person||isQueued(userid))return;var cell=button.parentNode;var fieldId="verasmart-cc-"+userid.replace(/[^a-zA-Z0-9_-]/g,"");cell.innerHTML=costCenterFieldHtml(fieldId)+" <button type='button' data-confirm-userid='"+esc(userid)+"'>Confirm</button> <button type='button' data-cancel-userid='"+esc(userid)+"'>Cancel</button>";var field=document.getElementById(fieldId);var confirmButton=cell.querySelector("[data-confirm-userid]");var cancelButton=cell.querySelector("[data-cancel-userid]");confirmButton.addEventListener("click",function(){var costCenter=String((field&&field.value)||"").trim();if(!costCenter){window.alert("Select or enter a Cost Center.");return;}queue.push({userid:person.userid,name:person.name,email:person.email||"",windows_domain_account:"AHS"+String.fromCharCode(92)+person.userid,cost_center:costCenter});renderQueue();renderResults(lastResults);});cancelButton.addEventListener("click",function(){renderResults(lastResults);});});});}
             searchButton.addEventListener("click",async function(){var lastName=String(lastNameInput.value||"").trim();if(!lastName){searchStatus.style.color="#b42318";searchStatus.textContent="Enter a last name to search CUCM.";return;}searchButton.disabled=true;searchStatus.style.color="#2c5c8a";searchStatus.textContent="Searching CUCM...";try{var data=new FormData();data.append("cucm_host",hostInput?hostInput.value:"");data.append("cucm_user",userInput?userInput.value:"");data.append("cucm_pass",passInput?passInput.value:"");data.append("last_name",lastName);data.append("first_name",String(firstNameInput.value||"").trim());var response=await fetch("/verasmart/lab/template-builder/search-cucm",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));renderResults(payload.results||[]);searchStatus.style.color="#146c2e";searchStatus.textContent="Found "+(payload.count||0)+" CUCM match(es). Click Add to Template to enter a Cost Center and queue them.";}catch(error){searchResults.innerHTML="";searchStatus.style.color="#b42318";searchStatus.textContent="CUCM search failed: "+((error&&error.message)||"Unknown error.");}finally{searchButton.disabled=false;}});
-            generateButton.addEventListener("click",async function(){if(!queue.length)return;if(!window.confirm("Generate Personnel Cost Center and EZ-Burst files for "+queue.length+" queued employee(s)? No files will be sent by SFTP."))return;generateButton.disabled=true;downloads.style.display="none";try{var data=new FormData();data.append("entries_json",JSON.stringify(queue));var response=await fetch("/verasmart/lab/template-builder/generate-from-cucm",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));downloads.style.display="block";downloads.innerHTML="<strong>Two manual-test CSV files ready. Nothing was sent by SFTP.</strong><div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;'><a class='mini-btn' href='"+esc(payload.downloads.personnel)+"'>Download Personnel Cost Center CSV</a><a class='mini-btn' href='"+esc(payload.downloads.ezburst)+"'>Download EZ-Burst Distribution CSV</a></div>"+(payload.note?"<p style='color:#b42318;margin-top:8px;'>"+esc(payload.note)+"</p>":"");}catch(error){searchStatus.style.color="#b42318";searchStatus.textContent="File generation failed: "+((error&&error.message)||"Unknown error.");}finally{generateButton.disabled=!queue.length;}});
+            generateButton.addEventListener("click",async function(){if(!queue.length)return;if(!window.confirm("Generate Personnel Cost Center and EZ-Burst files for "+queue.length+" queued employee(s)? Files will be delivered via SFTP automatically."))return;generateButton.disabled=true;downloads.style.display="none";try{var data=new FormData();data.append("entries_json",JSON.stringify(queue));var response=await fetch("/verasmart/lab/template-builder/generate-from-cucm",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));var notesHtml=Array.isArray(payload.delivery_notes)?"<ul style='margin:8px 0 0 18px;'>"+payload.delivery_notes.map(function(note){return "<li>"+esc(note)+"</li>";}).join("")+"</ul>":"";downloads.style.display="block";downloads.innerHTML="<strong>Files generated.</strong>"+notesHtml+"<div style='display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;'><a class='mini-btn' href='"+esc(payload.downloads.personnel)+"'>Download Personnel Cost Center CSV</a><a class='mini-btn' href='"+esc(payload.downloads.ezburst)+"'>Download EZ-Burst Distribution CSV</a></div>"+(payload.note?"<p style='color:#b42318;margin-top:8px;'>"+esc(payload.note)+"</p>":"");}catch(error){searchStatus.style.color="#b42318";searchStatus.textContent="File generation failed: "+((error&&error.message)||"Unknown error.");}finally{generateButton.disabled=!queue.length;}});
             renderQueue();
             loadCostCenters();
           })();
@@ -57127,14 +57242,43 @@ def verasmart_lab_template_builder_generate_from_cucm_route(
       ezburst_rows,
     )
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    personnel_job = _store_job_output(personnel_bytes, f"verasmart_personnel_update_{timestamp}.csv", "text/csv")
-    ezburst_job = _store_job_output(ezburst_bytes, f"verasmart_ezburst_update_{timestamp}.csv", "text/csv")
+    personnel_filename = f"verasmart_personnel_update_{timestamp}.csv"
+    ezburst_filename = f"verasmart_ezburst_update_{timestamp}.csv"
+    personnel_job = _store_job_output(personnel_bytes, personnel_filename, "text/csv")
+    ezburst_job = _store_job_output(ezburst_bytes, ezburst_filename, "text/csv")
+
+    sftp_settings = _verasmart_sftp_settings()
+    delivery_notes = []
+    sftp_ok = True
+    try:
+      _verasmart_sftp_upload(personnel_bytes, sftp_settings["personnel_dir"], personnel_filename)
+      delivery_notes.append("Personnel file delivered via SFTP to /personnel.")
+    except Exception as exc:
+      sftp_ok = False
+      delivery_notes.append(f"Personnel SFTP delivery failed: {exc}")
+
+    tz = ZoneInfo("America/Los_Angeles")
+    now_local = datetime.datetime.now(tz=tz)
+    within_ezburst_window = now_local.hour < VERASMART_EZBURST_CUTOFF_HOUR or (
+      now_local.hour == VERASMART_EZBURST_CUTOFF_HOUR and now_local.minute < VERASMART_EZBURST_CUTOFF_MINUTE
+    )
+    if within_ezburst_window:
+      try:
+        _verasmart_sftp_upload(ezburst_bytes, sftp_settings["ezburst_dir"], ezburst_filename)
+        delivery_notes.append("EZ-Burst file delivered via SFTP to /ezburst.")
+      except Exception as exc:
+        sftp_ok = False
+        delivery_notes.append(f"EZ-Burst SFTP delivery failed: {exc}")
+    else:
+      _queue_verasmart_ezburst_pending(ezburst_filename, ezburst_bytes, operator)
+      delivery_notes.append("EZ-Burst file held until tomorrow's safe delivery window (before 11:30 PM Pacific) to protect the 1:00 AM VeraSMART run.")
+
     _append_audit_event(
       action="verasmart_lab_manual_files_generated_from_cucm",
       cucm_host=str((_session or {}).get("cucm_host", "") or ""),
       operator=operator,
-      target=f"targets={len(targets)};sftp=false",
-      output_filename=f"verasmart_personnel_update_{timestamp}.csv",
+      target=f"targets={len(targets)};sftp_ok={sftp_ok}",
+      output_filename=personnel_filename,
       inline_mode=True,
     )
     return JSONResponse({
@@ -57147,7 +57291,8 @@ def verasmart_lab_template_builder_generate_from_cucm_route(
         "personnel": f"/download/job-output/{personnel_job}",
         "ezburst": f"/download/job-output/{ezburst_job}",
       },
-      "manual_only": True,
+      "manual_only": False,
+      "delivery_notes": delivery_notes,
       "note": "Login disabled is not an importable field for this Personnel import; verify/set it to No manually in VeraSMART for each employee.",
     })
 

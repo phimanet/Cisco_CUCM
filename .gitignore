@@ -3,3 +3,6 @@ __pycache__/
 
 # Persisted Project Greenlight job history and CSV outputs (may contain PII)
 data/greenlight_jobs/
+
+# Held VeraSMART EZ-Burst files awaiting the next safe delivery window (contains PII)
+data/verasmart_ezburst_pending.json*
