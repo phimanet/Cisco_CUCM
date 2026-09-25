@@ -57109,7 +57109,7 @@ def verasmart_lab_template_builder_generate_from_cucm_route(
 
     personnel_bytes = _pipe_csv(
       ["Email", "CostCenter", "EZBurstOption", "WindowsDomainAccount"],
-      [[row["email"], row["cost_center"], "E-mail links to EZ-Burst reports", row["windows_domain_account"]] for row in targets],
+      [[row["email"], row["cost_center"], "Linked", row["windows_domain_account"]] for row in targets],
     )
     distribution_lists = [
       "1 All Sales 6 Daily",
@@ -57211,7 +57211,7 @@ def verasmart_lab_template_builder_generate_route(
 
     personnel_bytes = _pipe_csv(
       ["WindowsDomainAccount", "CostCenter", "EZBurstOption"],
-      [[row["windows_domain_account"], template_cost_center, "E-mail links to EZ-Burst reports"] for row in targets],
+      [[row["windows_domain_account"], template_cost_center, "Linked"] for row in targets],
     )
     distribution_lists = [
       "1 All Sales 6 Daily",
