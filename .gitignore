@@ -6,3 +6,6 @@ data/greenlight_jobs/
 
 # Held VeraSMART EZ-Burst files awaiting the next safe delivery window (contains PII)
 data/verasmart_ezburst_pending.json*
+
+# Cached VeraSMART Personnel reference export pulled from SFTP /export (contains PII)
+data/verasmart_reference_export_cache.json*

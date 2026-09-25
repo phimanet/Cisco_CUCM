@@ -134,6 +134,10 @@ VERASMART_EZBURST_PENDING_PATH = os.path.join(os.path.dirname(__file__), "data",
 VERASMART_EZBURST_PENDING_LOCK = threading.Lock()
 VERASMART_EZBURST_CUTOFF_HOUR = 23
 VERASMART_EZBURST_CUTOFF_MINUTE = 30
+VERASMART_REFERENCE_EXPORT_CACHE = {}
+VERASMART_REFERENCE_EXPORT_LOCK = threading.Lock()
+VERASMART_REFERENCE_EXPORT_CHECK_INTERVAL_SECONDS = 7 * 24 * 60 * 60
+VERASMART_REFERENCE_EXPORT_DISK_PATH = os.path.join(os.path.dirname(__file__), "data", "verasmart_reference_export_cache.json")
 GREENLIGHT_LOOKUP_RUNS = {}
 GREENLIGHT_LOOKUP_RUNS_LOCK = threading.Lock()
 GREENLIGHT_LOOKUP_MAX_RUNS = 20
@@ -17059,6 +17063,152 @@ def _verasmart_sftp_upload(file_bytes: bytes, remote_dir: str, filename: str) ->
       sftp.close()
   finally:
     transport.close()
+
+
+def _verasmart_sftp_download_latest(remote_dir: str, filename_prefix: str, filename_suffix: str = ".csv") -> tuple[bytes, str]:
+  try:
+    import paramiko
+  except ImportError as exc:
+    raise RuntimeError("paramiko is not installed on this server. Run: pip install paramiko") from exc
+
+  settings = _verasmart_sftp_settings()
+  if not settings["host"] or not settings["user"] or not settings["password"]:
+    raise RuntimeError("VeraSMART SFTP is not configured (set VERASMART_SFTP_HOST/VERASMART_SFTP_USER/VERASMART_SFTP_PASSWORD in .env).")
+
+  transport = paramiko.Transport((settings["host"], settings["port"]))
+  try:
+    transport.connect(username=settings["user"], password=settings["password"])
+    sftp = paramiko.SFTPClient.from_transport(transport)
+    try:
+      clean_dir = remote_dir.rstrip("/") or "/"
+      entries = sftp.listdir_attr(clean_dir)
+      candidates = [
+        entry for entry in entries
+        if entry.filename.lower().startswith(filename_prefix.lower()) and entry.filename.lower().endswith(filename_suffix.lower())
+      ]
+      if not candidates:
+        raise RuntimeError(f"No files matching {filename_prefix}*{filename_suffix} were found in {clean_dir}.")
+      newest = max(candidates, key=lambda entry: entry.st_mtime or 0)
+      remote_path = clean_dir + "/" + newest.filename
+      with sftp.open(remote_path, "rb") as handle:
+        file_bytes = handle.read()
+      return file_bytes, newest.filename
+    finally:
+      sftp.close()
+  finally:
+    transport.close()
+
+
+def _parse_verasmart_reference_export(file_bytes: bytes) -> list[dict]:
+  try:
+    text = file_bytes.decode("utf-8-sig")
+  except UnicodeDecodeError:
+    text = file_bytes.decode("windows-1252")
+  lines = [line for line in text.splitlines() if line.strip()]
+  if not lines:
+    return []
+  # First line is always a fixed format/version marker (e.g. "05|VeraSMART_Personnel_1.0"), not data.
+  data_lines = lines[1:]
+  rows = []
+  for line in data_lines:
+    fields = line.split("|")
+    if len(fields) < 3:
+      continue
+    name = fields[0].strip() if len(fields) > 0 else ""
+    cost_center = fields[1].strip() if len(fields) > 1 else ""
+    email = fields[2].strip() if len(fields) > 2 else ""
+    employee_number = fields[3].strip() if len(fields) > 3 else ""
+    windows_domain_account = fields[5].strip() if len(fields) > 5 else ""
+    if not name and not email:
+      continue
+    rows.append({
+      "name": name,
+      "cost_center": cost_center,
+      "email": email,
+      "employee_number": employee_number,
+      "windows_domain_account": windows_domain_account,
+    })
+  return rows
+
+
+def _load_verasmart_reference_cache_from_disk() -> dict | None:
+  try:
+    with open(VERASMART_REFERENCE_EXPORT_DISK_PATH, "r", encoding="utf-8") as handle:
+      payload = json.load(handle)
+    if isinstance(payload, dict) and isinstance(payload.get("rows"), list):
+      return payload
+  except (FileNotFoundError, OSError, ValueError, TypeError):
+    pass
+  return None
+
+
+def _save_verasmart_reference_cache_to_disk(data: dict) -> None:
+  try:
+    parent = os.path.dirname(VERASMART_REFERENCE_EXPORT_DISK_PATH)
+    if parent:
+      os.makedirs(parent, exist_ok=True)
+    temp_path = VERASMART_REFERENCE_EXPORT_DISK_PATH + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+      json.dump(data, handle, indent=2)
+    os.replace(temp_path, VERASMART_REFERENCE_EXPORT_DISK_PATH)
+  except OSError as exc:
+    logger.warning("VeraSMART reference export cache persistence failed: %s", exc)
+
+
+def _verasmart_reference_check_and_maybe_refresh(force: bool = False) -> dict:
+  """Check SFTP /export for a newer Personnel reference file; keep the current cache if none is found."""
+  with VERASMART_REFERENCE_EXPORT_LOCK:
+    cached = VERASMART_REFERENCE_EXPORT_CACHE.get("data")
+    if cached is None:
+      cached = _load_verasmart_reference_cache_from_disk()
+      if cached:
+        VERASMART_REFERENCE_EXPORT_CACHE["data"] = cached
+    last_checked = float(VERASMART_REFERENCE_EXPORT_CACHE.get("last_checked_epoch", 0) or 0)
+    due_for_check = force or cached is None or (time.time() - last_checked) >= VERASMART_REFERENCE_EXPORT_CHECK_INTERVAL_SECONDS
+
+  if not due_for_check:
+    return cached or {"filename": "", "loaded_epoch": 0, "count": 0, "rows": []}
+
+  export_dir = (os.environ.get("VERASMART_SFTP_EXPORT_DIR", "/export") or "/export").strip() or "/export"
+  try:
+    file_bytes, filename = _verasmart_sftp_download_latest(export_dir, "personnel", ".csv")
+  except Exception as exc:
+    logger.warning("VeraSMART reference export check failed, keeping existing cache: %s", exc)
+    with VERASMART_REFERENCE_EXPORT_LOCK:
+      VERASMART_REFERENCE_EXPORT_CACHE["last_checked_epoch"] = time.time()
+    return cached or {"filename": "", "loaded_epoch": 0, "count": 0, "rows": []}
+
+  with VERASMART_REFERENCE_EXPORT_LOCK:
+    VERASMART_REFERENCE_EXPORT_CACHE["last_checked_epoch"] = time.time()
+    if cached and str(cached.get("filename", "") or "") == filename and not force:
+      # Same file as before — nothing newer is present, keep using what we have.
+      return cached
+    rows = _parse_verasmart_reference_export(file_bytes)
+    result = {
+      "filename": filename,
+      "loaded_epoch": time.time(),
+      "count": len(rows),
+      "rows": rows,
+    }
+    VERASMART_REFERENCE_EXPORT_CACHE["data"] = result
+    _save_verasmart_reference_cache_to_disk(result)
+    return result
+
+
+def _get_verasmart_reference_export() -> dict:
+  return _verasmart_reference_check_and_maybe_refresh(force=False)
+
+
+def _verasmart_reference_export_scheduler_loop():
+  while True:
+    try:
+      time.sleep(3600)
+      _verasmart_reference_check_and_maybe_refresh(force=False)
+    except Exception as exc:
+      logger.error("verasmart_reference_export_scheduler_loop error: %s", exc, exc_info=True)
+
+
+threading.Thread(target=_verasmart_reference_export_scheduler_loop, name="verasmart-reference-export-scheduler", daemon=True).start()
 
 
 def _load_verasmart_ezburst_pending() -> list[dict]:
@@ -43569,6 +43719,31 @@ def menu_admin_page(request: Request):
           })();
         </script>
         <div style="margin:14px 0;padding:12px;border:1px solid #c8dbee;background:#f8fcff;">
+          <h4 style="margin-top:0;">Reference Lookup - Compare to Existing Employee</h4>
+          <p style="color:#4e6a84;font-size:12px;">Search a name against the latest VeraSMART Personnel reference export (pulled weekly from SFTP <code>/export</code>) to see what Cost Center an existing employee already has, for "same as Bob Smith" requests.</p>
+          <div class="search-filter-row">
+            <input id="verasmart-ref-search" placeholder="Name or email" style="width:260px;">
+            <button type="button" id="verasmart-ref-search-btn">Search Reference Export</button>
+            <button type="button" id="verasmart-ref-refresh-btn">Check for Newer Export Now</button>
+          </div>
+          <p id="verasmart-ref-status" style="color:#2c5c8a;min-height:16px;font-size:12px;margin-top:6px;">Enter a name to search the reference export.</p>
+          <div id="verasmart-ref-results" style="overflow-x:auto;"></div>
+        </div>
+        <script>
+          (function () {
+            var refInput=document.getElementById("verasmart-ref-search");
+            var refSearchButton=document.getElementById("verasmart-ref-search-btn");
+            var refRefreshButton=document.getElementById("verasmart-ref-refresh-btn");
+            var refStatus=document.getElementById("verasmart-ref-status");
+            var refResults=document.getElementById("verasmart-ref-results");
+            if(!refInput||!refSearchButton||!refRefreshButton||!refStatus||!refResults)return;
+            function esc(value){return String(value==null?"":value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;");}
+            async function runSearch(forceRefresh){var query=String(refInput.value||"").trim();if(!query){refStatus.style.color="#b42318";refStatus.textContent="Enter a name or email to search.";return;}refSearchButton.disabled=true;refRefreshButton.disabled=true;refStatus.style.color="#2c5c8a";refStatus.textContent=forceRefresh?"Checking SFTP for a newer export...":"Searching reference export...";try{var url="/verasmart/lab/reference-export/search?query="+encodeURIComponent(query)+(forceRefresh?"&refresh=true":"");var response=await fetch(url,{credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));var results=payload.results||[];if(!results.length){refResults.innerHTML="<p>No matches in "+esc(payload.filename||"the reference export")+".</p>";}else{refResults.innerHTML="<table><thead><tr><th>Name</th><th>Email</th><th>Cost Center</th><th>Windows Domain Account</th></tr></thead><tbody>"+results.map(function(row){return "<tr><td>"+esc(row.name)+"</td><td>"+esc(row.email)+"</td><td><strong>"+esc(row.cost_center||"(none)")+"</strong></td><td>"+esc(row.windows_domain_account||"(none)")+"</td></tr>";}).join("")+"</tbody></table>";}refStatus.style.color="#146c2e";refStatus.textContent="Found "+results.length+" match(es) in "+esc(payload.filename||"reference export")+" ("+(payload.total_rows||0)+" total rows loaded).";}catch(error){refResults.innerHTML="";refStatus.style.color="#b42318";refStatus.textContent="Reference lookup failed: "+((error&&error.message)||"Unknown error.");}finally{refSearchButton.disabled=false;refRefreshButton.disabled=false;}}
+            refSearchButton.addEventListener("click",function(){runSearch(false);});
+            refRefreshButton.addEventListener("click",function(){runSearch(true);});
+          })();
+        </script>
+        <div style="margin:14px 0;padding:12px;border:1px solid #c8dbee;background:#f8fcff;">
           <h4 style="margin-top:0;">Build Manual Cost Center Files from Personnel Export</h4>
           <p style="color:#4e6a84;font-size:12px;">Upload a current VeraSMART Personnel CSV/TXT/XLSX export. Search one employee at a time, add each target to the queue, then generate the Personnel Cost Center and EZ-Burst files. The export stays in memory for one hour and is not written to disk.</p>
           <div class="search-filter-row">
@@ -57122,6 +57297,32 @@ def verasmart_lab_cost_centers_route(request: Request):
     except OSError:
       cost_centers = []
     return JSONResponse({"ok": True, "cost_centers": cost_centers})
+
+
+@app.get("/verasmart/lab/reference-export/search")
+def verasmart_lab_reference_export_search_route(request: Request, query: str = "", refresh: bool = False):
+    _require_admin_session(request)
+    try:
+      export = _verasmart_reference_check_and_maybe_refresh(force=refresh)
+    except Exception as exc:
+      return JSONResponse({"ok": False, "error": f"Reference export lookup failed: {exc}"}, status_code=502)
+
+    clean_query = str(query or "").strip().lower()
+    rows = export.get("rows", []) or []
+    if clean_query:
+      matches = [
+        row for row in rows
+        if clean_query in str(row.get("name", "") or "").lower() or clean_query in str(row.get("email", "") or "").lower()
+      ][:25]
+    else:
+      matches = []
+    return JSONResponse({
+      "ok": True,
+      "filename": export.get("filename", ""),
+      "loaded_epoch": export.get("loaded_epoch", 0),
+      "total_rows": export.get("count", 0),
+      "results": matches,
+    })
 
 
 @app.post("/verasmart/lab/template-builder/search-cucm")
