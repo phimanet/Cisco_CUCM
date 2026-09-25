@@ -118,6 +118,12 @@ Priority keys:
 - Fixed a real bug during this work: an embedded-JS backslash literal (`"\\\\"`) was being collapsed by Python's string escaping into an unterminated JS string, throwing a syntax error that silently disabled every handler in the panel's script block. Fixed using `String.fromCharCode(92)` instead of a literal backslash — same category as the 2026-09-22 Hunt List incident. Recorded in repo memory (`/memories/repo/embedded-js-pitfalls.md`).
 - Still LAB-only; no PROD rollout for this workflow yet, per existing v1.01 gating.
 
+### 2026-09-24 (VeraSMART CUCM Personnel CSV column mapping validated in LAB import wizard)
+- Live-test rejection on a real VeraSMART Personnel Import (test record `Alfredo.Salcedo@amnhealthcare.com`) revealed the generated column order didn't match VeraSMART's configured import mapping; the Cost Center value landed in `E-mail address` and the EZ-Burst option value landed in `Employee number`, causing rejection.
+- Corrected and confirmed final generated Personnel CSV column order to match the VeraSMART "Map File Columns to Database Fields" wizard exactly: **Email, CostCenter, EZBurstOption, WindowsDomainAccount** (4 columns), mapped in the wizard to `E-mail address`, `Personnel Cost Center`, `EZ-Burst option`, `Windows domain account` respectively — confirmed via live wizard screenshot with sample row `Alfredo.Salcedo@amnhealthcare.com | Allied SAM | E-mail links to EZ-Burst reports | AHS\Alfredo.Salcedo`.
+- Removed `LoginDisabled` from the generated file entirely — this specific Personnel Import job has no importable database field for it (wizard shows `[Ignored]` with no `Login disabled` option in the dropdown list). The route now returns a `note` in the JSON response, and the UI shows it in red after generation, reminding the operator to manually verify/set `Login disabled = No` in VeraSMART per the standing rule that LDAP resync does not repair this field.
+- This column order/format is now the validated baseline for the CUCM-driven Personnel CSV generator (`/verasmart/lab/template-builder/generate-from-cucm`).
+
 - Keep this section concise with short chronological notes after significant updates.
 
 ### 2026-09-23 (Genesys Set User to Inactive)
