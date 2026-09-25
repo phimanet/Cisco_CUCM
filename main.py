@@ -43690,7 +43690,7 @@ def menu_admin_page(request: Request):
           <div style="margin-top:14px;">
             <strong>Queued Employees (from CUCM)</strong>
             <div id="verasmart-cucm-queue" style="overflow-x:auto;margin:8px 0;"></div>
-            <button type="button" id="verasmart-cucm-generate" disabled>Generate Queued CSV Files</button>
+            <button type="button" id="verasmart-cucm-generate" disabled>Generate Queued and Upload to Calero</button>
             <div id="verasmart-cucm-downloads" style="display:none;margin-top:10px;padding:10px;background:#eef9f1;border:1px solid #9dccaa;"></div>
           </div>
         </div>
