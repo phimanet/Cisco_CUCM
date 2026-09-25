@@ -57118,12 +57118,12 @@ def verasmart_lab_template_builder_generate_from_cucm_route(
       "1 All Sales East 6 Hourly",
     ]
     ezburst_rows = [
-      [list_name, row["email"], row["cost_center"], ""]
+      [list_name, row["email"], row["cost_center"]]
       for row in targets
       for list_name in distribution_lists
     ]
     ezburst_bytes = _pipe_csv(
-      ["DistributionListName", "EmailAddress", "CostCenter", "Department"],
+      ["DistributionListName", "EmailAddress", "CostCenter"],
       ezburst_rows,
     )
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -57220,12 +57220,12 @@ def verasmart_lab_template_builder_generate_route(
       "1 All Sales East 6 Hourly",
     ]
     ezburst_rows = [
-      [list_name, str(row.get("email", "") or ""), template_cost_center, ""]
+      [list_name, str(row.get("email", "") or ""), template_cost_center]
       for row in targets
       for list_name in distribution_lists
     ]
     ezburst_bytes = _pipe_csv(
-      ["DistributionListName", "EmailAddress", "CostCenter", "Department"],
+      ["DistributionListName", "EmailAddress", "CostCenter"],
       ezburst_rows,
     )
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
