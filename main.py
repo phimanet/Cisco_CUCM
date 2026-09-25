@@ -138,6 +138,7 @@ VERASMART_REFERENCE_EXPORT_CACHE = {}
 VERASMART_REFERENCE_EXPORT_LOCK = threading.Lock()
 VERASMART_REFERENCE_EXPORT_CHECK_INTERVAL_SECONDS = 7 * 24 * 60 * 60
 VERASMART_REFERENCE_EXPORT_DISK_PATH = os.path.join(os.path.dirname(__file__), "data", "verasmart_reference_export_cache.json")
+VERASMART_REFERENCE_EXPORT_SCHEMA_VERSION = 2
 GREENLIGHT_LOOKUP_RUNS = {}
 GREENLIGHT_LOOKUP_RUNS_LOCK = threading.Lock()
 GREENLIGHT_LOOKUP_MAX_RUNS = 20
@@ -17166,8 +17167,9 @@ def _verasmart_reference_check_and_maybe_refresh(force: bool = False) -> dict:
       cached = _load_verasmart_reference_cache_from_disk()
       if cached:
         VERASMART_REFERENCE_EXPORT_CACHE["data"] = cached
+    schema_stale = bool(cached) and int(cached.get("schema_version", 0) or 0) != VERASMART_REFERENCE_EXPORT_SCHEMA_VERSION
     last_checked = float(VERASMART_REFERENCE_EXPORT_CACHE.get("last_checked_epoch", 0) or 0)
-    due_for_check = force or cached is None or (time.time() - last_checked) >= VERASMART_REFERENCE_EXPORT_CHECK_INTERVAL_SECONDS
+    due_for_check = force or cached is None or schema_stale or (time.time() - last_checked) >= VERASMART_REFERENCE_EXPORT_CHECK_INTERVAL_SECONDS
 
   if not due_for_check:
     return cached or {"filename": "", "loaded_epoch": 0, "count": 0, "rows": []}
@@ -17183,7 +17185,7 @@ def _verasmart_reference_check_and_maybe_refresh(force: bool = False) -> dict:
 
   with VERASMART_REFERENCE_EXPORT_LOCK:
     VERASMART_REFERENCE_EXPORT_CACHE["last_checked_epoch"] = time.time()
-    if cached and str(cached.get("filename", "") or "") == filename and not force:
+    if cached and not schema_stale and str(cached.get("filename", "") or "") == filename and not force:
       # Same file as before — nothing newer is present, keep using what we have.
       return cached
     rows = _parse_verasmart_reference_export(file_bytes)
@@ -17191,6 +17193,7 @@ def _verasmart_reference_check_and_maybe_refresh(force: bool = False) -> dict:
       "filename": filename,
       "loaded_epoch": time.time(),
       "count": len(rows),
+      "schema_version": VERASMART_REFERENCE_EXPORT_SCHEMA_VERSION,
       "rows": rows,
     }
     VERASMART_REFERENCE_EXPORT_CACHE["data"] = result
