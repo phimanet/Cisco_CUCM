@@ -33075,6 +33075,37 @@ __ADMIN_CARD__
             refRefreshButton.addEventListener("click",function(){runSearch(true);});
           })();
         </script>
+        <div style="margin:14px 0;padding:12px;border:1px solid #c8dbee;background:#f8fcff;">
+          <h4 style="margin-top:0;">EZ-Burst File from Pasted Names</h4>
+          <p style="color:#4e6a84;font-size:12px;">Paste one <code>Lastname, Firstname</code> per line. Each name is matched against the latest VeraSMART Personnel reference export to pull that person's current email address and Cost Center, then an EZ-Burst Distribution import file is generated and uploaded to the Calero SFTP <code>/ezburst</code> folder so you can run the import immediately. No Personnel/Cost Center change is made.</p>
+          <textarea id="verasmart-ezname-input" rows="8" style="width:100%;max-width:520px;" placeholder="Smith, John&#10;Doe, Jane"></textarea>
+          <div class="search-filter-row" style="margin-top:8px;align-items:center;">
+            <button type="button" id="verasmart-ezname-lookup-btn">Look Up Names</button>
+            <label style="font-size:12px;"><input type="checkbox" id="verasmart-ezname-refresh"> Pull newest export first</label>
+            <button type="button" id="verasmart-ezname-generate-btn" disabled>Generate and Upload EZ-Burst File</button>
+          </div>
+          <p id="verasmart-ezname-status" style="color:#2c5c8a;min-height:16px;font-size:12px;margin-top:6px;">Paste names and click Look Up Names.</p>
+          <div id="verasmart-ezname-results" style="overflow-x:auto;"></div>
+          <div id="verasmart-ezname-downloads" style="display:none;margin-top:10px;padding:10px;background:#eef9f1;border:1px solid #9dccaa;"></div>
+        </div>
+        <script>
+          (function () {
+            var nameInput=document.getElementById("verasmart-ezname-input");
+            var lookupButton=document.getElementById("verasmart-ezname-lookup-btn");
+            var generateButton=document.getElementById("verasmart-ezname-generate-btn");
+            var refreshBox=document.getElementById("verasmart-ezname-refresh");
+            var statusEl=document.getElementById("verasmart-ezname-status");
+            var resultsEl=document.getElementById("verasmart-ezname-results");
+            var downloadsEl=document.getElementById("verasmart-ezname-downloads");
+            if(!nameInput||!lookupButton||!generateButton||!statusEl||!resultsEl||!downloadsEl){if(statusEl){statusEl.style.color="#b42318";statusEl.textContent="Panel JavaScript did not load. Reload the page.";}return;}
+            var matched=[];
+            function esc(value){return String(value==null?"":value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;");}
+            function statusColor(row){if(row.status==="matched")return "#146c2e";if(row.status==="ambiguous")return "#8a6d1f";return "#b42318";}
+            function renderResults(rows){matched=rows.filter(function(row){return row.status==="matched";});if(!rows.length){resultsEl.innerHTML="<p>No names parsed.</p>";generateButton.disabled=true;return;}resultsEl.innerHTML="<table><thead><tr><th>Pasted Name</th><th>Matched Name</th><th>Email</th><th>Cost Center</th><th>Status</th></tr></thead><tbody>"+rows.map(function(row){return "<tr><td>"+esc(row.input)+"</td><td>"+esc(row.matched_name||"(none)")+"</td><td>"+esc(row.email||"(none)")+"</td><td><strong>"+esc(row.cost_center||"(none)")+"</strong></td><td style='color:"+statusColor(row)+"'>"+esc(row.status)+(row.message?" - "+esc(row.message):"")+"</td></tr>";}).join("")+"</tbody></table>";generateButton.disabled=!matched.length;}
+            lookupButton.addEventListener("click",async function(){var text=String(nameInput.value||"").trim();if(!text){statusEl.style.color="#b42318";statusEl.textContent="Paste at least one 'Lastname, Firstname' line.";return;}lookupButton.disabled=true;generateButton.disabled=true;downloadsEl.style.display="none";statusEl.style.color="#2c5c8a";statusEl.textContent="Looking up names in the reference export...";try{var data=new FormData();data.append("names_text",text);data.append("refresh",refreshBox&&refreshBox.checked?"true":"false");var response=await fetch("/verasmart/lab/ezburst-by-name/lookup",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));var rows=payload.results||[];renderResults(rows);statusEl.style.color=matched.length===rows.length?"#146c2e":"#8a6d1f";statusEl.textContent="Matched "+matched.length+" of "+rows.length+" name(s) in "+(payload.filename||"the reference export")+" ("+(payload.total_rows||0)+" rows loaded).";}catch(error){resultsEl.innerHTML="";matched=[];statusEl.style.color="#b42318";statusEl.textContent="Name lookup failed: "+((error&&error.message)||"Unknown error.");}finally{lookupButton.disabled=false;generateButton.disabled=!matched.length;}});
+            generateButton.addEventListener("click",async function(){if(!matched.length)return;if(!window.confirm("Generate an EZ-Burst file for "+matched.length+" employee(s) and upload it to the Calero SFTP /ezburst folder?"))return;generateButton.disabled=true;downloadsEl.style.display="none";try{var data=new FormData();data.append("entries_json",JSON.stringify(matched));var response=await fetch("/verasmart/lab/ezburst-by-name/generate",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));var notesHtml=Array.isArray(payload.delivery_notes)?"<ul style='margin:8px 0 0 18px;'>"+payload.delivery_notes.map(function(note){return "<li>"+esc(note)+"</li>";}).join("")+"</ul>":"";downloadsEl.style.display="block";downloadsEl.style.background=payload.sftp_ok?"#eef9f1":"#fdeceb";downloadsEl.style.borderColor=payload.sftp_ok?"#9dccaa":"#e0a3a0";downloadsEl.innerHTML="<strong>EZ-Burst file generated for "+esc(payload.targets?payload.targets.length:0)+" employee(s) ("+esc(payload.row_count||0)+" rows).</strong>"+notesHtml+"<div style='margin-top:8px;'><a class='mini-btn' href='"+esc(payload.download)+"'>Download EZ-Burst Distribution CSV</a></div>";}catch(error){statusEl.style.color="#b42318";statusEl.textContent="File generation failed: "+((error&&error.message)||"Unknown error.");}finally{generateButton.disabled=!matched.length;}});
+          })();
+        </script>
     </section>
 
     <section class="tool-panel" data-panel="extensionlookup">
@@ -43876,6 +43907,37 @@ def menu_admin_page(request: Request):
             async function runSearch(forceRefresh){var lastName=String(refLastNameInput.value||"").trim();if(!lastName){refStatus.style.color="#b42318";refStatus.textContent="Enter a last name to search.";return;}refSearchButton.disabled=true;refRefreshButton.disabled=true;refStatus.style.color="#2c5c8a";refStatus.textContent=forceRefresh?"Checking SFTP for a newer export...":"Searching reference export...";try{var url="/verasmart/lab/reference-export/search?last_name="+encodeURIComponent(lastName)+"&first_name="+encodeURIComponent(String(refFirstNameInput.value||"").trim())+(forceRefresh?"&refresh=true":"");var response=await fetch(url,{credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));var results=payload.results||[];if(!results.length){refResults.innerHTML="<p>No matches in "+esc(payload.filename||"the reference export")+".</p>";}else{refResults.innerHTML="<table><thead><tr><th>Name</th><th>Email</th><th>Cost Center</th><th>Windows Domain Account</th></tr></thead><tbody>"+results.map(function(row){return "<tr><td>"+esc(row.name)+"</td><td>"+esc(row.email)+"</td><td><strong>"+esc(row.cost_center||"(none)")+"</strong></td><td>"+esc(row.windows_domain_account||"(none)")+"</td></tr>";}).join("")+"</tbody></table>";}refStatus.style.color="#146c2e";refStatus.textContent="Found "+results.length+" match(es) in "+esc(payload.filename||"reference export")+" ("+(payload.total_rows||0)+" total rows loaded).";}catch(error){refResults.innerHTML="";refStatus.style.color="#b42318";refStatus.textContent="Reference lookup failed: "+((error&&error.message)||"Unknown error.");}finally{refSearchButton.disabled=false;refRefreshButton.disabled=false;}}
             refSearchButton.addEventListener("click",function(){runSearch(false);});
             refRefreshButton.addEventListener("click",function(){runSearch(true);});
+          })();
+        </script>
+        <div style="margin:14px 0;padding:12px;border:1px solid #c8dbee;background:#f8fcff;">
+          <h4 style="margin-top:0;">EZ-Burst File from Pasted Names</h4>
+          <p style="color:#4e6a84;font-size:12px;">Paste one <code>Lastname, Firstname</code> per line. Each name is matched against the latest VeraSMART Personnel reference export to pull that person's current email address and Cost Center, then an EZ-Burst Distribution import file is generated and uploaded to the Calero SFTP <code>/ezburst</code> folder so you can run the import immediately. No Personnel/Cost Center change is made.</p>
+          <textarea id="verasmart-ezname-input" rows="8" style="width:100%;max-width:520px;" placeholder="Smith, John&#10;Doe, Jane"></textarea>
+          <div class="search-filter-row" style="margin-top:8px;align-items:center;">
+            <button type="button" id="verasmart-ezname-lookup-btn">Look Up Names</button>
+            <label style="font-size:12px;"><input type="checkbox" id="verasmart-ezname-refresh"> Pull newest export first</label>
+            <button type="button" id="verasmart-ezname-generate-btn" disabled>Generate and Upload EZ-Burst File</button>
+          </div>
+          <p id="verasmart-ezname-status" style="color:#2c5c8a;min-height:16px;font-size:12px;margin-top:6px;">Paste names and click Look Up Names.</p>
+          <div id="verasmart-ezname-results" style="overflow-x:auto;"></div>
+          <div id="verasmart-ezname-downloads" style="display:none;margin-top:10px;padding:10px;background:#eef9f1;border:1px solid #9dccaa;"></div>
+        </div>
+        <script>
+          (function () {
+            var nameInput=document.getElementById("verasmart-ezname-input");
+            var lookupButton=document.getElementById("verasmart-ezname-lookup-btn");
+            var generateButton=document.getElementById("verasmart-ezname-generate-btn");
+            var refreshBox=document.getElementById("verasmart-ezname-refresh");
+            var statusEl=document.getElementById("verasmart-ezname-status");
+            var resultsEl=document.getElementById("verasmart-ezname-results");
+            var downloadsEl=document.getElementById("verasmart-ezname-downloads");
+            if(!nameInput||!lookupButton||!generateButton||!statusEl||!resultsEl||!downloadsEl){if(statusEl){statusEl.style.color="#b42318";statusEl.textContent="Panel JavaScript did not load. Reload the page.";}return;}
+            var matched=[];
+            function esc(value){return String(value==null?"":value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/\"/g,"&quot;").replace(/'/g,"&#39;");}
+            function statusColor(row){if(row.status==="matched")return "#146c2e";if(row.status==="ambiguous")return "#8a6d1f";return "#b42318";}
+            function renderResults(rows){matched=rows.filter(function(row){return row.status==="matched";});if(!rows.length){resultsEl.innerHTML="<p>No names parsed.</p>";generateButton.disabled=true;return;}resultsEl.innerHTML="<table><thead><tr><th>Pasted Name</th><th>Matched Name</th><th>Email</th><th>Cost Center</th><th>Status</th></tr></thead><tbody>"+rows.map(function(row){return "<tr><td>"+esc(row.input)+"</td><td>"+esc(row.matched_name||"(none)")+"</td><td>"+esc(row.email||"(none)")+"</td><td><strong>"+esc(row.cost_center||"(none)")+"</strong></td><td style='color:"+statusColor(row)+"'>"+esc(row.status)+(row.message?" - "+esc(row.message):"")+"</td></tr>";}).join("")+"</tbody></table>";generateButton.disabled=!matched.length;}
+            lookupButton.addEventListener("click",async function(){var text=String(nameInput.value||"").trim();if(!text){statusEl.style.color="#b42318";statusEl.textContent="Paste at least one 'Lastname, Firstname' line.";return;}lookupButton.disabled=true;generateButton.disabled=true;downloadsEl.style.display="none";statusEl.style.color="#2c5c8a";statusEl.textContent="Looking up names in the reference export...";try{var data=new FormData();data.append("names_text",text);data.append("refresh",refreshBox&&refreshBox.checked?"true":"false");var response=await fetch("/verasmart/lab/ezburst-by-name/lookup",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));var rows=payload.results||[];renderResults(rows);statusEl.style.color=matched.length===rows.length?"#146c2e":"#8a6d1f";statusEl.textContent="Matched "+matched.length+" of "+rows.length+" name(s) in "+(payload.filename||"the reference export")+" ("+(payload.total_rows||0)+" rows loaded).";}catch(error){resultsEl.innerHTML="";matched=[];statusEl.style.color="#b42318";statusEl.textContent="Name lookup failed: "+((error&&error.message)||"Unknown error.");}finally{lookupButton.disabled=false;generateButton.disabled=!matched.length;}});
+            generateButton.addEventListener("click",async function(){if(!matched.length)return;if(!window.confirm("Generate an EZ-Burst file for "+matched.length+" employee(s) and upload it to the Calero SFTP /ezburst folder?"))return;generateButton.disabled=true;downloadsEl.style.display="none";try{var data=new FormData();data.append("entries_json",JSON.stringify(matched));var response=await fetch("/verasmart/lab/ezburst-by-name/generate",{method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});var payload=await response.json();if(!response.ok||!payload.ok)throw new Error((payload&&payload.error)||("HTTP "+response.status));var notesHtml=Array.isArray(payload.delivery_notes)?"<ul style='margin:8px 0 0 18px;'>"+payload.delivery_notes.map(function(note){return "<li>"+esc(note)+"</li>";}).join("")+"</ul>":"";downloadsEl.style.display="block";downloadsEl.style.background=payload.sftp_ok?"#eef9f1":"#fdeceb";downloadsEl.style.borderColor=payload.sftp_ok?"#9dccaa":"#e0a3a0";downloadsEl.innerHTML="<strong>EZ-Burst file generated for "+esc(payload.targets?payload.targets.length:0)+" employee(s) ("+esc(payload.row_count||0)+" rows).</strong>"+notesHtml+"<div style='margin-top:8px;'><a class='mini-btn' href='"+esc(payload.download)+"'>Download EZ-Burst Distribution CSV</a></div>";}catch(error){statusEl.style.color="#b42318";statusEl.textContent="File generation failed: "+((error&&error.message)||"Unknown error.");}finally{generateButton.disabled=!matched.length;}});
           })();
         </script>
       </section>
@@ -57705,6 +57767,197 @@ def verasmart_lab_reference_export_search_route(
       "loaded_epoch": export.get("loaded_epoch", 0),
       "total_rows": export.get("count", 0),
       "results": matches,
+    })
+
+
+VERASMART_EZBURST_DISTRIBUTION_LISTS = [
+  "1 All Sales 6 Daily",
+  "1 All Sales 6 Hourly - USR Custom",
+  "1 All Sales 6 Weekly",
+  "1 All Sales East 6 Hourly",
+]
+
+
+def _verasmart_parse_pasted_names(names_text: str) -> list[dict]:
+  """Parse pasted 'Lastname, Firstname' lines (newline or semicolon separated)."""
+  raw_lines: list[str] = []
+  for chunk in str(names_text or "").replace("\r", "\n").split("\n"):
+    for part in chunk.split(";"):
+      if part.strip():
+        raw_lines.append(part.strip())
+  parsed = []
+  for line in raw_lines:
+    last_name, sep, first_name = line.partition(",")
+    if not sep:
+      parsed.append({"input": line, "last_name": "", "first_name": "", "error": "Expected format is 'Lastname, Firstname'."})
+      continue
+    parsed.append({
+      "input": line,
+      "last_name": last_name.strip(),
+      "first_name": first_name.strip(),
+      "error": "" if last_name.strip() and first_name.strip() else "Both last name and first name are required.",
+    })
+  return parsed
+
+
+def _verasmart_ezburst_csv_bytes(targets: list[dict]) -> bytes:
+  output = io.StringIO(newline="")
+  writer = csv.writer(output, delimiter="|", lineterminator="\n")
+  writer.writerow(["DistributionListName", "EmailAddress", "CostCenter"])
+  writer.writerows([
+    [list_name, row["email"], row["cost_center"]]
+    for row in targets
+    for list_name in VERASMART_EZBURST_DISTRIBUTION_LISTS
+  ])
+  return output.getvalue().encode("utf-8")
+
+
+@app.post("/verasmart/lab/ezburst-by-name/lookup")
+def verasmart_lab_ezburst_by_name_lookup_route(
+    request: Request,
+    names_text: str = Form(""),
+    refresh: bool = Form(False),
+):
+    _session, operator = _require_admin_session(request)
+    parsed = _verasmart_parse_pasted_names(names_text)
+    if not parsed:
+      return JSONResponse({"ok": False, "error": "Paste at least one 'Lastname, Firstname' line."}, status_code=400)
+    if len(parsed) > 500:
+      return JSONResponse({"ok": False, "error": "A maximum of 500 names can be looked up at once."}, status_code=400)
+    try:
+      export = _verasmart_reference_check_and_maybe_refresh(force=bool(refresh))
+    except Exception as exc:
+      return JSONResponse({"ok": False, "error": f"Reference export lookup failed: {exc}"}, status_code=502)
+
+    rows = export.get("rows", []) or []
+    by_last: dict[str, list[dict]] = {}
+    for row in rows:
+      by_last.setdefault(str(row.get("last_name", "") or "").strip().lower(), []).append(row)
+
+    results = []
+    for item in parsed:
+      entry = {
+        "input": item["input"],
+        "last_name": item["last_name"],
+        "first_name": item["first_name"],
+        "email": "",
+        "cost_center": "",
+        "matched_name": "",
+        "status": "not_found",
+        "message": "",
+      }
+      if item["error"]:
+        entry["status"] = "invalid"
+        entry["message"] = item["error"]
+        results.append(entry)
+        continue
+      candidates = by_last.get(item["last_name"].lower(), [])
+      wanted_first = item["first_name"].lower()
+      exact = [row for row in candidates if str(row.get("first_name", "") or "").strip().lower() == wanted_first]
+      matches = exact or [
+        row for row in candidates
+        if str(row.get("first_name", "") or "").strip().lower().startswith(wanted_first)
+      ]
+      if not matches:
+        entry["message"] = "No match in the VeraSMART reference export."
+      elif len(matches) > 1:
+        entry["status"] = "ambiguous"
+        entry["message"] = "Multiple matches: " + ", ".join(str(row.get("name", "") or "") for row in matches[:5])
+      else:
+        row = matches[0]
+        entry["email"] = str(row.get("email", "") or "").strip()
+        entry["cost_center"] = str(row.get("cost_center", "") or "").strip()
+        entry["matched_name"] = str(row.get("name", "") or "").strip()
+        if not entry["email"]:
+          entry["status"] = "invalid"
+          entry["message"] = "Matched employee has no email address in the export."
+        elif not entry["cost_center"]:
+          entry["status"] = "invalid"
+          entry["message"] = "Matched employee has no Cost Center in the export."
+        else:
+          entry["status"] = "matched"
+      results.append(entry)
+
+    _append_audit_event(
+      action="verasmart_lab_ezburst_name_lookup",
+      cucm_host=str((_session or {}).get("cucm_host", "") or ""),
+      operator=operator,
+      target=f"names={len(parsed)};matched={sum(1 for row in results if row['status'] == 'matched')}",
+      output_filename="",
+      inline_mode=True,
+    )
+    return JSONResponse({
+      "ok": True,
+      "filename": export.get("filename", ""),
+      "total_rows": export.get("count", 0),
+      "results": results,
+    })
+
+
+@app.post("/verasmart/lab/ezburst-by-name/generate")
+def verasmart_lab_ezburst_by_name_generate_route(
+    request: Request,
+    entries_json: str = Form(""),
+):
+    _session, operator = _require_admin_session(request)
+    try:
+      entries = json.loads(entries_json or "[]")
+    except (TypeError, ValueError):
+      return JSONResponse({"ok": False, "error": "Matched employee data is invalid."}, status_code=400)
+    if not isinstance(entries, list) or not entries:
+      return JSONResponse({"ok": False, "error": "Look up names first, then generate."}, status_code=400)
+    if len(entries) > 500:
+      return JSONResponse({"ok": False, "error": "A maximum of 500 employees can be generated at once."}, status_code=400)
+
+    targets = []
+    seen = set()
+    for entry in entries:
+      if not isinstance(entry, dict):
+        continue
+      email = str(entry.get("email", "") or "").strip()
+      cost_center = str(entry.get("cost_center", "") or "").strip()
+      if not email or not cost_center or email.lower() in seen:
+        continue
+      seen.add(email.lower())
+      targets.append({
+        "name": str(entry.get("matched_name", "") or entry.get("input", "") or email).strip(),
+        "email": email,
+        "cost_center": cost_center,
+      })
+    if not targets:
+      return JSONResponse({"ok": False, "error": "No matched employees with both an email and a Cost Center were found."}, status_code=400)
+
+    ezburst_bytes = _verasmart_ezburst_csv_bytes(targets)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    ezburst_filename = f"verasmart_ezburst_update_{timestamp}.csv"
+    ezburst_job = _store_job_output(ezburst_bytes, ezburst_filename, "text/csv")
+
+    delivery_notes = []
+    sftp_ok = True
+    # No Personnel/Cost Center change is involved here, so the 11:30 PM EZ-Burst hold does not apply.
+    try:
+      _verasmart_sftp_upload(ezburst_bytes, _verasmart_sftp_settings()["ezburst_dir"], ezburst_filename)
+      delivery_notes.append(f"Delivered via SFTP to /ezburst as {ezburst_filename}. You can run the EZ-Burst Distribution import now.")
+    except Exception as exc:
+      sftp_ok = False
+      delivery_notes.append(f"EZ-Burst SFTP delivery failed: {exc}")
+
+    _append_audit_event(
+      action="verasmart_lab_ezburst_generated_from_names",
+      cucm_host=str((_session or {}).get("cucm_host", "") or ""),
+      operator=operator,
+      target=f"targets={len(targets)};sftp_ok={sftp_ok}",
+      output_filename=ezburst_filename,
+      inline_mode=True,
+    )
+    return JSONResponse({
+      "ok": True,
+      "targets": targets,
+      "row_count": len(targets) * len(VERASMART_EZBURST_DISTRIBUTION_LISTS),
+      "filename": ezburst_filename,
+      "sftp_ok": sftp_ok,
+      "download": f"/download/job-output/{ezburst_job}",
+      "delivery_notes": delivery_notes,
     })
 
 
