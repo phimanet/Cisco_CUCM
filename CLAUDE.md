@@ -112,6 +112,19 @@ Priority keys:
 
 ## Conversation Notes
 
+### 2026-09-28 (Microsoft Calling Plan — Phase 1 read-only)
+- New pages `/microsoft-calling-plan` and `/strike-items` (Page 1 shell) share one read-only panel; linked from Page 1 hero cards.
+- `toolkit/ms_graph_calling.py`: Graph client-credentials (`MS_GRAPH_TENANT_ID/CLIENT_ID/CLIENT_SECRET`), person read (profile, licenseDetails, Teams numberAssignments), Calling Plan holder list (subscribedSkus + assignedLicenses filter) with CSV export.
+- Required Entra app permissions (application, admin consent): `User.Read.All`, `Organization.Read.All`, `TeamsTelephoneNumber.Read.All`. Calling Plan SKU detection via prefix `MCOPSTN` (override `MS_CALLING_PLAN_PREFIXES`; excludes `MCOPSTNC` Communication Credits).
+- Planned phases: (2) assign license via `POST /users/{id}/assignLicense` + number via Graph v1.0 `numberAssignments/assignNumber` (needs `LicenseAssignment.ReadWrite.All`, `TeamsTelephoneNumber.ReadWrite.All`), persistent build tracker + admin build email; (3) weekly holder email; (4) SMS enablement — no Graph API confirmed yet, needs research.
+
+### 2026-09-25 (Genesys queue workers — stuck-forever job bug fixed)
+- Root cause: all 4 Genesys background queue workers (`ad-webrtc`, `inactive`, `webrtc-cleanup`, `user-cleanup`) polled a `while True` loop with **no try/except around the job-execution call**. Any unhandled exception in a job silently killed that single daemon thread forever (threads do not auto-restart), so every subsequent job sat in `queued` state permanently no matter how many times "Execute Now" was clicked (that route only updates the in-memory record; nothing was left alive to consume it).
+- Confirmed via PROD `systemctl cat cucm-web`: single uvicorn process, no `--workers`, ruling out multi-process split-state as the cause.
+- Fix (commit `844a346`): wrapped the job-execution call in all 4 worker loops in try/except; on exception the job is now marked `failed` with the error message instead of killing the thread, so the loop runs forever regardless of any single job's failure.
+- Separately identified (not the root cause, but a real ongoing issue): `/opt/cucm-web-data` permission denied for `www-data` on PROD, preventing Genesys AD WebRTC queue state from persisting to disk. Operator instructed to run `sudo mkdir -p /opt/cucm-web-data && sudo chown www-data:www-data /opt/cucm-web-data`.
+- Deployed and confirmed working in PROD after restart.
+
 ### 2026-09-24 (VeraSMART live CUCM search builder)
 - Added a standalone "Live CUCM Search" flow at the top of the VeraSMART / Calero (v1.01 LAB) panel: search CUCM by last name (backed by `search_persons_by_name`, no personnel export needed), select a Cost Center from a dropdown per person, queue as many as needed, then generate the Personnel + EZ-Burst CSVs. New routes: `/verasmart/lab/template-builder/search-cucm`, `/verasmart/lab/template-builder/generate-from-cucm`, `/verasmart/lab/cost-centers`.
 - Cost Center dropdown is sourced from [toolkit/verasmart_cost_centers.txt](toolkit/verasmart_cost_centers.txt) (currently trimmed to the operator-approved subset); edit that file directly to add/remove options, no code change needed.

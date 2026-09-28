@@ -81,6 +81,7 @@ from toolkit.ad_phone_fields import (
   lookup_ad_identities_by_email,
 )
 from toolkit.unity_user_extract import extract_unity_users
+from toolkit import ms_graph_calling
 from toolkit.transunion_sdpr import (
   integration_status as transunion_integration_status,
   list_caller_profiles as transunion_list_caller_profiles,
@@ -31458,6 +31459,14 @@ __ADMIN_CARD__
           <strong>Genesys Admin Page</strong>
           <span>Reserved path for the separate Genesys administration workflow.</span>
         </a>
+        <a class="hero-link-card" href="/microsoft-calling-plan">
+          <strong>Microsoft Calling Plan</strong>
+          <span>Read Microsoft 365 users, Calling Plan licenses, and Teams numbers.</span>
+        </a>
+        <a class="hero-link-card" href="/strike-items">
+          <strong>Strike Related Items</strong>
+          <span>Strike-focused tools, including Microsoft Calling Plan lookup.</span>
+        </a>
       </div>
     </section>
 
@@ -51904,6 +51913,383 @@ def _start_expressway_certificate_notice_worker() -> None:
     return
   thread = threading.Thread(target=_expressway_certificate_notice_loop, name="expressway-cert-notices", daemon=True)
   thread.start()
+
+
+MS_CALLING_PAGES = {
+  "/microsoft-calling-plan": {
+    "title": "Microsoft Calling Plan",
+    "kicker": "MICROSOFT TEAMS CALLING PLAN",
+    "subtitle": "Read Microsoft 365 users, Calling Plan licenses, and Teams phone numbers through Microsoft Graph.",
+  },
+  "/strike-items": {
+    "title": "Strike Related Items",
+    "kicker": "STRIKE OPERATIONS",
+    "subtitle": "Strike-focused tools. Microsoft Calling Plan lookup is available here for strike staff builds.",
+  },
+}
+
+MS_CALLING_PAGE_TEMPLATE = """<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>__PAGE_TITLE__ - Voice Operations Portal</title>
+  <style>
+    :root { --amn-blue:#005eb8; --amn-navy:#002f6c; --amn-text:#12304a; --amn-text-soft:#4e6a84; --amn-border:#c8dbee; --amn-shadow:0 14px 30px rgba(0,47,108,0.11); }
+    body { font-family:"Segoe UI",Tahoma,Arial,sans-serif; margin:0; background:linear-gradient(180deg,#f7fbff 0%,#edf5fc 100%); color:var(--amn-text); }
+    .topbar { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:10px 16px; background:linear-gradient(120deg,rgba(0,47,108,0.98),rgba(0,94,184,0.94)); color:#fff; box-shadow:0 12px 28px rgba(0,47,108,0.22); }
+    .topbar-brand { display:flex; align-items:center; gap:12px; }
+    .topbar-brand strong { font-size:16px; }
+    .brand-fallback { font-weight:700; letter-spacing:0.6px; text-transform:uppercase; font-size:12px; opacity:0.86; }
+    .topbar-status { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+    .topbar-status > * { display:inline-flex; align-items:center; min-height:32px; padding:6px 10px; border-radius:10px; border:1px solid rgba(255,255,255,0.35); box-sizing:border-box; font-size:11px; font-weight:700; background:rgba(255,255,255,0.12); color:#fff; }
+    .topbar-status .session-timer { display:none; background:linear-gradient(180deg,#fff4df,#ffdca3); color:#6a3c00; border-color:#f0b44a; }
+    .topbar-btn { display:inline-block; padding:7px 12px; border-radius:10px; font-size:12px; font-weight:700; text-decoration:none; color:#fff; background:linear-gradient(180deg,#cb3b2f,#9f2018); border:1px solid #f0a79c; }
+    .content { max-width:1500px; margin:8px auto 14px auto; padding:0 12px 12px 12px; }
+    .page-hero { padding:12px 14px; margin-bottom:10px; border-radius:12px; background:linear-gradient(135deg,rgba(255,255,255,0.96),rgba(239,247,255,0.95)); border:1px solid rgba(0,47,108,0.1); box-shadow:var(--amn-shadow); }
+    .page-kicker { display:inline-flex; padding:5px 9px; border-radius:999px; background:rgba(0,94,184,0.08); color:var(--amn-blue); font-size:10px; font-weight:800; letter-spacing:0.4px; }
+    .page-title { margin:6px 0 0 0; color:var(--amn-navy); font-size:22px; }
+    .page-subtitle { margin:4px 0 0 0; color:var(--amn-text-soft); font-size:12px; }
+    .hero-link-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; margin-top:8px; }
+    .hero-link-card { display:block; padding:7px 10px; border-radius:10px; background:rgba(255,255,255,0.9); border:1px solid rgba(0,47,108,0.1); color:var(--amn-navy); text-decoration:none; font-size:12px; font-weight:700; }
+    .portal-shell { display:grid; grid-template-columns:244px minmax(0,1fr); gap:10px; align-items:start; margin-top:8px; }
+    .portal-sidebar { position:sticky; top:54px; background:linear-gradient(180deg,rgba(0,47,108,0.97),rgba(7,75,138,0.96)); border-radius:12px; padding:8px; box-shadow:0 18px 36px rgba(0,47,108,0.18); }
+    .portal-sidebar h4 { margin:4px 6px 8px 6px; color:#fff; font-size:13px; }
+    .portal-nav { display:flex; flex-direction:column; gap:6px; }
+    .portal-nav-btn { width:100%; text-align:left; background:rgba(255,255,255,0.09); color:rgba(255,255,255,0.94); border:1px solid rgba(255,255,255,0.12); border-radius:8px; padding:7px 8px; font-size:12px; font-weight:600; cursor:pointer; }
+    .portal-nav-btn:hover { background:rgba(255,255,255,0.16); }
+    .portal-nav-btn.active { background:#fff; color:var(--amn-navy); font-weight:700; }
+    .portal-main { min-width:0; background:#fff; border:1px solid var(--amn-border); border-radius:12px; padding:14px; box-shadow:var(--amn-shadow); }
+    .btn-action { padding:8px 14px; border:0; border-radius:6px; background:var(--amn-blue); color:#fff; font-weight:700; cursor:pointer; font-size:12px; }
+    .btn-action:hover { background:var(--amn-navy); }
+    .row { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:8px 0; }
+    .row input { padding:7px 9px; border:1px solid var(--amn-border); border-radius:6px; min-width:320px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; margin-top:8px; }
+    th { background:var(--amn-blue); color:#fff; text-align:left; padding:7px 9px; }
+    td { padding:6px 9px; border-bottom:1px solid var(--amn-border); vertical-align:top; }
+    .ok { color:#16733b; font-weight:700; }
+    .bad { color:#a12626; font-weight:700; }
+    .muted { color:var(--amn-text-soft); font-size:12px; }
+    .preview-banner { background:#fff7e6; border:1px solid #f0c36d; color:#6a4a00; padding:8px 10px; border-radius:8px; font-size:12px; }
+    pre { background:#0f1f33; color:#d7e6f7; padding:10px; border-radius:8px; max-height:320px; overflow:auto; font-size:11px; }
+    @media(max-width:900px){ .portal-shell { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-brand"><span class="brand-fallback">AMN Healthcare</span><strong>Voice Operations Portal</strong></div>
+    <div class="topbar-status">
+      <span>Authenticated Operator: __AUTH_USER__</span>
+      <span class="env-banner __ENV_CSS__">__ENV_TEXT__</span>
+      <span id="session-timer-banner" class="session-timer">Auto logout in:&nbsp;<span id="session-timer-remaining"></span></span>
+    </div>
+    <div><a class="topbar-btn" href="/logout">Log Out</a></div>
+  </header>
+
+  <main class="content">
+    <section class="page-hero">
+      <span class="page-kicker">__PAGE_KICKER__</span>
+      <h2 class="page-title">__PAGE_TITLE__</h2>
+      <p class="page-subtitle">__PAGE_SUBTITLE__</p>
+      <div class="hero-link-grid">
+        <a class="hero-link-card" href="/menu">Main Operations</a>
+        <a class="hero-link-card" href="/page2">Administrative Items</a>
+        <a class="hero-link-card" href="/page3">SMS Item Menu</a>
+        <a class="hero-link-card" href="/microsoft-calling-plan">Microsoft Calling Plan</a>
+        <a class="hero-link-card" href="/strike-items">Strike Related Items</a>
+        <a class="hero-link-card" href="/audit-trail">Action History</a>
+      </div>
+    </section>
+
+    <div class="portal-shell">
+      <aside class="portal-sidebar">
+        <h4>__PAGE_TITLE__ Menu</h4>
+        <div class="portal-nav">
+          <button type="button" class="portal-nav-btn active">Microsoft Calling Plan Lookup (Read-Only)</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/menu'">Main Operations (Page 1)</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/page2'">Administrative Items (Page 2)</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/page3'">SMS Item Menu (Page 3)</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='__OTHER_PAGE_PATH__'">__OTHER_PAGE_TITLE__</button>
+          <button type="button" class="portal-nav-btn" onclick="location.href='/logout'">Log Out</button>
+        </div>
+      </aside>
+
+      <section class="portal-main" data-panel="ms-calling-plan">
+        <h3 style="margin-top:0;color:var(--amn-navy);">Microsoft Calling Plan Lookup (Read-Only)</h3>
+        <p class="preview-banner">Phase 1 is read-only. This page does not assign licenses, phone numbers, or SMS.</p>
+        <p id="ms-calling-config" class="muted">Checking Microsoft Graph configuration...</p>
+
+        <form id="ms-calling-lookup-form" onsubmit="return false;">
+          <div class="row">
+            <input id="ms-calling-identifier" name="identifier" type="email" placeholder="Email or UPN (first.last@amnhealthcare.com)" required>
+            <button type="button" class="btn-action" onclick="if(window.msCallingLookup){window.msCallingLookup(event);}else{document.getElementById('ms-calling-status').textContent='Error: panel JavaScript did not load (msCallingLookup missing).';}">Read Person</button>
+            <button type="button" class="btn-action" style="background:#0e7490;" onclick="if(window.msCallingHolders){window.msCallingHolders(event);}else{document.getElementById('ms-calling-status').textContent='Error: panel JavaScript did not load (msCallingHolders missing).';}">List Calling Plan Holders</button>
+          </div>
+        </form>
+        <div id="ms-calling-status" class="muted" style="min-height:18px;font-weight:600;"></div>
+        <div id="ms-calling-results" style="overflow-x:auto;"></div>
+        <details style="margin-top:12px;"><summary class="muted">Debug output (raw response)</summary><pre id="ms-calling-debug"></pre></details>
+      </section>
+    </div>
+  </main>
+
+  <script>
+    (function () {
+      var expiresAtMs = __CRED_EXPIRES_MS__;
+      var banner = document.getElementById("session-timer-banner");
+      var remaining = document.getElementById("session-timer-remaining");
+      if (!expiresAtMs || !banner || !remaining) { return; }
+      banner.style.display = "inline-flex";
+      function pad(n) { return String(n).padStart(2, "0"); }
+      function tick() {
+        var s = Math.floor((expiresAtMs - Date.now()) / 1000);
+        if (s <= 0) { remaining.textContent = "Expired"; window.location.href = "/logout"; return; }
+        remaining.textContent = pad(Math.floor(s / 3600)) + ":" + pad(Math.floor((s % 3600) / 60)) + ":" + pad(s % 60);
+      }
+      tick();
+      window.setInterval(tick, 1000);
+    })();
+
+    (function () {
+      var statusEl = document.getElementById("ms-calling-status");
+      var resultsEl = document.getElementById("ms-calling-results");
+      var debugEl = document.getElementById("ms-calling-debug");
+      var configEl = document.getElementById("ms-calling-config");
+      var lastHolders = [];
+      function esc(v) {
+        var map = {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"};
+        return String(v == null ? "" : v).replace(/[&<>"']/g, function (c) { return map[c]; });
+      }
+      function yesNo(v) { return v ? '<span class="ok">Yes</span>' : '<span class="bad">No</span>'; }
+      function errText(data, fallback) {
+        if (!data) { return fallback; }
+        if (typeof data.error === "string") { return data.error; }
+        if (data.error && data.error.message) { return data.error.message; }
+        return fallback;
+      }
+      function showDebug(data) { debugEl.textContent = JSON.stringify(data, null, 2); }
+
+      function renderPerson(data) {
+        if (!data.found) {
+          resultsEl.innerHTML = '<p class="bad">No Microsoft 365 user found for ' + esc(data.identifier) + '.</p>';
+          return;
+        }
+        var u = data.user || {};
+        var html = '<h4 style="margin:10px 0 4px 0;color:#002f6c;">' + esc(u.display_name) + '</h4>';
+        html += '<table><tbody>';
+        html += '<tr><th style="width:220px;">UPN</th><td>' + esc(u.user_principal_name) + '</td></tr>';
+        html += '<tr><th>Mail</th><td>' + esc(u.mail) + '</td></tr>';
+        html += '<tr><th>Job Title / Department</th><td>' + esc(u.job_title) + ' / ' + esc(u.department) + '</td></tr>';
+        html += '<tr><th>Account Enabled</th><td>' + yesNo(u.account_enabled) + '</td></tr>';
+        html += '<tr><th>Usage Location</th><td>' + (u.usage_location ? esc(u.usage_location) : '<span class="bad">Not set (required before licensing)</span>') + '</td></tr>';
+        html += '<tr><th>Business Phones</th><td>' + esc((u.business_phones || []).join(", ")) + '</td></tr>';
+        html += '<tr><th>Has Teams Phone</th><td>' + yesNo(data.has_teams_phone) + '</td></tr>';
+        html += '<tr><th>Has Calling Plan</th><td>' + yesNo(data.has_calling_plan) + '</td></tr>';
+        html += '</tbody></table>';
+
+        html += '<h4 style="margin:14px 0 4px 0;color:#002f6c;">Licenses</h4>';
+        html += '<table><thead><tr><th>SKU</th><th>Calling Plan</th><th>Teams Phone</th><th>Voice Service Plans</th></tr></thead><tbody>';
+        (data.licenses || []).forEach(function (l) {
+          var plans = (l.voice_plans || []).map(function (p) { return esc(p.name) + ' (' + esc(p.status) + ')'; }).join("<br>");
+          html += '<tr><td>' + esc(l.sku_part_number) + '</td><td>' + yesNo(l.calling_plan) + '</td><td>' + yesNo(l.teams_phone) + '</td><td>' + plans + '</td></tr>';
+        });
+        if (!(data.licenses || []).length) { html += '<tr><td colspan="4">No licenses assigned.</td></tr>'; }
+        html += '</tbody></table>';
+
+        html += '<h4 style="margin:14px 0 4px 0;color:#002f6c;">Teams Phone Numbers</h4>';
+        html += '<table><thead><tr><th>Number</th><th>Type</th><th>Status</th><th>Activation</th><th>Category</th><th>City</th></tr></thead><tbody>';
+        (data.phone_numbers || []).forEach(function (n) {
+          html += '<tr><td>' + esc(n.telephone_number) + '</td><td>' + esc(n.number_type) + '</td><td>' + esc(n.assignment_status) + '</td><td>' + esc(n.activation_state) + '</td><td>' + esc(n.assignment_category) + '</td><td>' + esc(n.city) + '</td></tr>';
+        });
+        if (!(data.phone_numbers || []).length) { html += '<tr><td colspan="6">No Teams phone number assigned.</td></tr>'; }
+        html += '</tbody></table>';
+        (data.warnings || []).forEach(function (w) { html += '<p class="bad">' + esc(w) + '</p>'; });
+        resultsEl.innerHTML = html;
+      }
+
+      function renderHolders(data) {
+        lastHolders = data.holders || [];
+        var html = '<h4 style="margin:10px 0 4px 0;color:#002f6c;">Calling Plan License Pools</h4>';
+        html += '<table><thead><tr><th>SKU</th><th>Purchased</th><th>Assigned</th><th>Available</th></tr></thead><tbody>';
+        (data.skus || []).forEach(function (s) {
+          html += '<tr><td>' + esc(s.sku_part_number) + '</td><td>' + esc(s.enabled) + '</td><td>' + esc(s.consumed) + '</td><td>' + esc(s.available) + '</td></tr>';
+        });
+        if (!(data.skus || []).length) { html += '<tr><td colspan="4">No Calling Plan SKUs found in this tenant.</td></tr>'; }
+        html += '</tbody></table>';
+        if (data.unassigned_calling_plan_numbers !== null && data.unassigned_calling_plan_numbers !== undefined) {
+          html += '<p class="muted">Unassigned Calling Plan numbers in tenant inventory: <strong>' + esc(data.unassigned_calling_plan_numbers) + '</strong></p>';
+        }
+        html += '<div class="row"><strong>' + esc(data.holder_count) + ' Calling Plan holder(s)</strong>';
+        html += '<button type="button" class="btn-action" style="background:#19743a;" onclick="window.msCallingHoldersCsv()">Download CSV</button></div>';
+        html += '<table><thead><tr><th>Name</th><th>UPN</th><th>Department</th><th>Enabled</th><th>Calling Plan SKU</th><th>Teams Number</th></tr></thead><tbody>';
+        lastHolders.forEach(function (h) {
+          html += '<tr><td>' + esc(h.display_name) + '</td><td>' + esc(h.user_principal_name) + '</td><td>' + esc(h.department) + '</td><td>' + yesNo(h.account_enabled) + '</td><td>' + esc((h.skus || []).join(", ")) + '</td><td>' + esc((h.phone_numbers || []).join(", ")) + '</td></tr>';
+        });
+        html += '</tbody></table>';
+        (data.warnings || []).forEach(function (w) { html += '<p class="bad">' + esc(w) + '</p>'; });
+        resultsEl.innerHTML = html;
+      }
+
+      window.msCallingHoldersCsv = function () {
+        var nl = String.fromCharCode(10);
+        function cell(v) { return '"' + String(v == null ? "" : v).split('"').join('""') + '"'; }
+        var lines = [["Name", "UPN", "Mail", "Department", "Enabled", "Calling Plan SKU", "Teams Number"].map(cell).join(",")];
+        lastHolders.forEach(function (h) {
+          lines.push([h.display_name, h.user_principal_name, h.mail, h.department, h.account_enabled ? "Yes" : "No", (h.skus || []).join("; "), (h.phone_numbers || []).join("; ")].map(cell).join(","));
+        });
+        var blob = new Blob([lines.join(nl)], {type: "text/csv"});
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "microsoft_calling_plan_holders.csv";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      };
+
+      window.msCallingLookup = function (event) {
+        if (event && event.preventDefault) { event.preventDefault(); }
+        var identifier = (document.getElementById("ms-calling-identifier").value || "").trim();
+        if (!identifier) { statusEl.textContent = "Enter an email address or UPN."; return; }
+        statusEl.textContent = "Reading " + identifier + " from Microsoft Graph...";
+        resultsEl.innerHTML = "";
+        var body = new URLSearchParams();
+        body.set("identifier", identifier);
+        fetch("/ms-calling/lookup", {method: "POST", body: body, headers: {"Accept": "application/json"}})
+          .then(function (r) { return r.json().then(function (d) { return {ok: r.ok, data: d}; }); })
+          .then(function (res) {
+            showDebug(res.data);
+            if (!res.ok || !res.data.ok) { statusEl.textContent = "Error: " + errText(res.data, "Lookup failed."); return; }
+            statusEl.textContent = "Lookup complete.";
+            renderPerson(res.data.result || {});
+          })
+          .catch(function (e) { statusEl.textContent = "Error: " + e; });
+      };
+
+      window.msCallingHolders = function (event) {
+        if (event && event.preventDefault) { event.preventDefault(); }
+        statusEl.textContent = "Loading Calling Plan holders from Microsoft Graph...";
+        resultsEl.innerHTML = "";
+        fetch("/ms-calling/holders", {headers: {"Accept": "application/json"}})
+          .then(function (r) { return r.json().then(function (d) { return {ok: r.ok, data: d}; }); })
+          .then(function (res) {
+            showDebug(res.data);
+            if (!res.ok || !res.data.ok) { statusEl.textContent = "Error: " + errText(res.data, "Holder list failed."); return; }
+            statusEl.textContent = "Holder list loaded.";
+            renderHolders(res.data.result || {});
+          })
+          .catch(function (e) { statusEl.textContent = "Error: " + e; });
+      };
+
+      document.getElementById("ms-calling-identifier").addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { window.msCallingLookup(e); }
+      });
+
+      fetch("/ms-calling/status", {headers: {"Accept": "application/json"}})
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          var s = d.status || {};
+          if (s.configured) {
+            configEl.innerHTML = '<span class="ok">Microsoft Graph configured.</span> Calling Plan SKU prefixes: ' + esc((s.calling_plan_prefixes || []).join(", "));
+          } else {
+            configEl.innerHTML = '<span class="bad">Microsoft Graph not configured.</span> Missing: ' + esc([s.tenant_id_set ? "" : "MS_GRAPH_TENANT_ID", s.client_id_set ? "" : "MS_GRAPH_CLIENT_ID", s.client_secret_set ? "" : "MS_GRAPH_CLIENT_SECRET"].filter(Boolean).join(", "));
+          }
+        })
+        .catch(function (e) { configEl.textContent = "Configuration check failed: " + e; });
+    })();
+  </script>
+</body>
+</html>
+"""
+
+
+def _render_ms_calling_page(request: Request, path: str):
+  session = _get_auth_session(request) or {}
+  session_username = str(session.get("username", ""))
+  if not _is_admin_user(session_username):
+    return HTMLResponse(content="<h3>403 Forbidden</h3><p>You are not authorized to access this page.</p>", status_code=403)
+  page = MS_CALLING_PAGES[path]
+  other_path = "/strike-items" if path == "/microsoft-calling-plan" else "/microsoft-calling-plan"
+  auth_cucm_host = str(session.get("cucm_host", "") or "")
+  env_text, env_css_class = _get_environment_label(auth_cucm_host)
+  has_cached_cucm_pass = _has_valid_cached_secret(session, "cucm_pass", time.time())
+  credential_expires_at = float(session.get("credential_expires_at", 0) or 0)
+  credential_expires_at_ms = int(credential_expires_at * 1000) if (has_cached_cucm_pass and credential_expires_at > 0) else 0
+  html = (
+    MS_CALLING_PAGE_TEMPLATE
+    .replace("__PAGE_TITLE__", escape(page["title"]))
+    .replace("__PAGE_KICKER__", escape(page["kicker"]))
+    .replace("__PAGE_SUBTITLE__", escape(page["subtitle"]))
+    .replace("__OTHER_PAGE_PATH__", other_path)
+    .replace("__OTHER_PAGE_TITLE__", escape(MS_CALLING_PAGES[other_path]["title"]))
+    .replace("__AUTH_USER__", escape(session_username))
+    .replace("__ENV_TEXT__", escape(env_text))
+    .replace("__ENV_CSS__", escape(env_css_class))
+    .replace("__CRED_EXPIRES_MS__", str(credential_expires_at_ms))
+  )
+  return HTMLResponse(content=html)
+
+
+@app.get("/microsoft-calling-plan", response_class=HTMLResponse)
+def microsoft_calling_plan_page(request: Request):
+  return _render_ms_calling_page(request, "/microsoft-calling-plan")
+
+
+@app.get("/strike-items", response_class=HTMLResponse)
+def strike_items_page(request: Request):
+  return _render_ms_calling_page(request, "/strike-items")
+
+
+def _ms_calling_require_admin(request: Request):
+  session = _get_auth_session(request) or {}
+  username = str(session.get("username", ""))
+  if not _is_admin_user(username):
+    return None, JSONResponse({"ok": False, "error": "Not authorized."}, status_code=403)
+  return session, None
+
+
+@app.get("/ms-calling/status")
+def ms_calling_status_route(request: Request):
+  _, denied = _ms_calling_require_admin(request)
+  if denied:
+    return denied
+  return JSONResponse({"ok": True, "status": ms_graph_calling.integration_status()})
+
+
+@app.post("/ms-calling/lookup")
+def ms_calling_lookup_route(request: Request, identifier: str = Form("")):
+  session, denied = _ms_calling_require_admin(request)
+  if denied:
+    return denied
+  try:
+    result = ms_graph_calling.lookup_person(identifier)
+  except ms_graph_calling.GraphError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+  except requests.RequestException as exc:
+    logger.warning("Microsoft Graph lookup network error: %s", exc)
+    return JSONResponse({"ok": False, "error": "Microsoft Graph request failed (network error)."}, status_code=502)
+  _append_audit_event(
+    "ms_calling_person_lookup",
+    str(session.get("cucm_host", "") or ""),
+    str(session.get("username", "") or ""),
+    str(identifier or "").strip(),
+    "",
+    True,
+  )
+  return JSONResponse({"ok": True, "result": result})
+
+
+@app.get("/ms-calling/holders")
+def ms_calling_holders_route(request: Request):
+  _, denied = _ms_calling_require_admin(request)
+  if denied:
+    return denied
+  try:
+    result = ms_graph_calling.list_calling_plan_holders()
+  except ms_graph_calling.GraphError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+  except requests.RequestException as exc:
+    logger.warning("Microsoft Graph holder list network error: %s", exc)
+    return JSONResponse({"ok": False, "error": "Microsoft Graph request failed (network error)."}, status_code=502)
+  return JSONResponse({"ok": True, "result": result})
 
 
 @app.get("/expressways", response_class=HTMLResponse)
