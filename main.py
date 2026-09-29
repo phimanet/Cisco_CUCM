@@ -37133,7 +37133,7 @@ __ADMIN_CARD__
           statusEl.textContent = `Hunt List "${payload.line_group_name || ""}" has ${members.length} member(s).`;
 
           if (!members.length) {
-            resultsEl.innerHTML = "<p style=\"margin:0; color:#355978;\">No members found for this Hunt List.</p>";
+            resultsEl.innerHTML = "<p style='margin:0; color:#355978;'>No members found for this Hunt List.</p>";
             return;
           }
 
@@ -43603,6 +43603,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="linegroup-admin">Update Hunt List Line Group</button>
             <button type="button" class="portal-nav-btn" data-panel="add-user-hunt-list">Add User to Hunt List</button>
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
+            <button type="button" class="portal-nav-btn" data-panel="jabber-specific-ext">Build Jabber with Specific Extension</button>
             <button type="button" class="portal-nav-btn" data-panel="ad-user-lookups">Active Directory Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
@@ -43863,6 +43864,91 @@ def menu_admin_page(request: Request):
         </form>
       </section>
 
+      <section class="panel tool-panel" data-panel="jabber-specific-ext">
+        <h3>Build Jabber with Specific Extension</h3>
+        <p>Special use case. Enter one person per line as <strong>email, extension</strong>. For each person: builds the Jabber CSF on that exact extension, updates the CUCM end user, creates the Unity voicemail box, and sends the welcome email. Active Directory/LDAP is <strong>not</strong> updated.</p>
+        <form id="admin-jabber-specific-ext-form" action="javascript:void(0)" method="post" onsubmit="return false;">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <textarea id="admin-jabber-specific-ext-input" placeholder="first.last@amnhealthcare.com, 8585551234" style="width:min(760px,100%);min-height:120px;"></textarea>
+          <div class="compact-inline-row" style="margin-top:8px;">
+            <button type="button" id="admin-jabber-specific-ext-run" onclick="if (window.runJabberSpecificExt) { return window.runJabberSpecificExt(event); } var s=document.getElementById('admin-jabber-specific-ext-status'); s.textContent='Build Jabber with Specific Extension handler missing (JavaScript did not load).'; s.style.color='#b42318'; return false;">Build Jabber for All Lines</button>
+          </div>
+        </form>
+        <p id="admin-jabber-specific-ext-status" style="color:#2c5c8a;min-height:18px;margin-top:12px;">Enter email, extension pairs and click Build.</p>
+        <div id="admin-jabber-specific-ext-results" style="overflow-x:auto;"></div>
+        <script>
+          (function () {
+            var form = document.getElementById("admin-jabber-specific-ext-form");
+            var input = document.getElementById("admin-jabber-specific-ext-input");
+            var runBtn = document.getElementById("admin-jabber-specific-ext-run");
+            var statusEl = document.getElementById("admin-jabber-specific-ext-status");
+            var resultsEl = document.getElementById("admin-jabber-specific-ext-results");
+            if (!form || !input || !runBtn || !statusEl || !resultsEl) return;
+            var rows = [];
+            function esc(value) { return String(value == null ? "" : value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+            function parseLines() {
+              var parsed = [];
+              String(input.value || "").split(String.fromCharCode(10)).forEach(function (line) {
+                var text = line.trim();
+                if (!text) return;
+                var parts = text.split(/[,;|]/);
+                parsed.push({ email: (parts[0] || "").trim(), extension: (parts[1] || "").replace(/[^0-9]/g, ""), raw: text });
+              });
+              return parsed;
+            }
+            function render() {
+              var cell = "padding:6px 8px;border:1px solid #d9e4ef;vertical-align:top;";
+              var html = "<table style='border-collapse:collapse;font-size:12px;width:100%;'><thead><tr style='background:#005eb8;color:#fff;'><th style='" + cell + "'>Email</th><th style='" + cell + "'>Extension</th><th style='" + cell + "'>User ID</th><th style='" + cell + "'>Result</th><th style='" + cell + "'>Details</th></tr></thead><tbody>";
+              rows.forEach(function (row) {
+                var color = row.state === "Built" ? "#146c2e" : (row.state === "Failed" ? "#b42318" : "#7a5a13");
+                var details = (row.steps || []).map(function (s) { return "<div><strong>" + esc(s.step) + ":</strong> " + esc(s.status) + (s.details ? " - " + esc(s.details) : "") + "</div>"; }).join("");
+                if (row.error) details = "<div style='color:#b42318;'>" + esc(row.error) + "</div>" + details;
+                if (row.download_url) details += "<div><a href='" + esc(row.download_url) + "'>Download CSV</a></div>";
+                html += "<tr><td style='" + cell + "'>" + esc(row.email) + "</td><td style='" + cell + "'>" + esc(row.extension) + "</td><td style='" + cell + "'>" + esc(row.userid || "") + "</td><td style='" + cell + "color:" + color + ";font-weight:700;'>" + esc(row.state) + "</td><td style='" + cell + "'>" + details + "</td></tr>";
+              });
+              resultsEl.innerHTML = html + "</tbody></table>";
+            }
+            window.runJabberSpecificExt = async function (event) {
+              if (event && event.preventDefault) event.preventDefault();
+              var parsed = parseLines();
+              if (!parsed.length) { statusEl.textContent = "Enter at least one email, extension line."; statusEl.style.color = "#b42318"; return false; }
+              var bad = parsed.filter(function (p) { return p.email.indexOf("@") < 1 || p.extension.length < 4; });
+              if (bad.length) { statusEl.textContent = "Fix these lines (need email, extension): " + bad.map(function (p) { return p.raw; }).join(" | "); statusEl.style.color = "#b42318"; return false; }
+              if (!window.confirm("Build Jabber + voicemail and send welcome email for " + parsed.length + " person(s)? AD/LDAP will not be updated.")) { statusEl.textContent = "Cancelled. No changes were made."; statusEl.style.color = "#2c5c8a"; return false; }
+              rows = parsed.map(function (p) { return { email: p.email, extension: p.extension, state: "Queued", steps: [] }; });
+              render();
+              runBtn.disabled = true;
+              var built = 0, failed = 0;
+              for (var i = 0; i < rows.length; i++) {
+                var row = rows[i];
+                row.state = "Building..."; render();
+                statusEl.style.color = "#2c5c8a"; statusEl.textContent = "Building " + (i + 1) + " of " + rows.length + ": " + row.email;
+                try {
+                  var data = new FormData(form);
+                  data.append("email", row.email);
+                  data.append("extension", row.extension);
+                  var response = await fetch("/admin/jabber-build-specific-extension", { method: "POST", body: data, credentials: "same-origin", headers: { "Accept": "application/json" } });
+                  var payload = await response.json().catch(function () { return { ok: false, error: "HTTP " + response.status }; });
+                  if (!response.ok || !payload.ok) throw new Error((payload && (payload.error && payload.error.message ? payload.error.message : payload.error)) || ("HTTP " + response.status));
+                  row.userid = payload.userid; row.steps = payload.steps || []; row.download_url = payload.download_url;
+                  row.state = payload.built ? "Built" : "Failed";
+                  if (payload.built) built++; else failed++;
+                } catch (err) {
+                  row.state = "Failed"; row.error = String(err && err.message ? err.message : err); failed++;
+                }
+                render();
+              }
+              runBtn.disabled = false;
+              statusEl.style.color = failed ? "#9a4b00" : "#146c2e";
+              statusEl.textContent = "Done: " + built + " built, " + failed + " failed.";
+              return false;
+            };
+          })();
+        </script>
+      </section>
+
       <section class="panel tool-panel" data-panel="route-plan-report">
         <h3>CUCM Route Plan Report</h3>
         <p>Enter a phone number or dial string to find CUCM route-plan patterns whose Pattern or URI begins with it. This report is read-only.</p>
@@ -44008,7 +44094,7 @@ def menu_admin_page(request: Request):
                   downloadBtn.disabled = !rows.length;
                   if (!rows.length) return;
                   var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr style="background:#005eb8;color:#fff;">';
-                  ["Match","Pattern or URI","Partition","Type","Description","Called Party Transform Mask","Callable","Route Detail"].forEach(function (heading) { html += "<th style=\"padding:8px;text-align:left;white-space:nowrap;\">" + escapeHtml(heading) + "</th>"; });
+                  ["Match","Pattern or URI","Partition","Type","Description","Called Party Transform Mask","Callable","Route Detail"].forEach(function (heading) { html += "<th style='padding:8px;text-align:left;white-space:nowrap;'>" + escapeHtml(heading) + "</th>"; });
                   html += "</tr></thead><tbody>";
                   rows.forEach(function (row, index) {
                     var details = (row.devices || []).map(function (name) { return "Device: " + name; }).concat((row.line_groups || []).map(function (name) { return "Line Group: " + name; }));
@@ -44575,7 +44661,7 @@ def menu_admin_page(request: Request):
                 }
               }
             }
-            debugEl.textContent = (line + "\n\n" + debugEl.textContent).slice(0, 20000);
+            debugEl.textContent = (line + String.fromCharCode(10, 10) + debugEl.textContent).slice(0, 20000);
           }
 
           window.__adminSearchLineGroups = async function (formId, statusId, debugId) {
@@ -44697,7 +44783,7 @@ def menu_admin_page(request: Request):
                 }
               }
             }
-            debugEl.textContent = (line + "\n\n" + debugEl.textContent).slice(0, 16000);
+            debugEl.textContent = (line + String.fromCharCode(10, 10) + debugEl.textContent).slice(0, 16000);
           }
 
           async function searchHuntLists() {
@@ -44802,7 +44888,7 @@ def menu_admin_page(request: Request):
               statusEl.textContent = `Hunt List "${payload.line_group_name || ""}" has ${members.length} member(s).`;
 
               if (!members.length) {
-                resultsEl.innerHTML = "<p style=\"margin:0; color:#355978;\">No members found for this Hunt List.</p>";
+                resultsEl.innerHTML = "<p style='margin:0; color:#355978;'>No members found for this Hunt List.</p>";
                 return;
               }
 
@@ -44864,7 +44950,7 @@ def menu_admin_page(request: Request):
                 }
               }
             }
-            debugEl.textContent = (line + "\n\n" + debugEl.textContent).slice(0, 16000);
+            debugEl.textContent = (line + String.fromCharCode(10, 10) + debugEl.textContent).slice(0, 16000);
           }
 
           async function searchLineGroupsForEdit() {
@@ -47663,7 +47749,7 @@ def menu_admin_page(request: Request):
               const summary = payload.summary || {};
               statusEl.textContent = `Completed: ${summary.success_count || 0} succeeded, ${summary.failed_count || 0} failed, ${summary.total_rows || 0} total.`;
               
-              const outputText = (payload.output_text || "").split("\n").filter(l => l.trim());
+              const outputText = (payload.output_text || "").split(String.fromCharCode(10)).filter(l => l.trim());
               let resultHtml = "<pre style='background:#f5f5f5; padding:10px; border-radius:4px; overflow-x:auto; font-size:12px; font-family:Consolas,monospace;'>";
               resultHtml += outputText.slice(0, 50).join("\\n");
               if (outputText.length > 50) {
@@ -56615,6 +56701,99 @@ async def build_user_csf_phone(
     return _render_job_result("Build User CSF Phone", data, filename)
 
 
+@app.post("/admin/jabber-build-specific-extension")
+def admin_jabber_build_specific_extension_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    email: str = Form(""),
+    extension: str = Form(""),
+):
+    _require_admin_session(request)
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    clean_email = (email or "").strip()
+    clean_extension = re.sub(r"\D", "", extension or "")
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", clean_email):
+      return JSONResponse({"ok": False, "error": f"Invalid email: {clean_email or '(blank)'}"}, status_code=400)
+    if not re.fullmatch(r"\d{4,15}", clean_extension):
+      return JSONResponse({"ok": False, "error": f"Invalid extension: {extension or '(blank)'}"}, status_code=400)
+
+    try:
+      user_rows = _axl_execute_sql_rows(
+        cucm_host, cucm_user, cucm_pass,
+        f"SELECT userid FROM enduser WHERE LOWER(mailid) = LOWER('{_sql_escape_literal(clean_email)}')",
+      )
+    except Exception as exc:
+      return JSONResponse({"ok": False, "error": f"CUCM user lookup failed: {exc}"}, status_code=502)
+    userids = sorted({str(row.get("userid", "") or "").strip() for row in user_rows if str(row.get("userid", "") or "").strip()})
+    if not userids:
+      return JSONResponse({"ok": False, "error": f"No CUCM end user has email {clean_email}."}, status_code=404)
+    if len(userids) > 1:
+      return JSONResponse({"ok": False, "error": f"Multiple CUCM end users have email {clean_email}: {', '.join(userids)}"}, status_code=409)
+    userid = userids[0]
+
+    data, filename = build_user_csf_phone_from_template(
+      cucm_host=cucm_host,
+      cucm_user=cucm_user,
+      cucm_pass=cucm_pass,
+      target_user=userid,
+      dn_type="general",
+      explicit_dn=clean_extension,
+      skip_ad_update=True,
+    )
+    step_status = {}
+    for row in csv.reader(io.StringIO(_to_bytes(data).decode("utf-8", errors="replace"))):
+      if len(row) >= 2 and row[0] != "Step":
+        step_status[row[0].strip()] = row[1].strip().lower()
+    built = all(step_status.get(step) == "success" for step in ("Add Phone", "Update User", "Unity Voicemail"))
+
+    if built:
+      try:
+        notify_status, notify_details = _send_csf_jabber_ready_email_if_created(
+          cucm_host=cucm_host,
+          cucm_user=cucm_user,
+          cucm_pass=cucm_pass,
+          target_user=userid,
+          added_dn=clean_extension,
+          new_build=True,
+        )
+      except Exception as exc:
+        notify_status, notify_details = "Failed", f"Welcome email failed: {exc}"
+    else:
+      notify_status, notify_details = "Skipped", "Build did not complete Add Phone + Update User + Unity Voicemail; email not sent"
+    data = _append_result_row(data, "Send Jabber Ready Email", notify_status, notify_details)
+
+    _append_audit_event(
+      action="build_user_csf_phone_specific_extension",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=f"account={userid};email={clean_email};dn_added={clean_extension if built else 'none'}",
+      account=userid,
+      extension_added=clean_extension if built else "",
+      extension_deleted="",
+      output_filename=filename,
+      inline_mode=True,
+    )
+
+    steps = [
+      {"step": row[0], "status": row[1], "details": row[2] if len(row) > 2 else ""}
+      for row in csv.reader(io.StringIO(_to_bytes(data).decode("utf-8", errors="replace")))
+      if len(row) >= 2 and row[0] != "Step"
+    ]
+    job_output = _prepare_job_output(data, filename)
+    return JSONResponse({
+      "ok": True,
+      "built": built,
+      "userid": userid,
+      "email": clean_email,
+      "extension": clean_extension,
+      "email_status": notify_status,
+      "steps": steps,
+      "download_url": f"/download/job-output/{job_output['job_id']}",
+    })
+
+
 @app.post("/build/teams-telephony-user")
 async def build_teams_telephony_user(
   request: Request,
@@ -64991,7 +65170,7 @@ def page2_linegroup_search_js():
       statusEl.textContent = `Hunt List "${payload.line_group_name || ""}" has ${members.length} member(s).`;
 
       if (!members.length) {
-        resultsEl.innerHTML = "<p style=\"margin:0; color:#355978;\">No members found for this Hunt List.</p>";
+        resultsEl.innerHTML = "<p style='margin:0; color:#355978;'>No members found for this Hunt List.</p>";
         return;
       }
 

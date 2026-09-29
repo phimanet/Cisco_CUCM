@@ -745,6 +745,37 @@ def _phone_exists(session, cucm_ip, phone_name):
     return details is not None
 
 
+def _dn_assigned_devices(session, cucm_ip, pattern, route_partition):
+    """Return device names on the DN, or None when the DN does not exist yet."""
+    soap = f"""<?xml version="1.0" encoding="UTF-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+   <soapenv:Body>
+      <axl:getLine>
+         <pattern>{escape(pattern)}</pattern>
+         <routePartitionName>{escape(route_partition)}</routePartitionName>
+         <returnedTags>
+            <associatedDevices>
+               <device/>
+            </associatedDevices>
+         </returnedTags>
+      </axl:getLine>
+   </soapenv:Body>
+</soapenv:Envelope>"""
+
+    response = _axl_post(session, cucm_ip, soap)
+    if response.status_code != 200:
+        if "not found" in (response.text or "").lower():
+            return None
+        raise RuntimeError(f"getLine for {pattern} failed with HTTP {response.status_code}: {response.text[:500]}")
+
+    root = ET.fromstring(response.text)
+    return [
+        elem.text.strip()
+        for elem in root.iter()
+        if _strip_ns(elem.tag) == "device" and elem.text and elem.text.strip()
+    ]
+
+
 def _choose_available_dn(session, cucm_ip, prefix, device_name_prefix=""):
     candidates = _list_available_dns(session, cucm_ip, prefix)
     for candidate in candidates:
@@ -891,6 +922,8 @@ def build_user_csf_phone_from_template(
     ad_username="",
     ad_password="",
     preferred_dn="",
+    explicit_dn="",
+    skip_ad_update=False,
 ):
     settings = _load_dn_settings()
     dn_map = {
@@ -1001,7 +1034,21 @@ def build_user_csf_phone_from_template(
             return out.getvalue().encode("utf-8"), filename
 
         preferred_dn_clean = (preferred_dn or "").strip()
-        if preferred_dn_clean:
+        explicit_dn_clean = (explicit_dn or "").strip()
+        if explicit_dn_clean:
+            if not re.fullmatch(r"\d{4,}", explicit_dn_clean):
+                log_writer.writerow(["Select DN", "Failed", f"Requested extension is invalid: {explicit_dn_clean}"])
+                return out.getvalue().encode("utf-8"), filename
+            dn_devices = _dn_assigned_devices(session, cucm_host, explicit_dn_clean, ROUTE_PARTITION)
+            if dn_devices:
+                log_writer.writerow([
+                    "Select DN",
+                    "Failed",
+                    f"Requested extension {explicit_dn_clean}/{ROUTE_PARTITION} is already assigned to: {', '.join(dn_devices)}",
+                ])
+                return out.getvalue().encode("utf-8"), filename
+            new_dn = explicit_dn_clean
+        elif preferred_dn_clean:
             if not re.fullmatch(r"\d{4,}", preferred_dn_clean):
                 log_writer.writerow([
                     "Select DN",
@@ -1066,7 +1113,9 @@ def build_user_csf_phone_from_template(
         ])
         log_writer.writerow(["DN Type", "Success", f"{dn_type_name} ({dn_prefix})"])
         log_writer.writerow(["Lookup User", "Success", f"Found user {user_details['userid']} ({display_name})"])
-        if preferred_dn_clean:
+        if explicit_dn_clean:
+            log_writer.writerow(["Select DN", "Success", f"Using requested extension {new_dn}"])
+        elif preferred_dn_clean:
             log_writer.writerow(["Select DN", "Success", f"Using preferred DN {new_dn} from audit trail"])
         else:
             log_writer.writerow(["Select DN", "Success", f"Using available DN {new_dn}"])
@@ -1106,12 +1155,15 @@ def build_user_csf_phone_from_template(
 
         log_writer.writerow(["Update User", "Success", f"Updated {user_details['userid']} with phone {phone_name} and DN {new_dn}"])
 
-        ad_ok, ad_message = update_ad_phone_fields(user_details["userid"], new_dn, ad_context)
-        log_writer.writerow([
-            "Update AD Phone Fields",
-            "Success" if ad_ok else "Failed",
-            ad_message,
-        ])
+        if skip_ad_update:
+            log_writer.writerow(["Update AD Phone Fields", "Skipped", "AD/LDAP update skipped by request (already maintained)"])
+        else:
+            ad_ok, ad_message = update_ad_phone_fields(user_details["userid"], new_dn, ad_context)
+            log_writer.writerow([
+                "Update AD Phone Fields",
+                "Success" if ad_ok else "Failed",
+                ad_message,
+            ])
 
         unity_email = user_details.get("mailid", "").strip() or f"{user_details['userid'].lower()}@amnhealthcare.com"
         unity_first = user_details.get("firstName", "").strip() or user_details["userid"]
