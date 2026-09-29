@@ -16840,6 +16840,106 @@ def _greenlight_rows_to_csv_bytes(rows: list[dict]) -> bytes:
   return output.getvalue().encode("utf-8")
 
 
+GREENLIGHT_CSF_INVENTORY_PAGE_SIZE = 1000
+GREENLIGHT_CSF_INVENTORY_MAX_PAGES = 100
+GREENLIGHT_CSF_INVENTORY_COLUMNS = [
+  ("device_name", "Device Name"),
+  ("device_description", "Device Description"),
+  ("userid", "User ID"),
+  ("user_source", "User Source"),
+  ("first_name", "First Name"),
+  ("last_name", "Last Name"),
+  ("title", "Title"),
+  ("department", "Department"),
+  ("manager_id", "Manager ID"),
+  ("manager_name", "Manager Name"),
+  ("extension", "Primary Extension"),
+]
+
+
+def _greenlight_csf_sql_paged(cucm_host: str, cucm_user: str, cucm_pass: str, select_body: str) -> list[dict]:
+  rows: list[dict] = []
+  for page in range(GREENLIGHT_CSF_INVENTORY_MAX_PAGES):
+    skip = page * GREENLIGHT_CSF_INVENTORY_PAGE_SIZE
+    sql = f"SELECT SKIP {skip} FIRST {GREENLIGHT_CSF_INVENTORY_PAGE_SIZE} {select_body}"
+    batch = _axl_execute_sql_rows(cucm_host, cucm_user, cucm_pass, sql)
+    rows.extend(batch)
+    if len(batch) < GREENLIGHT_CSF_INVENTORY_PAGE_SIZE:
+      break
+  return rows
+
+
+def _greenlight_build_csf_inventory(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[dict]:
+  # tkmodel 503 = Cisco Unified Client Services Framework (Jabber CSF).
+  user_cols = (
+    "u.userid AS userid, u.firstname AS first_name, u.lastname AS last_name, "
+    "u.title AS title, u.department AS department, u.manager AS manager_id, "
+    "m.firstname AS manager_first, m.lastname AS manager_last"
+  )
+  owner_rows = _greenlight_csf_sql_paged(
+    cucm_host, cucm_user, cucm_pass,
+    f"d.name AS device_name, d.description AS device_description, {user_cols}, n.dnorpattern AS extension "
+    "FROM device d "
+    "LEFT OUTER JOIN enduser u ON u.pkid = d.fkenduser "
+    "LEFT OUTER JOIN enduser m ON m.userid = u.manager "
+    "LEFT OUTER JOIN devicenumplanmap dm ON dm.fkdevice = d.pkid AND dm.numplanindex = 1 "
+    "LEFT OUTER JOIN numplan n ON n.pkid = dm.fknumplan "
+    "WHERE d.tkmodel = 503 ORDER BY d.name",
+  )
+  assoc_rows = _greenlight_csf_sql_paged(
+    cucm_host, cucm_user, cucm_pass,
+    f"d.name AS device_name, {user_cols} "
+    "FROM device d "
+    "INNER JOIN enduserdevicemap edm ON edm.fkdevice = d.pkid "
+    "INNER JOIN enduser u ON u.pkid = edm.fkenduser "
+    "LEFT OUTER JOIN enduser m ON m.userid = u.manager "
+    "WHERE d.tkmodel = 503 AND d.fkenduser IS NULL ORDER BY d.name, u.userid",
+  )
+  assoc_by_device: dict[str, dict] = {}
+  for row in assoc_rows:
+    assoc_by_device.setdefault(str(row.get("device_name", "")).upper(), row)
+
+  results: list[dict] = []
+  seen: set[str] = set()
+  for row in owner_rows:
+    device_name = str(row.get("device_name", "") or "").strip()
+    key = device_name.upper()
+    if not device_name or key in seen:
+      continue
+    seen.add(key)
+    user_row = row
+    source = "Owner"
+    if not str(row.get("userid", "") or "").strip():
+      user_row = assoc_by_device.get(key) or {}
+      source = "Associated User" if user_row else "None"
+    manager_name = " ".join(
+      part for part in [str(user_row.get("manager_first", "") or "").strip(), str(user_row.get("manager_last", "") or "").strip()] if part
+    )
+    results.append({
+      "device_name": device_name,
+      "device_description": str(row.get("device_description", "") or "").strip(),
+      "userid": str(user_row.get("userid", "") or "").strip(),
+      "user_source": source,
+      "first_name": str(user_row.get("first_name", "") or "").strip(),
+      "last_name": str(user_row.get("last_name", "") or "").strip(),
+      "title": str(user_row.get("title", "") or "").strip(),
+      "department": str(user_row.get("department", "") or "").strip(),
+      "manager_id": str(user_row.get("manager_id", "") or "").strip(),
+      "manager_name": manager_name,
+      "extension": str(row.get("extension", "") or "").strip(),
+    })
+  return results
+
+
+def _greenlight_csf_inventory_csv_bytes(rows: list[dict]) -> bytes:
+  output = io.StringIO()
+  writer = csv.writer(output)
+  writer.writerow([label for _, label in GREENLIGHT_CSF_INVENTORY_COLUMNS])
+  for row in rows:
+    writer.writerow([row.get(key, "") for key, _ in GREENLIGHT_CSF_INVENTORY_COLUMNS])
+  return output.getvalue().encode("utf-8")
+
+
 def _greenlight_queue_store(entry: dict) -> None:
   with GREENLIGHT_LOOKUP_RUNS_LOCK:
     now_text = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -38635,6 +38735,7 @@ __GREENLIGHT_ADMIN_CARD__
             <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="jabberstatus">Jabber Status Check</button>
             <button type="button" class="portal-nav-btn" data-panel="translationlookup">Translation Pattern Lookup</button>
+            <button type="button" class="portal-nav-btn" data-panel="csfinventory">Jabber CSF License Inventory</button>
             <a class="portal-nav-link" href="/menu?panel=build">Open Build User (Page 1)</a>
             <a class="portal-nav-link" href="/menu?panel=offboard">Open Separate Employee (Page 1)</a>
           </div>
@@ -39080,6 +39181,114 @@ __GREENLIGHT_ADMIN_CARD__
                 <pre id="greenlight-translation-output"></pre>
               </div>
             </div>
+          </section>
+
+          <section class="tool-panel" data-panel="csfinventory">
+            <h3>Jabber CSF License Inventory (Cisco CUCM)</h3>
+            <p>Read-only. Extracts every Jabber CSF device from CUCM with its description and user ID, plus the end user's Title, Manager ID, and Department.</p>
+            <form id="greenlight-csf-form" onsubmit="return false;">
+              <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
+              <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
+              <input type="hidden" name="cucm_pass" value="" />
+              <div class="search-filter-row">
+                <button type="button" id="greenlight-csf-run" onclick="if (window.greenlightCsfRun) { window.greenlightCsfRun(event); } else { document.getElementById('greenlight-csf-status').textContent = 'Error: Jabber CSF inventory JavaScript did not load.'; }">Extract Jabber CSF Devices</button>
+                <input id="greenlight-csf-filter" placeholder="Filter results (any column)" style="min-width:260px;" />
+              </div>
+            </form>
+            <div class="result-card" style="width:100%; max-width:none;">
+              <p id="greenlight-csf-status" class="status-line">Click Extract Jabber CSF Devices to build the inventory.</p>
+              <p><a id="greenlight-csf-download" href="#" style="display:none; font-weight:700;">Download Full CSV</a></p>
+              <div id="greenlight-csf-summary" style="overflow-x:auto; margin-bottom:12px;"></div>
+              <div id="greenlight-csf-results" style="overflow:auto; max-height:600px;"></div>
+            </div>
+            <script>
+              (function () {
+                var allRows = [];
+                var MAX_RENDER = 1000;
+                var cols = [
+                  ["device_name", "Device Name"], ["device_description", "Description"], ["userid", "User ID"],
+                  ["user_source", "User Source"], ["first_name", "First"], ["last_name", "Last"], ["title", "Title"],
+                  ["department", "Department"], ["manager_id", "Manager ID"], ["manager_name", "Manager Name"],
+                  ["extension", "Extension"]
+                ];
+                function esc(v) {
+                  return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+                }
+                var cellStyle = "border:1px solid #d9e4ef; padding:4px 6px; white-space:nowrap;";
+                var headStyle = cellStyle + " background:#eaf4ff; position:sticky; top:0;";
+                function renderRows() {
+                  var resultsEl = document.getElementById("greenlight-csf-results");
+                  var filterEl = document.getElementById("greenlight-csf-filter");
+                  var term = String(filterEl ? filterEl.value : "").trim().toLowerCase();
+                  var filtered = !term ? allRows : allRows.filter(function (r) {
+                    return cols.some(function (c) { return String(r[c[0]] || "").toLowerCase().indexOf(term) !== -1; });
+                  });
+                  if (!allRows.length) { resultsEl.innerHTML = ""; return; }
+                  var html = "<p style='font-size:12px; color:#355978;'>Showing " + Math.min(filtered.length, MAX_RENDER) + " of " + filtered.length + " matching device(s). CSV contains all " + allRows.length + ".</p>";
+                  html += "<table style='border-collapse:collapse; font-size:12px;'><thead><tr>";
+                  cols.forEach(function (c) { html += "<th style='" + headStyle + "'>" + esc(c[1]) + "</th>"; });
+                  html += "</tr></thead><tbody>";
+                  filtered.slice(0, MAX_RENDER).forEach(function (r) {
+                    html += "<tr>";
+                    cols.forEach(function (c) { html += "<td style='" + cellStyle + "'>" + esc(r[c[0]]) + "</td>"; });
+                    html += "</tr>";
+                  });
+                  html += "</tbody></table>";
+                  resultsEl.innerHTML = html;
+                }
+                function renderSummary(data) {
+                  var el = document.getElementById("greenlight-csf-summary");
+                  var summary = data.department_summary || [];
+                  var html = "<strong style='font-size:12px; color:#234d72; text-transform:uppercase;'>Devices by Department</strong>";
+                  html += "<table style='border-collapse:collapse; font-size:12px; margin-top:6px;'><thead><tr><th style='" + headStyle + "'>Department</th><th style='" + headStyle + "'>CSF Devices</th></tr></thead><tbody>";
+                  summary.forEach(function (s) {
+                    html += "<tr><td style='" + cellStyle + "'>" + esc(s.department) + "</td><td style='" + cellStyle + " text-align:right;'>" + esc(s.count) + "</td></tr>";
+                  });
+                  html += "<tr><td style='" + cellStyle + " font-weight:700;'>TOTAL</td><td style='" + cellStyle + " text-align:right; font-weight:700;'>" + esc(data.count) + "</td></tr>";
+                  html += "</tbody></table>";
+                  el.innerHTML = html;
+                }
+                window.greenlightCsfRun = function (ev) {
+                  if (ev && ev.preventDefault) { ev.preventDefault(); }
+                  var form = document.getElementById("greenlight-csf-form");
+                  var statusEl = document.getElementById("greenlight-csf-status");
+                  var btn = document.getElementById("greenlight-csf-run");
+                  var dl = document.getElementById("greenlight-csf-download");
+                  statusEl.textContent = "Extracting Jabber CSF devices from CUCM...";
+                  dl.style.display = "none";
+                  btn.disabled = true;
+                  fetch("/project-greenlight/jabber-csf-inventory", {
+                    method: "POST",
+                    body: new FormData(form),
+                    headers: { "X-Requested-With": "XMLHttpRequest", "Accept": "application/json" },
+                    credentials: "same-origin"
+                  }).then(function (resp) {
+                    return resp.json().catch(function () { return { ok: false, error: { message: "HTTP " + resp.status } }; });
+                  }).then(function (data) {
+                    if (!data || !data.ok) {
+                      statusEl.textContent = "Error: " + ((data && data.error && data.error.message) || "Request failed.");
+                      return;
+                    }
+                    allRows = data.rows || [];
+                    statusEl.textContent = "Found " + data.count + " Jabber CSF device(s); " + data.no_user_count + " with no user tied.";
+                    dl.href = data.download_url;
+                    dl.textContent = "Download Full CSV (" + data.filename + ")";
+                    dl.style.display = "inline";
+                    renderSummary(data);
+                    renderRows();
+                  }).catch(function (err) {
+                    statusEl.textContent = "Error: " + String(err && err.message ? err.message : err);
+                  }).then(function () {
+                    btn.disabled = false;
+                  });
+                };
+                var filterEl = document.getElementById("greenlight-csf-filter");
+                if (filterEl) {
+                  filterEl.addEventListener("input", renderRows);
+                  filterEl.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); } });
+                }
+              })();
+            </script>
           </section>
 
           </section>
@@ -59814,6 +60023,50 @@ def project_greenlight_person_lookup_status_route(job_id: str):
 @app.get("/project-greenlight/person-lookup/history")
 def project_greenlight_person_lookup_history_route(limit: int = Query(20, ge=1, le=100)):
   return JSONResponse({"ok": True, "runs": _greenlight_queue_list(limit=limit)})
+
+
+@app.post("/project-greenlight/jabber-csf-inventory")
+def project_greenlight_jabber_csf_inventory_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  try:
+    rows = _greenlight_build_csf_inventory(cucm_host, cucm_user, cucm_pass)
+  except Exception as exc:
+    logger.warning("Greenlight CSF inventory failed: %s", exc)
+    raise RuntimeError(f"Jabber CSF inventory failed: {exc}") from exc
+
+  dept_counts: dict[str, int] = {}
+  for row in rows:
+    dept = row.get("department") or ("(No User)" if not row.get("userid") else "(No Department)")
+    dept_counts[dept] = dept_counts.get(dept, 0) + 1
+  summary = [{"department": k, "count": v} for k, v in sorted(dept_counts.items(), key=lambda kv: (-kv[1], kv[0].lower()))]
+
+  timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+  filename = f"jabber_csf_license_inventory_{timestamp}.csv"
+  job_output = _prepare_job_output(_greenlight_csf_inventory_csv_bytes(rows), filename)
+
+  _append_audit_event(
+    action="project_greenlight_jabber_csf_inventory",
+    cucm_host=cucm_host,
+    operator=cucm_user,
+    target=f"devices={len(rows)}",
+    output_filename=filename,
+    inline_mode=True,
+  )
+
+  return JSONResponse({
+    "ok": True,
+    "count": len(rows),
+    "no_user_count": sum(1 for r in rows if not r.get("userid")),
+    "department_summary": summary,
+    "rows": rows,
+    "filename": job_output["filename"],
+    "download_url": f"/download/job-output/{job_output['job_id']}",
+  })
 
 
 @app.post("/project-greenlight/batch-ldap-phone-update")
