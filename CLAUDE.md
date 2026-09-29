@@ -112,6 +112,11 @@ Priority keys:
 
 ## Conversation Notes
 
+### 2026-09-29 (Project Greenlight — Jabber CSF License Inventory)
+- New Greenlight menu item **Jabber CSF License Inventory** (read-only, CUCM): paged `executeSQLQuery` on `device` (tkmodel 503) + owner/associated `enduser` → device name, description, user ID, user source, title, department, manager ID/name, primary extension; department summary + full CSV. Route `/project-greenlight/jabber-csf-inventory`. Validated in LAB.
+- Fixed pre-existing quote mismatch (from `e47552a`, 2026-08-05) in the Greenlight main script that silently disabled every menu button (commit `356d534`).
+- Permanent rule: before committing page changes, render the full page and parse every `<script>` in a browser, then click-test nav + new buttons.
+
 ### 2026-09-28 (Microsoft Calling Plan — Phase 1 read-only)
 - New pages `/microsoft-calling-plan` and `/strike-items` (Page 1 shell) share one read-only panel; linked from Page 1 hero cards.
 - `toolkit/ms_graph_calling.py`: Graph client-credentials (`MS_GRAPH_TENANT_ID/CLIENT_ID/CLIENT_SECRET`), person read (profile, licenseDetails, Teams numberAssignments), Calling Plan holder list (subscribedSkus + assignedLicenses filter) with CSV export.
