@@ -3415,6 +3415,84 @@ def _genesys_list_unassigned_webrtc_phones(region: str, access_token: str) -> di
   }
 
 
+def _genesys_list_users_missing_webrtc(region: str, access_token: str) -> dict:
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+  users, pages_scanned, users_error = _genesys_collect_paged_entities(
+    api_base,
+    access_token,
+    "/api/v2/users",
+    max(25, min(GENESYS_USERS_PAGE_SIZE, 200)),
+    300,
+    query_params={"state": "active"},
+  )
+  if users_error:
+    return {"ok": False, "error": f"Genesys user inventory failed: {users_error}"}
+
+  phone_payload, phone_error = _genesys_list_phone_management_inventory(api_base, access_token)
+  if phone_error:
+    return {"ok": False, "error": f"Phone Management inventory failed: {phone_error}"}
+  phones = phone_payload.get("entities", []) if isinstance(phone_payload, dict) else []
+  phones = phones if isinstance(phones, list) else []
+  phone_cap = max(1, min(GENESYS_PHONE_LOOKUP_MAX_PAGES, 200)) * 100
+
+  template = _load_genesys_webrtc_template()
+  template_base_settings_id = str(template.get("phone_base_settings_id", "") or "").strip().lower()
+  assigned_user_ids = set()
+  unassigned_by_name: dict[str, str] = {}
+  webrtc_phone_count = 0
+  for phone in phones:
+    if not isinstance(phone, dict):
+      continue
+    phone_name = str(phone.get("name", "") or phone.get("phoneName", "") or phone.get("displayName", "") or "").strip()
+    base_settings = phone.get("phoneBaseSettings") if isinstance(phone.get("phoneBaseSettings"), dict) else {}
+    base_settings_id = str(phone.get("phoneBaseSettingsId", "") or base_settings.get("id", "") or "").strip()
+    base_settings_name = str(base_settings.get("name", "") or phone.get("phoneBaseSettingsName", "") or "").strip()
+    is_webrtc = bool(
+      (template_base_settings_id and base_settings_id.lower() == template_base_settings_id)
+      or "webrtc" in base_settings_name.lower()
+      or "webrtc" in phone_name.lower()
+    )
+    if not is_webrtc:
+      continue
+    webrtc_phone_count += 1
+    web_rtc_user = phone.get("webRtcUser") if isinstance(phone.get("webRtcUser"), dict) else {}
+    web_rtc_user_id = str(web_rtc_user.get("id", "") or "").strip()
+    if web_rtc_user_id:
+      assigned_user_ids.add(web_rtc_user_id)
+    elif phone_name:
+      unassigned_by_name.setdefault(phone_name.casefold(), phone_name)
+
+  rows = []
+  for user in users:
+    if not isinstance(user, dict):
+      continue
+    user_id = str(user.get("id", "") or "").strip()
+    if not user_id or user_id in assigned_user_ids:
+      continue
+    name = str(user.get("name", "") or "").strip()
+    division = user.get("division") if isinstance(user.get("division"), dict) else {}
+    rows.append({
+      "user_id": user_id,
+      "name": name,
+      "email": str(user.get("email", "") or "").strip(),
+      "username": str(user.get("username", "") or "").strip(),
+      "division_name": str(division.get("name", "") or "").strip(),
+      "unassigned_phone_same_name": unassigned_by_name.get(name.casefold(), "") if name else "",
+    })
+
+  rows.sort(key=lambda item: ((item.get("name") or "").casefold(), (item.get("email") or "").casefold()))
+  return {
+    "ok": True,
+    "region": clean_region,
+    "pages_scanned": pages_scanned,
+    "users_scanned": len(users),
+    "phones_scanned": len(phones),
+    "webrtc_phones": webrtc_phone_count,
+    "phone_inventory_truncated": len(phones) >= phone_cap,
+    "rows": rows,
+  }
+
+
 def _genesys_collect_paged_entities(
   api_base: str,
   access_token: str,
@@ -20641,6 +20719,7 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn active" data-panel-target="genesys-ad-webrtc-panel" onclick="(function(){var id='genesys-ad-webrtc-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Add Genesys User</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-update-panel" onclick="(function(){var id='genesys-user-update-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Search and Update</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-panel" onclick="(function(){var id='genesys-user-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User WebRTC Lookup</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-missing-webrtc-panel" onclick="(function(){var id='genesys-missing-webrtc-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Users Missing WebRTC Phone</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-cleanup-panel" onclick="(function(){var id='genesys-user-cleanup-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Cleanup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-webrtc-cleanup-panel" onclick="(function(){var id='genesys-webrtc-cleanup-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys WebRTC Cleanup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-bulk-email-panel" onclick="(function(){var id='genesys-bulk-email-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Bulk WebRTC build</button>
@@ -20654,6 +20733,112 @@ def genesys_admin_placeholder(request: Request):
         </aside>
 
         <section class="portal-main">
+          <div id="genesys-missing-webrtc-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+            <h3 style="margin-top:0;">Users Missing WebRTC Phone</h3>
+            <p style="color:#4e6a84;font-size:12px;">Lists active Genesys users with no WebRTC phone tied to them (matched by the phone's WebRTC Person). Select users and build their WebRTC phones using the standard template.</p>
+            <div class="search-filter-row">
+              <input id="genesys-missing-webrtc-filter" placeholder="Filter by name, email, username, or division" style="width:420px;">
+              <button type="button" id="genesys-missing-webrtc-load-btn" onclick="if(window.loadGenesysMissingWebRTC){window.loadGenesysMissingWebRTC();}else{document.getElementById('genesys-missing-webrtc-status').textContent='Users Missing WebRTC Phone JavaScript handler is missing.';}return false;" style="background:#385977;">Load Users Missing WebRTC</button>
+              <button type="button" id="genesys-missing-webrtc-build-btn" onclick="if(window.buildGenesysMissingWebRTC){window.buildGenesysMissingWebRTC();}else{document.getElementById('genesys-missing-webrtc-status').textContent='Users Missing WebRTC Phone JavaScript handler is missing.';}return false;" disabled>Build WebRTC for Selected (<span id="genesys-missing-webrtc-selected-count">0</span>)</button>
+            </div>
+            <p id="genesys-missing-webrtc-status" style="color:#2c5c8a;min-height:18px;">Ready. Click Load Users Missing WebRTC.</p>
+            <div id="genesys-missing-webrtc-summary" style="display:none;margin:8px 0;padding:8px;background:#f8fcff;border:1px solid #c8dbee;"></div>
+            <div id="genesys-missing-webrtc-output" style="overflow:auto;max-height:640px;"></div>
+            <script>
+              (function () {
+                var loadButton = document.getElementById("genesys-missing-webrtc-load-btn");
+                var buildButton = document.getElementById("genesys-missing-webrtc-build-btn");
+                var selectedCount = document.getElementById("genesys-missing-webrtc-selected-count");
+                var filterInput = document.getElementById("genesys-missing-webrtc-filter");
+                var status = document.getElementById("genesys-missing-webrtc-status");
+                var summary = document.getElementById("genesys-missing-webrtc-summary");
+                var output = document.getElementById("genesys-missing-webrtc-output");
+                if (!loadButton || !buildButton || !selectedCount || !filterInput || !status || !summary || !output) return;
+                var loadedRows = [];
+                var scanInfo = {};
+                var selectedIds = {};
+                var building = false;
+                var CHUNK = 100;
+                function esc(value) { return String(value == null ? "" : value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+                function eligible(row) { return row && row.user_id && row.build_status !== "built" && row.build_status !== "building"; }
+                function updateSelectedCount() {
+                  var count = loadedRows.filter(function (row) { return eligible(row) && !!selectedIds[row.user_id]; }).length;
+                  selectedCount.textContent = String(count);
+                  buildButton.disabled = count === 0 || building;
+                }
+                function statusCell(row) {
+                  if (row.build_status === "built") return "<strong style='color:#146c2e;'>Built</strong><div style='font-size:11px;color:#4e6a84;'>" + esc(row.build_phone || "") + "</div>";
+                  if (row.build_status === "failed") return "<strong style='color:#b42318;'>Failed</strong><div style='font-size:11px;color:#b42318;'>" + esc(row.build_error || "") + "</div>";
+                  if (row.build_status === "building") return "<strong style='color:#7a5a13;'>Building...</strong>";
+                  return "<strong style='color:#9a4b00;'>No WebRTC Phone</strong>";
+                }
+                function renderRows() {
+                  var query = String(filterInput.value || "").trim().toLowerCase();
+                  var rows = loadedRows.filter(function (row) { return !query || [row.name, row.email, row.username, row.division_name].join(" ").toLowerCase().indexOf(query) >= 0; });
+                  summary.style.display = "block";
+                  summary.innerHTML = "<strong>Missing WebRTC:</strong> " + rows.length + " of " + loadedRows.length + " &nbsp; <strong>Active users scanned:</strong> " + Number(scanInfo.users_scanned || 0) + " &nbsp; <strong>WebRTC phones scanned:</strong> " + Number(scanInfo.webrtc_phones || 0) + " of " + Number(scanInfo.phones_scanned || 0) + " phones" + (scanInfo.phone_inventory_truncated ? " &nbsp; <strong style='color:#b42318;'>Warning: phone inventory hit the page cap (GENESYS_PHONE_LOOKUP_MAX_PAGES); some users may be listed incorrectly.</strong>" : "");
+                  if (!rows.length) { output.innerHTML = "<p>No users match the current filter.</p>"; updateSelectedCount(); return; }
+                  output.innerHTML = "<table><thead><tr><th><input type='checkbox' id='genesys-missing-webrtc-select-all' title='Select all filtered users'></th><th>Name</th><th>Email</th><th>Username</th><th>Division</th><th>Note</th><th>Status</th></tr></thead><tbody>" + rows.map(function (row) {
+                    var checkbox = eligible(row) ? "<input type='checkbox' data-missing-webrtc-select='" + esc(row.user_id) + "'" + (selectedIds[row.user_id] ? " checked" : "") + ">" : "";
+                    var note = row.unassigned_phone_same_name ? "Unassociated WebRTC phone with same name exists: " + esc(row.unassigned_phone_same_name) : "";
+                    var bg = row.build_status === "built" ? " style='background:#eef9f1;'" : (row.build_status === "failed" ? " style='background:#fff1ef;'" : "");
+                    return "<tr" + bg + "><td>" + checkbox + "</td><td><strong>" + esc(row.name || "(unnamed)") + "</strong></td><td>" + esc(row.email) + "</td><td>" + esc(row.username) + "</td><td>" + esc(row.division_name) + "</td><td style='font-size:11px;color:#7a5a13;'>" + note + "</td><td>" + statusCell(row) + "</td></tr>";
+                  }).join("") + "</tbody></table>";
+                  Array.prototype.forEach.call(output.querySelectorAll("[data-missing-webrtc-select]"), function (checkbox) {
+                    checkbox.addEventListener("change", function () { var id = checkbox.getAttribute("data-missing-webrtc-select") || ""; if (checkbox.checked) selectedIds[id] = true; else delete selectedIds[id]; updateSelectedCount(); });
+                  });
+                  var selectAll = document.getElementById("genesys-missing-webrtc-select-all");
+                  if (selectAll) selectAll.addEventListener("change", function () { rows.forEach(function (row) { if (eligible(row)) { if (selectAll.checked) selectedIds[row.user_id] = true; else delete selectedIds[row.user_id]; } }); renderRows(); });
+                  updateSelectedCount();
+                }
+                window.loadGenesysMissingWebRTC = async function () {
+                  loadButton.disabled = true; status.style.color = "#2c5c8a"; status.textContent = "Loading active Genesys users and Phone Management inventory..."; summary.style.display = "none"; output.innerHTML = "";
+                  try {
+                    var response = await fetch("/genesys/users/missing-webrtc", { credentials: "same-origin", headers: { "Accept": "application/json" } });
+                    var payload = await response.json();
+                    if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
+                    loadedRows = Array.isArray(payload.rows) ? payload.rows : []; selectedIds = {}; scanInfo = payload; renderRows();
+                    status.style.color = "#146c2e"; status.textContent = loadedRows.length + " active user(s) have no WebRTC phone. Select users to build.";
+                  } catch (error) { status.style.color = "#b42318"; status.textContent = "Lookup failed: " + ((error && error.message) || "Unknown error."); }
+                  finally { loadButton.disabled = false; }
+                };
+                window.buildGenesysMissingWebRTC = async function () {
+                  var targets = loadedRows.filter(function (row) { return eligible(row) && !!selectedIds[row.user_id]; });
+                  if (!targets.length) { status.textContent = "Select at least one user."; return; }
+                  if (!window.confirm("Build WebRTC phones for " + targets.length + " Genesys user(s)?")) { status.textContent = "Build cancelled. No changes were made."; return; }
+                  building = true; updateSelectedCount();
+                  targets.forEach(function (row) { row.build_status = "building"; row.build_error = ""; });
+                  renderRows();
+                  var built = 0, failed = 0;
+                  for (var offset = 0; offset < targets.length; offset += CHUNK) {
+                    var chunk = targets.slice(offset, offset + CHUNK);
+                    status.style.color = "#2c5c8a"; status.textContent = "Building WebRTC phones " + (offset + 1) + "-" + (offset + chunk.length) + " of " + targets.length + "...";
+                    try {
+                      var data = new FormData();
+                      data.append("users_json", JSON.stringify(chunk.map(function (row) { return { user_id: row.user_id, user_name: row.name, user_email: row.email }; })));
+                      var response = await fetch("/genesys/users/build-webrtc-batch", { method: "POST", body: data, credentials: "same-origin", headers: { "Accept": "application/json" } });
+                      var payload = await response.json();
+                      if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
+                      var byId = {};
+                      (payload.results || []).forEach(function (res) { if (res && res.user_id) byId[res.user_id] = res; });
+                      chunk.forEach(function (row) {
+                        var res = byId[row.user_id];
+                        if (res && res.ok) { row.build_status = "built"; row.build_phone = res.phone_name || ""; delete selectedIds[row.user_id]; built++; }
+                        else { row.build_status = "failed"; row.build_error = (res && res.error) || "No result returned."; failed++; }
+                      });
+                    } catch (error) {
+                      chunk.forEach(function (row) { row.build_status = "failed"; row.build_error = (error && error.message) || "Request failed."; failed++; });
+                    }
+                    renderRows();
+                  }
+                  building = false; updateSelectedCount();
+                  status.style.color = failed ? "#9a4b00" : "#146c2e";
+                  status.textContent = "WebRTC build complete: " + built + " built, " + failed + " failed.";
+                };
+                filterInput.addEventListener("input", renderRows);
+              })();
+            </script>
+          </div>
           <div id="genesys-user-cleanup-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Genesys User Cleanup</h3>
             <p style="color:#4e6a84;font-size:12px;">Compare Genesys end-user emails against Active Directory, then queue approved active users for Inactive status and guarded deletion of WebRTC phones still tied to that user. Emails beginning with zz are excluded.</p>
@@ -21174,7 +21359,7 @@ def genesys_admin_placeholder(request: Request):
                     if (!response.ok || !payload.ok) throw new Error((payload && payload.error) || ("HTTP " + response.status));
                     var groups = Array.isArray(payload.groups) ? payload.groups : [];
                     output.innerHTML = groups.length ? groups.map(function (group) {
-                      return "<details style='margin:8px 0;padding:8px;border:1px solid #c8dbee;border-radius:6px;background:#f8fcff;'><summary style='cursor:pointer;font-weight:700;color:#12304a;'>" + esc(group.name) + " (" + esc(group.id) + ")</summary><div style='margin-top:8px;'><div><strong>Detail API:</strong> " + esc(group.detail_path) + "</div><div><strong>Member endpoint probe:</strong> " + esc(group.member_probe || "not attempted") + "</div><pre style='white-space:pre-wrap;max-height:360px;overflow:auto;background:#fff;border:1px solid #d7e3ee;padding:8px;">" + esc(JSON.stringify(group.detail, null, 2)) + "</pre></div></details>";
+                      return "<details style='margin:8px 0;padding:8px;border:1px solid #c8dbee;border-radius:6px;background:#f8fcff;'><summary style='cursor:pointer;font-weight:700;color:#12304a;'>" + esc(group.name) + " (" + esc(group.id) + ")</summary><div style='margin-top:8px;'><div><strong>Detail API:</strong> " + esc(group.detail_path) + "</div><div><strong>Member endpoint probe:</strong> " + esc(group.member_probe || "not attempted") + "</div><pre style='white-space:pre-wrap;max-height:360px;overflow:auto;background:#fff;border:1px solid #d7e3ee;padding:8px;'>" + esc(JSON.stringify(group.detail, null, 2)) + "</pre></div></details>";
                     }).join("") : "<div style='color:#8a2d2d;'>No Genesys_User_Role groups were returned.</div>";
                     status.textContent = groups.length + " Genesys_User_Role group(s) inspected. Read-only; no changes made.";
                   } catch (err) { status.textContent = "Role-group inspection failed: " + ((err && err.message) || "Unknown error."); }
@@ -24011,7 +24196,7 @@ def genesys_admin_placeholder(request: Request):
             divisionFilterMap = {};
             rows.forEach(function (row) {
               const filterId = String((row && row.filter_id) || (row && row.division_id) || "").trim();
-        e      const divisionId = String((row && row.division_id) || "").trim();
+              const divisionId = String((row && row.division_id) || "").trim();
               if (!filterId || !divisionId) {
                 return;
               }
@@ -24865,7 +25050,7 @@ def genesys_admin_placeholder(request: Request):
               const originalUrl = String(batchPayload.original_emails_download_url || "");
               const failedUrl = String(batchPayload.failed_emails_download_url || "");
               summaryHtml.push("<div style='margin-top:8px;'><strong>Downloads</strong><div style='margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;'><a href='" + _escapeHtml(originalUrl) + "' style='display:inline-block;padding:6px 10px;background:#385977;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Original Input</a><a href='" + _escapeHtml(failedUrl) + "' style='display:inline-block;padding:6px 10px;background:#8a5a2c;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;'>Download Failed Emails</a></div></div>");
-              summaryHtml.push("<div style='margin-top:8px;'><strong>Failed Emails (Copy/Paste Rerun)</strong><textarea id='genesys-failed-emails-textarea' readonly style='width:100%;min-height:90px;resize:vertical;padding:8px;border-radius:8px;border:1px solid #c8dbee;">" + _escapeHtml(failedEmailText) + "</textarea><div style='margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;'><button type='button' id='genesys-copy-failed-emails-btn' style='background:#385977;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-weight:700;cursor:pointer;" + (failedEmails.length ? "" : "opacity:0.5;cursor:not-allowed;") + "' " + (failedEmails.length ? "" : "disabled") + ">Copy Failed Emails</button><span style='font-size:12px;color:#4e6a84;'>" + (failedEmails.length ? (failedEmails.length + " failed email(s) ready to rerun.") : "No failed emails.") + "</span></div></div>");
+              summaryHtml.push("<div style='margin-top:8px;'><strong>Failed Emails (Copy/Paste Rerun)</strong><textarea id='genesys-failed-emails-textarea' readonly style='width:100%;min-height:90px;resize:vertical;padding:8px;border-radius:8px;border:1px solid #c8dbee;'>" + _escapeHtml(failedEmailText) + "</textarea><div style='margin-top:6px;display:flex;gap:8px;flex-wrap:wrap;'><button type='button' id='genesys-copy-failed-emails-btn' style='background:#385977;color:#fff;border:none;border-radius:6px;padding:6px 10px;font-weight:700;cursor:pointer;" + (failedEmails.length ? "" : "opacity:0.5;cursor:not-allowed;") + "' " + (failedEmails.length ? "" : "disabled") + ">Copy Failed Emails</button><span style='font-size:12px;color:#4e6a84;'>" + (failedEmails.length ? (failedEmails.length + " failed email(s) ready to rerun.") : "No failed emails.") + "</span></div></div>");
               if (failureList.length) {
                 summaryHtml.push("<div style='margin-top:8px;'><strong>Failures</strong><ul style='margin:6px 0 0 18px;'>" + failureList.join("") + "</ul></div>");
               }
@@ -27575,6 +27760,21 @@ def genesys_user_inactive_candidates_route():
   )
   if not result.get("ok"):
     return JSONResponse({"ok": False, "error": result.get("error", "Genesys user list failed.")}, status_code=400)
+  return JSONResponse(result)
+
+
+@app.get("/genesys/users/missing-webrtc")
+def genesys_users_missing_webrtc_route():
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  result = _genesys_list_users_missing_webrtc(
+    token_result.get("region", clean_region),
+    token_result.get("access_token", ""),
+  )
+  if not result.get("ok"):
+    return JSONResponse({"ok": False, "error": result.get("error", "Genesys missing WebRTC lookup failed.")}, status_code=400)
   return JSONResponse(result)
 
 
