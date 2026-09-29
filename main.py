@@ -17243,6 +17243,13 @@ def _verasmart_sftp_settings() -> dict:
 
 
 def _verasmart_sftp_upload(file_bytes: bytes, remote_dir: str, filename: str) -> None:
+  errors = _verasmart_sftp_upload_many([(filename, file_bytes)], remote_dir)
+  if errors.get(filename):
+    raise RuntimeError(errors[filename])
+
+
+def _verasmart_sftp_upload_many(files: list[tuple[str, bytes]], remote_dir: str) -> dict[str, str]:
+  """Upload files over one SFTP session; returns {filename: error} for failures only."""
   try:
     import paramiko
   except ImportError as exc:
@@ -17252,28 +17259,52 @@ def _verasmart_sftp_upload(file_bytes: bytes, remote_dir: str, filename: str) ->
   if not settings["host"] or not settings["user"] or not settings["password"]:
     raise RuntimeError("VeraSMART SFTP is not configured (set VERASMART_SFTP_HOST/VERASMART_SFTP_USER/VERASMART_SFTP_PASSWORD in .env).")
 
+  errors: dict[str, str] = {}
   transport = paramiko.Transport((settings["host"], settings["port"]))
   try:
     transport.connect(username=settings["user"], password=settings["password"])
     sftp = paramiko.SFTPClient.from_transport(transport)
     try:
-      remote_path = remote_dir.rstrip("/") + "/" + filename
-      temp_remote_path = remote_dir.rstrip("/") + "/." + filename + ".uploading"
-      with sftp.open(temp_remote_path, "wb") as handle:
-        handle.write(file_bytes)
-      try:
-        sftp.rename(temp_remote_path, remote_path)
-      except OSError:
-        # Some SFTP servers refuse rename onto an existing filename; clear it and retry.
+      for filename, file_bytes in files:
         try:
-          sftp.remove(remote_path)
-        except OSError:
-          pass
-        sftp.rename(temp_remote_path, remote_path)
+          remote_path = remote_dir.rstrip("/") + "/" + filename
+          temp_remote_path = remote_dir.rstrip("/") + "/." + filename + ".uploading"
+          with sftp.open(temp_remote_path, "wb") as handle:
+            handle.write(file_bytes)
+          try:
+            sftp.rename(temp_remote_path, remote_path)
+          except OSError:
+            # Some SFTP servers refuse rename onto an existing filename; clear it and retry.
+            try:
+              sftp.remove(remote_path)
+            except OSError:
+              pass
+            sftp.rename(temp_remote_path, remote_path)
+        except Exception as exc:
+          errors[filename] = str(exc) or exc.__class__.__name__
     finally:
       sftp.close()
   finally:
     transport.close()
+  return errors
+
+
+def _verasmart_numbered_files(stem: str, per_person_bytes: list[bytes]) -> list[tuple[str, bytes]]:
+  return [(f"{stem}_{index}.csv", data) for index, data in enumerate(per_person_bytes, start=1)]
+
+
+def _verasmart_deliver_numbered(label: str, files: list[tuple[str, bytes]], remote_dir: str) -> tuple[bool, str]:
+  if not files:
+    return True, f"{label}: no files to deliver."
+  try:
+    errors = _verasmart_sftp_upload_many(files, remote_dir)
+  except Exception as exc:
+    return False, f"{label} SFTP delivery failed: {exc}"
+  delivered = len(files) - len(errors)
+  note = f"{label}: {delivered} of {len(files)} per-person file(s) delivered via SFTP to {remote_dir} ({files[0][0]} ... {files[-1][0]})."
+  if errors:
+    note += " Failed: " + "; ".join(f"{name}: {err}" for name, err in list(errors.items())[:10])
+  return not errors, note
 
 
 def _verasmart_sftp_download_latest(remote_dir: str, filename_prefix: str, filename_suffix: str = ".csv") -> tuple[bytes, str]:
@@ -58342,14 +58373,16 @@ def verasmart_lab_ezburst_by_name_generate_route(
     ezburst_job = _store_job_output(ezburst_bytes, ezburst_filename, "text/csv")
 
     delivery_notes = []
-    sftp_ok = True
     # No Personnel/Cost Center change is involved here, so the 11:30 PM EZ-Burst hold does not apply.
-    try:
-      _verasmart_sftp_upload(ezburst_bytes, _verasmart_sftp_settings()["ezburst_dir"], ezburst_filename)
-      delivery_notes.append(f"Delivered via SFTP to /ezburst as {ezburst_filename}. You can run the EZ-Burst Distribution import now.")
-    except Exception as exc:
-      sftp_ok = False
-      delivery_notes.append(f"EZ-Burst SFTP delivery failed: {exc}")
+    # One file per person: VeraSMART rejects large combined imports.
+    ezburst_files = _verasmart_numbered_files(
+      f"verasmart_ezburst_update_{timestamp}",
+      [_verasmart_ezburst_csv_bytes([row]) for row in targets],
+    )
+    sftp_ok, note = _verasmart_deliver_numbered("EZ-Burst", ezburst_files, _verasmart_sftp_settings()["ezburst_dir"])
+    delivery_notes.append(note)
+    if sftp_ok:
+      delivery_notes.append("You can run the EZ-Burst Distribution import now.")
 
     _append_audit_event(
       action="verasmart_lab_ezburst_generated_from_names",
@@ -58495,13 +58528,29 @@ def verasmart_lab_template_builder_generate_from_cucm_route(
 
     sftp_settings = _verasmart_sftp_settings()
     delivery_notes = []
-    sftp_ok = True
-    try:
-      _verasmart_sftp_upload(personnel_bytes, sftp_settings["personnel_dir"], personnel_filename)
-      delivery_notes.append("Personnel file delivered via SFTP to /personnel.")
-    except Exception as exc:
-      sftp_ok = False
-      delivery_notes.append(f"Personnel SFTP delivery failed: {exc}")
+    # One file per person: VeraSMART rejects large combined imports.
+    personnel_files = _verasmart_numbered_files(
+      f"verasmart_personnel_update_{timestamp}",
+      [
+        _pipe_csv(
+          ["Email", "CostCenter", "EZBurstOption", "WindowsDomainAccount"],
+          [[row["email"], row["cost_center"], "Linked", row["windows_domain_account"]]],
+        )
+        for row in targets
+      ],
+    )
+    ezburst_files = _verasmart_numbered_files(
+      f"verasmart_ezburst_update_{timestamp}",
+      [
+        _pipe_csv(
+          ["DistributionListName", "EmailAddress", "CostCenter"],
+          [[list_name, row["email"], row["cost_center"]] for list_name in distribution_lists],
+        )
+        for row in targets
+      ],
+    )
+    sftp_ok, note = _verasmart_deliver_numbered("Personnel", personnel_files, sftp_settings["personnel_dir"])
+    delivery_notes.append(note)
 
     tz = ZoneInfo("America/Los_Angeles")
     now_local = datetime.datetime.now(tz=tz)
@@ -58509,15 +58558,13 @@ def verasmart_lab_template_builder_generate_from_cucm_route(
       now_local.hour == VERASMART_EZBURST_CUTOFF_HOUR and now_local.minute < VERASMART_EZBURST_CUTOFF_MINUTE
     )
     if within_ezburst_window:
-      try:
-        _verasmart_sftp_upload(ezburst_bytes, sftp_settings["ezburst_dir"], ezburst_filename)
-        delivery_notes.append("EZ-Burst file delivered via SFTP to /ezburst.")
-      except Exception as exc:
-        sftp_ok = False
-        delivery_notes.append(f"EZ-Burst SFTP delivery failed: {exc}")
+      ezburst_ok, note = _verasmart_deliver_numbered("EZ-Burst", ezburst_files, sftp_settings["ezburst_dir"])
+      sftp_ok = sftp_ok and ezburst_ok
+      delivery_notes.append(note)
     else:
-      _queue_verasmart_ezburst_pending(ezburst_filename, ezburst_bytes, operator)
-      delivery_notes.append("EZ-Burst file held until tomorrow's safe delivery window (before 11:30 PM Pacific) to protect the 1:00 AM VeraSMART run.")
+      for name, data in ezburst_files:
+        _queue_verasmart_ezburst_pending(name, data, operator)
+      delivery_notes.append(f"EZ-Burst: {len(ezburst_files)} per-person file(s) held until tomorrow's safe delivery window (before 11:30 PM Pacific) to protect the 1:00 AM VeraSMART run.")
 
     _append_audit_event(
       action="verasmart_lab_manual_files_generated_from_cucm",
