@@ -39713,7 +39713,7 @@ __GREENLIGHT_ADMIN_CARD__
                 if (state === "failed") {
                   const errText = String(run.error || "Unknown error.");
                   statusEl.textContent = "Queued lookup failed.";
-                  resultsEl.innerHTML = "<p style='margin:0;color:#a42323; font-weight:700;">" + escapeHtml(errText) + "</p>";
+                  resultsEl.innerHTML = "<p style='margin:0;color:#a42323; font-weight:700;'>" + escapeHtml(errText) + "</p>";
                   debugLog("poll-failed", { token: token, error: errText });
                   refreshQueueHistory();
                   return;
