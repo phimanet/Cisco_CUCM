@@ -112,6 +112,12 @@ Priority keys:
 
 ## Conversation Notes
 
+### 2026-09-30 (Project Greenlight — Jabber Cleanup)
+- Stages: Never-registered CSF/TCT/BOT scan (`registrationdynamic` has no timestamp) → move to `T3_CENT_DP_LowUsage` (any `*_LowUsage` pool counts as staged) → queue user + send removal-notice email → after 14 days, operator clicks **Run Separation** manually.
+- Decision: no credentials are stored; separation uses the operator's same-day session credentials (LDAP passwords rotate daily). Devices are rechecked before separation; skipped if the user signed in.
+- Queue/email/event history persisted in `data/jabber_cleanup_queue.json` (atomic write + fsync, gitignored, 180-day retention; active entries never pruned; unreadable file is refused, not overwritten).
+- Separation pipeline extracted to shared `_run_full_separation()` so queued and manual separations are identical.
+
 ### 2026-09-29 (Project Greenlight — Jabber CSF License Inventory)
 - New Greenlight menu item **Jabber CSF License Inventory** (read-only, CUCM): paged `executeSQLQuery` on `device` (tkmodel 503) + owner/associated `enduser` → device name, description, user ID, user source, title, department, manager ID/name, primary extension; department summary + full CSV. Route `/project-greenlight/jabber-csf-inventory`. Validated in LAB.
 - Fixed pre-existing quote mismatch (from `e47552a`, 2026-08-05) in the Greenlight main script that silently disabled every menu button (commit `356d534`).
