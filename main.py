@@ -111,6 +111,13 @@ GENESYS_EXTERNAL_CONTACT_LOAD_JOBS = {}
 GENESYS_EXTERNAL_CONTACT_LOAD_LOCK = threading.Lock()
 GENESYS_EXTERNAL_CONTACT_LOAD_QUEUE = queue.Queue()
 GENESYS_EXTERNAL_CONTACT_LOAD_WORKER_STARTED = False
+GENESYS_ZZ_CONTACT_QUEUE_PATH = (os.getenv("GENESYS_ZZ_CONTACT_QUEUE_PATH", "") or "").strip() or os.path.join(
+  os.path.dirname(os.path.abspath(__file__)), "data", "genesys_zz_external_contact_queue.json"
+)
+GENESYS_ZZ_CONTACT_QUEUE_LOCK = threading.Lock()
+GENESYS_ZZ_CONTACT_QUEUE_STATE = {"entries": [], "run_status": "idle", "run_error": "", "updated_at": ""}
+GENESYS_ZZ_CONTACT_QUEUE_LOADED = False
+GENESYS_ZZ_CONTACT_QUEUE_WORKER_RUNNING = False
 GENESYS_CUCM_SYNC_MANUAL_LOCK = threading.Lock()
 GENESYS_CUCM_SYNC_MANUAL_STATE = {"status": "idle", "result": None, "error": ""}
 FORWARDED_CSF_LIST_JOBS = {}
@@ -327,6 +334,7 @@ def _run_genesys_cucm_contact_sync(phase: str = "full", triggered_by: str = "sch
   created = 0
   skipped = 0
   deleted = 0
+  exempted = 0
   failures = []
 
   if phase in {"create", "full"}:
@@ -360,12 +368,16 @@ def _run_genesys_cucm_contact_sync(phase: str = "full", triggered_by: str = "sch
         failures.append(f"create {user.get('userid', '')}: {error or 'failed'}")
 
   if phase in {"delete", "full"}:
+    protected_contacts = _genesys_zz_contact_exemptions()
     for contact in contacts:
+      contact_id = str(contact.get("id", "") or "").strip()
+      if _genesys_zz_contact_is_exempt(contact, protected_contacts):
+        exempted += 1
+        continue
       email = str(contact.get("email", "") or "").strip().lower()
       name_key = " ".join([str(contact.get("first_name", "") or "").strip().lower(), str(contact.get("last_name", "") or "").strip().lower()]).strip()
       if email in cucm_by_email or name_key in cucm_by_name:
         continue
-      contact_id = str(contact.get("id", "") or "").strip()
       if not contact_id:
         continue
       ok, _body, error, _status_code = _genesys_send_json("DELETE", api_base, access_token, f"/api/v2/externalcontacts/contacts/{quote(contact_id, safe='')}")
@@ -374,7 +386,7 @@ def _run_genesys_cucm_contact_sync(phase: str = "full", triggered_by: str = "sch
       else:
         failures.append(f"delete {contact_id}: {error or 'failed'}")
 
-  result = {"phase": phase, "region": clean_region, "cucm_users_scanned": len(cucm_users or []), "contacts_scanned": len(contacts), "created": created, "skipped": skipped, "deleted": deleted, "failures": failures, "triggered_by": triggered_by}
+  result = {"phase": phase, "region": clean_region, "cucm_users_scanned": len(cucm_users or []), "contacts_scanned": len(contacts), "created": created, "skipped": skipped, "deleted": deleted, "exempted": exempted, "failures": failures, "triggered_by": triggered_by}
   settings = _load_settings()
   settings["genesys_cucm_sync_last_run"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
   settings["genesys_cucm_sync_last_result"] = json.dumps(result, ensure_ascii=True)
@@ -3893,6 +3905,251 @@ def _genesys_create_external_contact(api_base: str, access_token: str, division_
     "POST", api_base, access_token, "/api/v2/externalcontacts/contacts", payload=payload
   )
   return ok, body if isinstance(body, dict) else {}, error
+
+
+def _genesys_zz_phone_choices(user: dict) -> list[dict]:
+  candidates = []
+  for key in ("addresses", "primaryContactInfo", "phoneNumbers", "phones"):
+    values = user.get(key)
+    if isinstance(values, dict):
+      values = [values]
+    if not isinstance(values, list):
+      continue
+    for item in values:
+      if not isinstance(item, dict):
+        continue
+      media = str(item.get("mediaType", item.get("media_type", "")) or "").strip().upper()
+      value = str(item.get("display", "") or item.get("address", "") or item.get("number", "") or item.get("value", "")).strip()
+      if value and (not media or media in {"PHONE", "TEL", "TELEPHONE"}):
+        candidates.append((value, str(item.get("type", "") or "").strip()))
+  for key in ("phone", "phoneNumber", "telephone", "telephoneNumber", "workPhone", "otherPhone"):
+    value = user.get(key)
+    if isinstance(value, dict):
+      value = value.get("display", "") or value.get("address", "") or value.get("number", "")
+    if isinstance(value, str) and value.strip():
+      candidates.append((value.strip(), key))
+
+  result = []
+  seen = set()
+  for raw, source in candidates:
+    digits = re.sub(r"\D", "", raw)
+    if len(digits) == 11 and digits.startswith("1"):
+      digits = digits[1:]
+    if len(digits) != 10 or digits in seen:
+      continue
+    seen.add(digits)
+    result.append({"phone": digits, "display": raw, "source": source or "Phone"})
+  return result
+
+
+def _genesys_zz_user_row(user: dict) -> dict:
+  email = str(user.get("email", "") or "").strip()
+  full_name = str(user.get("name", "") or "").strip()
+  first = str(user.get("firstName", "") or user.get("first_name", "") or "").strip()
+  last = str(user.get("lastName", "") or user.get("last_name", "") or "").strip()
+  if not first and not last and full_name:
+    pieces = full_name.split()
+    first, last = (" ".join(pieces[:-1]), pieces[-1]) if len(pieces) > 1 else (full_name, "")
+  division = user.get("division") if isinstance(user.get("division"), dict) else {}
+  phone_options = _genesys_zz_phone_choices(user)
+  return {
+    "user_id": str(user.get("id", "") or "").strip(),
+    "name": full_name or " ".join(p for p in (first, last) if p),
+    "first_name": first,
+    "last_name": last,
+    "email": email,
+    "state": str(user.get("state", "") or "").strip(),
+    "division_name": str(division.get("name", "") or "").strip(),
+    "phone_options": phone_options,
+    "eligible": bool(first and last and "@" in email and phone_options),
+    "review_reason": "" if first and last and "@" in email and phone_options else (
+      "Missing first or last name" if not first or not last else
+      "Missing or invalid source email" if "@" not in email else
+      "No valid 10-digit phone found"
+    ),
+  }
+
+
+def _genesys_zz_queue_load_locked() -> dict:
+  global GENESYS_ZZ_CONTACT_QUEUE_LOADED, GENESYS_ZZ_CONTACT_QUEUE_STATE
+  if GENESYS_ZZ_CONTACT_QUEUE_LOADED:
+    return GENESYS_ZZ_CONTACT_QUEUE_STATE
+  try:
+    with open(GENESYS_ZZ_CONTACT_QUEUE_PATH, "r", encoding="utf-8") as handle:
+      payload = json.load(handle)
+    if not isinstance(payload, dict) or not isinstance(payload.get("entries"), list):
+      raise ValueError("Queue file does not contain an entries list.")
+    state = {
+      "entries": [e for e in payload["entries"] if isinstance(e, dict)],
+      "exempt_contact_ids": sorted({str(x).strip() for x in payload.get("exempt_contact_ids", []) if str(x).strip()}),
+      "exempt_contact_emails": sorted({str(x).strip().lower() for x in payload.get("exempt_contact_emails", []) if str(x).strip()}),
+      "run_status": str(payload.get("run_status", "idle") or "idle"),
+      "run_error": str(payload.get("run_error", "") or ""),
+      "updated_at": str(payload.get("updated_at", "") or ""),
+    }
+  except FileNotFoundError:
+    state = {"entries": [], "exempt_contact_ids": [], "exempt_contact_emails": [], "run_status": "idle", "run_error": "", "updated_at": ""}
+  except (OSError, ValueError, TypeError) as exc:
+    raise RuntimeError(f"Genesys zz External Contact queue cannot be read: {exc}") from exc
+  if state["run_status"] == "running":
+    state["run_status"] = "interrupted"
+    state["run_error"] = "Previous run was interrupted by a service restart. Pending items remain queued; select Run Queue to continue."
+  for entry in state["entries"]:
+    if entry.get("status") == "creating":
+      entry["status"] = "queued"
+      entry["detail"] = "Previous attempt was interrupted; retry checks for an existing contact first."
+  GENESYS_ZZ_CONTACT_QUEUE_STATE = state
+  GENESYS_ZZ_CONTACT_QUEUE_LOADED = True
+  if state["run_status"] == "interrupted":
+    _genesys_zz_queue_save_locked()
+  return state
+
+
+def _genesys_zz_queue_save_locked() -> None:
+  state = GENESYS_ZZ_CONTACT_QUEUE_STATE
+  state["updated_at"] = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+  parent = os.path.dirname(GENESYS_ZZ_CONTACT_QUEUE_PATH)
+  if parent:
+    os.makedirs(parent, exist_ok=True)
+  temp_path = GENESYS_ZZ_CONTACT_QUEUE_PATH + ".tmp"
+  with open(temp_path, "w", encoding="utf-8") as handle:
+    json.dump({"version": 1, **state}, handle, indent=2)
+    handle.flush()
+    os.fsync(handle.fileno())
+  os.replace(temp_path, GENESYS_ZZ_CONTACT_QUEUE_PATH)
+
+
+def _genesys_zz_contact_exempt_ids() -> set[str]:
+  with GENESYS_ZZ_CONTACT_QUEUE_LOCK:
+    state = _genesys_zz_queue_load_locked()
+    return set(state.get("exempt_contact_ids", []))
+
+
+def _genesys_zz_contact_exemptions() -> dict[str, set[str]]:
+  with GENESYS_ZZ_CONTACT_QUEUE_LOCK:
+    state = _genesys_zz_queue_load_locked()
+    return {
+      "ids": set(state.get("exempt_contact_ids", [])),
+      "emails": set(state.get("exempt_contact_emails", [])),
+    }
+
+
+def _genesys_zz_contact_is_exempt(contact: dict, exemptions: dict[str, set[str]]) -> bool:
+  contact_id = str(contact.get("id", "") or "").strip()
+  email = str(contact.get("email", "") or "").strip().lower()
+  return bool(
+    (contact_id and contact_id in exemptions.get("ids", set()))
+    or (email and email in exemptions.get("emails", set()))
+  )
+
+
+def _genesys_zz_contact_queue_worker() -> None:
+  global GENESYS_ZZ_CONTACT_QUEUE_WORKER_RUNNING
+  try:
+    with GENESYS_ZZ_CONTACT_QUEUE_LOCK:
+      state = _genesys_zz_queue_load_locked()
+      pending = [dict(e) for e in state["entries"] if e.get("status") == "queued"]
+      operator = str(state.get("run_operator", "Genesys Admin"))
+      state["run_status"] = "running"
+      state["run_error"] = ""
+      _genesys_zz_queue_save_locked()
+
+    token = _genesys_get_queue_access_token(GENESYS_CLOUD_REGION)
+    if not token.get("ok"):
+      raise RuntimeError(token.get("error", "Genesys authentication failed."))
+    access_token = str(token.get("access_token", "") or "")
+    _, _, api_base = _genesys_region_to_urls(str(token.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION))
+    division, division_error = _genesys_find_division_by_name(api_base, access_token, "CiscoVoiceUser")
+    if division_error:
+      raise RuntimeError(division_error)
+    division_id = str(division.get("id", "") or "").strip()
+    contact_inventory = _genesys_list_external_contacts_in_division(api_base, access_token, "CiscoVoiceUser", division_id)
+    if not contact_inventory.get("ok"):
+      raise RuntimeError(contact_inventory.get("error", "Unable to read existing CiscoVoiceUser contacts."))
+    contact_rows = list(contact_inventory.get("rows", []))
+
+    for queued in pending:
+      entry_id = str(queued.get("id", ""))
+      try:
+        ok_user, source_user, user_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{queued['user_id']}")
+        if not ok_user or not isinstance(source_user, dict):
+          raise RuntimeError(user_error or "Unable to reread source user.")
+        fresh = _genesys_zz_user_row(source_user)
+        if not fresh["email"].lower().startswith("zz") or fresh["email"].lower() != str(queued.get("email", "")).lower():
+          raise RuntimeError("Source user email is no longer the queued zz email; blocked for review.")
+        phone = str(queued.get("phone", ""))
+        if phone not in {option["phone"] for option in fresh["phone_options"]}:
+          raise RuntimeError("Selected source number changed or is no longer present; blocked for review.")
+        with GENESYS_ZZ_CONTACT_QUEUE_LOCK:
+          state = _genesys_zz_queue_load_locked()
+          live = next(e for e in state["entries"] if e.get("id") == entry_id)
+          live.update({"status": "creating", "updated_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)})
+          _genesys_zz_queue_save_locked()
+
+        existing = _genesys_external_contact_match(contact_rows, fresh["first_name"], fresh["last_name"], fresh["email"])
+        if existing:
+          status = "skipped_existing"
+          contact_id = str(existing.get("id", "") or "")
+          detail = f"Matching CiscoVoiceUser contact already exists ({contact_id})."
+        else:
+          ok_create, contact, create_error = _genesys_create_external_contact(api_base, access_token, division_id, {
+            "first_name": fresh["first_name"], "last_name": fresh["last_name"], "email": fresh["email"], "phone": phone,
+          })
+          if not ok_create:
+            raise RuntimeError(create_error or "External Contact creation failed.")
+          status = "completed"
+          contact_id = str(contact.get("id", "") or "")
+          detail = "External Contact created in CiscoVoiceUser."
+          contact_rows.append({"id": contact_id, "first_name": fresh["first_name"], "last_name": fresh["last_name"], "email": fresh["email"], "phone": phone})
+
+        with GENESYS_ZZ_CONTACT_QUEUE_LOCK:
+          state = _genesys_zz_queue_load_locked()
+          live = next(e for e in state["entries"] if e.get("id") == entry_id)
+          live.update({"status": status, "contact_id": contact_id, "detail": detail, "updated_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)})
+          if contact_id:
+            state["exempt_contact_ids"] = sorted(set(state.get("exempt_contact_ids", [])) | {contact_id})
+          _genesys_zz_queue_save_locked()
+        _append_audit_event(action="genesys_zz_external_contact_created" if status == "completed" else "genesys_zz_external_contact_skipped_existing", cucm_host="", operator=operator, target=f"source_user={queued.get('user_id')};contact_id={contact_id};phone={phone}", output_filename="", inline_mode=True)
+      except Exception as exc:
+        logger.exception("Genesys zz External Contact conversion failed for %s", entry_id)
+        with GENESYS_ZZ_CONTACT_QUEUE_LOCK:
+          state = _genesys_zz_queue_load_locked()
+          live = next((e for e in state["entries"] if e.get("id") == entry_id), None)
+          if live:
+            live.update({"status": "failed", "detail": str(exc)[:1000], "updated_at": _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)})
+          _genesys_zz_queue_save_locked()
+
+    with GENESYS_ZZ_CONTACT_QUEUE_LOCK:
+      state = _genesys_zz_queue_load_locked()
+      state["run_status"] = "completed"
+      _genesys_zz_queue_save_locked()
+  except Exception as exc:
+    logger.exception("Genesys zz External Contact queue run failed")
+    with GENESYS_ZZ_CONTACT_QUEUE_LOCK:
+      state = _genesys_zz_queue_load_locked()
+      state["run_status"] = "failed"
+      state["run_error"] = str(exc)[:1000]
+      for entry in state["entries"]:
+        if entry.get("status") == "creating":
+          entry["status"] = "queued"
+      _genesys_zz_queue_save_locked()
+  finally:
+    GENESYS_ZZ_CONTACT_QUEUE_WORKER_RUNNING = False
+
+
+def _genesys_start_zz_contact_queue_run(operator: str) -> tuple[bool, str]:
+  global GENESYS_ZZ_CONTACT_QUEUE_WORKER_RUNNING
+  with GENESYS_ZZ_CONTACT_QUEUE_LOCK:
+    state = _genesys_zz_queue_load_locked()
+    if GENESYS_ZZ_CONTACT_QUEUE_WORKER_RUNNING or state.get("run_status") == "running":
+      return False, "The zz-user External Contact queue is already running."
+    if not any(e.get("status") == "queued" for e in state["entries"]):
+      return False, "There are no queued users to run."
+    GENESYS_ZZ_CONTACT_QUEUE_WORKER_RUNNING = True
+    state.update({"run_status": "running", "run_operator": operator, "run_error": ""})
+    _genesys_zz_queue_save_locked()
+  threading.Thread(target=_genesys_zz_contact_queue_worker, name="genesys-zz-external-contact", daemon=True).start()
+  return True, "External Contact queue run started."
 
 
 def _genesys_get_user_queues_paged(api_base: str, access_token: str, user_id: str) -> tuple[list[dict], str, int]:
@@ -21123,6 +21380,7 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn active" data-panel-target="genesys-ad-webrtc-panel" onclick="(function(){var id='genesys-ad-webrtc-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Add Genesys User</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-update-panel" onclick="(function(){var id='genesys-user-update-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Search and Update</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-panel" onclick="(function(){var id='genesys-user-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User WebRTC Lookup</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-zz-contact-cleanup-panel" onclick="(function(){var id='genesys-zz-contact-cleanup-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User to External Contact Cleanup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-missing-webrtc-panel" onclick="(function(){var id='genesys-missing-webrtc-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Users Missing WebRTC Phone</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-cleanup-panel" onclick="(function(){var id='genesys-user-cleanup-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Cleanup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-webrtc-cleanup-panel" onclick="(function(){var id='genesys-webrtc-cleanup-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys WebRTC Cleanup</button>
@@ -21240,6 +21498,253 @@ def genesys_admin_placeholder(request: Request):
                   status.textContent = "WebRTC build complete: " + built + " built, " + failed + " failed.";
                 };
                 filterInput.addEventListener("input", renderRows);
+              })();
+            </script>
+          </div>
+          <!-- Stale duplicate draft panel retained inert; the active implementation follows below. -->
+          <!--
+          <div id="genesys-zz-contact-cleanup-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+            <h3 style="margin-top:0;">Genesys User to External Contact Cleanup</h3>
+            <p style="color:#4e6a84;font-size:12px;">Find Genesys users whose email begins with zz, review the phone number(s) on each profile, choose which number to convert, and queue selected users as External Contacts in CiscoVoiceUser. Source Genesys users are not changed. Converted contacts are protected from the scheduled CUCM contact cleanup.</p>
+            <div class="search-filter-row">
+              <button type="button" id="genesys-zz-contact-scan" onclick="if(window.loadGenesysZZCandidates){window.loadGenesysZZCandidates();}else{document.getElementById('genesys-zz-contact-status').textContent='Genesys zz cleanup JavaScript handler is missing.';}return false;" style="background:#385977;">Load zz Users</button>
+              <input id="genesys-zz-contact-filter" placeholder="Filter by name, email, division, or phone" style="width:380px;">
+              <button type="button" id="genesys-zz-contact-queue-btn" disabled style="background:#a56a00;">Queue Selected (<span id="genesys-zz-contact-selected-count">0</span>)</button>
+            </div>
+            <p id="genesys-zz-contact-status" style="color:#2c5c8a;min-height:18px;">Load the zz-prefixed Genesys users to review their contact details and numbers.</p>
+            <div id="genesys-zz-contact-summary" style="display:none;margin:8px 0;padding:8px;background:#f8fcff;border:1px solid #c8dbee;"></div>
+            <div id="genesys-zz-contact-candidates" style="overflow-x:auto;max-height:520px;"></div>
+            <hr style="margin:16px 0;border:0;border-top:1px solid #c8dbee;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+              <strong style="font-size:13px;color:#234d72;text-transform:uppercase;">Persistent Conversion Queue</strong>
+              <div class="search-filter-row">
+                <button type="button" id="genesys-zz-contact-refresh-queue">Refresh Queue</button>
+                <button type="button" id="genesys-zz-contact-run-queue" disabled style="background:#146c2e;">Run Queue</button>
+              </div>
+            </div>
+            <p id="genesys-zz-contact-queue-status" style="color:#2c5c8a;min-height:18px;">Loading queue...</p>
+            <div id="genesys-zz-contact-queue-table" style="overflow-x:auto;max-height:440px;"></div>
+            <script>
+              (function () {
+                var candidates = [];
+                var queueEntries = [];
+                var selected = {};
+                var loading = false;
+                var creating = false;
+                var pollTimer = 0;
+                var loadButton = document.getElementById("genesys-zz-contact-scan");
+                var queueButton = document.getElementById("genesys-zz-contact-queue-btn");
+                var filter = document.getElementById("genesys-zz-contact-filter");
+                var status = document.getElementById("genesys-zz-contact-status");
+                var summary = document.getElementById("genesys-zz-contact-summary");
+                var output = document.getElementById("genesys-zz-contact-candidates");
+                var queueStatus = document.getElementById("genesys-zz-contact-queue-status");
+                var queueOutput = document.getElementById("genesys-zz-contact-queue-table");
+                var runButton = document.getElementById("genesys-zz-contact-run-queue");
+                if (!loadButton || !queueButton || !filter || !status || !summary || !output || !queueStatus || !queueOutput || !runButton) return;
+                function esc(v) { return String(v == null ? "" : v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+                function cell(value) { return "<td style='padding:6px 8px;border:1px solid #d9e4ef;vertical-align:top;'>" + value + "</td>"; }
+                function selectedRows() { return candidates.filter(function (r) { return !!selected[r.user_id] && r.eligible && !r.already_contact; }); }
+                function renderCandidates() {
+                  var term = String(filter.value || "").trim().toLowerCase();
+                  var rows = candidates.filter(function (r) { return !term || [r.name,r.email,r.division_name,(r.phone_options||[]).map(function(o){return o.display;}).join(" ")].join(" ").toLowerCase().indexOf(term) >= 0; });
+                  if (!candidates.length) { output.innerHTML = ""; return; }
+                  var html = "<table style='border-collapse:collapse;font-size:12px;width:100%;'><thead><tr style='background:#eaf4ff;'><th style='padding:6px;border:1px solid #d9e4ef;'><input type='checkbox' id='genesys-zz-contact-select-all'></th><th>Name</th><th>Source Email</th><th>Division</th><th>Source Phone Number</th><th>External Contact</th></tr></thead><tbody>";
+                  rows.forEach(function (r) {
+                    var canChoose = r.eligible && !r.already_contact;
+                    var check = "<input type='checkbox' data-zz-user='" + esc(r.user_id) + "'" + (selected[r.user_id] ? " checked" : "") + (canChoose ? "" : " disabled") + ">";
+                    var options = (r.phone_options || []).map(function (o) { return "<option value='" + esc(o.phone) + "'" + (String(selected[r.user_id] && selected[r.user_id].phone || (r.phone_options[0] || {}).phone) === String(o.phone) ? " selected" : "") + ">" + esc(o.display) + " (" + esc(o.source) + ")</option>"; }).join("");
+                    var phone = options ? "<select data-zz-phone='" + esc(r.user_id) + "'>" + options + "</select>" : "<span style='color:#b42318;'>No valid phone found</span>";
+                    var contact = r.already_contact ? "<span style='color:#146c2e;font-weight:700;'>Already exists (" + esc(r.contact_id) + ")</span>" : (r.eligible ? "Ready to queue" : "<span style='color:#9a4b00;'>" + esc(r.review_reason) + "</span>");
+                    html += "<tr>" + cell(check) + cell(esc(r.name)) + cell(esc(r.email)) + cell(esc(r.division_name)) + cell(phone) + cell(contact) + "</tr>";
+                  });
+                  output.innerHTML = html + "</tbody></table>";
+                  var all = document.getElementById("genesys-zz-contact-select-all");
+                  if (all) {
+                    var visibleEligible = rows.filter(function (r) { return r.eligible && !r.already_contact; });
+                    all.checked = visibleEligible.length > 0 && visibleEligible.every(function (r) { return !!selected[r.user_id]; });
+                    all.addEventListener("change", function () { visibleEligible.forEach(function (r) { if (all.checked) { selected[r.user_id] = selected[r.user_id] || { phone: (r.phone_options[0] || {}).phone }; } else { delete selected[r.user_id]; } }); renderCandidates(); updateSelected(); });
+                  }
+                  Array.prototype.forEach.call(output.querySelectorAll("[data-zz-user]"), function (node) {
+                    node.addEventListener("change", function () { var id = node.getAttribute("data-zz-user"); if (node.checked) { var row = candidates.filter(function (r) { return r.user_id === id; })[0]; selected[id] = { phone: (row.phone_options[0] || {}).phone }; } else { delete selected[id]; } renderCandidates(); updateSelected(); });
+                  });
+                  Array.prototype.forEach.call(output.querySelectorAll("[data-zz-phone]"), function (node) {
+                    node.addEventListener("change", function () { var id = node.getAttribute("data-zz-phone"); selected[id] = selected[id] || {}; selected[id].phone = node.value; updateSelected(); });
+                  });
+                }
+                function updateSelected() {
+                  var rows = selectedRows();
+                  document.getElementById("genesys-zz-contact-selected-count").textContent = String(rows.length);
+                  queueButton.disabled = loading || creating || rows.length === 0;
+                }
+                function renderQueue(data) {
+                  queueEntries = data.entries || [];
+                  var pending = queueEntries.filter(function (e) { return e.status === "queued"; }).length;
+                  runButton.disabled = creating || pending === 0;
+                  if (!queueEntries.length) { queueOutput.innerHTML = "<p>No conversion queue entries.</p>"; return; }
+                  var html = "<table style='border-collapse:collapse;font-size:12px;width:100%;'><thead><tr style='background:#eaf4ff;'><th>User</th><th>Source Email</th><th>Selected Number</th><th>Status</th><th>External Contact ID</th><th>Updated</th><th>Details</th></tr></thead><tbody>";
+                  queueEntries.slice().reverse().forEach(function (e) {
+                    var color = e.status === "completed" ? "#146c2e" : (e.status === "failed" ? "#b42318" : "#7a5a13");
+                    html += "<tr>" + cell(esc(e.name)) + cell(esc(e.email)) + cell(esc(e.source_phone_display || e.phone)) + cell("<strong style='color:" + color + ";'>" + esc(e.status) + "</strong>") + cell(esc(e.contact_id)) + cell(esc(e.updated_at || e.queued_at)) + cell(esc(e.detail)) + "</tr>";
+                  });
+                  queueOutput.innerHTML = html + "</tbody></table>";
+                }
+                window.loadGenesysZZQueue = function (quiet) {
+                  return fetch("/genesys/users/zz-external-contact-queue", { credentials:"same-origin", headers:{"Accept":"application/json"} }).then(function (response) { return response.json().then(function (data) { if (!response.ok || !data.ok) throw new Error(data.error || "Queue load failed."); return data; }); }).then(function (data) {
+                    renderQueue(data);
+                    queueStatus.textContent = "Run status: " + data.run_status + ". Pending: " + data.entries.filter(function (e) { return e.status === "queued"; }).length + ". Protected from scheduled cleanup: " + data.protected_contact_count + " converted contact(s)." + (data.run_error ? " " + data.run_error : "");
+                    if (data.run_status === "running") { if (!pollTimer) pollTimer = window.setInterval(function () { window.loadGenesysZZQueue(true); }, 2500); }
+                    else if (pollTimer) { window.clearInterval(pollTimer); pollTimer = 0; }
+                    return data;
+                  }).catch(function (error) { if (!quiet) queueStatus.textContent = "Queue error: " + error.message; });
+                };
+                window.loadGenesysZZCandidates = function () {
+                  loadButton.disabled = true; loading = true; updateSelected();
+                  status.textContent = "Reading Genesys users with zz-prefixed email and checking CiscoVoiceUser contacts...";
+                  fetch("/genesys/users/zz-external-contact-candidates", { credentials:"same-origin", headers:{"Accept":"application/json"} }).then(function (response) { return response.json().then(function (data) { if (!response.ok || !data.ok) throw new Error(data.error || "Candidate lookup failed."); return data; }); }).then(function (data) {
+                    candidates = data.rows || []; selected = {}; summary.style.display = "block";
+                    summary.textContent = "Genesys users scanned: " + data.users_scanned + ". zz-email users: " + data.zz_user_count + ". Eligible to convert: " + data.eligible_count + ". Division: CiscoVoiceUser.";
+                    status.textContent = "Review each source number, select users, and queue the exact phone value shown.";
+                    renderCandidates(); updateSelected();
+                  }).catch(function (error) { status.style.color = "#b42318"; status.textContent = "Candidate lookup failed: " + error.message; }).then(function () { loading = false; loadButton.disabled = false; updateSelected(); });
+                };
+                queueButton.addEventListener("click", function () {
+                  var rows = selectedRows().map(function (r) { return { user_id: r.user_id, phone: selected[r.user_id].phone }; });
+                  if (!rows.length || !window.confirm("Add " + rows.length + " selected zz user(s) and phone number(s) to the persistent External Contact queue? No contacts are created until Run Queue.")) return;
+                  queueButton.disabled = true; status.textContent = "Verifying selected source users and saving the persistent queue...";
+                  fetch("/genesys/users/zz-external-contact-queue/add", { method:"POST", credentials:"same-origin", headers:{"Content-Type":"application/json","Accept":"application/json"}, body:JSON.stringify({selections:rows}) }).then(function (response) { return response.json().then(function (data) { if (!response.ok || !data.ok) throw new Error(data.error || "Unable to queue selections."); return data; }); }).then(function (data) {
+                    var added = data.results.filter(function (r) { return r.ok; }).length;
+                    var rejected = data.results.filter(function (r) { return !r.ok; });
+                    status.textContent = added + " selection(s) queued." + (rejected.length ? " Not queued: " + rejected.map(function (r) { return r.user_id + ": " + r.detail; }).join("; ") : "");
+                    selected = {}; renderCandidates(); updateSelected(); window.loadGenesysZZQueue();
+                  }).catch(function (error) { status.style.color = "#b42318"; status.textContent = "Queue staging failed: " + error.message; queueButton.disabled = false; });
+                });
+                document.getElementById("genesys-zz-contact-refresh-queue").addEventListener("click", function () { window.loadGenesysZZQueue(); });
+                runButton.addEventListener("click", function () {
+                  var pending = queueEntries.filter(function (e) { return e.status === "queued"; }).length;
+                  if (!pending || !window.confirm("Run " + pending + " queued conversion(s) now? The source Genesys users remain unchanged. Created External Contacts will be exempt from scheduled cleanup.")) return;
+                  creating = true; runButton.disabled = true; queueStatus.textContent = "Starting sequential External Contact creation...";
+                  fetch("/genesys/users/zz-external-contact-queue/run", { method:"POST", credentials:"same-origin", headers:{"Accept":"application/json"} }).then(function (response) { return response.json().then(function (data) { if (!response.ok || !data.ok) throw new Error(data.error || "Run failed to start."); return data; }); }).then(function (data) {
+                    queueStatus.textContent = data.message; window.loadGenesysZZQueue();
+                  }).catch(function (error) { queueStatus.textContent = "Run failed to start: " + error.message; }).then(function () { creating = false; window.loadGenesysZZQueue(); });
+                });
+                loadButton.addEventListener("click", function () { window.loadGenesysZZCandidates(); });
+                loadButton.addEventListener("click", function () { window.loadGenesysZZCandidates(); });
+                filter.addEventListener("input", renderCandidates);
+                window.loadGenesysZZQueue();
+              })();
+            </script>
+          </div>
+          -->
+          <div id="genesys-zz-contact-cleanup-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+            <h3 style="margin-top:0;">Genesys User to External Contact Cleanup</h3>
+            <p style="color:#4e6a84;font-size:12px;">Find Genesys users whose email begins with zz. Review each source number, choose the exact number for conversion, then queue and run. This creates a CiscoVoiceUser External Contact; it does not change or delete the source Genesys user. Converted contacts are protected from scheduled cleanup.</p>
+            <div class="search-filter-row">
+              <button type="button" id="genesys-zz-contact-scan" style="background:#385977;">Load zz Users</button>
+              <input id="genesys-zz-contact-filter" placeholder="Filter by name, email, division, or number" style="width:380px;">
+              <button type="button" id="genesys-zz-contact-queue-btn" disabled style="background:#a56a00;">Queue Selected (<span id="genesys-zz-contact-selected-count">0</span>)</button>
+            </div>
+            <p id="genesys-zz-contact-status" style="color:#2c5c8a;min-height:18px;">Load zz-prefixed users to review candidate details and numbers.</p>
+            <div id="genesys-zz-contact-summary" style="display:none;margin:8px 0;padding:8px;background:#f8fcff;border:1px solid #c8dbee;"></div>
+            <div id="genesys-zz-contact-candidates" style="overflow:auto;max-height:500px;"></div>
+            <hr style="margin:16px 0;border:0;border-top:1px solid #c8dbee;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+              <strong style="font-size:13px;color:#234d72;text-transform:uppercase;">Persistent Conversion Queue</strong>
+              <div class="search-filter-row">
+                <button type="button" id="genesys-zz-contact-refresh-queue">Refresh Queue</button>
+                <button type="button" id="genesys-zz-contact-run-queue" style="background:#146c2e;">Run Queue</button>
+              </div>
+            </div>
+            <p id="genesys-zz-contact-queue-status" style="color:#2c5c8a;min-height:18px;">Loading queue...</p>
+            <div id="genesys-zz-contact-queue-table" style="overflow:auto;max-height:420px;"></div>
+            <script>
+              (function () {
+                var candidates = [], entries = [], selected = {}, phoneChoice = {}, loading = false, running = false, pollTimer = 0;
+                var el = function (id) { return document.getElementById(id); };
+                var loadButton = el("genesys-zz-contact-scan"), filter = el("genesys-zz-contact-filter");
+                var queueButton = el("genesys-zz-contact-queue-btn"), status = el("genesys-zz-contact-status");
+                var summary = el("genesys-zz-contact-summary"), output = el("genesys-zz-contact-candidates");
+                var queueStatus = el("genesys-zz-contact-queue-status"), queueOutput = el("genesys-zz-contact-queue-table");
+                var runButton = el("genesys-zz-contact-run-queue");
+                if (!loadButton || !filter || !queueButton || !status || !summary || !output || !queueStatus || !queueOutput || !runButton) return;
+                function esc(v) { return String(v == null ? "" : v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+                function td(value) { return "<td style='padding:6px 8px;border:1px solid #d9e4ef;vertical-align:top;'>" + value + "</td>"; }
+                function pickedRows() { return candidates.filter(function (r) { return !!selected[r.user_id] && r.eligible && !r.already_contact; }); }
+                function renderCandidates() {
+                  var term = String(filter.value || "").trim().toLowerCase();
+                  var rows = candidates.filter(function (r) { return !term || [r.name,r.email,r.division_name,(r.phone_options||[]).map(function (o) { return o.display; }).join(" ")].join(" ").toLowerCase().indexOf(term) >= 0; });
+                  if (!candidates.length) { output.innerHTML = ""; return; }
+                  var html = "<table style='border-collapse:collapse;font-size:12px;width:100%;'><thead><tr style='background:#eaf4ff;'><th style='padding:6px;border:1px solid #d9e4ef;'><input type='checkbox' id='genesys-zz-contact-select-all'></th><th>Name</th><th>Source Email</th><th>Division</th><th>Phone Number to Convert</th><th>Eligibility</th></tr></thead><tbody>";
+                  rows.forEach(function (r) {
+                    var canSelect = r.eligible && !r.already_contact;
+                    var checkbox = "<input type='checkbox' data-zz-user='" + esc(r.user_id) + "'" + (selected[r.user_id] ? " checked" : "") + (canSelect ? "" : " disabled") + ">";
+                    var options = (r.phone_options || []).map(function (o) { var chosen = selected[r.user_id] ? selected[r.user_id].phone : (phoneChoice[r.user_id] || (r.phone_options[0] || {}).phone || ""); return "<option value='" + esc(o.phone) + "'" + (String(chosen) === String(o.phone) ? " selected" : "") + ">" + esc(o.display) + " (" + esc(o.source) + ")</option>"; }).join("");
+                    var phone = options ? "<select data-zz-phone='" + esc(r.user_id) + "'>" + options + "</select>" : "<span style='color:#b42318;'>No valid 10-digit phone found</span>";
+                    var eligibility = r.already_contact ? "<strong style='color:#146c2e;'>Already External Contact</strong> " + esc(r.contact_id) : (r.eligible ? "Ready to queue" : "<span style='color:#9a4b00;'>" + esc(r.review_reason) + "</span>");
+                    html += "<tr>" + td(checkbox) + td(esc(r.name)) + td(esc(r.email)) + td(esc(r.division_name)) + td(phone) + td(eligibility) + "</tr>";
+                  });
+                  output.innerHTML = html + "</tbody></table>";
+                  var all = el("genesys-zz-contact-select-all");
+                  if (all) {
+                    var eligible = rows.filter(function (r) { return r.eligible && !r.already_contact; });
+                    all.checked = eligible.length > 0 && eligible.every(function (r) { return !!selected[r.user_id]; });
+                    all.addEventListener("change", function () { eligible.forEach(function (r) { if (all.checked) selected[r.user_id] = selected[r.user_id] || { phone: phoneChoice[r.user_id] || (r.phone_options[0] || {}).phone }; else delete selected[r.user_id]; }); renderCandidates(); updateSelected(); });
+                  }
+                  Array.prototype.forEach.call(output.querySelectorAll("[data-zz-user]"), function (node) { node.addEventListener("change", function () { var id = node.getAttribute("data-zz-user"), row = candidates.filter(function (r) { return r.user_id === id; })[0]; if (node.checked) selected[id] = selected[id] || { phone: phoneChoice[id] || (row.phone_options[0] || {}).phone }; else delete selected[id]; renderCandidates(); updateSelected(); }); });
+                  Array.prototype.forEach.call(output.querySelectorAll("[data-zz-phone]"), function (node) { node.addEventListener("change", function () { var id = node.getAttribute("data-zz-phone"); phoneChoice[id] = node.value; if (selected[id]) selected[id].phone = node.value; updateSelected(); }); });
+                }
+                function updateSelected() {
+                  var count = pickedRows().length;
+                  el("genesys-zz-contact-selected-count").textContent = String(count);
+                  queueButton.disabled = loading || running || count === 0;
+                }
+                function renderQueue(data) {
+                  entries = data.entries || [];
+                  var pending = entries.filter(function (e) { return e.status === "queued"; }).length;
+                  runButton.disabled = running || data.run_status === "running" || pending === 0;
+                  if (!entries.length) { queueOutput.innerHTML = "<p>No conversion queue entries.</p>"; return; }
+                  var html = "<table style='border-collapse:collapse;font-size:12px;width:100%;'><thead><tr style='background:#eaf4ff;'><th>User</th><th>Source Email</th><th>Selected Number</th><th>Status</th><th>External Contact ID</th><th>Updated</th><th>Details</th></tr></thead><tbody>";
+                  entries.slice().reverse().forEach(function (e) { var color = e.status === "completed" ? "#146c2e" : (e.status === "failed" ? "#b42318" : "#7a5a13"); html += "<tr>" + td(esc(e.name)) + td(esc(e.email)) + td(esc(e.source_phone_display || e.phone)) + td("<strong style='color:" + color + ";'>" + esc(e.status) + "</strong>") + td(esc(e.contact_id)) + td(esc(e.updated_at || e.queued_at)) + td(esc(e.detail)) + "</tr>"; });
+                  queueOutput.innerHTML = html + "</tbody></table>";
+                }
+                window.loadGenesysZZQueue = function (quiet) {
+                  return fetch("/genesys/users/zz-external-contact-queue", { credentials:"same-origin", headers:{"Accept":"application/json"} }).then(function (response) { return response.json().then(function (data) { if (!response.ok || !data.ok) throw new Error(data.error || "Queue load failed."); return data; }); }).then(function (data) {
+                    renderQueue(data);
+                    queueStatus.textContent = "Run status: " + data.run_status + ". Pending: " + data.entries.filter(function (e) { return e.status === "queued"; }).length + ". Protected from scheduled cleanup: " + data.protected_contact_count + " contact(s)." + (data.run_error ? " " + data.run_error : "");
+                    if (data.run_status === "running" && !pollTimer) pollTimer = window.setInterval(function () { window.loadGenesysZZQueue(true); }, 2500);
+                    else if (data.run_status !== "running" && pollTimer) { window.clearInterval(pollTimer); pollTimer = 0; }
+                    return data;
+                  }).catch(function (error) { if (!quiet) queueStatus.textContent = "Queue error: " + error.message; });
+                };
+                window.loadGenesysZZCandidates = function () {
+                  loadButton.disabled = true; loading = true; updateSelected(); status.textContent = "Reading Genesys zz users and checking CiscoVoiceUser contacts...";
+                  fetch("/genesys/users/zz-external-contact-candidates", { credentials:"same-origin", headers:{"Accept":"application/json"} }).then(function (response) { return response.json().then(function (data) { if (!response.ok || !data.ok) throw new Error(data.error || "Candidate lookup failed."); return data; }); }).then(function (data) {
+                    candidates = data.rows || []; selected = {}; phoneChoice = {}; summary.style.display = "block";
+                    summary.textContent = "Genesys users scanned: " + data.users_scanned + ". zz-email users: " + data.zz_user_count + ". Eligible: " + data.eligible_count + ". Target division: CiscoVoiceUser.";
+                    status.textContent = "Review the source phone number(s), select users, then queue the chosen numbers.";
+                    renderCandidates(); updateSelected();
+                  }).catch(function (error) { status.style.color = "#b42318"; status.textContent = "Candidate lookup failed: " + error.message; }).then(function () { loading = false; loadButton.disabled = false; updateSelected(); });
+                };
+                queueButton.addEventListener("click", function () {
+                  var selections = pickedRows().map(function (r) { return { user_id: r.user_id, phone: selected[r.user_id].phone }; });
+                  if (!selections.length || !window.confirm("Queue " + selections.length + " selected zz user(s) and number(s)? No contacts are created until Run Queue.")) return;
+                  queueButton.disabled = true; status.textContent = "Verifying source users and saving selections...";
+                  fetch("/genesys/users/zz-external-contact-queue/add", { method:"POST", credentials:"same-origin", headers:{"Content-Type":"application/json","Accept":"application/json"}, body:JSON.stringify({selections:selections}) }).then(function (response) { return response.json().then(function (data) { if (!response.ok || !data.ok) throw new Error(data.error || "Unable to queue selections."); return data; }); }).then(function (data) {
+                    var added = data.results.filter(function (r) { return r.ok; }).length, rejected = data.results.filter(function (r) { return !r.ok; });
+                    status.textContent = added + " selection(s) queued." + (rejected.length ? " Not queued: " + rejected.map(function (r) { return r.user_id + ": " + r.detail; }).join("; ") : "");
+                    selected = {}; renderCandidates(); updateSelected(); window.loadGenesysZZQueue();
+                  }).catch(function (error) { status.style.color = "#b42318"; status.textContent = "Queue staging failed: " + error.message; queueButton.disabled = false; });
+                });
+                el("genesys-zz-contact-refresh-queue").addEventListener("click", function () { window.loadGenesysZZQueue(); });
+                runButton.addEventListener("click", function () {
+                  var pending = entries.filter(function (e) { return e.status === "queued"; }).length;
+                  if (!pending || !window.confirm("Run " + pending + " queued conversion(s) now? Source users remain unchanged; created contacts are protected from scheduled cleanup.")) return;
+                  running = true; runButton.disabled = true; queueStatus.textContent = "Starting sequential External Contact creation...";
+                  fetch("/genesys/users/zz-external-contact-queue/run", { method:"POST", credentials:"same-origin", headers:{"Accept":"application/json"} }).then(function (response) { return response.json().then(function (data) { if (!response.ok || !data.ok) throw new Error(data.error || "Run failed to start."); return data; }); }).then(function (data) { queueStatus.textContent = data.message; window.loadGenesysZZQueue(); }).catch(function (error) { queueStatus.textContent = "Run failed to start: " + error.message; }).then(function () { running = false; window.loadGenesysZZQueue(); });
+                });
+                loadButton.addEventListener("click", function () { window.loadGenesysZZCandidates(); });
+                filter.addEventListener("input", renderCandidates);
+                window.loadGenesysZZQueue();
               })();
             </script>
           </div>
@@ -27255,6 +27760,153 @@ def genesys_extract_users_route(
   })
 
 
+@app.get("/genesys/users/zz-external-contact-candidates")
+def genesys_zz_external_contact_candidates_route(request: Request):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not operator or not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Admin authorization required."}, status_code=403)
+  token = _genesys_get_queue_access_token(GENESYS_CLOUD_REGION)
+  if not token.get("ok"):
+    return JSONResponse({"ok": False, "error": token.get("error", "Genesys authentication failed.")}, status_code=400)
+  region = str(token.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION)
+  access_token = str(token.get("access_token", "") or "")
+  _, _, api_base = _genesys_region_to_urls(region)
+  users, pages_scanned, users_error = _genesys_collect_paged_entities(
+    api_base, access_token, "/api/v2/users", max(25, min(GENESYS_USERS_PAGE_SIZE, 200)), 300,
+  )
+  if users_error:
+    return JSONResponse({"ok": False, "error": f"Genesys user inventory failed: {users_error}"}, status_code=400)
+  division, division_error = _genesys_find_division_by_name(api_base, access_token, "CiscoVoiceUser")
+  if division_error:
+    return JSONResponse({"ok": False, "error": division_error}, status_code=400)
+  contacts = _genesys_list_external_contacts_in_division(api_base, access_token, "CiscoVoiceUser", str(division.get("id", "") or ""))
+  if not contacts.get("ok"):
+    return JSONResponse({"ok": False, "error": contacts.get("error", "Unable to check CiscoVoiceUser contacts.")}, status_code=400)
+  contact_rows = contacts.get("rows", [])
+  candidates = []
+  for user in users:
+    if not str(user.get("email", "") or "").strip().lower().startswith("zz"):
+      continue
+    row = _genesys_zz_user_row(user)
+    existing = _genesys_external_contact_match(contact_rows, row["first_name"], row["last_name"], row["email"])
+    row["already_contact"] = bool(existing)
+    row["contact_id"] = str(existing.get("id", "") or "")
+    row["eligible"] = row["eligible"] and not row["already_contact"]
+    if row["already_contact"]:
+      row["review_reason"] = f"Already an External Contact (ID {row['contact_id']})."
+    candidates.append(row)
+  candidates.sort(key=lambda row: ((row.get("name") or "").casefold(), (row.get("email") or "").casefold()))
+  return JSONResponse({"ok": True, "region": region, "pages_scanned": pages_scanned, "users_scanned": len(users), "zz_user_count": len(candidates), "eligible_count": sum(1 for row in candidates if row["eligible"]), "rows": candidates})
+
+
+@app.get("/genesys/users/zz-external-contact-queue")
+def genesys_zz_external_contact_queue_list_route(request: Request):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not operator or not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Admin authorization required."}, status_code=403)
+  try:
+    with GENESYS_ZZ_CONTACT_QUEUE_LOCK:
+      state = _genesys_zz_queue_load_locked()
+      return JSONResponse({"ok": True, "run_status": state.get("run_status", "idle"), "run_error": state.get("run_error", ""), "updated_at": state.get("updated_at", ""), "entries": state.get("entries", []), "protected_contact_count": len(state.get("exempt_contact_ids", []))})
+  except RuntimeError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@app.post("/genesys/users/zz-external-contact-queue/add")
+async def genesys_zz_external_contact_queue_add_route(request: Request):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not operator or not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Admin authorization required."}, status_code=403)
+  try:
+    payload = await request.json()
+  except Exception:
+    payload = {}
+  selections = payload.get("selections", []) if isinstance(payload, dict) else []
+  if not isinstance(selections, list) or not selections:
+    return JSONResponse({"ok": False, "error": "Select one or more zz users and phone numbers."}, status_code=400)
+  if len(selections) > 100:
+    return JSONResponse({"ok": False, "error": "Maximum 100 users can be queued per request."}, status_code=400)
+  token = _genesys_get_queue_access_token(GENESYS_CLOUD_REGION)
+  if not token.get("ok"):
+    return JSONResponse({"ok": False, "error": token.get("error", "Genesys authentication failed.")}, status_code=400)
+  access_token = str(token.get("access_token", "") or "")
+  _, _, api_base = _genesys_region_to_urls(str(token.get("region", GENESYS_CLOUD_REGION) or GENESYS_CLOUD_REGION))
+  division, division_error = _genesys_find_division_by_name(api_base, access_token, "CiscoVoiceUser")
+  if division_error:
+    return JSONResponse({"ok": False, "error": division_error}, status_code=400)
+  contacts = _genesys_list_external_contacts_in_division(api_base, access_token, "CiscoVoiceUser", str(division.get("id", "") or ""))
+  if not contacts.get("ok"):
+    return JSONResponse({"ok": False, "error": contacts.get("error", "Unable to check CiscoVoiceUser contacts.")}, status_code=400)
+  contact_rows = contacts.get("rows", [])
+  results = []
+  try:
+    with GENESYS_ZZ_CONTACT_QUEUE_LOCK:
+      state = _genesys_zz_queue_load_locked()
+      for selection in selections:
+        if not isinstance(selection, dict):
+          continue
+        user_id = str(selection.get("user_id", "") or "").strip()
+        phone = re.sub(r"\D", "", str(selection.get("phone", "") or ""))
+        if len(phone) == 11 and phone.startswith("1"):
+          phone = phone[1:]
+        if not user_id or len(phone) != 10:
+          results.append({"user_id": user_id, "ok": False, "detail": "A user ID and valid 10-digit phone are required."})
+          continue
+        if any(e.get("user_id") == user_id and e.get("phone") == phone and e.get("status") in {"queued", "creating", "completed", "skipped_existing"} for e in state["entries"]):
+          results.append({"user_id": user_id, "ok": False, "detail": "This user and number are already queued or converted."})
+          continue
+        ok_user, source_user, user_error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}")
+        if not ok_user or not isinstance(source_user, dict):
+          results.append({"user_id": user_id, "ok": False, "detail": user_error or "Unable to verify source user."})
+          continue
+        row = _genesys_zz_user_row(source_user)
+        if not row["email"].lower().startswith("zz"):
+          results.append({"user_id": user_id, "ok": False, "detail": "Source email no longer starts with zz."})
+          continue
+        if not row["eligible"]:
+          results.append({"user_id": user_id, "ok": False, "detail": row["review_reason"]})
+          continue
+        if phone not in {option["phone"] for option in row["phone_options"]}:
+          results.append({"user_id": user_id, "ok": False, "detail": "Selected number is not present in the current Genesys user profile."})
+          continue
+        existing = _genesys_external_contact_match(contact_rows, row["first_name"], row["last_name"], row["email"])
+        if existing:
+          results.append({"user_id": user_id, "ok": False, "detail": f"Already an External Contact (ID {existing.get('id', '')})."})
+          continue
+        now = _audit_now().strftime(AUDIT_TIMESTAMP_FORMAT)
+        entry = {
+          "id": uuid4().hex, "user_id": user_id, "name": row["name"],
+          "first_name": row["first_name"], "last_name": row["last_name"], "email": row["email"],
+          "phone": phone,
+          "source_phone_display": next((o["display"] for o in row["phone_options"] if o["phone"] == phone), phone),
+          "source_division": row["division_name"], "status": "queued", "detail": "Queued for manual run.",
+          "contact_id": "", "queued_at": now, "queued_by": operator, "updated_at": now,
+        }
+        state["entries"].append(entry)
+        state.setdefault("exempt_contact_emails", [])
+        state["exempt_contact_emails"] = sorted(set(state["exempt_contact_emails"]) | {row["email"].strip().lower()})
+        results.append({"user_id": user_id, "ok": True, "entry_id": entry["id"], "detail": "Queued."})
+      _genesys_zz_queue_save_locked()
+  except RuntimeError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+  return JSONResponse({"ok": True, "results": results})
+
+
+@app.post("/genesys/users/zz-external-contact-queue/run")
+def genesys_zz_external_contact_queue_run_route(request: Request):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not operator or not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Admin authorization required."}, status_code=403)
+  started, message = _genesys_start_zz_contact_queue_run(operator)
+  if not started:
+    return JSONResponse({"ok": False, "error": message}, status_code=409)
+  return JSONResponse({"ok": True, "message": message})
+
+
 @app.post("/genesys/external-contacts/cucm-preview")
 def genesys_external_contact_cucm_preview_route(
   request: Request,
@@ -27521,6 +28173,7 @@ def genesys_external_contact_reconcile_cucm_route(
     return JSONResponse({"ok": False, "error": result.get("error", "Unable to list CiscoVoiceUser contacts."), "rows": []}, status_code=400)
 
   rows = []
+  protected_contacts = _genesys_zz_contact_exemptions()
   for contact in result.get("rows", []):
     email = str(contact.get("email", "") or "").strip().lower()
     first_name = str(contact.get("first_name", "") or "").strip().lower()
@@ -27531,10 +28184,12 @@ def genesys_external_contact_reconcile_cucm_route(
     if not matched_user and name_key:
       matched_user = name_index.get(name_key)
       match_method = "name" if matched_user else ""
+    protected = _genesys_zz_contact_is_exempt(contact, protected_contacts)
     rows.append({
       **contact,
+      "protected_from_auto_cleanup": protected,
       "valid_cucm_user": bool(matched_user),
-      "eligible_for_deletion": not bool(matched_user),
+      "eligible_for_deletion": not bool(matched_user) and not protected,
       "cucm_user_id": str((matched_user or {}).get("userid", "") or "").strip(),
       "cucm_match_method": match_method,
     })

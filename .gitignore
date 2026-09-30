@@ -12,3 +12,9 @@ data/verasmart_reference_export_cache.json*
 
 # Jabber Cleanup removal queue, notice email history, and separation output (contains PII)
 data/jabber_cleanup_queue.json*
+
+# Genesys zz-user External Contact conversion queue and protected contact IDs (contains PII)
+data/genesys_zz_external_contact_queue.json*
+
+# Genesys zz-user External Contact conversion queue and cleanup exemption registry
+data/genesys_zz_external_contact_queue.json*
