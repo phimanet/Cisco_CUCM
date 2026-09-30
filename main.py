@@ -17035,14 +17035,45 @@ GREENLIGHT_JABBER_CLEANUP_COLUMNS = [
   ("extension", "Extension"),
   ("userid", "User ID"),
   ("user_name", "User Name"),
-  ("user_all_jabber_never", "All User Jabber Devices Never Registered"),
+  ("user_all_jabber_never", "All User Jabber Devices Inactive"),
   ("last_registered", "Last Registered"),
+  ("inactive_reason", "Inactive Reason"),
 ]
 
 
-def _greenlight_is_never_registered(value) -> bool:
-  text = str(value or "").strip()
-  return not text or text == "0"
+def _greenlight_reg_epoch(row: dict) -> int | None:
+  """Last-registered epoch seconds from a registrationdynamic row, or None when CUCM shows Never."""
+  # Devices CUCM shows as Never have no last-known Unified CM even when a registrationdynamic row exists.
+  if "lastknownucm" in row and not str(row.get("lastknownucm") or "").strip():
+    return None
+  raw = str(row.get("datetimestamp", "") or "").strip()
+  try:
+    ts = int(float(raw))
+  except ValueError:
+    return None
+  if ts <= 0:
+    return None
+  if ts > 10 ** 12:
+    ts //= 1000
+  return ts
+
+
+def _greenlight_reg_display(ts: int | None) -> str:
+  if ts is None:
+    return "Never"
+  return datetime.datetime.fromtimestamp(ts, tz=ZoneInfo("America/Los_Angeles")).strftime("%Y-%m-%d %H:%M")
+
+
+def _greenlight_cutoff_epoch(cutoff_month: str) -> int | None:
+  match = re.fullmatch(r"(\d{4})-(\d{1,2})", str(cutoff_month or "").strip())
+  if not match or not 1 <= int(match.group(2)) <= 12:
+    return None
+  start = datetime.datetime(int(match.group(1)), int(match.group(2)), 1, tzinfo=ZoneInfo("America/Los_Angeles"))
+  return int(start.timestamp())
+
+
+def _greenlight_is_inactive(ts: int | None, cutoff_epoch: int | None) -> bool:
+  return ts is None or (cutoff_epoch is not None and ts < cutoff_epoch)
 
 
 def _greenlight_lowusage_target(pool: str) -> str:
@@ -17052,13 +17083,24 @@ def _greenlight_lowusage_target(pool: str) -> str:
   return GREENLIGHT_LOWUSAGE_TARGET_POOL
 
 
-def _greenlight_jabber_cleanup_scan(cucm_host: str, cucm_user: str, cucm_pass: str) -> dict:
-  # registrationdynamic has no row / no timestamp for devices CUCM shows as Last Registered = Never.
+def _greenlight_merge_reg(devices: dict, name: str, row: dict, base: dict) -> None:
+  # A device can have several registrationdynamic rows; keep the most recent registration.
+  key = name.upper()
+  ts = _greenlight_reg_epoch(row)
+  existing = devices.get(key)
+  if existing is None:
+    base["ts"] = ts
+    devices[key] = base
+  elif ts is not None and (existing["ts"] is None or ts > existing["ts"]):
+    existing["ts"] = ts
+
+
+def _greenlight_jabber_cleanup_scan(cucm_host: str, cucm_user: str, cucm_pass: str, cutoff_epoch: int | None = None) -> dict:
   rows = _greenlight_csf_sql_paged(
     cucm_host, cucm_user, cucm_pass,
     "d.name AS device_name, d.description AS device_description, dp.name AS device_pool, "
     "n.dnorpattern AS extension, u.userid AS userid, u.firstname AS first_name, u.lastname AS last_name, "
-    "rd.datetimestamp AS last_registered "
+    "rd.* "
     "FROM device d "
     "LEFT OUTER JOIN devicepool dp ON dp.pkid = d.fkdevicepool "
     "LEFT OUTER JOIN enduser u ON u.pkid = d.fkenduser "
@@ -17075,13 +17117,7 @@ def _greenlight_jabber_cleanup_scan(cucm_host: str, cucm_user: str, cucm_pass: s
     name = str(row.get("device_name", "") or "").strip()
     if not name:
       continue
-    existing = devices.get(name.upper())
-    # A device can have more than one registrationdynamic row; any timestamp means it registered.
-    if existing:
-      if not _greenlight_is_never_registered(row.get("last_registered")):
-        existing["never"] = False
-      continue
-    devices[name.upper()] = {
+    _greenlight_merge_reg(devices, name, row, {
       "device_name": name,
       "device_type": name[:3].upper(),
       "device_description": str(row.get("device_description", "") or "").strip(),
@@ -17089,19 +17125,21 @@ def _greenlight_jabber_cleanup_scan(cucm_host: str, cucm_user: str, cucm_pass: s
       "extension": str(row.get("extension", "") or "").strip(),
       "userid": str(row.get("userid", "") or "").strip(),
       "user_name": " ".join(p for p in [str(row.get("first_name", "") or "").strip(), str(row.get("last_name", "") or "").strip()] if p),
-      "never": _greenlight_is_never_registered(row.get("last_registered")),
-    }
+    })
 
-  user_has_registered: dict[str, bool] = {}
+  user_has_active: dict[str, bool] = {}
   for dev in devices.values():
     if dev["userid"]:
       key = dev["userid"].lower()
-      user_has_registered[key] = user_has_registered.get(key, False) or not dev["never"]
+      user_has_active[key] = user_has_active.get(key, False) or not _greenlight_is_inactive(dev["ts"], cutoff_epoch)
 
   results = []
+  never_count = 0
   for dev in devices.values():
-    if not dev["never"]:
+    if not _greenlight_is_inactive(dev["ts"], cutoff_epoch):
       continue
+    if dev["ts"] is None:
+      never_count += 1
     target = _greenlight_lowusage_target(dev["device_pool"])
     results.append({
       "device_name": dev["device_name"],
@@ -17114,11 +17152,13 @@ def _greenlight_jabber_cleanup_scan(cucm_host: str, cucm_user: str, cucm_pass: s
       "extension": dev["extension"],
       "userid": dev["userid"],
       "user_name": dev["user_name"],
-      "user_all_jabber_never": "Yes" if dev["userid"] and not user_has_registered.get(dev["userid"].lower(), False) else "No",
-      "last_registered": "Never",
+      "user_all_jabber_never": "Yes" if dev["userid"] and not user_has_active.get(dev["userid"].lower(), False) else "No",
+      "last_registered": _greenlight_reg_display(dev["ts"]),
+      "last_registered_epoch": dev["ts"] or 0,
+      "inactive_reason": "Never" if dev["ts"] is None else "Before cutoff",
     })
   results.sort(key=lambda r: (r["userid"].lower() or "~", r["device_name"]))
-  return {"devices_scanned": len(devices), "rows": results}
+  return {"devices_scanned": len(devices), "never_count": never_count, "rows": results}
 
 
 def _greenlight_jabber_cleanup_csv_bytes(rows: list[dict]) -> bytes:
@@ -17130,11 +17170,11 @@ def _greenlight_jabber_cleanup_csv_bytes(rows: list[dict]) -> bytes:
   return output.getvalue().encode("utf-8")
 
 
-def _greenlight_move_devices_to_lowusage(cucm_host: str, cucm_user: str, cucm_pass: str, device_names: list[str]) -> list[dict]:
+def _greenlight_move_devices_to_lowusage(cucm_host: str, cucm_user: str, cucm_pass: str, device_names: list[str], cutoff_epoch: int | None = None) -> list[dict]:
   quoted = ", ".join(f"'{_sql_escape_literal(name)}'" for name in device_names)
   current_rows = _axl_execute_sql_rows(
     cucm_host, cucm_user, cucm_pass,
-    "SELECT d.name AS device_name, dp.name AS device_pool, rd.datetimestamp AS last_registered "
+    "SELECT d.name AS device_name, dp.name AS device_pool, rd.* "
     "FROM device d LEFT OUTER JOIN devicepool dp ON dp.pkid = d.fkdevicepool "
     "LEFT OUTER JOIN registrationdynamic rd ON rd.fkdevice = d.pkid "
     f"WHERE d.name IN ({quoted})",
@@ -17145,10 +17185,8 @@ def _greenlight_move_devices_to_lowusage(cucm_host: str, cucm_user: str, cucm_pa
   }
   current: dict[str, dict] = {}
   for row in current_rows:
-    key = str(row.get("device_name", "") or "").strip().upper()
-    entry = current.setdefault(key, {"pool": str(row.get("device_pool", "") or "").strip(), "never": True})
-    if not _greenlight_is_never_registered(row.get("last_registered")):
-      entry["never"] = False
+    name = str(row.get("device_name", "") or "").strip()
+    _greenlight_merge_reg(current, name, row, {"pool": str(row.get("device_pool", "") or "").strip()})
 
   session = requests.Session()
   session.verify = False
@@ -17160,8 +17198,8 @@ def _greenlight_move_devices_to_lowusage(cucm_host: str, cucm_user: str, cucm_pa
     if not info:
       results.append({"device_name": name, "ok": False, "message": "Device not found in CUCM."})
       continue
-    if not info["never"]:
-      results.append({"device_name": name, "ok": False, "message": "Device has registered since the scan; not moved."})
+    if not _greenlight_is_inactive(info["ts"], cutoff_epoch):
+      results.append({"device_name": name, "ok": False, "message": f"Device registered recently ({_greenlight_reg_display(info['ts'])}); not moved."})
       continue
     target = _greenlight_lowusage_target(info["pool"])
     if target.lower() == info["pool"].lower():
@@ -17241,7 +17279,7 @@ def _jabber_cleanup_user_devices(cucm_host: str, cucm_user: str, cucm_pass: str,
     cucm_host, cucm_user, cucm_pass,
     "SELECT d.name AS device_name, dp.name AS device_pool, n.dnorpattern AS extension, "
     "u.userid AS userid, u.firstname AS first_name, u.lastname AS last_name, u.mailid AS email, "
-    "rd.datetimestamp AS last_registered "
+    "rd.* "
     "FROM enduser u "
     "INNER JOIN device d ON d.fkenduser = u.pkid "
     "LEFT OUTER JOIN devicepool dp ON dp.pkid = d.fkdevicepool "
@@ -17258,14 +17296,13 @@ def _jabber_cleanup_user_devices(cucm_host: str, cucm_user: str, cucm_pass: str,
     info["user_name"] = " ".join(p for p in [str(row.get("first_name", "") or "").strip(), str(row.get("last_name", "") or "").strip()] if p)
     info["email"] = str(row.get("email", "") or "").strip()
     name = str(row.get("device_name", "") or "").strip()
-    dev = devices.setdefault(name.upper(), {
+    _greenlight_merge_reg(devices, name, row, {
       "device_name": name,
       "device_pool": str(row.get("device_pool", "") or "").strip(),
       "extension": str(row.get("extension", "") or "").strip(),
-      "never": True,
     })
-    if not _greenlight_is_never_registered(row.get("last_registered")):
-      dev["never"] = False
+  for dev in devices.values():
+    dev["last_registered"] = _greenlight_reg_display(dev["ts"])
   info["devices"] = sorted(devices.values(), key=lambda d: d["device_name"])
   return info
 
@@ -17276,11 +17313,16 @@ def _jabber_cleanup_notice_content(entry: dict) -> tuple[str, str, str]:
   numbers = sorted({d["extension"] for d in entry.get("devices", []) if d.get("extension")})
   number_text = ", ".join(_format_notification_phone(n) or n for n in numbers) or "your Cisco Jabber number"
   name = entry.get("user_name") or entry.get("userid")
+  last_seen = max((int(d.get("ts") or 0) for d in entry.get("devices", [])), default=0)
+  if last_seen:
+    usage_text = f"has not been signed in to since {datetime.datetime.fromtimestamp(last_seen, tz=ZoneInfo('America/Los_Angeles')).strftime('%B %Y')}"
+  else:
+    usage_text = "has never been signed in to"
   subject = f"Notice: Your Cisco Jabber phone number {number_text} will be removed on {date_text}"
   body = (
     f"Hello {name},\n\n"
     "As part of AMN Healthcare's cost-savings effort, we review Cisco Jabber phone numbers that are not being used.\n\n"
-    f"Our records show that your Cisco Jabber phone number {number_text} has never been signed in to.\n\n"
+    f"Our records show that your Cisco Jabber phone number {number_text} {usage_text}.\n\n"
     f"Your Cisco Jabber phone number and voicemail box will be removed on or after {date_text}.\n\n"
     f"If you still need this number, sign in to Cisco Jabber before {date_text}. Once you have signed in, your number will not be removed.\n\n"
     "If you have questions, please contact the IT Service Desk.\n\n"
@@ -17289,7 +17331,7 @@ def _jabber_cleanup_notice_content(entry: dict) -> tuple[str, str, str]:
   html_body = (
     f"<p>Hello {escape(name)},</p>"
     "<p>As part of AMN Healthcare's cost-savings effort, we review Cisco Jabber phone numbers that are not being used.</p>"
-    f"<p>Our records show that your Cisco Jabber phone number <strong>{escape(number_text)}</strong> has never been signed in to.</p>"
+    f"<p>Our records show that your Cisco Jabber phone number <strong>{escape(number_text)}</strong> {escape(usage_text)}.</p>"
     f"<p>Your Cisco Jabber phone number and voicemail box will be removed on or after <strong>{escape(date_text)}</strong>.</p>"
     f"<p>If you still need this number, sign in to Cisco Jabber before {escape(date_text)}. Once you have signed in, your number will not be removed.</p>"
     "<p>If you have questions, please contact the IT Service Desk.</p>"
@@ -39737,21 +39779,25 @@ __GREENLIGHT_ADMIN_CARD__
           </section>
 
           <section class="tool-panel" data-panel="jabbercleanup">
-            <h3>Jabber Cleanup (Last Registered = Never)</h3>
-            <p><strong>Stages:</strong> 1) Find CSF/TCT/BOT devices with Last Registered = Never. 2) Stage them in <strong>T3_CENT_DP_LowUsage</strong>. 3) Queue the user: a removal notice email is sent. 4) After the notice period, click <strong>Run Separation</strong> (standard separation: phones, numbers, LDAP, Unity voicemail) using that day's login credentials. Queue and email history are kept 180 days and survive restarts.</p>
+            <h3>Jabber Cleanup (Never or Inactive Since a Date)</h3>
+            <p><strong>Stages:</strong> 1) Find CSF/TCT/BOT devices with Last Registered = Never, or (optionally) last registered before a month/year you pick. 2) Stage them in <strong>T3_CENT_DP_LowUsage</strong>. 3) Queue the user: a removal notice email is sent. 4) After the notice period, click <strong>Run Separation</strong> (standard separation: phones, numbers, LDAP, Unity voicemail) using that day's login credentials. Queue and email history are kept 180 days and survive restarts.</p>
             <form id="greenlight-jcleanup-form" onsubmit="return false;">
               <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
               <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
               <input type="hidden" name="cucm_pass" value="" />
               <div class="search-filter-row">
-                <button type="button" id="greenlight-jcleanup-scan" onclick="if (window.greenlightJCleanupScan) { window.greenlightJCleanupScan(event); } else { document.getElementById('greenlight-jcleanup-status').textContent = 'Error: Jabber Cleanup JavaScript did not load.'; }">1. Find Never-Registered Jabber</button>
+                <label style="font-size:12px; display:inline-flex; align-items:center; gap:6px; white-space:nowrap;">Also include last registered before <input type="month" name="cutoff_month" id="greenlight-jcleanup-cutoff" style="width:auto;" /></label>
+                <span style="font-size:12px; color:#4e6a84;">Blank = Never only. Example: January 2025 finds Never plus everything last registered in 2024 or earlier.</span>
+              </div>
+              <div class="search-filter-row">
+                <button type="button" id="greenlight-jcleanup-scan" onclick="if (window.greenlightJCleanupScan) { window.greenlightJCleanupScan(event); } else { document.getElementById('greenlight-jcleanup-status').textContent = 'Error: Jabber Cleanup JavaScript did not load.'; }">1. Find Inactive Jabber</button>
                 <input id="greenlight-jcleanup-filter" placeholder="Filter (name, user, pool, extension)" style="min-width:240px;" />
                 <select id="greenlight-jcleanup-stage" aria-label="Stage filter">
                   <option value="all">All stages</option>
                   <option value="unstaged">Not staged (needs LowUsage)</option>
                   <option value="staged">Staged in LowUsage</option>
                 </select>
-                <label style="font-size:12px; display:inline-flex; align-items:center; gap:6px; white-space:nowrap;"><input type="checkbox" id="greenlight-jcleanup-allnever" style="width:auto; min-width:0; height:auto; margin:0;" /> Only users whose Jabber devices are ALL Never</label>
+                <label style="font-size:12px; display:inline-flex; align-items:center; gap:6px; white-space:nowrap;"><input type="checkbox" id="greenlight-jcleanup-allnever" style="width:auto; min-width:0; height:auto; margin:0;" /> Only users whose Jabber devices are ALL inactive</label>
               </div>
               <div class="search-filter-row">
                 <button type="button" id="greenlight-jcleanup-move" disabled onclick="if (window.greenlightJCleanupMove) { window.greenlightJCleanupMove(event); }">2. Move Selected to T3_CENT_DP_LowUsage (<span id="greenlight-jcleanup-count">0</span>)</button>
@@ -39822,18 +39868,18 @@ __GREENLIGHT_ADMIN_CARD__
                   var list = visibleRows();
                   var out = el("greenlight-jcleanup-results");
                   if (!rows.length) { out.innerHTML = ""; updateCount(); return; }
-                  var html = "<p style='font-size:12px; color:#355978;'>Showing " + list.length + " of " + rows.length + " never-registered device(s).</p>";
+                  var html = "<p style='font-size:12px; color:#355978;'>Showing " + list.length + " of " + rows.length + " inactive device(s).</p>";
                   html += "<table style='border-collapse:collapse; font-size:12px;'><thead><tr><th style='" + head + "'><input type='checkbox' id='greenlight-jcleanup-selall' title='Select all visible devices'></th>";
-                  ["Device", "Type", "Description", "Device Pool", "Stage", "Extension", "User ID", "User Name", "All Jabber Never", "Status", "Queue"].forEach(function (h) { html += "<th style='" + head + "'>" + esc(h) + "</th>"; });
+                  ["Device", "Type", "Description", "Device Pool", "Stage", "Extension", "User ID", "User Name", "Last Registered", "All Jabber Inactive", "Status", "Queue"].forEach(function (h) { html += "<th style='" + head + "'>" + esc(h) + "</th>"; });
                   html += "</tr></thead><tbody>";
                   list.forEach(function (r) {
                     var box = "<input type='checkbox' data-jc-dev='" + esc(r.device_name) + "'" + (selected[r.device_name] ? " checked" : "") + ">";
                     var stageText = r.already_lowusage ? "<span style='color:#146c2e;font-weight:700;'>Staged</span>" : (r.target_pool_exists ? "Needs LowUsage" : "<span style='color:#b42318;'>Target pool missing</span>");
                     var status = r.move_message ? esc(r.move_message) : "";
                     var q = r.userid ? queueByUser[String(r.userid).toLowerCase()] : null;
-                    var queueText = q ? esc(q.status) + (q.eligible_at ? " (eligible " + esc(String(q.eligible_at).slice(0, 10)) + ")" : "") : (r.user_all_jabber_never === "Yes" ? "" : "<span style='color:#7a5a13;'>Has a registered device</span>");
+                    var queueText = q ? esc(q.status) + (q.eligible_at ? " (eligible " + esc(String(q.eligible_at).slice(0, 10)) + ")" : "") : (r.user_all_jabber_never === "Yes" ? "" : "<span style='color:#7a5a13;'>Has a recently registered device</span>");
                     var bg = r.move_state === "moved" ? " style='background:#eef9f1;'" : (r.move_state === "failed" ? " style='background:#fff1ef;'" : "");
-                    html += "<tr" + bg + "><td style='" + cell + "'>" + box + "</td><td style='" + cell + "'>" + esc(r.device_name) + "</td><td style='" + cell + "'>" + esc(r.device_type) + "</td><td style='" + cell + "'>" + esc(r.device_description) + "</td><td style='" + cell + "'>" + esc(r.device_pool) + "</td><td style='" + cell + "'>" + stageText + "</td><td style='" + cell + "'>" + esc(r.extension) + "</td><td style='" + cell + "'>" + esc(r.userid) + "</td><td style='" + cell + "'>" + esc(r.user_name) + "</td><td style='" + cell + "'>" + esc(r.user_all_jabber_never) + "</td><td style='" + cell + "'>" + status + "</td><td style='" + cell + "'>" + queueText + "</td></tr>";
+                    html += "<tr" + bg + "><td style='" + cell + "'>" + box + "</td><td style='" + cell + "'>" + esc(r.device_name) + "</td><td style='" + cell + "'>" + esc(r.device_type) + "</td><td style='" + cell + "'>" + esc(r.device_description) + "</td><td style='" + cell + "'>" + esc(r.device_pool) + "</td><td style='" + cell + "'>" + stageText + "</td><td style='" + cell + "'>" + esc(r.extension) + "</td><td style='" + cell + "'>" + esc(r.userid) + "</td><td style='" + cell + "'>" + esc(r.user_name) + "</td><td style='" + cell + (r.last_registered === "Never" ? "color:#b42318;font-weight:700;" : "") + "'>" + esc(r.last_registered) + "</td><td style='" + cell + "'>" + esc(r.user_all_jabber_never) + "</td><td style='" + cell + "'>" + status + "</td><td style='" + cell + "'>" + queueText + "</td></tr>";
                   });
                   out.innerHTML = html + "</tbody></table>";
                   Array.prototype.forEach.call(out.querySelectorAll("[data-jc-dev]"), function (b) {
@@ -39853,12 +39899,12 @@ __GREENLIGHT_ADMIN_CARD__
                   if (ev && ev.preventDefault) ev.preventDefault();
                   var status = el("greenlight-jcleanup-status");
                   var dl = el("greenlight-jcleanup-download");
-                  status.textContent = "Scanning CUCM for never-registered CSF/TCT/BOT devices...";
+                  status.textContent = "Scanning CUCM for inactive CSF/TCT/BOT devices...";
                   dl.style.display = "none";
                   el("greenlight-jcleanup-scan").disabled = true;
                   post("/project-greenlight/jabber-cleanup/scan", new FormData(el("greenlight-jcleanup-form"))).then(function (p) {
                     rows = p.rows || []; selected = {};
-                    status.textContent = "Scanned " + p.devices_scanned + " Jabber device(s); " + p.count + " have Last Registered = Never.";
+                    status.textContent = "Scanned " + p.devices_scanned + " Jabber device(s); " + p.count + " inactive (" + p.never_count + " Never" + (p.cutoff_month ? ", " + (p.count - p.never_count) + " last registered before " + p.cutoff_month : "") + ").";
                     dl.href = p.download_url; dl.textContent = "Download Full CSV (" + p.filename + ")"; dl.style.display = "inline";
                     render();
                   }).catch(function (err) { status.textContent = "Error: " + err.message; })
@@ -61058,28 +61104,34 @@ def project_greenlight_jabber_cleanup_scan_route(
     cucm_host: str = Form(""),
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
+    cutoff_month: str = Form(""),
 ):
   cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  cutoff_epoch = _greenlight_cutoff_epoch(cutoff_month)
+  if (cutoff_month or "").strip() and cutoff_epoch is None:
+    return JSONResponse({"ok": False, "error": "Cutoff must be a valid month and year."}, status_code=400)
   try:
-    result = _greenlight_jabber_cleanup_scan(cucm_host, cucm_user, cucm_pass)
+    result = _greenlight_jabber_cleanup_scan(cucm_host, cucm_user, cucm_pass, cutoff_epoch)
   except Exception as exc:
     logger.warning("Greenlight Jabber cleanup scan failed: %s", exc)
     raise RuntimeError(f"Jabber Cleanup scan failed: {exc}") from exc
   rows = result["rows"]
   timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-  filename = f"jabber_cleanup_never_registered_{timestamp}.csv"
+  filename = f"jabber_cleanup_inactive_{(cutoff_month or 'never').strip()}_{timestamp}.csv"
   job_output = _prepare_job_output(_greenlight_jabber_cleanup_csv_bytes(rows), filename)
   _append_audit_event(
     action="project_greenlight_jabber_cleanup_scan",
     cucm_host=cucm_host,
     operator=cucm_user,
-    target=f"scanned={result['devices_scanned']};never={len(rows)}",
+    target=f"scanned={result['devices_scanned']};inactive={len(rows)};never={result['never_count']};cutoff={cutoff_month or 'none'}",
     output_filename=filename,
     inline_mode=True,
   )
   return JSONResponse({
     "ok": True,
     "devices_scanned": result["devices_scanned"],
+    "never_count": result["never_count"],
+    "cutoff_month": (cutoff_month or "").strip(),
     "count": len(rows),
     "rows": rows,
     "filename": filename,
@@ -61094,8 +61146,10 @@ def project_greenlight_jabber_cleanup_move_route(
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
     devices_json: str = Form(""),
+    cutoff_month: str = Form(""),
 ):
   cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  cutoff_epoch = _greenlight_cutoff_epoch(cutoff_month)
   try:
     parsed = json.loads(devices_json or "[]")
   except (TypeError, ValueError):
@@ -61110,7 +61164,7 @@ def project_greenlight_jabber_cleanup_move_route(
   if len(names) > 50:
     return JSONResponse({"ok": False, "error": "Maximum 50 devices per request."}, status_code=400)
   try:
-    results = _greenlight_move_devices_to_lowusage(cucm_host, cucm_user, cucm_pass, names)
+    results = _greenlight_move_devices_to_lowusage(cucm_host, cucm_user, cucm_pass, names, cutoff_epoch)
   except Exception as exc:
     raise RuntimeError(f"Move to LowUsage failed: {exc}") from exc
   moved = [r["device_name"] for r in results if r.get("ok") and str(r.get("message", "")).startswith("Moved")]
@@ -61132,8 +61186,10 @@ def project_greenlight_jabber_cleanup_queue_add_route(
     cucm_user: str = Form(""),
     cucm_pass: str = Form(""),
     users_json: str = Form(""),
+    cutoff_month: str = Form(""),
 ):
   cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  cutoff_epoch = _greenlight_cutoff_epoch(cutoff_month)
   try:
     parsed = json.loads(users_json or "[]")
   except (TypeError, ValueError):
@@ -61164,9 +61220,9 @@ def project_greenlight_jabber_cleanup_queue_add_route(
       if not devices:
         results.append({"userid": uid, "ok": False, "message": "No CSF/TCT/BOT devices owned by this user."})
         continue
-      registered = [d["device_name"] for d in devices if not d["never"]]
+      registered = [f"{d['device_name']} ({d['last_registered']})" for d in devices if not _greenlight_is_inactive(d["ts"], cutoff_epoch)]
       if registered:
-        results.append({"userid": uid, "ok": False, "message": f"Not eligible: registered device(s) {', '.join(registered)}."})
+        results.append({"userid": uid, "ok": False, "message": f"Not eligible: recently registered {', '.join(registered)}."})
         continue
       unstaged = [d["device_name"] for d in devices if not d["device_pool"].lower().endswith(GREENLIGHT_LOWUSAGE_SUFFIX.lower())]
       if unstaged:
@@ -61179,7 +61235,8 @@ def project_greenlight_jabber_cleanup_queue_add_route(
         "user_name": info["user_name"],
         "email": info["email"],
         "cucm_host": cucm_host,
-        "devices": [{k: d[k] for k in ("device_name", "device_pool", "extension")} for d in devices],
+        "devices": [{k: d[k] for k in ("device_name", "device_pool", "extension", "ts", "last_registered")} for d in devices],
+        "cutoff_month": (cutoff_month or "").strip(),
         "status": "notified",
         "queued_at": now.isoformat(timespec="seconds"),
         "queued_by": cucm_user,
@@ -61294,7 +61351,8 @@ def project_greenlight_jabber_cleanup_run_route(
   final_status, detail, output_text = "failed", "", ""
   try:
     info = _jabber_cleanup_user_devices(cucm_host, cucm_user, cucm_pass, userid)
-    registered = [d["device_name"] for d in info.get("devices", []) if not d["never"]]
+    queued_epoch = int(datetime.datetime.fromisoformat(entry["queued_at"]).timestamp())
+    registered = [f"{d['device_name']} ({d['last_registered']})" for d in info.get("devices", []) if d["ts"] is not None and d["ts"] >= queued_epoch]
     if registered:
       final_status = "skipped_registered"
       detail = f"User signed in during the notice period ({', '.join(registered)}); separation skipped."
