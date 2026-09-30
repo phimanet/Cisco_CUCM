@@ -39751,7 +39751,7 @@ __GREENLIGHT_ADMIN_CARD__
                   <option value="unstaged">Not staged (needs LowUsage)</option>
                   <option value="staged">Staged in LowUsage</option>
                 </select>
-                <label style="font-size:12px;"><input type="checkbox" id="greenlight-jcleanup-allnever" /> Only users whose Jabber devices are ALL Never</label>
+                <label style="font-size:12px; display:inline-flex; align-items:center; gap:6px; white-space:nowrap;"><input type="checkbox" id="greenlight-jcleanup-allnever" style="width:auto; min-width:0; height:auto; margin:0;" /> Only users whose Jabber devices are ALL Never</label>
               </div>
               <div class="search-filter-row">
                 <button type="button" id="greenlight-jcleanup-move" disabled onclick="if (window.greenlightJCleanupMove) { window.greenlightJCleanupMove(event); }">2. Move Selected to T3_CENT_DP_LowUsage (<span id="greenlight-jcleanup-count">0</span>)</button>
@@ -39762,6 +39762,14 @@ __GREENLIGHT_ADMIN_CARD__
               <p id="greenlight-jcleanup-status" class="status-line">Click Find Never-Registered Jabber.</p>
               <p><a id="greenlight-jcleanup-download" href="#" style="display:none; font-weight:700;">Download Full CSV</a></p>
               <div id="greenlight-jcleanup-results" style="overflow:auto; max-height:560px;"></div>
+            </div>
+            <div class="result-card" style="width:100%; max-width:none; margin-top:14px;">
+              <strong style="font-size:13px; color:#234d72; text-transform:uppercase;">Registration Diagnostic (read-only)</strong>
+              <div class="search-filter-row" style="margin-top:6px;">
+                <input id="greenlight-jcleanup-dbg-names" placeholder="Device names, e.g. CSF4695241416, CSF4695241406" style="min-width:420px;" />
+                <button type="button" id="greenlight-jcleanup-dbg-run" onclick="(function(){var out=document.getElementById('greenlight-jcleanup-dbg-out');var fd=new FormData(document.getElementById('greenlight-jcleanup-form'));fd.append('device_names',document.getElementById('greenlight-jcleanup-dbg-names').value);out.textContent='Querying raw registration data...';fetch('/project-greenlight/jabber-cleanup/registration-debug',{method:'POST',body:fd,credentials:'same-origin',headers:{'Accept':'application/json'}}).then(function(r){return r.json();}).then(function(p){out.textContent=JSON.stringify(p,null,2);}).catch(function(e){out.textContent='Error: '+e.message;});})();">Show Raw Registration Data</button>
+              </div>
+              <pre id="greenlight-jcleanup-dbg-out" style="white-space:pre-wrap; max-height:360px; overflow:auto; font-size:12px;"></pre>
             </div>
             <div class="result-card" style="width:100%; max-width:none; margin-top:14px;">
               <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
@@ -61019,6 +61027,29 @@ def project_greenlight_person_lookup_status_route(job_id: str):
 @app.get("/project-greenlight/person-lookup/history")
 def project_greenlight_person_lookup_history_route(limit: int = Query(20, ge=1, le=100)):
   return JSONResponse({"ok": True, "runs": _greenlight_queue_list(limit=limit)})
+
+
+@app.post("/project-greenlight/jabber-cleanup/registration-debug")
+def project_greenlight_jabber_cleanup_registration_debug_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    device_names: str = Form(""),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  names = [n for n in re.split(r"[\s,;]+", device_names or "") if re.fullmatch(r"[A-Za-z0-9_.-]{1,50}", n)][:10]
+  if not names:
+    return JSONResponse({"ok": False, "error": "Enter 1-10 device names."}, status_code=400)
+  quoted = ", ".join(f"'{_sql_escape_literal(n)}'" for n in names)
+  try:
+    rows = _axl_execute_sql_rows(
+      cucm_host, cucm_user, cucm_pass,
+      f"SELECT d.name AS device_name, rd.* FROM device d LEFT OUTER JOIN registrationdynamic rd ON rd.fkdevice = d.pkid WHERE d.name IN ({quoted})",
+    )
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": f"Registration query failed: {exc}"}, status_code=502)
+  return JSONResponse({"ok": True, "rows": rows})
 
 
 @app.post("/project-greenlight/jabber-cleanup/scan")
