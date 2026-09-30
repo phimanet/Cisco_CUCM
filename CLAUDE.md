@@ -112,6 +112,11 @@ Priority keys:
 
 ## Conversation Notes
 
+### 2026-09-30 (Genesys zz Users to External Contact Cleanup)
+- Added Genesys Admin **Genesys User to External Contact Cleanup**: finds `zz*` email users, displays profile name/email/division/phone choices, allows per-user number selection, and queues selected conversions to CiscoVoiceUser External Contacts.
+- Queue is persistent, atomic, restart-safe, and manually run; source Genesys users are never changed. Contact IDs and source emails are persisted as exemptions from the scheduled CUCM-to-Genesys cleanup and reconciliation deletion candidates.
+- Existing-contact check and source-user/phone revalidation run before create; UI/queue remains available after service restart. Server data file is gitignored.
+
 ### 2026-09-30 (Project Greenlight — Jabber Cleanup)
 - Stages: Never-registered CSF/TCT/BOT scan (`registrationdynamic` has no timestamp) → move to `T3_CENT_DP_LowUsage` (any `*_LowUsage` pool counts as staged) → queue user + send removal-notice email → after 14 days, operator clicks **Run Separation** manually.
 - Decision: no credentials are stored; separation uses the operator's same-day session credentials (LDAP passwords rotate daily). Devices are rechecked before separation; skipped if the user signed in.
