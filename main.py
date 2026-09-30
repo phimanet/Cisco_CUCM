@@ -3945,11 +3945,8 @@ def _genesys_zz_phone_choices(user: dict) -> list[dict]:
 def _genesys_zz_user_row(user: dict) -> dict:
   email = str(user.get("email", "") or "").strip()
   full_name = str(user.get("name", "") or "").strip()
-  first = str(user.get("firstName", "") or user.get("first_name", "") or "").strip()
-  last = str(user.get("lastName", "") or user.get("last_name", "") or "").strip()
-  if not first and not last and full_name:
-    pieces = full_name.split()
-    first, last = (" ".join(pieces[:-1]), pieces[-1]) if len(pieces) > 1 else (full_name, "")
+  first = full_name
+  last = "zz"
   division = user.get("division") if isinstance(user.get("division"), dict) else {}
   phone_options = _genesys_zz_phone_choices(user)
   return {
@@ -3961,9 +3958,9 @@ def _genesys_zz_user_row(user: dict) -> dict:
     "state": str(user.get("state", "") or "").strip(),
     "division_name": str(division.get("name", "") or "").strip(),
     "phone_options": phone_options,
-    "eligible": bool(first and last and "@" in email and phone_options),
-    "review_reason": "" if first and last and "@" in email and phone_options else (
-      "Missing first or last name" if not first or not last else
+    "eligible": bool(full_name and "@" in email and phone_options),
+    "review_reason": "" if full_name and "@" in email and phone_options else (
+      "Missing Genesys User Name" if not full_name else
       "Missing or invalid source email" if "@" not in email else
       "No valid 10-digit phone found"
     ),
@@ -4037,9 +4034,11 @@ def _genesys_zz_contact_exemptions() -> dict[str, set[str]]:
 def _genesys_zz_contact_is_exempt(contact: dict, exemptions: dict[str, set[str]]) -> bool:
   contact_id = str(contact.get("id", "") or "").strip()
   email = str(contact.get("email", "") or "").strip().lower()
+  last_name = str(contact.get("last_name", "") or "").strip().casefold()
   return bool(
     (contact_id and contact_id in exemptions.get("ids", set()))
     or (email and email in exemptions.get("emails", set()))
+    or last_name == "zz"
   )
 
 
@@ -21638,7 +21637,7 @@ def genesys_admin_placeholder(request: Request):
           -->
           <div id="genesys-zz-contact-cleanup-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Genesys User to External Contact Cleanup</h3>
-            <p style="color:#4e6a84;font-size:12px;">Find Genesys users whose email begins with zz. Review each source number, choose the exact number for conversion, then queue and run. This creates a CiscoVoiceUser External Contact; it does not change or delete the source Genesys user. Converted contacts are protected from scheduled cleanup.</p>
+            <p style="color:#4e6a84;font-size:12px;">Find Genesys users whose email begins with zz. Review each source number, choose the exact number for conversion, then queue and run. The External Contact uses the Genesys User Name as First Name and zz as Last Name. The source Genesys user is not changed or deleted. Converted contacts are protected from scheduled cleanup.</p>
             <div class="search-filter-row">
               <button type="button" id="genesys-zz-contact-scan" style="background:#385977;">Load zz Users</button>
               <input id="genesys-zz-contact-filter" placeholder="Filter by name, email, division, or number" style="width:380px;">
