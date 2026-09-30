@@ -17065,10 +17065,20 @@ def _greenlight_reg_display(ts: int | None) -> str:
 
 
 def _greenlight_cutoff_epoch(cutoff_month: str) -> int | None:
-  match = re.fullmatch(r"(\d{4})-(\d{1,2})", str(cutoff_month or "").strip())
-  if not match or not 1 <= int(match.group(2)) <= 12:
+  raw = str(cutoff_month or "").strip()
+  if not raw:
     return None
-  start = datetime.datetime(int(match.group(1)), int(match.group(2)), 1, tzinfo=ZoneInfo("America/Los_Angeles"))
+  formats = ("%Y-%m", "%Y-%m-%d", "%Y/%m", "%m/%Y", "%B %Y", "%b %Y")
+  start = None
+  for date_format in formats:
+    try:
+      parsed = datetime.datetime.strptime(raw, date_format)
+      start = datetime.datetime(parsed.year, parsed.month, 1, tzinfo=ZoneInfo("America/Los_Angeles"))
+      break
+    except ValueError:
+      continue
+  if start is None:
+    return None
   return int(start.timestamp())
 
 
@@ -61109,7 +61119,7 @@ def project_greenlight_jabber_cleanup_scan_route(
   cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
   cutoff_epoch = _greenlight_cutoff_epoch(cutoff_month)
   if (cutoff_month or "").strip() and cutoff_epoch is None:
-    return JSONResponse({"ok": False, "error": "Cutoff must be a valid month and year."}, status_code=400)
+    return JSONResponse({"ok": False, "error": f"Cutoff must be a valid month and year; received {cutoff_month!r}."}, status_code=400)
   try:
     result = _greenlight_jabber_cleanup_scan(cucm_host, cucm_user, cucm_pass, cutoff_epoch)
   except Exception as exc:
