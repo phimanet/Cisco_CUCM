@@ -148,6 +148,12 @@ GREENLIGHT_LOOKUP_STORE_DIR = (os.getenv("GREENLIGHT_LOOKUP_STORE_DIR", "") or "
   os.path.dirname(os.path.abspath(__file__)), "data", "greenlight_jobs"
 )
 GREENLIGHT_LOOKUP_HISTORY_FILE = os.path.join(GREENLIGHT_LOOKUP_STORE_DIR, "history.json")
+JABBER_CLEANUP_QUEUE_PATH = (os.getenv("JABBER_CLEANUP_QUEUE_PATH", "") or "").strip() or os.path.join(
+  os.path.dirname(os.path.abspath(__file__)), "data", "jabber_cleanup_queue.json"
+)
+JABBER_CLEANUP_LOCK = threading.Lock()
+JABBER_CLEANUP_RETENTION_DAYS = 180
+JABBER_CLEANUP_NOTICE_DAYS = int((os.getenv("JABBER_CLEANUP_NOTICE_DAYS", "14") or "14").strip())
 STRIKE_MASK_OPERATIONS = {}
 STRIKE_MASK_LOCK = threading.Lock()
 STRIKE_MASK_MAX_OPERATIONS = 200
@@ -17016,6 +17022,321 @@ def _greenlight_csf_inventory_csv_bytes(rows: list[dict]) -> bytes:
   for row in rows:
     writer.writerow([row.get(key, "") for key, _ in GREENLIGHT_CSF_INVENTORY_COLUMNS])
   return output.getvalue().encode("utf-8")
+
+
+GREENLIGHT_LOWUSAGE_SUFFIX = "_LowUsage"
+GREENLIGHT_LOWUSAGE_TARGET_POOL = (os.getenv("JABBER_CLEANUP_LOWUSAGE_POOL", "T3_CENT_DP_LowUsage") or "T3_CENT_DP_LowUsage").strip()
+GREENLIGHT_JABBER_CLEANUP_COLUMNS = [
+  ("device_name", "Device Name"),
+  ("device_type", "Type"),
+  ("device_description", "Description"),
+  ("device_pool", "Device Pool"),
+  ("lowusage_target", "LowUsage Target Pool"),
+  ("extension", "Extension"),
+  ("userid", "User ID"),
+  ("user_name", "User Name"),
+  ("user_all_jabber_never", "All User Jabber Devices Never Registered"),
+  ("last_registered", "Last Registered"),
+]
+
+
+def _greenlight_is_never_registered(value) -> bool:
+  text = str(value or "").strip()
+  return not text or text == "0"
+
+
+def _greenlight_lowusage_target(pool: str) -> str:
+  clean = str(pool or "").strip()
+  if clean.lower().endswith(GREENLIGHT_LOWUSAGE_SUFFIX.lower()):
+    return clean
+  return GREENLIGHT_LOWUSAGE_TARGET_POOL
+
+
+def _greenlight_jabber_cleanup_scan(cucm_host: str, cucm_user: str, cucm_pass: str) -> dict:
+  # registrationdynamic has no row / no timestamp for devices CUCM shows as Last Registered = Never.
+  rows = _greenlight_csf_sql_paged(
+    cucm_host, cucm_user, cucm_pass,
+    "d.name AS device_name, d.description AS device_description, dp.name AS device_pool, "
+    "n.dnorpattern AS extension, u.userid AS userid, u.firstname AS first_name, u.lastname AS last_name, "
+    "rd.datetimestamp AS last_registered "
+    "FROM device d "
+    "LEFT OUTER JOIN devicepool dp ON dp.pkid = d.fkdevicepool "
+    "LEFT OUTER JOIN enduser u ON u.pkid = d.fkenduser "
+    "LEFT OUTER JOIN devicenumplanmap dm ON dm.fkdevice = d.pkid AND dm.numplanindex = 1 "
+    "LEFT OUTER JOIN numplan n ON n.pkid = dm.fknumplan "
+    "LEFT OUTER JOIN registrationdynamic rd ON rd.fkdevice = d.pkid "
+    "WHERE (d.name LIKE 'CSF%' OR d.name LIKE 'TCT%' OR d.name LIKE 'BOT%') ORDER BY d.name",
+  )
+  pool_rows = _axl_execute_sql_rows(cucm_host, cucm_user, cucm_pass, "SELECT name FROM devicepool")
+  pools = {str(r.get("name", "") or "").strip().lower() for r in pool_rows}
+
+  devices: dict[str, dict] = {}
+  for row in rows:
+    name = str(row.get("device_name", "") or "").strip()
+    if not name:
+      continue
+    existing = devices.get(name.upper())
+    # A device can have more than one registrationdynamic row; any timestamp means it registered.
+    if existing:
+      if not _greenlight_is_never_registered(row.get("last_registered")):
+        existing["never"] = False
+      continue
+    devices[name.upper()] = {
+      "device_name": name,
+      "device_type": name[:3].upper(),
+      "device_description": str(row.get("device_description", "") or "").strip(),
+      "device_pool": str(row.get("device_pool", "") or "").strip(),
+      "extension": str(row.get("extension", "") or "").strip(),
+      "userid": str(row.get("userid", "") or "").strip(),
+      "user_name": " ".join(p for p in [str(row.get("first_name", "") or "").strip(), str(row.get("last_name", "") or "").strip()] if p),
+      "never": _greenlight_is_never_registered(row.get("last_registered")),
+    }
+
+  user_has_registered: dict[str, bool] = {}
+  for dev in devices.values():
+    if dev["userid"]:
+      key = dev["userid"].lower()
+      user_has_registered[key] = user_has_registered.get(key, False) or not dev["never"]
+
+  results = []
+  for dev in devices.values():
+    if not dev["never"]:
+      continue
+    target = _greenlight_lowusage_target(dev["device_pool"])
+    results.append({
+      "device_name": dev["device_name"],
+      "device_type": dev["device_type"],
+      "device_description": dev["device_description"],
+      "device_pool": dev["device_pool"],
+      "lowusage_target": target,
+      "already_lowusage": bool(target) and target.lower() == dev["device_pool"].lower(),
+      "target_pool_exists": target.lower() in pools,
+      "extension": dev["extension"],
+      "userid": dev["userid"],
+      "user_name": dev["user_name"],
+      "user_all_jabber_never": "Yes" if dev["userid"] and not user_has_registered.get(dev["userid"].lower(), False) else "No",
+      "last_registered": "Never",
+    })
+  results.sort(key=lambda r: (r["userid"].lower() or "~", r["device_name"]))
+  return {"devices_scanned": len(devices), "rows": results}
+
+
+def _greenlight_jabber_cleanup_csv_bytes(rows: list[dict]) -> bytes:
+  output = io.StringIO()
+  writer = csv.writer(output)
+  writer.writerow([label for _, label in GREENLIGHT_JABBER_CLEANUP_COLUMNS])
+  for row in rows:
+    writer.writerow([row.get(key, "") for key, _ in GREENLIGHT_JABBER_CLEANUP_COLUMNS])
+  return output.getvalue().encode("utf-8")
+
+
+def _greenlight_move_devices_to_lowusage(cucm_host: str, cucm_user: str, cucm_pass: str, device_names: list[str]) -> list[dict]:
+  quoted = ", ".join(f"'{_sql_escape_literal(name)}'" for name in device_names)
+  current_rows = _axl_execute_sql_rows(
+    cucm_host, cucm_user, cucm_pass,
+    "SELECT d.name AS device_name, dp.name AS device_pool, rd.datetimestamp AS last_registered "
+    "FROM device d LEFT OUTER JOIN devicepool dp ON dp.pkid = d.fkdevicepool "
+    "LEFT OUTER JOIN registrationdynamic rd ON rd.fkdevice = d.pkid "
+    f"WHERE d.name IN ({quoted})",
+  )
+  pools = {
+    str(r.get("name", "") or "").strip().lower(): str(r.get("name", "") or "").strip()
+    for r in _axl_execute_sql_rows(cucm_host, cucm_user, cucm_pass, "SELECT name FROM devicepool")
+  }
+  current: dict[str, dict] = {}
+  for row in current_rows:
+    key = str(row.get("device_name", "") or "").strip().upper()
+    entry = current.setdefault(key, {"pool": str(row.get("device_pool", "") or "").strip(), "never": True})
+    if not _greenlight_is_never_registered(row.get("last_registered")):
+      entry["never"] = False
+
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+  results = []
+  for name in device_names:
+    info = current.get(name.upper())
+    if not info:
+      results.append({"device_name": name, "ok": False, "message": "Device not found in CUCM."})
+      continue
+    if not info["never"]:
+      results.append({"device_name": name, "ok": False, "message": "Device has registered since the scan; not moved."})
+      continue
+    target = _greenlight_lowusage_target(info["pool"])
+    if target.lower() == info["pool"].lower():
+      results.append({"device_name": name, "ok": True, "message": f"Already in {info['pool']}.", "device_pool": info["pool"]})
+      continue
+    real_target = pools.get(target.lower())
+    if not real_target:
+      results.append({"device_name": name, "ok": False, "message": f"Target device pool {target} does not exist in CUCM."})
+      continue
+    soap = f"""<?xml version="1.0" encoding="utf-8"?>
+<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:axl="http://www.cisco.com/AXL/API/15.0">
+  <soapenv:Header/>
+  <soapenv:Body>
+    <axl:updatePhone>
+      <name>{xml_escape(name)}</name>
+      <devicePoolName>{xml_escape(real_target)}</devicePoolName>
+    </axl:updatePhone>
+  </soapenv:Body>
+</soapenv:Envelope>"""
+    try:
+      _axl_post_raw_text(session, cucm_host, soap, "updatePhone")
+      results.append({"device_name": name, "ok": True, "message": f"Moved {info['pool']} -> {real_target}.", "device_pool": real_target})
+    except Exception as exc:
+      results.append({"device_name": name, "ok": False, "message": str(exc)[:300]})
+  return results
+
+
+JABBER_CLEANUP_ACTIVE_STATUSES = {"notified", "notice_failed", "separating", "failed"}
+
+
+def _jabber_cleanup_now() -> datetime.datetime:
+  return datetime.datetime.now(tz=ZoneInfo("America/Los_Angeles"))
+
+
+def _jabber_cleanup_load_locked() -> list[dict]:
+  try:
+    with open(JABBER_CLEANUP_QUEUE_PATH, "r", encoding="utf-8") as handle:
+      payload = json.load(handle)
+    entries = payload.get("entries", []) if isinstance(payload, dict) else []
+    return [e for e in entries if isinstance(e, dict)]
+  except FileNotFoundError:
+    return []
+  except (OSError, ValueError, TypeError) as exc:
+    # Never silently start from an empty queue when the file exists but is unreadable.
+    raise RuntimeError(f"Jabber Cleanup queue file could not be read ({JABBER_CLEANUP_QUEUE_PATH}): {exc}") from exc
+
+
+def _jabber_cleanup_save_locked(entries: list[dict]) -> None:
+  cutoff = _jabber_cleanup_now() - datetime.timedelta(days=JABBER_CLEANUP_RETENTION_DAYS)
+  kept = []
+  for entry in entries:
+    try:
+      updated = datetime.datetime.fromisoformat(str(entry.get("updated_at", "") or entry.get("queued_at", "")))
+    except ValueError:
+      updated = None
+    if updated is None or updated >= cutoff or entry.get("status") in JABBER_CLEANUP_ACTIVE_STATUSES:
+      kept.append(entry)
+  parent = os.path.dirname(JABBER_CLEANUP_QUEUE_PATH)
+  if parent:
+    os.makedirs(parent, exist_ok=True)
+  temp_path = JABBER_CLEANUP_QUEUE_PATH + ".tmp"
+  with open(temp_path, "w", encoding="utf-8") as handle:
+    json.dump({"version": 1, "retention_days": JABBER_CLEANUP_RETENTION_DAYS, "entries": kept}, handle, indent=2)
+    handle.flush()
+    os.fsync(handle.fileno())
+  os.replace(temp_path, JABBER_CLEANUP_QUEUE_PATH)
+
+
+def _jabber_cleanup_event(entry: dict, action: str, operator: str, detail: str = "") -> None:
+  now_iso = _jabber_cleanup_now().isoformat(timespec="seconds")
+  entry.setdefault("events", []).append({"at": now_iso, "by": operator, "action": action, "detail": detail[:2000]})
+  entry["updated_at"] = now_iso
+
+
+def _jabber_cleanup_user_devices(cucm_host: str, cucm_user: str, cucm_pass: str, userid: str) -> dict:
+  rows = _axl_execute_sql_rows(
+    cucm_host, cucm_user, cucm_pass,
+    "SELECT d.name AS device_name, dp.name AS device_pool, n.dnorpattern AS extension, "
+    "u.userid AS userid, u.firstname AS first_name, u.lastname AS last_name, u.mailid AS email, "
+    "rd.datetimestamp AS last_registered "
+    "FROM enduser u "
+    "INNER JOIN device d ON d.fkenduser = u.pkid "
+    "LEFT OUTER JOIN devicepool dp ON dp.pkid = d.fkdevicepool "
+    "LEFT OUTER JOIN devicenumplanmap dm ON dm.fkdevice = d.pkid AND dm.numplanindex = 1 "
+    "LEFT OUTER JOIN numplan n ON n.pkid = dm.fknumplan "
+    "LEFT OUTER JOIN registrationdynamic rd ON rd.fkdevice = d.pkid "
+    f"WHERE LOWER(u.userid) = LOWER('{_sql_escape_literal(userid)}') "
+    "AND (d.name LIKE 'CSF%' OR d.name LIKE 'TCT%' OR d.name LIKE 'BOT%')",
+  )
+  devices: dict[str, dict] = {}
+  info = {"userid": userid, "user_name": "", "email": ""}
+  for row in rows:
+    info["userid"] = str(row.get("userid", "") or userid).strip()
+    info["user_name"] = " ".join(p for p in [str(row.get("first_name", "") or "").strip(), str(row.get("last_name", "") or "").strip()] if p)
+    info["email"] = str(row.get("email", "") or "").strip()
+    name = str(row.get("device_name", "") or "").strip()
+    dev = devices.setdefault(name.upper(), {
+      "device_name": name,
+      "device_pool": str(row.get("device_pool", "") or "").strip(),
+      "extension": str(row.get("extension", "") or "").strip(),
+      "never": True,
+    })
+    if not _greenlight_is_never_registered(row.get("last_registered")):
+      dev["never"] = False
+  info["devices"] = sorted(devices.values(), key=lambda d: d["device_name"])
+  return info
+
+
+def _jabber_cleanup_notice_content(entry: dict) -> tuple[str, str, str]:
+  eligible = datetime.datetime.fromisoformat(entry["eligible_at"])
+  date_text = eligible.strftime("%A, %B %d, %Y")
+  numbers = sorted({d["extension"] for d in entry.get("devices", []) if d.get("extension")})
+  number_text = ", ".join(_format_notification_phone(n) or n for n in numbers) or "your Cisco Jabber number"
+  name = entry.get("user_name") or entry.get("userid")
+  subject = f"Notice: Your Cisco Jabber phone number {number_text} will be removed on {date_text}"
+  body = (
+    f"Hello {name},\n\n"
+    "As part of AMN Healthcare's cost-savings effort, we review Cisco Jabber phone numbers that are not being used.\n\n"
+    f"Our records show that your Cisco Jabber phone number {number_text} has never been signed in to.\n\n"
+    f"Your Cisco Jabber phone number and voicemail box will be removed on or after {date_text}.\n\n"
+    f"If you still need this number, sign in to Cisco Jabber before {date_text}. Once you have signed in, your number will not be removed.\n\n"
+    "If you have questions, please contact the IT Service Desk.\n\n"
+    "Thank you,\nAMN Healthcare Voice Team"
+  )
+  html_body = (
+    f"<p>Hello {escape(name)},</p>"
+    "<p>As part of AMN Healthcare's cost-savings effort, we review Cisco Jabber phone numbers that are not being used.</p>"
+    f"<p>Our records show that your Cisco Jabber phone number <strong>{escape(number_text)}</strong> has never been signed in to.</p>"
+    f"<p>Your Cisco Jabber phone number and voicemail box will be removed on or after <strong>{escape(date_text)}</strong>.</p>"
+    f"<p>If you still need this number, sign in to Cisco Jabber before {escape(date_text)}. Once you have signed in, your number will not be removed.</p>"
+    "<p>If you have questions, please contact the IT Service Desk.</p>"
+    "<p>Thank you,<br>AMN Healthcare Voice Team</p>"
+  )
+  return subject, body, html_body
+
+
+def _jabber_cleanup_send_notice(entry: dict, operator: str) -> bool:
+  now_iso = _jabber_cleanup_now().isoformat(timespec="seconds")
+  recipient = str(entry.get("email", "") or "").strip()
+  record = {"sent_at": now_iso, "sent_by": operator, "to": recipient, "subject": "", "status": "Failed", "detail": ""}
+  if not recipient:
+    record["detail"] = "User has no email (mailid) in CUCM."
+  else:
+    try:
+      subject, body, html_body = _jabber_cleanup_notice_content(entry)
+      record["subject"] = subject
+      _send_smtp_email(
+        sender=CSF_JABBER_EMAIL_FROM,
+        recipients=[recipient],
+        subject=subject,
+        body=body,
+        html_body=html_body,
+        smtp_port=SMTP_PORT,
+        use_starttls=SMTP_USE_STARTTLS,
+      )
+      record["status"] = "Sent"
+      record["detail"] = f"Sent via {SMTP_SERVER}:{SMTP_PORT}"
+    except Exception as exc:
+      record["detail"] = str(exc)[:500]
+  entry.setdefault("emails", []).append(record)
+  _jabber_cleanup_event(entry, "notice_email", operator, f"{record['status']}: {record['detail']}")
+  return record["status"] == "Sent"
+
+
+def _jabber_cleanup_public(entry: dict) -> dict:
+  view = dict(entry)
+  view.pop("separation_output", None)
+  now = _jabber_cleanup_now()
+  eligible = entry.get("eligible_at")
+  view["ready"] = bool(
+    entry.get("status") in {"notified", "failed"}
+    and eligible
+    and now >= datetime.datetime.fromisoformat(eligible)
+  )
+  return view
 
 
 def _greenlight_queue_store(entry: dict) -> None:
@@ -38967,6 +39288,7 @@ __GREENLIGHT_ADMIN_CARD__
             <button type="button" class="portal-nav-btn" data-panel="jabberstatus">Jabber Status Check</button>
             <button type="button" class="portal-nav-btn" data-panel="translationlookup">Translation Pattern Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="csfinventory">Jabber CSF License Inventory</button>
+            <button type="button" class="portal-nav-btn" data-panel="jabbercleanup">Jabber Cleanup</button>
             <a class="portal-nav-link" href="/menu?panel=build">Open Build User (Page 1)</a>
             <a class="portal-nav-link" href="/menu?panel=offboard">Open Separate Employee (Page 1)</a>
           </div>
@@ -39412,6 +39734,254 @@ __GREENLIGHT_ADMIN_CARD__
                 <pre id="greenlight-translation-output"></pre>
               </div>
             </div>
+          </section>
+
+          <section class="tool-panel" data-panel="jabbercleanup">
+            <h3>Jabber Cleanup (Last Registered = Never)</h3>
+            <p><strong>Stages:</strong> 1) Find CSF/TCT/BOT devices with Last Registered = Never. 2) Stage them in <strong>T3_CENT_DP_LowUsage</strong>. 3) Queue the user: a removal notice email is sent. 4) After the notice period, click <strong>Run Separation</strong> (standard separation: phones, numbers, LDAP, Unity voicemail) using that day's login credentials. Queue and email history are kept 180 days and survive restarts.</p>
+            <form id="greenlight-jcleanup-form" onsubmit="return false;">
+              <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
+              <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
+              <input type="hidden" name="cucm_pass" value="" />
+              <div class="search-filter-row">
+                <button type="button" id="greenlight-jcleanup-scan" onclick="if (window.greenlightJCleanupScan) { window.greenlightJCleanupScan(event); } else { document.getElementById('greenlight-jcleanup-status').textContent = 'Error: Jabber Cleanup JavaScript did not load.'; }">1. Find Never-Registered Jabber</button>
+                <input id="greenlight-jcleanup-filter" placeholder="Filter (name, user, pool, extension)" style="min-width:240px;" />
+                <select id="greenlight-jcleanup-stage" aria-label="Stage filter">
+                  <option value="all">All stages</option>
+                  <option value="unstaged">Not staged (needs LowUsage)</option>
+                  <option value="staged">Staged in LowUsage</option>
+                </select>
+                <label style="font-size:12px;"><input type="checkbox" id="greenlight-jcleanup-allnever" /> Only users whose Jabber devices are ALL Never</label>
+              </div>
+              <div class="search-filter-row">
+                <button type="button" id="greenlight-jcleanup-move" disabled onclick="if (window.greenlightJCleanupMove) { window.greenlightJCleanupMove(event); }">2. Move Selected to T3_CENT_DP_LowUsage (<span id="greenlight-jcleanup-count">0</span>)</button>
+                <button type="button" id="greenlight-jcleanup-queue" disabled style="background:#a56a00;" onclick="if (window.greenlightJCleanupQueue) { window.greenlightJCleanupQueue(event); }">3. Queue Users + Send Removal Notice (<span id="greenlight-jcleanup-qcount">0</span>)</button>
+              </div>
+            </form>
+            <div class="result-card" style="width:100%; max-width:none;">
+              <p id="greenlight-jcleanup-status" class="status-line">Click Find Never-Registered Jabber.</p>
+              <p><a id="greenlight-jcleanup-download" href="#" style="display:none; font-weight:700;">Download Full CSV</a></p>
+              <div id="greenlight-jcleanup-results" style="overflow:auto; max-height:560px;"></div>
+            </div>
+            <div class="result-card" style="width:100%; max-width:none; margin-top:14px;">
+              <div style="display:flex; align-items:center; justify-content:space-between; gap:8px;">
+                <strong style="font-size:13px; color:#234d72; text-transform:uppercase;">Removal Queue and Email History (180 days)</strong>
+                <button type="button" id="greenlight-jcleanup-qrefresh" onclick="if (window.greenlightJCleanupLoadQueue) { window.greenlightJCleanupLoadQueue(); }">Refresh Queue</button>
+              </div>
+              <p id="greenlight-jcleanup-qstatus" class="status-line">Loading queue...</p>
+              <div id="greenlight-jcleanup-qresults" style="overflow:auto; max-height:560px;"></div>
+            </div>
+            <script>
+              (function () {
+                var rows = [];
+                var selected = {};
+                var busy = false;
+                var CHUNK = 25;
+                var cell = "border:1px solid #d9e4ef; padding:4px 6px; white-space:nowrap;";
+                var head = cell + " background:#eaf4ff; position:sticky; top:0;";
+                function el(id) { return document.getElementById(id); }
+                function esc(v) { return String(v == null ? "" : v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+                function movable(r) { return !r.already_lowusage && r.target_pool_exists && r.move_state !== "moved"; }
+                function queueable(r) { return r.already_lowusage && r.user_all_jabber_never === "Yes" && r.userid && !queueByUser[String(r.userid).toLowerCase()]; }
+                var queueEntries = [];
+                var queueByUser = {};
+                function visibleRows() {
+                  var term = String(el("greenlight-jcleanup-filter").value || "").trim().toLowerCase();
+                  var allNever = el("greenlight-jcleanup-allnever").checked;
+                  var stage = el("greenlight-jcleanup-stage").value;
+                  return rows.filter(function (r) {
+                    if (allNever && r.user_all_jabber_never !== "Yes") return false;
+                    if (stage === "staged" && !r.already_lowusage) return false;
+                    if (stage === "unstaged" && r.already_lowusage) return false;
+                    if (!term) return true;
+                    return [r.device_name, r.device_description, r.device_pool, r.extension, r.userid, r.user_name].join(" ").toLowerCase().indexOf(term) !== -1;
+                  });
+                }
+                function selectedQueueUsers() {
+                  var users = {};
+                  rows.forEach(function (r) { if (selected[r.device_name] && queueable(r)) users[r.userid] = true; });
+                  return Object.keys(users);
+                }
+                function updateCount() {
+                  var n = rows.filter(function (r) { return movable(r) && selected[r.device_name]; }).length;
+                  var q = selectedQueueUsers().length;
+                  el("greenlight-jcleanup-count").textContent = String(n);
+                  el("greenlight-jcleanup-qcount").textContent = String(q);
+                  el("greenlight-jcleanup-move").disabled = busy || n === 0;
+                  el("greenlight-jcleanup-queue").disabled = busy || q === 0;
+                }
+                function render() {
+                  var list = visibleRows();
+                  var out = el("greenlight-jcleanup-results");
+                  if (!rows.length) { out.innerHTML = ""; updateCount(); return; }
+                  var html = "<p style='font-size:12px; color:#355978;'>Showing " + list.length + " of " + rows.length + " never-registered device(s).</p>";
+                  html += "<table style='border-collapse:collapse; font-size:12px;'><thead><tr><th style='" + head + "'><input type='checkbox' id='greenlight-jcleanup-selall' title='Select all visible devices'></th>";
+                  ["Device", "Type", "Description", "Device Pool", "Stage", "Extension", "User ID", "User Name", "All Jabber Never", "Status", "Queue"].forEach(function (h) { html += "<th style='" + head + "'>" + esc(h) + "</th>"; });
+                  html += "</tr></thead><tbody>";
+                  list.forEach(function (r) {
+                    var box = "<input type='checkbox' data-jc-dev='" + esc(r.device_name) + "'" + (selected[r.device_name] ? " checked" : "") + ">";
+                    var stageText = r.already_lowusage ? "<span style='color:#146c2e;font-weight:700;'>Staged</span>" : (r.target_pool_exists ? "Needs LowUsage" : "<span style='color:#b42318;'>Target pool missing</span>");
+                    var status = r.move_message ? esc(r.move_message) : "";
+                    var q = r.userid ? queueByUser[String(r.userid).toLowerCase()] : null;
+                    var queueText = q ? esc(q.status) + (q.eligible_at ? " (eligible " + esc(String(q.eligible_at).slice(0, 10)) + ")" : "") : (r.user_all_jabber_never === "Yes" ? "" : "<span style='color:#7a5a13;'>Has a registered device</span>");
+                    var bg = r.move_state === "moved" ? " style='background:#eef9f1;'" : (r.move_state === "failed" ? " style='background:#fff1ef;'" : "");
+                    html += "<tr" + bg + "><td style='" + cell + "'>" + box + "</td><td style='" + cell + "'>" + esc(r.device_name) + "</td><td style='" + cell + "'>" + esc(r.device_type) + "</td><td style='" + cell + "'>" + esc(r.device_description) + "</td><td style='" + cell + "'>" + esc(r.device_pool) + "</td><td style='" + cell + "'>" + stageText + "</td><td style='" + cell + "'>" + esc(r.extension) + "</td><td style='" + cell + "'>" + esc(r.userid) + "</td><td style='" + cell + "'>" + esc(r.user_name) + "</td><td style='" + cell + "'>" + esc(r.user_all_jabber_never) + "</td><td style='" + cell + "'>" + status + "</td><td style='" + cell + "'>" + queueText + "</td></tr>";
+                  });
+                  out.innerHTML = html + "</tbody></table>";
+                  Array.prototype.forEach.call(out.querySelectorAll("[data-jc-dev]"), function (b) {
+                    b.addEventListener("change", function () { var k = b.getAttribute("data-jc-dev"); if (b.checked) selected[k] = true; else delete selected[k]; updateCount(); });
+                  });
+                  var all = el("greenlight-jcleanup-selall");
+                  if (all) all.checked = list.length > 0 && list.every(function (r) { return selected[r.device_name]; });
+                  if (all) all.addEventListener("change", function () { list.forEach(function (r) { if (all.checked) selected[r.device_name] = true; else delete selected[r.device_name]; }); render(); });
+                  updateCount();
+                }
+                function post(url, data) {
+                  return fetch(url, { method: "POST", body: data, credentials: "same-origin", headers: { "X-Requested-With": "XMLHttpRequest", "Accept": "application/json" } })
+                    .then(function (resp) { return resp.json().catch(function () { return { ok: false, error: { message: "HTTP " + resp.status } }; }); })
+                    .then(function (p) { if (!p || !p.ok) { var e = p && p.error; throw new Error((e && e.message) || e || "Request failed."); } return p; });
+                }
+                window.greenlightJCleanupScan = function (ev) {
+                  if (ev && ev.preventDefault) ev.preventDefault();
+                  var status = el("greenlight-jcleanup-status");
+                  var dl = el("greenlight-jcleanup-download");
+                  status.textContent = "Scanning CUCM for never-registered CSF/TCT/BOT devices...";
+                  dl.style.display = "none";
+                  el("greenlight-jcleanup-scan").disabled = true;
+                  post("/project-greenlight/jabber-cleanup/scan", new FormData(el("greenlight-jcleanup-form"))).then(function (p) {
+                    rows = p.rows || []; selected = {};
+                    status.textContent = "Scanned " + p.devices_scanned + " Jabber device(s); " + p.count + " have Last Registered = Never.";
+                    dl.href = p.download_url; dl.textContent = "Download Full CSV (" + p.filename + ")"; dl.style.display = "inline";
+                    render();
+                  }).catch(function (err) { status.textContent = "Error: " + err.message; })
+                    .then(function () { el("greenlight-jcleanup-scan").disabled = false; });
+                };
+                window.greenlightJCleanupMove = async function (ev) {
+                  if (ev && ev.preventDefault) ev.preventDefault();
+                  var targets = rows.filter(function (r) { return movable(r) && selected[r.device_name]; });
+                  if (!targets.length) return;
+                  if (!window.confirm("Move " + targets.length + " device(s) to T3_CENT_DP_LowUsage? Each device is rechecked and skipped if it has registered since the scan.")) return;
+                  var status = el("greenlight-jcleanup-status");
+                  busy = true; updateCount();
+                  var moved = 0, failed = 0;
+                  for (var i = 0; i < targets.length; i += CHUNK) {
+                    var chunk = targets.slice(i, i + CHUNK);
+                    status.textContent = "Moving devices " + (i + 1) + "-" + (i + chunk.length) + " of " + targets.length + "...";
+                    var data = new FormData(el("greenlight-jcleanup-form"));
+                    data.append("devices_json", JSON.stringify(chunk.map(function (r) { return r.device_name; })));
+                    try {
+                      var p = await post("/project-greenlight/jabber-cleanup/move-lowusage", data);
+                      var byName = {};
+                      (p.results || []).forEach(function (res) { byName[res.device_name] = res; });
+                      chunk.forEach(function (r) {
+                        var res = byName[r.device_name];
+                        if (res && res.ok) { r.move_state = "moved"; r.move_message = res.message; if (res.device_pool) { r.device_pool = res.device_pool; } r.already_lowusage = true; delete selected[r.device_name]; moved++; }
+                        else { r.move_state = "failed"; r.move_message = (res && res.message) || "No result returned."; failed++; }
+                      });
+                    } catch (err) {
+                      chunk.forEach(function (r) { r.move_state = "failed"; r.move_message = err.message; failed++; });
+                    }
+                    render();
+                  }
+                  busy = false; updateCount();
+                  status.textContent = "Move complete: " + moved + " moved/confirmed, " + failed + " failed or skipped.";
+                };
+                function fmt(iso) { return iso ? String(iso).replace("T", " ").slice(0, 16) : ""; }
+                function renderQueue() {
+                  var out = el("greenlight-jcleanup-qresults");
+                  if (!queueEntries.length) { out.innerHTML = "<p style='font-size:12px;'>Queue is empty.</p>"; return; }
+                  var html = "<table style='border-collapse:collapse; font-size:12px;'><thead><tr>";
+                  ["User ID", "Name", "Email", "Numbers", "Status", "Queued", "Eligible", "Emails", "Actions", "History"].forEach(function (h) { html += "<th style='" + head + "'>" + esc(h) + "</th>"; });
+                  html += "</tr></thead><tbody>";
+                  queueEntries.forEach(function (e) {
+                    var numbers = (e.devices || []).map(function (d) { return d.extension; }).filter(Boolean).filter(function (v, i, a) { return a.indexOf(v) === i; }).join(", ");
+                    var emails = (e.emails || []).map(function (m) { return "<div>" + esc(fmt(m.sent_at)) + " " + esc(m.status) + " to " + esc(m.to || "(none)") + "</div>"; }).join("");
+                    var events = (e.events || []).map(function (v) { return "<div>" + esc(fmt(v.at)) + " " + esc(v.by) + ": " + esc(v.action) + (v.detail ? " - " + esc(v.detail) : "") + "</div>"; }).join("");
+                    var actions = [];
+                    if (e.ready) actions.push("<button type='button' data-jq-run='" + esc(e.id) + "' style='background:#9f2f24;'>Run Separation</button>");
+                    if (e.status === "notified" || e.status === "notice_failed") actions.push("<button type='button' data-jq-resend='" + esc(e.id) + "'>Resend Notice</button>");
+                    if (e.status === "notified" || e.status === "notice_failed" || e.status === "failed") actions.push("<button type='button' data-jq-cancel='" + esc(e.id) + "' style='background:#6b7280;'>Cancel</button>");
+                    if (e.status === "separated" || e.status === "failed") actions.push("<a href='/project-greenlight/jabber-cleanup/queue/output/" + encodeURIComponent(e.id) + "'>Separation CSV</a>");
+                    var color = e.status === "separated" ? "#146c2e" : (e.status === "failed" || e.status === "notice_failed" ? "#b42318" : (e.ready ? "#9a4b00" : "#234d72"));
+                    var statusText = e.ready ? "Ready for Separation" : e.status;
+                    html += "<tr><td style='" + cell + "'>" + esc(e.userid) + "</td><td style='" + cell + "'>" + esc(e.user_name) + "</td><td style='" + cell + "'>" + esc(e.email) + "</td><td style='" + cell + "'>" + esc(numbers) + "</td><td style='" + cell + "color:" + color + ";font-weight:700;'>" + esc(statusText) + "</td><td style='" + cell + "'>" + esc(fmt(e.queued_at)) + "</td><td style='" + cell + "'>" + esc(fmt(e.eligible_at)) + "</td><td style='" + cell + "white-space:normal;min-width:220px;'>" + emails + "</td><td style='" + cell + "'>" + actions.join(" ") + "</td><td style='" + cell + "white-space:normal;min-width:260px;'><details><summary>" + (e.events || []).length + " event(s)</summary>" + events + "</details></td></tr>";
+                  });
+                  out.innerHTML = html + "</tbody></table>";
+                  Array.prototype.forEach.call(out.querySelectorAll("[data-jq-run]"), function (b) { b.addEventListener("click", function () { queueAction("run", b.getAttribute("data-jq-run"), b); }); });
+                  Array.prototype.forEach.call(out.querySelectorAll("[data-jq-resend]"), function (b) { b.addEventListener("click", function () { queueAction("resend", b.getAttribute("data-jq-resend"), b); }); });
+                  Array.prototype.forEach.call(out.querySelectorAll("[data-jq-cancel]"), function (b) { b.addEventListener("click", function () { queueAction("cancel", b.getAttribute("data-jq-cancel"), b); }); });
+                }
+                window.greenlightJCleanupLoadQueue = function () {
+                  var qs = el("greenlight-jcleanup-qstatus");
+                  qs.textContent = "Loading queue...";
+                  return fetch("/project-greenlight/jabber-cleanup/queue", { credentials: "same-origin", headers: { "Accept": "application/json" } })
+                    .then(function (resp) { return resp.json(); })
+                    .then(function (p) {
+                      if (!p || !p.ok) throw new Error((p && p.error && (p.error.message || p.error)) || "Queue load failed.");
+                      queueEntries = p.entries || [];
+                      queueByUser = {};
+                      queueEntries.forEach(function (e) { if (["notified", "notice_failed", "separating", "failed"].indexOf(e.status) !== -1) queueByUser[String(e.userid).toLowerCase()] = e; });
+                      var ready = queueEntries.filter(function (e) { return e.ready; }).length;
+                      qs.textContent = queueEntries.length + " entr(ies); " + ready + " ready for separation. Notice period: " + p.notice_days + " days. Retention: " + p.retention_days + " days.";
+                      renderQueue(); render();
+                    })
+                    .catch(function (err) { qs.textContent = "Error: " + err.message; });
+                };
+                function queueAction(kind, id, btn) {
+                  var entry = queueEntries.filter(function (e) { return e.id === id; })[0] || {};
+                  var qs = el("greenlight-jcleanup-qstatus");
+                  var data = new FormData(kind === "run" ? el("greenlight-jcleanup-form") : undefined);
+                  data.append("entry_id", id);
+                  var url = "/project-greenlight/jabber-cleanup/queue/" + (kind === "run" ? "run-separation" : kind);
+                  if (kind === "run" && !window.confirm("Run the full Separation for " + entry.userid + " now? This removes their Jabber devices, releases numbers, clears LDAP phone fields, and deletes Unity voicemail. Devices are rechecked first and separation is skipped if the user has signed in.")) return;
+                  if (kind === "cancel") {
+                    var reason = window.prompt("Cancel " + entry.userid + " from the cleanup queue. Reason:");
+                    if (reason === null) return;
+                    data.append("reason", reason);
+                  }
+                  if (kind === "resend" && !window.confirm("Resend the removal notice email to " + (entry.email || entry.userid) + "?")) return;
+                  btn.disabled = true;
+                  qs.textContent = (kind === "run" ? "Running separation for " : kind === "resend" ? "Resending notice to " : "Cancelling ") + entry.userid + "...";
+                  fetch(url, { method: "POST", body: data, credentials: "same-origin", headers: { "X-Requested-With": "XMLHttpRequest", "Accept": "application/json" } })
+                    .then(function (resp) { return resp.json().catch(function () { return { ok: false, error: "HTTP " + resp.status }; }); })
+                    .then(function (p) {
+                      var msg = p.detail || (p.error && (p.error.message || p.error)) || "";
+                      window.greenlightJCleanupLoadQueue().then(function () { el("greenlight-jcleanup-qstatus").textContent = entry.userid + ": " + (p.status || (p.ok ? "done" : "failed")) + (msg ? " - " + msg : ""); });
+                    })
+                    .catch(function (err) { qs.textContent = "Error: " + err.message; btn.disabled = false; });
+                }
+                window.greenlightJCleanupQueue = async function (ev) {
+                  if (ev && ev.preventDefault) ev.preventDefault();
+                  var users = selectedQueueUsers();
+                  if (!users.length) return;
+                  if (!window.confirm("Queue " + users.length + " user(s) and send the removal notice email now? Separation becomes available after the notice period.")) return;
+                  var status = el("greenlight-jcleanup-status");
+                  busy = true; updateCount();
+                  var ok = 0, bad = [];
+                  for (var i = 0; i < users.length; i += 25) {
+                    var chunk = users.slice(i, i + 25);
+                    status.textContent = "Queuing users " + (i + 1) + "-" + (i + chunk.length) + " of " + users.length + " and sending notices...";
+                    var data = new FormData(el("greenlight-jcleanup-form"));
+                    data.append("users_json", JSON.stringify(chunk));
+                    try {
+                      var p = await post("/project-greenlight/jabber-cleanup/queue", data);
+                      (p.results || []).forEach(function (res) { if (res.ok) ok++; else bad.push(res.userid + ": " + res.message); });
+                    } catch (err) { chunk.forEach(function (u) { bad.push(u + ": " + err.message); }); }
+                  }
+                  selected = {};
+                  busy = false;
+                  status.textContent = "Queued with notice sent: " + ok + ". " + (bad.length ? "Not queued / issues: " + bad.join(" | ") : "");
+                  window.greenlightJCleanupLoadQueue();
+                };
+                ["greenlight-jcleanup-filter", "greenlight-jcleanup-allnever", "greenlight-jcleanup-stage"].forEach(function (id) {
+                  var node = el(id);
+                  if (node) { node.addEventListener("input", render); node.addEventListener("change", render); }
+                });
+                var filterNode = el("greenlight-jcleanup-filter");
+                if (filterNode) filterNode.addEventListener("keydown", function (e) { if (e.key === "Enter") e.preventDefault(); });
+                window.greenlightJCleanupLoadQueue();
+              })();
+            </script>
           </section>
 
           <section class="tool-panel" data-panel="csfinventory">
@@ -60451,6 +61021,305 @@ def project_greenlight_person_lookup_history_route(limit: int = Query(20, ge=1, 
   return JSONResponse({"ok": True, "runs": _greenlight_queue_list(limit=limit)})
 
 
+@app.post("/project-greenlight/jabber-cleanup/scan")
+def project_greenlight_jabber_cleanup_scan_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  try:
+    result = _greenlight_jabber_cleanup_scan(cucm_host, cucm_user, cucm_pass)
+  except Exception as exc:
+    logger.warning("Greenlight Jabber cleanup scan failed: %s", exc)
+    raise RuntimeError(f"Jabber Cleanup scan failed: {exc}") from exc
+  rows = result["rows"]
+  timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+  filename = f"jabber_cleanup_never_registered_{timestamp}.csv"
+  job_output = _prepare_job_output(_greenlight_jabber_cleanup_csv_bytes(rows), filename)
+  _append_audit_event(
+    action="project_greenlight_jabber_cleanup_scan",
+    cucm_host=cucm_host,
+    operator=cucm_user,
+    target=f"scanned={result['devices_scanned']};never={len(rows)}",
+    output_filename=filename,
+    inline_mode=True,
+  )
+  return JSONResponse({
+    "ok": True,
+    "devices_scanned": result["devices_scanned"],
+    "count": len(rows),
+    "rows": rows,
+    "filename": filename,
+    "download_url": f"/download/job-output/{job_output['job_id']}",
+  })
+
+
+@app.post("/project-greenlight/jabber-cleanup/move-lowusage")
+def project_greenlight_jabber_cleanup_move_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    devices_json: str = Form(""),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  try:
+    parsed = json.loads(devices_json or "[]")
+  except (TypeError, ValueError):
+    return JSONResponse({"ok": False, "error": "devices_json must be a JSON list."}, status_code=400)
+  names = []
+  for item in parsed if isinstance(parsed, list) else []:
+    name = str(item or "").strip()
+    if re.fullmatch(r"(CSF|TCT|BOT)[A-Za-z0-9_.-]{1,40}", name, re.IGNORECASE) and name not in names:
+      names.append(name)
+  if not names:
+    return JSONResponse({"ok": False, "error": "No valid CSF/TCT/BOT device names were provided."}, status_code=400)
+  if len(names) > 50:
+    return JSONResponse({"ok": False, "error": "Maximum 50 devices per request."}, status_code=400)
+  try:
+    results = _greenlight_move_devices_to_lowusage(cucm_host, cucm_user, cucm_pass, names)
+  except Exception as exc:
+    raise RuntimeError(f"Move to LowUsage failed: {exc}") from exc
+  moved = [r["device_name"] for r in results if r.get("ok") and str(r.get("message", "")).startswith("Moved")]
+  _append_audit_event(
+    action="project_greenlight_jabber_cleanup_move_lowusage",
+    cucm_host=cucm_host,
+    operator=cucm_user,
+    target=f"requested={len(names)};moved={len(moved)};devices={'|'.join(moved)[:900]}",
+    output_filename="",
+    inline_mode=True,
+  )
+  return JSONResponse({"ok": True, "results": results})
+
+
+@app.post("/project-greenlight/jabber-cleanup/queue")
+def project_greenlight_jabber_cleanup_queue_add_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    users_json: str = Form(""),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  try:
+    parsed = json.loads(users_json or "[]")
+  except (TypeError, ValueError):
+    return JSONResponse({"ok": False, "error": "users_json must be a JSON list."}, status_code=400)
+  userids = []
+  for item in parsed if isinstance(parsed, list) else []:
+    uid = str(item or "").strip()
+    if re.fullmatch(r"[A-Za-z0-9_.@-]{1,128}", uid) and uid.lower() not in [u.lower() for u in userids]:
+      userids.append(uid)
+  if not userids:
+    return JSONResponse({"ok": False, "error": "No valid user IDs were provided."}, status_code=400)
+  if len(userids) > 25:
+    return JSONResponse({"ok": False, "error": "Maximum 25 users per request."}, status_code=400)
+
+  results = []
+  with JABBER_CLEANUP_LOCK:
+    entries = _jabber_cleanup_load_locked()
+    for uid in userids:
+      if any(e.get("userid", "").lower() == uid.lower() and e.get("status") in JABBER_CLEANUP_ACTIVE_STATUSES for e in entries):
+        results.append({"userid": uid, "ok": False, "message": "Already in the cleanup queue."})
+        continue
+      try:
+        info = _jabber_cleanup_user_devices(cucm_host, cucm_user, cucm_pass, uid)
+      except Exception as exc:
+        results.append({"userid": uid, "ok": False, "message": f"CUCM lookup failed: {exc}"})
+        continue
+      devices = info.get("devices", [])
+      if not devices:
+        results.append({"userid": uid, "ok": False, "message": "No CSF/TCT/BOT devices owned by this user."})
+        continue
+      registered = [d["device_name"] for d in devices if not d["never"]]
+      if registered:
+        results.append({"userid": uid, "ok": False, "message": f"Not eligible: registered device(s) {', '.join(registered)}."})
+        continue
+      unstaged = [d["device_name"] for d in devices if not d["device_pool"].lower().endswith(GREENLIGHT_LOWUSAGE_SUFFIX.lower())]
+      if unstaged:
+        results.append({"userid": uid, "ok": False, "message": f"Move to LowUsage first: {', '.join(unstaged)}."})
+        continue
+      now = _jabber_cleanup_now()
+      entry = {
+        "id": str(uuid4()),
+        "userid": info["userid"],
+        "user_name": info["user_name"],
+        "email": info["email"],
+        "cucm_host": cucm_host,
+        "devices": [{k: d[k] for k in ("device_name", "device_pool", "extension")} for d in devices],
+        "status": "notified",
+        "queued_at": now.isoformat(timespec="seconds"),
+        "queued_by": cucm_user,
+        "eligible_at": (now + datetime.timedelta(days=JABBER_CLEANUP_NOTICE_DAYS)).isoformat(timespec="seconds"),
+        "emails": [],
+        "events": [],
+      }
+      _jabber_cleanup_event(entry, "queued", cucm_user, f"{len(devices)} device(s) queued for removal notice.")
+      if not _jabber_cleanup_send_notice(entry, cucm_user):
+        entry["status"] = "notice_failed"
+      entries.append(entry)
+      # Persist after every user so a crash mid-batch never loses a sent notice.
+      _jabber_cleanup_save_locked(entries)
+      results.append({"userid": uid, "ok": entry["status"] == "notified", "message": entry["emails"][-1]["detail"] if entry["emails"] else ""})
+      _append_audit_event(
+        action="jabber_cleanup_queued",
+        cucm_host=cucm_host,
+        operator=cucm_user,
+        target=f"account={entry['userid']};status={entry['status']};eligible_at={entry['eligible_at']}",
+        account=entry["userid"],
+        output_filename="",
+        inline_mode=True,
+      )
+  return JSONResponse({"ok": True, "results": results})
+
+
+@app.get("/project-greenlight/jabber-cleanup/queue")
+def project_greenlight_jabber_cleanup_queue_list_route():
+  with JABBER_CLEANUP_LOCK:
+    entries = _jabber_cleanup_load_locked()
+  entries.sort(key=lambda e: str(e.get("queued_at", "")), reverse=True)
+  return JSONResponse({
+    "ok": True,
+    "notice_days": JABBER_CLEANUP_NOTICE_DAYS,
+    "retention_days": JABBER_CLEANUP_RETENTION_DAYS,
+    "entries": [_jabber_cleanup_public(e) for e in entries],
+  })
+
+
+def _jabber_cleanup_find(entries: list[dict], entry_id: str) -> dict:
+  for entry in entries:
+    if entry.get("id") == entry_id:
+      return entry
+  raise RuntimeError("Cleanup queue entry not found.")
+
+
+@app.post("/project-greenlight/jabber-cleanup/queue/resend")
+def project_greenlight_jabber_cleanup_resend_route(request: Request, entry_id: str = Form("")):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  with JABBER_CLEANUP_LOCK:
+    entries = _jabber_cleanup_load_locked()
+    entry = _jabber_cleanup_find(entries, entry_id)
+    if entry.get("status") not in {"notified", "notice_failed"}:
+      return JSONResponse({"ok": False, "error": f"Cannot resend a notice for status {entry.get('status')}."}, status_code=409)
+    if entry.get("status") == "notice_failed":
+      # The 14-day notice window starts when a notice is actually delivered.
+      entry["eligible_at"] = (_jabber_cleanup_now() + datetime.timedelta(days=JABBER_CLEANUP_NOTICE_DAYS)).isoformat(timespec="seconds")
+    sent = _jabber_cleanup_send_notice(entry, operator)
+    if sent:
+      entry["status"] = "notified"
+    _jabber_cleanup_save_locked(entries)
+  return JSONResponse({"ok": sent, "entry": _jabber_cleanup_public(entry), "error": "" if sent else entry["emails"][-1]["detail"]})
+
+
+@app.post("/project-greenlight/jabber-cleanup/queue/cancel")
+def project_greenlight_jabber_cleanup_cancel_route(request: Request, entry_id: str = Form(""), reason: str = Form("")):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  with JABBER_CLEANUP_LOCK:
+    entries = _jabber_cleanup_load_locked()
+    entry = _jabber_cleanup_find(entries, entry_id)
+    if entry.get("status") not in {"notified", "notice_failed", "failed"}:
+      return JSONResponse({"ok": False, "error": f"Cannot cancel an entry with status {entry.get('status')}."}, status_code=409)
+    entry["status"] = "cancelled"
+    _jabber_cleanup_event(entry, "cancelled", operator, (reason or "").strip()[:500])
+    _jabber_cleanup_save_locked(entries)
+  _append_audit_event(
+    action="jabber_cleanup_cancelled",
+    cucm_host=entry.get("cucm_host", ""),
+    operator=operator,
+    target=f"account={entry.get('userid', '')}",
+    account=entry.get("userid", ""),
+    output_filename="",
+    inline_mode=True,
+  )
+  return JSONResponse({"ok": True, "entry": _jabber_cleanup_public(entry)})
+
+
+@app.post("/project-greenlight/jabber-cleanup/queue/run-separation")
+def project_greenlight_jabber_cleanup_run_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    entry_id: str = Form(""),
+):
+  # Uses the operator's current-session credentials; nothing is stored in the queue.
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  with JABBER_CLEANUP_LOCK:
+    entries = _jabber_cleanup_load_locked()
+    entry = _jabber_cleanup_find(entries, entry_id)
+    if not _jabber_cleanup_public(entry)["ready"]:
+      return JSONResponse({"ok": False, "error": f"Not ready: status {entry.get('status')}, eligible on {entry.get('eligible_at')}."}, status_code=409)
+    if str(entry.get("cucm_host", "")).lower() != str(cucm_host).lower():
+      return JSONResponse({"ok": False, "error": f"This entry was queued on {entry.get('cucm_host')}; you are logged in to {cucm_host}."}, status_code=409)
+    entry["status"] = "separating"
+    _jabber_cleanup_event(entry, "separation_started", cucm_user)
+    _jabber_cleanup_save_locked(entries)
+
+  userid = entry["userid"]
+  final_status, detail, output_text = "failed", "", ""
+  try:
+    info = _jabber_cleanup_user_devices(cucm_host, cucm_user, cucm_pass, userid)
+    registered = [d["device_name"] for d in info.get("devices", []) if not d["never"]]
+    if registered:
+      final_status = "skipped_registered"
+      detail = f"User signed in during the notice period ({', '.join(registered)}); separation skipped."
+    else:
+      data, _filename = _run_full_separation(cucm_host, cucm_user, cucm_pass, userid, True)
+      output_text = _to_bytes(data).decode("utf-8", errors="replace")
+      failed_steps = [
+        row[0] for row in csv.reader(io.StringIO(output_text))
+        if len(row) >= 2 and row[0] != "Step" and row[1].strip().lower() in {"failed", "error"}
+      ]
+      final_status = "failed" if failed_steps else "separated"
+      detail = ("Failed steps: " + ", ".join(failed_steps)) if failed_steps else "Separation completed."
+  except Exception as exc:
+    detail = f"Separation error: {exc}"
+
+  with JABBER_CLEANUP_LOCK:
+    entries = _jabber_cleanup_load_locked()
+    entry = _jabber_cleanup_find(entries, entry_id)
+    entry["status"] = final_status
+    if output_text:
+      entry["separation_output"] = output_text[:20000]
+    _jabber_cleanup_event(entry, "separation_result", cucm_user, detail)
+    _jabber_cleanup_save_locked(entries)
+  _append_audit_event(
+    action="jabber_cleanup_separation",
+    cucm_host=cucm_host,
+    operator=cucm_user,
+    target=f"account={userid};status={final_status}",
+    account=userid,
+    output_filename="",
+    inline_mode=True,
+  )
+  job = _prepare_job_output(output_text.encode("utf-8"), f"jabber_cleanup_separation_{userid}.csv") if output_text else None
+  return JSONResponse({
+    "ok": final_status in {"separated", "skipped_registered"},
+    "status": final_status,
+    "detail": detail,
+    "entry": _jabber_cleanup_public(entry),
+    "download_url": f"/download/job-output/{job['job_id']}" if job else "",
+  })
+
+
+@app.get("/project-greenlight/jabber-cleanup/queue/output/{entry_id}")
+def project_greenlight_jabber_cleanup_output_route(entry_id: str):
+  with JABBER_CLEANUP_LOCK:
+    entry = _jabber_cleanup_find(_jabber_cleanup_load_locked(), entry_id)
+  output = str(entry.get("separation_output", "") or "")
+  if not output:
+    return JSONResponse({"ok": False, "error": "No separation output recorded for this entry."}, status_code=404)
+  return Response(
+    content=output.encode("utf-8"),
+    media_type="text/csv",
+    headers={"Content-Disposition": f"attachment; filename=jabber_cleanup_separation_{re.sub(r'[^A-Za-z0-9_.-]', '_', entry.get('userid', 'user'))}.csv"},
+  )
+
+
 @app.post("/project-greenlight/jabber-csf-inventory")
 def project_greenlight_jabber_csf_inventory_route(
     request: Request,
@@ -61943,6 +62812,22 @@ def decommission_user_csf_voicemail_route(
     cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
     _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
     clean_target_user = (target_user or "").strip()
+    data, filename = _run_full_separation(cucm_host, cucm_user, cucm_pass, clean_target_user, inline)
+
+    if inline:
+        job_output = _prepare_job_output(data, filename)
+        return JSONResponse({
+            "job_id": job_output["job_id"],
+            "filename": job_output["filename"],
+            "output_text": job_output["output_text"],
+            "download_url": f"/download/job-output/{job_output['job_id']}",
+        })
+
+    return _render_job_result("Offboard User - Delete all Jabber and Voicemail Box (Option 10)", data, filename)
+
+
+def _run_full_separation(cucm_host: str, cucm_user: str, cucm_pass: str, clean_target_user: str, inline: bool = True) -> tuple[bytes, str]:
+    """Full Separate Employee pipeline (Option 10): CUCM, Unity, LDAP, UM group, Teams, LS DIDs, audit."""
     try:
       _, clean_display_name = _lookup_user_contact(cucm_host, cucm_user, cucm_pass, clean_target_user)
     except Exception:
@@ -62104,17 +62989,7 @@ def decommission_user_csf_voicemail_route(
       output_filename=filename,
       inline_mode=inline,
     )
-
-    if inline:
-        job_output = _prepare_job_output(data, filename)
-        return JSONResponse({
-            "job_id": job_output["job_id"],
-            "filename": job_output["filename"],
-            "output_text": job_output["output_text"],
-            "download_url": f"/download/job-output/{job_output['job_id']}",
-        })
-
-    return _render_job_result("Offboard User - Delete all Jabber and Voicemail Box (Option 10)", data, filename)
+    return _to_bytes(data), filename
 
 
 def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pass: str, target_alias: str) -> tuple[bytes, str]:

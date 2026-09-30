@@ -9,3 +9,6 @@ data/verasmart_ezburst_pending.json*
 
 # Cached VeraSMART Personnel reference export pulled from SFTP /export (contains PII)
 data/verasmart_reference_export_cache.json*
+
+# Jabber Cleanup removal queue, notice email history, and separation output (contains PII)
+data/jabber_cleanup_queue.json*
