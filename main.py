@@ -31230,7 +31230,7 @@ def menu_page(request: Request):
 """
   greenlight_card_html = """
         <a class=\"hero-link-card\" href=\"/project-greenlight\"> 
-          <strong>Project Greenlight</strong>
+          <strong>Project Functions and Menu</strong>
           <span>Isolated workflow page that reuses existing portal endpoints.</span>
         </a>
 """
@@ -38856,7 +38856,7 @@ def project_greenlight_page(request: Request):
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>Project Greenlight - Voice Operations Portal</title>
+    <title>Project Functions and Menu - Voice Operations Portal</title>
     <style>
       :root {
         --amn-blue: #005eb8;
@@ -39255,13 +39255,13 @@ def project_greenlight_page(request: Request):
       <section class="page-hero">
         <div class="page-title-row">
           <div>
-            <h2 class="page-title">Project Greenlight</h2>
+            <h2 class="page-title">Project Functions and Menu</h2>
             <p class="page-subtitle">Standalone workspace with its own menu that reuses existing portal logic without modifying other pages.</p>
           </div>
           <div class="page-meta-card">
             <span class="page-meta-label">Mode</span>
             <span class="page-meta-value">Isolated Page</span>
-            <p class="page-meta-note">Greenlight actions call existing endpoints and keep current page flows unchanged.</p>
+            <p class="page-meta-note">Project actions call existing endpoints and keep current page flows unchanged.</p>
           </div>
         </div>
         <div class="hero-link-grid">
@@ -39279,7 +39279,7 @@ __GREENLIGHT_ADMIN_CARD__
 
       <div class="portal-shell">
         <aside class="portal-sidebar">
-          <h4>Project Greenlight Menu</h4>
+          <h4>Project Functions and Menu</h4>
           <div class="portal-nav">
             <button type="button" class="portal-nav-btn active" data-panel="personlookup">Person Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="singleldapupdate">LDAP Phone Update by Email</button>
@@ -39296,7 +39296,7 @@ __GREENLIGHT_ADMIN_CARD__
 
         <section class="portal-main">
           <section class="tool-panel active" data-panel="personlookup">
-            <h3>Person Lookup (Project Greenlight)</h3>
+            <h3>Person Lookup</h3>
             <form id="greenlight-person-form" style="margin-bottom:12px;">
               <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
               <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
@@ -44136,7 +44136,7 @@ def menu_admin_page(request: Request):
             <span>OpenTxt Numbers List and number lookup tools.</span>
           </a>
           <a class="hero-link-card" href="/project-greenlight">
-            <strong>Project Greenlight</strong>
+            <strong>Project Functions and Menu</strong>
             <span>Isolated lookup workspace and targeted operations.</span>
           </a>
           <a class="hero-link-card" href="/trucontact" style="background:#f4c542; border-color:#c68a12; color:#4d3500;">
@@ -61000,7 +61000,7 @@ def project_greenlight_person_lookup_route(
   except RuntimeError:
     raise
   except Exception as exc:
-    raise RuntimeError(f"Project Greenlight person lookup failed: {exc}") from exc
+    raise RuntimeError(f"Project Functions person lookup failed: {exc}") from exc
 
 
 @app.get("/project-greenlight/person-lookup/status/{job_id}")
@@ -64422,7 +64422,7 @@ def change_extension_page(request: Request):
     <div class="hero-link-grid">
       <a class="hero-link-card" href="/"><strong>Landing Page</strong></a>
       <a class="hero-link-card" href="/dashboard"><strong>Voice Dashboard</strong></a>
-      <a class="hero-link-card" href="/greenlight"><strong>Project Greenlight</strong></a>
+      <a class="hero-link-card" href="/greenlight"><strong>Project Functions and Menu</strong></a>
       <a class="hero-link-card" href="/sip-call-search"><strong>SIP Call Search</strong></a>
       <a class="hero-link-card" href="/menu2"><strong>Administrative Items</strong></a>
       <a class="hero-link-card" href="/audit-trail"><strong>Action History</strong></a>
