@@ -4038,7 +4038,7 @@ def _genesys_zz_contact_is_exempt(contact: dict, exemptions: dict[str, set[str]]
   return bool(
     (contact_id and contact_id in exemptions.get("ids", set()))
     or (email and email in exemptions.get("emails", set()))
-    or last_name == "zz"
+    or last_name.startswith("zz")
   )
 
 
@@ -28222,11 +28222,16 @@ async def genesys_external_contact_remove_all_route(request: Request):
     return JSONResponse({"ok": False, "error": result.get("error", "Unable to list CiscoVoiceUser contacts.")}, status_code=400)
 
   contacts = []
+  protected_count = 0
+  protected_contacts = _genesys_zz_contact_exemptions()
   for row in result.get("rows", []):
     contact_id = str(row.get("id", "") or "").strip()
     row_division_id = str(row.get("division_id", "") or "").strip()
     row_division_name = str(row.get("division_name", "") or "").strip().lower()
     if contact_id and (row_division_id == target_division_id or row_division_name == "ciscovoiceuser"):
+      if _genesys_zz_contact_is_exempt(row, protected_contacts):
+        protected_count += 1
+        continue
       contacts.append(row)
 
   deleted = []
@@ -28262,6 +28267,7 @@ async def genesys_external_contact_remove_all_route(request: Request):
     "region": clean_region,
     "division_name": "CiscoVoiceUser",
     "found_count": len(contacts),
+    "protected_count": protected_count,
     "deleted_count": len(deleted),
     "failed_count": len(failures),
     "deleted": deleted,
