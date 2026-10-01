@@ -115,7 +115,7 @@ Priority keys:
 ### 2026-09-30 (Genesys zz Users to External Contact Cleanup)
 - Added Genesys Admin **Genesys User to External Contact Cleanup**: finds `zz*` email users, displays profile name/email/division/phone choices, allows per-user number selection, and queues selected conversions to CiscoVoiceUser External Contacts.
 - Queue is persistent, atomic, restart-safe, and manually run; source Genesys users are never changed. Contact IDs and source emails are persisted as exemptions from the scheduled CUCM-to-Genesys cleanup and reconciliation deletion candidates.
-- Conversion field mapping: Genesys User `name` becomes External Contact `firstName` exactly (including one-word names such as `AMNSTRIKE`); `lastName` is literal `zz`. Any External Contact with `lastName=zz` is also exempt from automatic cleanup.
+- Conversion field mapping: Genesys User `name` becomes External Contact `firstName` exactly (including one-word names such as `AMNSTRIKE`); `lastName` is literal `zz`. Any External Contact whose `lastName` starts with `zz` (case-insensitive, manual adds) is exempt from the scheduled sync delete, reconciliation deletion candidates, and Remove All (commit `5c857a6`).
 - Existing-contact check and source-user/phone revalidation run before create; UI/queue remains available after service restart. Server data file is gitignored.
 
 ### 2026-09-30 (Project Greenlight — Jabber Cleanup)
