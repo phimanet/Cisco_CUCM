@@ -35722,6 +35722,7 @@ __ADMIN_CARD__
       <input type="hidden" name="unity_pass" value="">
       <input type="hidden" id="ldap-connection-issue-user" name="voicemail_user" value="">
       <p id="ldap-connection-issue-selected" style="padding:8px 10px; background:#eef4f8; border:1px solid #b9cede; border-radius:5px; font-weight:700;">No employee selected.</p>
+      <p role="note" style="margin:10px 0; padding:12px; background:#fff2cc; color:#7e4f00; border-left:5px solid #a56a00; font-size:20px; font-weight:900;">After the repair, the Jabber User must sign out, Reset Jabber, and then sign back on.</p>
       <div class="action-row"><button id="ldap-connection-issue-repair-btn" type="submit" style="background:linear-gradient(180deg,#a56a00,#7e4f00);" disabled>Run Verified 2-Step LDAP Repair</button></div>
     </form>
     <script>
