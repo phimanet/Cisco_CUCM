@@ -63798,8 +63798,8 @@ def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pas
       verified = verify.json() if verify.status_code == 200 and verify.text else {}
       writer.writerow(["Save LDAP Integration", "Success", f"Saved '{label}'; verified value={verified.get('LdapIntegration', 'unknown')}"])
       if not enabled:
-        writer.writerow(["Wait", "Success", "Waiting 2 seconds before restoring LDAP integration."])
-        time.sleep(2)
+        writer.writerow(["Wait", "Success", "Waiting 6 seconds before restoring LDAP integration."])
+        time.sleep(6)
   except Exception as exc:
     writer.writerow(["Repair", "Failed", str(exc)])
   return output.getvalue().encode("utf-8"), filename
