@@ -63791,33 +63791,33 @@ def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pas
     writer.writerow(["Lookup Mailbox", "Success", f"Alias={clean_alias}; ObjectId={object_id}"])
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
     label = "Do Not Integrate with LDAP Directory"
-    response = session.put(detail_url, headers=headers, json={"LdapIntegration": False}, timeout=60, verify=False)
+    response = session.put(detail_url, headers=headers, json={"IsLdapIntegrated": False}, timeout=60, verify=False)
     if not 200 <= response.status_code < 300:
       raise RuntimeError(f"{label} save failed HTTP {response.status_code}: {response.text[:300]}")
     verify = session.get(detail_url, headers={"Accept": "application/json"}, timeout=60, verify=False)
     if verify.status_code != 200:
       raise RuntimeError(f"LDAP integration read-back failed HTTP {verify.status_code}: {verify.text[:300]}")
     verified = verify.json() if verify.text else {}
-    integration_value = verified.get("LdapIntegration") if isinstance(verified, dict) else None
+    integration_value = verified.get("IsLdapIntegrated") if isinstance(verified, dict) else None
     is_disabled = integration_value is False or str(integration_value or "").strip().lower() in {"false", "0", "no"}
     if not is_disabled:
-      raise RuntimeError(f"Unity did not confirm LDAP integration is disabled; verified value={integration_value!r}.")
-    writer.writerow(["Step 1: Disable LDAP Integration", "Success", f"Saved '{label}' and verified LdapIntegration={integration_value!r}."])
+      raise RuntimeError(f"Unity did not confirm LDAP integration is disabled; verified IsLdapIntegrated={integration_value!r}.")
+    writer.writerow(["Step 1: Disable LDAP Integration", "Success", f"Saved '{label}' and verified IsLdapIntegrated={integration_value!r}."])
     writer.writerow(["Wait", "Success", "Waiting 1 second before restoring LDAP integration."])
     time.sleep(1)
     label = "Integrate with LDAP Directory"
-    response = session.put(detail_url, headers=headers, json={"LdapIntegration": True}, timeout=60, verify=False)
+    response = session.put(detail_url, headers=headers, json={"IsLdapIntegrated": True}, timeout=60, verify=False)
     if not 200 <= response.status_code < 300:
       raise RuntimeError(f"{label} save failed HTTP {response.status_code}: {response.text[:300]}")
     verify = session.get(detail_url, headers={"Accept": "application/json"}, timeout=60, verify=False)
     if verify.status_code != 200:
       raise RuntimeError(f"LDAP integration read-back failed HTTP {verify.status_code}: {verify.text[:300]}")
     verified = verify.json() if verify.text else {}
-    integration_value = verified.get("LdapIntegration") if isinstance(verified, dict) else None
+    integration_value = verified.get("IsLdapIntegrated") if isinstance(verified, dict) else None
     is_enabled = integration_value is True or str(integration_value or "").strip().lower() in {"true", "1", "yes"}
     if not is_enabled:
-      raise RuntimeError(f"Unity did not confirm LDAP integration is enabled; verified value={integration_value!r}.")
-    writer.writerow(["Step 2: Restore LDAP Integration", "Success", f"Saved '{label}' and verified LdapIntegration={integration_value!r}."])
+      raise RuntimeError(f"Unity did not confirm LDAP integration is enabled; verified IsLdapIntegrated={integration_value!r}.")
+    writer.writerow(["Step 2: Restore LDAP Integration", "Success", f"Saved '{label}' and verified IsLdapIntegrated={integration_value!r}."])
   except Exception as exc:
     writer.writerow(["Repair", "Failed", str(exc)])
   return output.getvalue().encode("utf-8"), filename
