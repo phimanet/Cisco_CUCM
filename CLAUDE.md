@@ -117,7 +117,7 @@ Priority keys:
 - Step 1 was validated in LAB by a fresh CUPI read-back of `LdapType=0`; Step 2 was separately validated by restoring `LdapType=3`.
 - Current implementation combines both CUPI updates: verify original `LdapType=3`, set `0`, read back `0`, wait 3 seconds, verify it is still `0`, restore original `3`, and read back `3`. Any failed precondition or read-back stops the workflow.
 - Current LAB Unity Connection version: `15.0.1.14900-45`.
-- Validate the combined flow in LAB; do not promote to PROD until end-to-end validation passes.
+- Combined flow validated in LAB on 2026-10-02: original `3` → Step 1 `0` → 3-second wait and `0` read-back → Step 2 restores `3` and verifies it. Keep LAB-only; no PROD promotion yet.
 
 ### 2026-09-30 (Genesys zz Users to External Contact Cleanup)
 - Added Genesys Admin **Genesys User to External Contact Cleanup**: finds `zz*` email users, displays profile name/email/division/phone choices, allows per-user number selection, and queues selected conversions to CiscoVoiceUser External Contacts.
