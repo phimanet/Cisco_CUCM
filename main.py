@@ -63939,7 +63939,7 @@ def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pas
     login_response = admin_session.post(
       f"{base}/cuadmin/j_security_check",
       data={"j_username": unity_user, "j_password": unity_pass},
-      headers={"Accept": "text/html", "Referer": login_url},
+      headers={"Accept": "text/html", "Origin": base, "Referer": login_url},
       timeout=60,
       verify=False,
     )
@@ -63985,7 +63985,7 @@ def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pas
       response = admin_session.post(
         save_url,
         data=updated_fields,
-        headers={"Accept": "text/html", "Referer": f"{base}/cuadmin/user.do?op=read&objectId={object_id}"},
+        headers={"Accept": "text/html", "Origin": base, "Referer": f"{base}/cuadmin/user.do?op=read&objectId={object_id}"},
         timeout=60,
         verify=False,
       )

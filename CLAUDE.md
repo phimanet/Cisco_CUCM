@@ -114,7 +114,7 @@ Priority keys:
 
 ### 2026-10-02 (Unity LDAP Integration Repair)
 - Unity Connection Administration saves LDAP integration through `POST /cuadmin/user.do?op=save` with form field `ldapIntegration=0` for Do Not Integrate and `ldapIntegration=1` for Integrate. The attempted `/vmrest/users/{ObjectId}` updates did not change existing mailbox linkage.
-- Current implementation is Step 1 only: it authenticates to Unity Admin, fetches the live mailbox form to preserve current fields and fresh tokens, updates only `ldapIntegration=0`, and verifies the value by reloading the form. It does not restore integration yet.
+- Current implementation is Step 1 only: it authenticates to Unity Admin, fetches the live mailbox form to preserve current fields and fresh tokens, updates only `ldapIntegration=0`, includes the same-origin `Origin` header used by the browser form, and verifies the value by reloading the form. It does not restore integration yet.
 - Current LAB Unity Connection version: `15.0.1.14900-45`.
 - Validate Step 1 in LAB first. Then implement and validate Step 2 (`ldapIntegration=1`) separately; combine the two steps only after both have been proven. Do not promote to PROD until LAB end-to-end validation is complete.
 
