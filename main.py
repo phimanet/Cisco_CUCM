@@ -35708,7 +35708,7 @@ __ADMIN_CARD__
       <img src="/templates/jabber_voicemail_connection_issue.png" alt="Example Jabber voicemail connection issue showing Contact your administrator" style="display:block; width:auto; max-width:540px; max-height:320px; height:auto; object-fit:contain; border:1px solid #d7e3ee; border-radius:4px;">
       <figcaption style="margin-top:6px; color:#4e6a84; font-size:12px;">Example issue: Jabber Call Voicemail displays "Contact your administrator."</figcaption>
     </figure>
-    <p>This two-step repair disables LDAP integration, verifies the change, waits 1 second, then restores LDAP integration only if Unity confirms Step 1 succeeded. The result reports Unity's read-back value for each step.</p>
+    <p>Step 1 sets the selected Unity voicemail box to Do Not Integrate with LDAP Directory and reports the value Unity reads back. The workflow stops here; restore integration separately after Step 1 is confirmed.</p>
     <form id="ldap-connection-issue-lookup-form" class="secondary-form" action="javascript:void(0)" method="post">
       <input type="hidden" name="unity_user" value="__AUTH_USER__">
       <input type="hidden" name="unity_pass" value="">
@@ -35723,7 +35723,7 @@ __ADMIN_CARD__
       <input type="hidden" name="unity_pass" value="">
       <input type="hidden" id="ldap-connection-issue-user" name="voicemail_user" value="">
       <p id="ldap-connection-issue-selected" style="padding:8px 10px; background:#eef4f8; border:1px solid #b9cede; border-radius:5px; font-weight:700;">No employee selected.</p>
-      <div class="action-row"><button id="ldap-connection-issue-repair-btn" type="submit" style="background:linear-gradient(180deg,#a56a00,#7e4f00);" disabled>Run 2-Step LDAP Integration Repair</button></div>
+      <div class="action-row"><button id="ldap-connection-issue-repair-btn" type="submit" style="background:linear-gradient(180deg,#a56a00,#7e4f00);" disabled>Step 1: Disable LDAP Integration</button></div>
     </form>
     <script>
       (function () {
@@ -63828,9 +63828,14 @@ class _UnityAdminErrorMessageParser(HTMLParser):
   def __init__(self):
     super().__init__(convert_charrefs=True)
     self.messages = []
+    self.text_parts = []
     self.capture = None
+    self.ignored_depth = 0
 
   def handle_starttag(self, tag, attrs):
+    if tag in {"script", "style"}:
+      self.ignored_depth += 1
+      return
     attributes = dict(attrs)
     if self.capture is not None:
       if tag not in self._VOID_TAGS:
@@ -63841,10 +63846,15 @@ class _UnityAdminErrorMessageParser(HTMLParser):
       self.capture = {"tag": tag, "depth": 1, "parts": []}
 
   def handle_data(self, data):
+    if self.ignored_depth == 0:
+      self.text_parts.append(data)
     if self.capture is not None:
       self.capture["parts"].append(data)
 
   def handle_endtag(self, tag):
+    if tag in {"script", "style"} and self.ignored_depth:
+      self.ignored_depth -= 1
+      return
     if self.capture is None or tag in self._VOID_TAGS:
       return
     self.capture["depth"] -= 1
@@ -63858,13 +63868,26 @@ class _UnityAdminErrorMessageParser(HTMLParser):
 def _unity_admin_error_message(html: str, *sensitive_values: str) -> str:
   parser = _UnityAdminErrorMessageParser()
   parser.feed(html or "")
-  for message in parser.messages:
+  messages = list(parser.messages)
+  if not messages:
+    visible_text = " ".join(" ".join(parser.text_parts).split())
+    match = re.search(
+      r"(?:LDAP|integration|request token|CSRF|error|invalid|failed|unable|denied|expired|not authorized|must be)[^.!?]{0,180}[.!?]?",
+      visible_text,
+      re.IGNORECASE,
+    )
+    if match:
+      messages.append(match.group(0))
+  for message in messages:
     if not re.search(r"error|invalid|failed|unable|denied|expired|not authorized|must be", message, re.IGNORECASE):
       continue
     safe_message = message
     for value in sensitive_values:
       if value:
         safe_message = safe_message.replace(str(value), "[redacted]")
+    safe_message = re.sub(r"\b[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}\b", "[email]", safe_message)
+    safe_message = re.sub(r"\b[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}\b", "[id]", safe_message)
+    safe_message = re.sub(r"\b[A-Za-z0-9_-]{24,}\b", "[redacted]", safe_message)
     return safe_message[:240]
   return ""
 
@@ -63977,11 +64000,7 @@ def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pas
       return verified_value
 
     disabled_value = save_and_verify("0", "Do Not Integrate with LDAP Directory")
-    writer.writerow(["Step 1: Disable LDAP Integration", "Success", f"Unity Admin saved ldapIntegration={disabled_value}."])
-    writer.writerow(["Wait", "Success", "Waiting 1 second before restoring LDAP integration."])
-    time.sleep(1)
-    enabled_value = save_and_verify("1", "Integrate with LDAP Directory")
-    writer.writerow(["Step 2: Restore LDAP Integration", "Success", f"Unity Admin saved ldapIntegration={enabled_value}."])
+    writer.writerow(["Step 1: Disable LDAP Integration", "Success", f"Fresh Unity Admin form read-back confirmed ldapIntegration={disabled_value}. The workflow stops here; restore integration separately after confirming Step 1."])
   except Exception as exc:
     writer.writerow(["Repair", "Failed", str(exc)])
   return output.getvalue().encode("utf-8"), filename
