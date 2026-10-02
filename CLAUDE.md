@@ -114,9 +114,10 @@ Priority keys:
 
 ### 2026-10-02 (Unity LDAP Integration Repair)
 - Unity Connection Administration saves LDAP integration through `POST /cuadmin/user.do?op=save` with form field `ldapIntegration=0` for Do Not Integrate and `ldapIntegration=1` for Integrate. Browser-form replay from the portal returned `denied`. The mailbox's CUPI detail showed `LdapType=3` and an LDAP PKID.
-- Current implementation is Step 1 only: CUPI `PUT /vmrest/users/{ObjectId}` with `{"LdapType": 0}`, then GET and require `LdapType=0`. It does not restore integration yet.
+- Step 1 was validated in LAB by a fresh CUPI read-back of `LdapType=0`.
+- Current implementation is Step 2 only: require a fresh `LdapType=0` read, CUPI `PUT /vmrest/users/{ObjectId}` with `{"LdapType": 3}`, then GET and require `LdapType=3`.
 - Current LAB Unity Connection version: `15.0.1.14900-45`.
-- Validate Step 1 in LAB first. Then implement and validate Step 2 separately, restoring the observed original `LdapType=3`; do not assume the Admin UI's `ldapIntegration=1` maps to CUPI `LdapType=1`. Combine the two steps only after both have been proven. Do not promote to PROD until LAB end-to-end validation is complete.
+- Validate Step 2 in LAB. Once confirmed, combine the steps with a 3-second pause after Step 1 reads back `0` and before restoring `LdapType=3`. Do not promote to PROD until both steps pass LAB end-to-end validation.
 
 ### 2026-09-30 (Genesys zz Users to External Contact Cleanup)
 - Added Genesys Admin **Genesys User to External Contact Cleanup**: finds `zz*` email users, displays profile name/email/division/phone choices, allows per-user number selection, and queues selected conversions to CiscoVoiceUser External Contacts.

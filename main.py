@@ -35707,7 +35707,7 @@ __ADMIN_CARD__
       <img src="/templates/jabber_voicemail_connection_issue.png" alt="Example Jabber voicemail connection issue showing Contact your administrator" style="display:block; width:auto; max-width:540px; max-height:320px; height:auto; object-fit:contain; border:1px solid #d7e3ee; border-radius:4px;">
       <figcaption style="margin-top:6px; color:#4e6a84; font-size:12px;">Example issue: Jabber Call Voicemail displays "Contact your administrator."</figcaption>
     </figure>
-    <p>Step 1 sets the selected Unity voicemail box to Do Not Integrate with LDAP Directory and reports the value Unity reads back. The workflow stops here; restore integration separately after Step 1 is confirmed.</p>
+    <p>Step 2 restores the selected Unity voicemail box to its original LDAP integration type (`LdapType=3`). It proceeds only when a fresh CUPI read confirms the mailbox is currently at `LdapType=0`, then verifies the restored value.</p>
     <form id="ldap-connection-issue-lookup-form" class="secondary-form" action="javascript:void(0)" method="post">
       <input type="hidden" name="unity_user" value="__AUTH_USER__">
       <input type="hidden" name="unity_pass" value="">
@@ -35722,7 +35722,7 @@ __ADMIN_CARD__
       <input type="hidden" name="unity_pass" value="">
       <input type="hidden" id="ldap-connection-issue-user" name="voicemail_user" value="">
       <p id="ldap-connection-issue-selected" style="padding:8px 10px; background:#eef4f8; border:1px solid #b9cede; border-radius:5px; font-weight:700;">No employee selected.</p>
-      <div class="action-row"><button id="ldap-connection-issue-repair-btn" type="submit" style="background:linear-gradient(180deg,#a56a00,#7e4f00);" disabled>Step 1: Disable LDAP Integration</button></div>
+      <div class="action-row"><button id="ldap-connection-issue-repair-btn" type="submit" style="background:linear-gradient(180deg,#a56a00,#7e4f00);" disabled>Step 2: Restore LDAP Integration</button></div>
     </form>
     <script>
       (function () {
@@ -63789,23 +63789,31 @@ def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pas
       raise RuntimeError("Unity mailbox ObjectId was missing.")
     writer.writerow(["Lookup Mailbox", "Success", f"Alias={clean_alias}; ObjectId={object_id}"])
     detail_url = f"{base}/vmrest/users/{object_id}"
+    current = session.get(detail_url, headers={"Accept": "application/json"}, timeout=60, verify=False)
+    if current.status_code != 200:
+      raise RuntimeError(f"Unity CUPI precondition read failed HTTP {current.status_code}: {current.text[:300]}")
+    current_payload = current.json() if current.text else {}
+    current_ldap_type = str(current_payload.get("LdapType", "")).strip() if isinstance(current_payload, dict) else ""
+    if current_ldap_type != "0":
+      raise RuntimeError(f"Step 2 requires current LdapType=0; CUPI read-back was {current_ldap_type!r}. No update was made.")
+    writer.writerow(["Step 2 Precondition", "Success", "Fresh CUPI read-back confirmed current LdapType=0."])
     response = session.put(
       detail_url,
       headers={"Accept": "application/json", "Content-Type": "application/json"},
-      json={"LdapType": 0},
+      json={"LdapType": 3},
       timeout=60,
       verify=False,
     )
     if not 200 <= response.status_code < 300:
-      raise RuntimeError(f"Unity CUPI failed to set LdapType=0 HTTP {response.status_code}: {response.text[:300]}")
+      raise RuntimeError(f"Unity CUPI failed to restore LdapType=3 HTTP {response.status_code}: {response.text[:300]}")
     verify = session.get(detail_url, headers={"Accept": "application/json"}, timeout=60, verify=False)
     if verify.status_code != 200:
       raise RuntimeError(f"Unity CUPI read-back failed HTTP {verify.status_code}: {verify.text[:300]}")
     verified = verify.json() if verify.text else {}
     ldap_type = str(verified.get("LdapType", "")).strip() if isinstance(verified, dict) else ""
-    if ldap_type != "0":
-      raise RuntimeError(f"Unity did not confirm Do Not Integrate with LDAP Directory; CUPI read-back LdapType was {ldap_type!r}.")
-    writer.writerow(["Step 1: Disable LDAP Integration", "Success", f"Fresh CUPI read-back confirmed LdapType={ldap_type}. The workflow stops here; restore integration separately after confirming Step 1."])
+    if ldap_type != "3":
+      raise RuntimeError(f"Unity did not confirm LDAP integration was restored; CUPI read-back LdapType was {ldap_type!r}.")
+    writer.writerow(["Step 2: Restore LDAP Integration", "Success", "Fresh CUPI read-back confirmed original LdapType=3."])
   except Exception as exc:
     writer.writerow(["Repair", "Failed", str(exc)])
   return output.getvalue().encode("utf-8"), filename
