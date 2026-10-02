@@ -35707,7 +35707,7 @@ __ADMIN_CARD__
       <img src="/templates/jabber_voicemail_connection_issue.png" alt="Example Jabber voicemail connection issue showing Contact your administrator" style="display:block; width:auto; max-width:540px; max-height:320px; height:auto; object-fit:contain; border:1px solid #d7e3ee; border-radius:4px;">
       <figcaption style="margin-top:6px; color:#4e6a84; font-size:12px;">Example issue: Jabber Call Voicemail displays "Contact your administrator."</figcaption>
     </figure>
-    <p>Use this repair when a Unity voicemail box reports a connection or LDAP integration issue. The mailbox is saved as Do Not Integrate with LDAP Directory, then saved back as Integrate with LDAP Directory.</p>
+    <p>This two-step repair disables LDAP integration, verifies the change, waits 1 second, then restores LDAP integration only if Unity confirms Step 1 succeeded. The result reports Unity's read-back value for each step.</p>
     <form id="ldap-connection-issue-lookup-form" class="secondary-form" action="javascript:void(0)" method="post">
       <input type="hidden" name="unity_user" value="__AUTH_USER__">
       <input type="hidden" name="unity_pass" value="">
@@ -35722,7 +35722,7 @@ __ADMIN_CARD__
       <input type="hidden" name="unity_pass" value="">
       <input type="hidden" id="ldap-connection-issue-user" name="voicemail_user" value="">
       <p id="ldap-connection-issue-selected" style="padding:8px 10px; background:#eef4f8; border:1px solid #b9cede; border-radius:5px; font-weight:700;">No employee selected.</p>
-      <div class="action-row"><button id="ldap-connection-issue-repair-btn" type="submit" style="background:linear-gradient(180deg,#a56a00,#7e4f00);" disabled>Repair Jabber Voicemail Connection</button></div>
+      <div class="action-row"><button id="ldap-connection-issue-repair-btn" type="submit" style="background:linear-gradient(180deg,#a56a00,#7e4f00);" disabled>Run 2-Step LDAP Integration Repair</button></div>
     </form>
     <script>
       (function () {
@@ -63790,16 +63790,34 @@ def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pas
     detail_url = f"{base}/vmrest/users/{object_id}"
     writer.writerow(["Lookup Mailbox", "Success", f"Alias={clean_alias}; ObjectId={object_id}"])
     headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    for label, enabled in (("Do Not Integrate with LDAP Directory", False), ("Integrate with LDAP Directory", True)):
-      response = session.put(detail_url, headers=headers, json={"LdapIntegration": enabled}, timeout=60, verify=False)
-      if not 200 <= response.status_code < 300:
-        raise RuntimeError(f"{label} save failed HTTP {response.status_code}: {response.text[:300]}")
-      verify = session.get(detail_url, headers={"Accept": "application/json"}, timeout=60, verify=False)
-      verified = verify.json() if verify.status_code == 200 and verify.text else {}
-      writer.writerow(["Save LDAP Integration", "Success", f"Saved '{label}'; verified value={verified.get('LdapIntegration', 'unknown')}"])
-      if not enabled:
-        writer.writerow(["Wait", "Success", "Waiting 6 seconds before restoring LDAP integration."])
-        time.sleep(6)
+    label = "Do Not Integrate with LDAP Directory"
+    response = session.put(detail_url, headers=headers, json={"LdapIntegration": False}, timeout=60, verify=False)
+    if not 200 <= response.status_code < 300:
+      raise RuntimeError(f"{label} save failed HTTP {response.status_code}: {response.text[:300]}")
+    verify = session.get(detail_url, headers={"Accept": "application/json"}, timeout=60, verify=False)
+    if verify.status_code != 200:
+      raise RuntimeError(f"LDAP integration read-back failed HTTP {verify.status_code}: {verify.text[:300]}")
+    verified = verify.json() if verify.text else {}
+    integration_value = verified.get("LdapIntegration") if isinstance(verified, dict) else None
+    is_disabled = integration_value is False or str(integration_value or "").strip().lower() in {"false", "0", "no"}
+    if not is_disabled:
+      raise RuntimeError(f"Unity did not confirm LDAP integration is disabled; verified value={integration_value!r}.")
+    writer.writerow(["Step 1: Disable LDAP Integration", "Success", f"Saved '{label}' and verified LdapIntegration={integration_value!r}."])
+    writer.writerow(["Wait", "Success", "Waiting 1 second before restoring LDAP integration."])
+    time.sleep(1)
+    label = "Integrate with LDAP Directory"
+    response = session.put(detail_url, headers=headers, json={"LdapIntegration": True}, timeout=60, verify=False)
+    if not 200 <= response.status_code < 300:
+      raise RuntimeError(f"{label} save failed HTTP {response.status_code}: {response.text[:300]}")
+    verify = session.get(detail_url, headers={"Accept": "application/json"}, timeout=60, verify=False)
+    if verify.status_code != 200:
+      raise RuntimeError(f"LDAP integration read-back failed HTTP {verify.status_code}: {verify.text[:300]}")
+    verified = verify.json() if verify.text else {}
+    integration_value = verified.get("LdapIntegration") if isinstance(verified, dict) else None
+    is_enabled = integration_value is True or str(integration_value or "").strip().lower() in {"true", "1", "yes"}
+    if not is_enabled:
+      raise RuntimeError(f"Unity did not confirm LDAP integration is enabled; verified value={integration_value!r}.")
+    writer.writerow(["Step 2: Restore LDAP Integration", "Success", f"Saved '{label}' and verified LdapIntegration={integration_value!r}."])
   except Exception as exc:
     writer.writerow(["Repair", "Failed", str(exc)])
   return output.getvalue().encode("utf-8"), filename
