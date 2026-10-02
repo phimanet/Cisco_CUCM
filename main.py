@@ -63822,6 +63822,53 @@ def _parse_unity_admin_user_form(html: str, expected_object_id: str) -> list[tup
   raise RuntimeError("Unity Admin mailbox form did not contain the expected object ID and ldapIntegration field.")
 
 
+class _UnityAdminErrorMessageParser(HTMLParser):
+  _VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+
+  def __init__(self):
+    super().__init__(convert_charrefs=True)
+    self.messages = []
+    self.capture = None
+
+  def handle_starttag(self, tag, attrs):
+    attributes = dict(attrs)
+    if self.capture is not None:
+      if tag not in self._VOID_TAGS:
+        self.capture["depth"] += 1
+      return
+    marker = " ".join(str(attributes.get(key, "")) for key in ("class", "id")).lower()
+    if tag in {"div", "span", "p", "td", "li", "font"} and re.search(r"error|invalid|validation|alert", marker):
+      self.capture = {"tag": tag, "depth": 1, "parts": []}
+
+  def handle_data(self, data):
+    if self.capture is not None:
+      self.capture["parts"].append(data)
+
+  def handle_endtag(self, tag):
+    if self.capture is None or tag in self._VOID_TAGS:
+      return
+    self.capture["depth"] -= 1
+    if self.capture["depth"] <= 0:
+      message = " ".join("".join(self.capture["parts"]).split())
+      if message:
+        self.messages.append(message)
+      self.capture = None
+
+
+def _unity_admin_error_message(html: str, *sensitive_values: str) -> str:
+  parser = _UnityAdminErrorMessageParser()
+  parser.feed(html or "")
+  for message in parser.messages:
+    if not re.search(r"error|invalid|failed|unable|denied|expired|not authorized|must be", message, re.IGNORECASE):
+      continue
+    safe_message = message
+    for value in sensitive_values:
+      if value:
+        safe_message = safe_message.replace(str(value), "[redacted]")
+    return safe_message[:240]
+  return ""
+
+
 def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pass: str, target_alias: str) -> tuple[bytes, str]:
   ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
   filename = f"repair_unity_ldap_integration_{(target_alias or '').strip() or 'unknown'}_{ts}.csv"
@@ -63921,6 +63968,9 @@ def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pas
       )
       if not 200 <= response.status_code < 300:
         raise RuntimeError(f"{label} save failed HTTP {response.status_code}.")
+      response_message = _unity_admin_error_message(response.text, clean_alias, unity_user, unity_pass)
+      if response_message:
+        raise RuntimeError(f"Unity Admin rejected {label}: {response_message}")
       _, verified_value = load_current_form()
       if verified_value != value:
         raise RuntimeError(f"Unity did not confirm {label}; ldapIntegration read-back was {verified_value!r}.")
