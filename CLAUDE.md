@@ -112,6 +112,11 @@ Priority keys:
 
 ## Conversation Notes
 
+### 2026-10-02 (Unity LDAP Integration Repair)
+- Unity Connection Administration saves LDAP integration through `POST /cuadmin/user.do?op=save` with form field `ldapIntegration=0` for Do Not Integrate and `ldapIntegration=1` for Integrate. The attempted `/vmrest/users/{ObjectId}` updates did not change existing mailbox linkage.
+- Repair now authenticates to Unity Admin, fetches the live mailbox form before each save to preserve current fields and fresh tokens, updates only `ldapIntegration`, and verifies the value by reloading the form. Step 2 runs only after Step 1 reads back `0`; the inter-step wait is 1 second.
+- Syntax and mocked form-flow checks pass. LAB end-to-end validation is pending; do not promote to PROD until confirmed.
+
 ### 2026-09-30 (Genesys zz Users to External Contact Cleanup)
 - Added Genesys Admin **Genesys User to External Contact Cleanup**: finds `zz*` email users, displays profile name/email/division/phone choices, allows per-user number selection, and queues selected conversions to CiscoVoiceUser External Contacts.
 - Queue is persistent, atomic, restart-safe, and manually run; source Genesys users are never changed. Contact IDs and source emails are persisted as exemptions from the scheduled CUCM-to-Genesys cleanup and reconciliation deletion candidates.

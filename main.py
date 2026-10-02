@@ -40,6 +40,7 @@ from fastapi import FastAPI, Form, UploadFile, File, Query, Request
 from fastapi.responses import HTMLResponse, Response, JSONResponse, RedirectResponse
 
 from html import escape, unescape
+from html.parser import HTMLParser
 from requests.auth import HTTPBasicAuth
 from urllib.parse import urljoin, quote
 from uuid import uuid4
@@ -63751,6 +63752,76 @@ def _run_full_separation(cucm_host: str, cucm_user: str, cucm_pass: str, clean_t
     return _to_bytes(data), filename
 
 
+class _UnityAdminFormParser(HTMLParser):
+  def __init__(self):
+    super().__init__(convert_charrefs=True)
+    self.forms = []
+    self.current_form = None
+    self.current_select = None
+    self.current_option = None
+    self.current_textarea = None
+
+  def handle_starttag(self, tag, attrs):
+    attributes = dict(attrs)
+    if tag == "form":
+      self.current_form = {"action": attributes.get("action", ""), "fields": []}
+      self.forms.append(self.current_form)
+      return
+    if not self.current_form:
+      return
+    if tag == "input":
+      name = attributes.get("name")
+      input_type = str(attributes.get("type", "text")).lower()
+      if not name or "disabled" in attributes or input_type in {"submit", "button", "reset", "image", "file"}:
+        return
+      if input_type in {"checkbox", "radio"} and "checked" not in attributes:
+        return
+      value = attributes.get("value", "on" if input_type == "checkbox" else "")
+      self.current_form["fields"].append((name, value))
+    elif tag == "select" and attributes.get("name") and "disabled" not in attributes:
+      self.current_select = {"name": attributes["name"], "multiple": "multiple" in attributes, "options": [], "selected": []}
+    elif tag == "option" and self.current_select is not None:
+      self.current_option = {"value": attributes.get("value"), "selected": "selected" in attributes, "text": []}
+    elif tag == "textarea" and attributes.get("name") and "disabled" not in attributes:
+      self.current_textarea = {"name": attributes["name"], "text": []}
+
+  def handle_data(self, data):
+    if self.current_option is not None:
+      self.current_option["text"].append(data)
+    elif self.current_textarea is not None:
+      self.current_textarea["text"].append(data)
+
+  def handle_endtag(self, tag):
+    if tag == "option" and self.current_option is not None and self.current_select is not None:
+      option = self.current_option
+      value = option["value"] if option["value"] is not None else "".join(option["text"]).strip()
+      self.current_select["options"].append(value)
+      if option["selected"]:
+        self.current_select["selected"].append(value)
+      self.current_option = None
+    elif tag == "select" and self.current_select is not None and self.current_form is not None:
+      select = self.current_select
+      selected = select["selected"] or ([] if select["multiple"] else select["options"][:1])
+      self.current_form["fields"].extend((select["name"], value) for value in selected)
+      self.current_select = None
+    elif tag == "textarea" and self.current_textarea is not None and self.current_form is not None:
+      self.current_form["fields"].append((self.current_textarea["name"], "".join(self.current_textarea["text"])))
+      self.current_textarea = None
+    elif tag == "form":
+      self.current_form = None
+
+
+def _parse_unity_admin_user_form(html: str, expected_object_id: str) -> list[tuple[str, str]]:
+  parser = _UnityAdminFormParser()
+  parser.feed(html or "")
+  for form in parser.forms:
+    fields = form["fields"]
+    values = dict(fields)
+    if values.get("objectId") == expected_object_id and "ldapIntegration" in values:
+      return fields
+  raise RuntimeError("Unity Admin mailbox form did not contain the expected object ID and ldapIntegration field.")
+
+
 def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pass: str, target_alias: str) -> tuple[bytes, str]:
   ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
   filename = f"repair_unity_ldap_integration_{(target_alias or '').strip() or 'unknown'}_{ts}.csv"
@@ -63787,55 +63858,80 @@ def _repair_unity_ldap_integration(unity_server: str, unity_user: str, unity_pas
     object_id = str(mailbox.get("ObjectId", "") or "").strip()
     if not object_id:
       raise RuntimeError("Unity mailbox ObjectId was missing.")
-    detail_url = f"{base}/vmrest/users/{object_id}"
     writer.writerow(["Lookup Mailbox", "Success", f"Alias={clean_alias}; ObjectId={object_id}"])
-    headers = {"Accept": "application/json", "Content-Type": "application/json"}
-    label = "Do Not Integrate with LDAP Directory"
-    response = session.put(detail_url, headers=headers, json={"IsLdapIntegrated": False}, timeout=60, verify=False)
-    if not 200 <= response.status_code < 300:
-      raise RuntimeError(f"{label} save failed HTTP {response.status_code}: {response.text[:300]}")
-    verify = session.get(detail_url, headers={"Accept": "application/json"}, timeout=60, verify=False)
-    if verify.status_code != 200:
-      raise RuntimeError(f"LDAP integration read-back failed HTTP {verify.status_code}: {verify.text[:300]}")
-    verified = verify.json() if verify.text else {}
-    ldap_fields = {key: value for key, value in verified.items() if "ldap" in str(key).lower()} if isinstance(verified, dict) else {}
-    integration_value = verified.get("IsLdapIntegrated", verified.get("LdapIntegration")) if isinstance(verified, dict) else None
-    normalized_value = str(integration_value or "").strip().lower()
-    is_disabled = integration_value is False or normalized_value in {"false", "0", "no"}
-    if integration_value is True or normalized_value in {"true", "1", "yes"}:
-      is_disabled = False
-    elif integration_value is None and isinstance(verified, dict):
-      ldap_type = str(verified.get("LdapType") or "").strip()
-      ldap_pkid = str(verified.get("LdapCcmPkid") or "").strip()
-      if ldap_type:
-        is_disabled = ldap_type != "3" or not ldap_pkid
-        integration_value = f"LdapType={ldap_type}; LdapCcmPkid={'present' if ldap_pkid else 'empty'}"
-    if not is_disabled:
-      raise RuntimeError(f"Unity did not confirm LDAP integration is disabled; verified value={integration_value!r}; LDAP-related fields={ldap_fields!r}.")
-    writer.writerow(["Step 1: Disable LDAP Integration", "Success", f"Saved '{label}' and verified {integration_value!r}."])
+    admin_session = requests.Session()
+    admin_session.verify = False
+    admin_session.trust_env = False
+    login_url = f"{base}/cuadmin/home.do"
+    login_page = admin_session.get(login_url, headers={"Accept": "text/html"}, timeout=60, verify=False)
+    if login_page.status_code != 200:
+      raise RuntimeError(f"Unity Admin login page failed HTTP {login_page.status_code}.")
+    login_response = admin_session.post(
+      f"{base}/cuadmin/j_security_check",
+      data={"j_username": unity_user, "j_password": unity_pass},
+      headers={"Accept": "text/html", "Referer": login_url},
+      timeout=60,
+      verify=False,
+    )
+    if not 200 <= login_response.status_code < 300:
+      raise RuntimeError(f"Unity Admin login failed HTTP {login_response.status_code}.")
+    if "Log on failed" in login_response.text or "Invalid User ID or Password" in login_response.text:
+      raise RuntimeError("Unity Admin rejected the supplied credentials.")
+
+    edit_url = f"{base}/cuadmin/user.do"
+    edit_params = {"op": "read", "objectId": object_id}
+    save_url = f"{base}/cuadmin/user.do?op=save"
+
+    def load_current_form():
+      response = admin_session.get(
+        edit_url,
+        params=edit_params,
+        headers={"Accept": "text/html", "Referer": login_url},
+        timeout=60,
+        verify=False,
+      )
+      if response.status_code != 200:
+        raise RuntimeError(f"Unity Admin mailbox form failed HTTP {response.status_code}.")
+      fields = _parse_unity_admin_user_form(response.text, object_id)
+      values = dict(fields)
+      current_value = str(values.get("ldapIntegration", "")).strip()
+      if current_value not in {"0", "1"}:
+        raise RuntimeError(f"Unity Admin returned an unexpected ldapIntegration value: {current_value!r}.")
+      return fields, current_value
+
+    def save_and_verify(value: str, label: str):
+      fields, _ = load_current_form()
+      updated_fields = []
+      field_replaced = False
+      for name, field_value in fields:
+        if name == "ldapIntegration":
+          if not field_replaced:
+            updated_fields.append((name, value))
+            field_replaced = True
+        else:
+          updated_fields.append((name, field_value))
+      if not field_replaced:
+        raise RuntimeError("Unity Admin mailbox form did not include ldapIntegration.")
+      response = admin_session.post(
+        save_url,
+        data=updated_fields,
+        headers={"Accept": "text/html", "Referer": f"{base}/cuadmin/user.do?op=read&objectId={object_id}"},
+        timeout=60,
+        verify=False,
+      )
+      if not 200 <= response.status_code < 300:
+        raise RuntimeError(f"{label} save failed HTTP {response.status_code}.")
+      _, verified_value = load_current_form()
+      if verified_value != value:
+        raise RuntimeError(f"Unity did not confirm {label}; ldapIntegration read-back was {verified_value!r}.")
+      return verified_value
+
+    disabled_value = save_and_verify("0", "Do Not Integrate with LDAP Directory")
+    writer.writerow(["Step 1: Disable LDAP Integration", "Success", f"Unity Admin saved ldapIntegration={disabled_value}."])
     writer.writerow(["Wait", "Success", "Waiting 1 second before restoring LDAP integration."])
     time.sleep(1)
-    label = "Integrate with LDAP Directory"
-    response = session.put(detail_url, headers=headers, json={"IsLdapIntegrated": True}, timeout=60, verify=False)
-    if not 200 <= response.status_code < 300:
-      raise RuntimeError(f"{label} save failed HTTP {response.status_code}: {response.text[:300]}")
-    verify = session.get(detail_url, headers={"Accept": "application/json"}, timeout=60, verify=False)
-    if verify.status_code != 200:
-      raise RuntimeError(f"LDAP integration read-back failed HTTP {verify.status_code}: {verify.text[:300]}")
-    verified = verify.json() if verify.text else {}
-    ldap_fields = {key: value for key, value in verified.items() if "ldap" in str(key).lower()} if isinstance(verified, dict) else {}
-    integration_value = verified.get("IsLdapIntegrated", verified.get("LdapIntegration")) if isinstance(verified, dict) else None
-    normalized_value = str(integration_value or "").strip().lower()
-    is_enabled = integration_value is True or normalized_value in {"true", "1", "yes"}
-    if integration_value is None and isinstance(verified, dict):
-      ldap_type = str(verified.get("LdapType") or "").strip()
-      ldap_pkid = str(verified.get("LdapCcmPkid") or "").strip()
-      is_enabled = ldap_type == "3" and bool(ldap_pkid)
-      if ldap_type:
-        integration_value = f"LdapType={ldap_type}; LdapCcmPkid={'present' if ldap_pkid else 'empty'}"
-    if not is_enabled:
-      raise RuntimeError(f"Unity did not confirm LDAP integration is enabled; verified value={integration_value!r}; LDAP-related fields={ldap_fields!r}.")
-    writer.writerow(["Step 2: Restore LDAP Integration", "Success", f"Saved '{label}' and verified {integration_value!r}."])
+    enabled_value = save_and_verify("1", "Integrate with LDAP Directory")
+    writer.writerow(["Step 2: Restore LDAP Integration", "Success", f"Unity Admin saved ldapIntegration={enabled_value}."])
   except Exception as exc:
     writer.writerow(["Repair", "Failed", str(exc)])
   return output.getvalue().encode("utf-8"), filename
