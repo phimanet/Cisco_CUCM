@@ -114,8 +114,10 @@ Priority keys:
 
 ### 2026-10-05 (Project Person Lookup translation-pattern matching)
 - Changed the Project Functions Person Lookup to search Translation Patterns by exact Called Party Transform Mask equal to each Jabber CSF line extension, rather than searching the pattern number for the extension. Example: pattern `8004425391` with mask `4697061228` is associated with Jabber extension `4697061228`.
-- Uses one read-only AXL SQL query per extension with no per-pattern detail calls; preserves partitions and existing result/CSV fields. Standalone Translation Pattern Lookup and page scripts are unchanged.
+- Initial correction used one read-only AXL SQL query per extension with no per-pattern detail calls; preserves partitions and existing result/CSV fields. Standalone Translation Pattern Lookup and page scripts are unchanged.
 - Full Python compilation and focused mocked regression checks passed (example mapping, exact-mask filtering, partition-aware deduplication, empty results, and SQL escaping). Operator confirmed the lookup worked after the LAB test instructions on 2026-10-05; no PROD validation reported.
+- Bulk efficiency follow-up: each job now lazily loads one paginated translation-pattern snapshot (1,000 rows/page), indexes it by exact Called Party Transform Mask, and reuses it for all CSF lines. The snapshot is local to the lookup call, released after completion/failure, and never shared across jobs or hosts. Jobs without CSF devices skip the inventory load.
+- Focused 200-person mocked regression passed with three inventory reads at a test page size of 100, including real/fallback lines, partition deduplication, and fresh next-job data. Inventory API failures or page-limit overflow fail the job instead of silently reporting missing patterns. Live LAB validation of this efficiency follow-up remains pending; email/device/SMS lookup behavior is unchanged.
 
 ### 2026-10-02 (Unity LDAP Integration Repair)
 - Unity Connection Administration saves LDAP integration through `POST /cuadmin/user.do?op=save` with form field `ldapIntegration=0` for Do Not Integrate and `ldapIntegration=1` for Integrate. Browser-form replay from the portal returned `denied`. The mailbox's CUPI detail showed `LdapType=3` and an LDAP PKID.

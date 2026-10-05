@@ -16673,51 +16673,59 @@ def _greenlight_get_csf_lines(cucm_host: str, cucm_user: str, cucm_pass: str, ph
   return details
 
 
-def _greenlight_find_translation_patterns(cucm_host: str, cucm_user: str, cucm_pass: str, person: dict, extension: str) -> list[dict]:
-  clean_ext = (extension or "").strip()
-  if not clean_ext:
-    return []
-
-  sql = (
-    "SELECT n.dnorpattern AS pattern, r.name AS route_partition, "
+def _greenlight_load_translation_patterns_by_mask(cucm_host: str, cucm_user: str, cucm_pass: str) -> dict[str, list[dict]]:
+  select_body = (
+    "n.pkid AS pattern_id, n.dnorpattern AS pattern, r.name AS route_partition, "
     "n.description AS description, "
     "n.calledpartytransformationmask AS called_party_transform_mask "
     "FROM numplan n "
     "LEFT OUTER JOIN routepartition r ON r.pkid = n.fkroutepartition "
     "WHERE n.tkpatternusage IN (3, 15) "
-    f"AND n.calledpartytransformationmask = '{_sql_escape_literal(clean_ext)}'"
+    "AND n.calledpartytransformationmask IS NOT NULL "
+    "AND n.calledpartytransformationmask <> '' ORDER BY n.pkid"
   )
-  try:
-    candidates = _axl_execute_sql_rows(cucm_host, cucm_user, cucm_pass, sql)
-  except Exception:
-    return []
-
-  associated = []
+  by_mask: dict[str, list[dict]] = {}
   seen = set()
-  for item in candidates:
-    pattern = str(item.get("pattern") or "").strip()
-    partition = str(item.get("route_partition") or "").strip()
-    description = str(item.get("description") or "").strip()
-    mask = str(item.get("called_party_transform_mask") or "").strip()
+  for page in range(GREENLIGHT_CSF_INVENTORY_MAX_PAGES):
+    skip = page * GREENLIGHT_CSF_INVENTORY_PAGE_SIZE
+    sql = f"SELECT SKIP {skip} FIRST {GREENLIGHT_CSF_INVENTORY_PAGE_SIZE} {select_body}"
+    candidates = _axl_execute_sql_rows(cucm_host, cucm_user, cucm_pass, sql)
+    for item in candidates:
+      pattern = str(item.get("pattern") or "").strip()
+      partition = str(item.get("route_partition") or "").strip()
+      description = str(item.get("description") or "").strip()
+      mask = str(item.get("called_party_transform_mask") or "").strip()
+      key = (mask, pattern, partition)
+      if not pattern or not mask or key in seen:
+        continue
+      seen.add(key)
+      by_mask.setdefault(mask, []).append(
+        {
+          "pattern": pattern,
+          "route_partition": partition,
+          "description": description,
+          "called_party_transform_mask": mask,
+        }
+      )
+    if len(candidates) < GREENLIGHT_CSF_INVENTORY_PAGE_SIZE:
+      break
+  else:
+    raise RuntimeError("Translation pattern inventory exceeded the page limit; lookup stopped to avoid incomplete results.")
 
-    if not pattern or mask != clean_ext:
-      continue
+  for associated in by_mask.values():
+    associated.sort(key=lambda item: (item["pattern"], item["route_partition"]))
+  return by_mask
 
-    key = (pattern, partition)
-    if key in seen:
-      continue
-    seen.add(key)
-    associated.append(
-      {
-        "pattern": pattern,
-        "route_partition": partition,
-        "description": description,
-        "called_party_transform_mask": mask,
-      }
+
+def _greenlight_find_translation_patterns(cucm_host: str, cucm_user: str, cucm_pass: str, person: dict, extension: str, translation_patterns_by_mask: dict[str, list[dict]] | None = None) -> list[dict]:
+  clean_ext = (extension or "").strip()
+  if not clean_ext:
+    return []
+  if translation_patterns_by_mask is None:
+    translation_patterns_by_mask = _greenlight_load_translation_patterns_by_mask(
+      cucm_host, cucm_user, cucm_pass,
     )
-
-  associated.sort(key=lambda x: (x.get("pattern") or "", x.get("route_partition") or ""))
-  return associated
+  return translation_patterns_by_mask.get(clean_ext, [])
 
 
 def _greenlight_resolve_sms_provider(*values: str) -> dict:
@@ -17013,6 +17021,7 @@ def _greenlight_build_person_lookup_rows(
     progress_callback=progress_callback,
   )
   output_rows = []
+  translation_patterns_by_mask = None
 
   def _identity(person: dict) -> dict:
     """Prefer authoritative AD identity fields over CUCM-derived values."""
@@ -17061,6 +17070,11 @@ def _greenlight_build_person_lookup_rows(
       )
       continue
 
+    if translation_patterns_by_mask is None:
+      translation_patterns_by_mask = _greenlight_load_translation_patterns_by_mask(
+        cucm_host, cucm_user, cucm_pass,
+      )
+
     for csf in csf_devices:
       csf_name = str(csf.get("name") or "").strip()
       csf_lines = _greenlight_get_csf_lines(cucm_host, cucm_user, cucm_pass, csf_name)
@@ -17071,7 +17085,7 @@ def _greenlight_build_person_lookup_rows(
           ext = str(ext_list[0] or "").strip()
         ext = ext or str(person.get("primary_extension") or "").strip()
         ext = _ext_or_ad(person, ext)
-        tps = _greenlight_find_translation_patterns(cucm_host, cucm_user, cucm_pass, person, ext)
+        tps = _greenlight_find_translation_patterns(cucm_host, cucm_user, cucm_pass, person, ext, translation_patterns_by_mask)
         # SMS is resolved from the device line directory number only.
         sms_lookup = _greenlight_resolve_sms_provider(ext)
         ident = _identity(person)
@@ -17103,7 +17117,7 @@ def _greenlight_build_person_lookup_rows(
         # lookups so each of a person's lines resolves independently.
         line_dn = str(line.get("pattern") or "").strip()
         ext = line_dn
-        tps = _greenlight_find_translation_patterns(cucm_host, cucm_user, cucm_pass, person, line_dn)
+        tps = _greenlight_find_translation_patterns(cucm_host, cucm_user, cucm_pass, person, line_dn, translation_patterns_by_mask)
         sms_lookup = _greenlight_resolve_sms_provider(
           line_dn,
           str(line.get("line_mask") or "").strip(),
