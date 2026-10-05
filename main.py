@@ -21513,7 +21513,7 @@ def genesys_admin_placeholder(request: Request):
           <div id="genesys-call-routes-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <style>
               #genesys-call-routes-filter { box-sizing:border-box; min-width:0; }
-              #genesys-call-routes-output table { min-width:760px; }
+              #genesys-call-routes-output table { min-width:560px; }
               @media (max-width: 760px) {
                 .portal-shell:has(#genesys-call-routes-panel[style*="display: block"]) { grid-template-columns:minmax(0,1fr); }
                 .portal-shell:has(#genesys-call-routes-panel[style*="display: block"]) .portal-sidebar { position:static; }
@@ -21546,7 +21546,7 @@ def genesys_admin_placeholder(request: Request):
                 function render() {
                   var query = filter.value.trim().toLowerCase();
                   var visible = rows.filter(function (row) { return [row.route_name, row.telephone_number, row.original_number, row.open_call_flow, row.schedule_group, row.closed_call_flow, row.division].join(" ").toLowerCase().indexOf(query) !== -1; });
-                  var columns = [["route_name", "Name"], ["telephone_number", "Inbound Number"], ["open", "Open"], ["open_call_flow", "Open Call Flow"], ["schedule_group", "Schedule Group"], ["closed_call_flow", "Closed Call Flow"], ["number_format", "Number Format"]];
+                  var columns = [["route_name", "Name"], ["telephone_number", "Inbound Number"], ["open", "Open"], ["open_call_flow", "Open Call Flow"]];
                   var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>';
                   columns.forEach(function (column) { html += '<th style="padding:8px;text-align:left;border-bottom:1px solid #c8dbee;white-space:nowrap;">' + esc(column[1]) + '</th>'; });
                   html += '</tr></thead><tbody>';
