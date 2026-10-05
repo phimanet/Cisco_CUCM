@@ -16678,12 +16678,17 @@ def _greenlight_find_translation_patterns(cucm_host: str, cucm_user: str, cucm_p
   if not clean_ext:
     return []
 
-  display_name = (person.get("display_name") or "").strip().lower()
-  full_name = f"{(person.get('first_name') or '').strip()} {(person.get('last_name') or '').strip()}".strip().lower()
-  translated_number = (person.get("translated_number") or "").strip()
-
+  sql = (
+    "SELECT n.dnorpattern AS pattern, r.name AS route_partition, "
+    "n.description AS description, "
+    "n.calledpartytransformationmask AS called_party_transform_mask "
+    "FROM numplan n "
+    "LEFT OUTER JOIN routepartition r ON r.pkid = n.fkroutepartition "
+    "WHERE n.tkpatternusage IN (3, 15) "
+    f"AND n.calledpartytransformationmask = '{_sql_escape_literal(clean_ext)}'"
+  )
   try:
-    candidates = lookup_translation_patterns(cucm_host, cucm_user, cucm_pass, clean_ext)
+    candidates = _axl_execute_sql_rows(cucm_host, cucm_user, cucm_pass, sql)
   except Exception:
     return []
 
@@ -16695,18 +16700,7 @@ def _greenlight_find_translation_patterns(cucm_host: str, cucm_user: str, cucm_p
     description = str(item.get("description") or "").strip()
     mask = str(item.get("called_party_transform_mask") or "").strip()
 
-    desc_l = description.lower()
-    is_associated = False
-    if mask and mask == clean_ext:
-      is_associated = True
-    elif translated_number and pattern == translated_number:
-      is_associated = True
-    elif full_name and full_name in desc_l:
-      is_associated = True
-    elif display_name and display_name in desc_l:
-      is_associated = True
-
-    if not is_associated:
+    if not pattern or mask != clean_ext:
       continue
 
     key = (pattern, partition)

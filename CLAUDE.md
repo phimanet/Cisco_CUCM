@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-09-24
+- Date: 2026-10-05
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -111,6 +111,11 @@ Priority keys:
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
+
+### 2026-10-05 (Project Person Lookup translation-pattern matching)
+- Changed the Project Functions Person Lookup to search Translation Patterns by exact Called Party Transform Mask equal to each Jabber CSF line extension, rather than searching the pattern number for the extension. Example: pattern `8004425391` with mask `4697061228` is associated with Jabber extension `4697061228`.
+- Uses one read-only AXL SQL query per extension with no per-pattern detail calls; preserves partitions and existing result/CSV fields. Standalone Translation Pattern Lookup and page scripts are unchanged.
+- Full Python compilation and focused mocked regression checks passed (example mapping, exact-mask filtering, partition-aware deduplication, empty results, and SQL escaping). Live LAB validation remains pending.
 
 ### 2026-10-02 (Unity LDAP Integration Repair)
 - Unity Connection Administration saves LDAP integration through `POST /cuadmin/user.do?op=save` with form field `ldapIntegration=0` for Do Not Integrate and `ldapIntegration=1` for Integrate. Browser-form replay from the portal returned `denied`. The mailbox's CUPI detail showed `LdapType=3` and an LDAP PKID.
