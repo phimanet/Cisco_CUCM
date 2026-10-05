@@ -21506,7 +21506,7 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-group-user-audit-panel" onclick="(function(){var id='genesys-group-user-audit-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Groups and User Cleanup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-set-inactive-panel" onclick="(function(){var id='genesys-set-inactive-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Set User to Inactive</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-external-contact-panel" onclick="(function(){var id='genesys-external-contact-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">External Contact Creation/Removal</button>
-          <button type="button" class="portal-nav-btn" data-panel-target="genesys-call-routes-panel" onclick="(function(){var id='genesys-call-routes-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Route Routes</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-call-routes-panel" onclick="(function(){var id='genesys-call-routes-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Call Routes</button>
         </aside>
 
         <section class="portal-main">
@@ -21524,7 +21524,7 @@ def genesys_admin_placeholder(request: Request):
                 #genesys-call-routes-panel { overflow-wrap:anywhere; }
               }
             </style>
-            <h3 style="margin-top:0;">Genesys Route Routes</h3>
+            <h3 style="margin-top:0;">Genesys Call Routes</h3>
             <div class="search-filter-row" style="flex-wrap:wrap;">
               <button type="button" id="genesys-call-routes-load" onclick="if(window.loadGenesysCallRoutes){window.loadGenesysCallRoutes(event);}else{document.getElementById('genesys-call-routes-status').textContent='Call routes handler missing (JavaScript did not load).';}return false;">Load Call Routes</button>
               <input id="genesys-call-routes-filter" aria-label="Filter call routes" placeholder="Filter by route name or number" style="width:360px;max-width:100%;">

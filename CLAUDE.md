@@ -112,8 +112,8 @@ Priority keys:
 
 ## Conversation Notes
 
-### 2026-10-05 (Genesys Route Routes report)
-- Added read-only Genesys Admin bottom-menu item `Genesys Route Routes`. Loads the paginated `/api/v2/architect/ivrs` call-routing inventory with no per-route detail calls; lists route name, inbound number, open/closed flow, schedule group, and number format.
+### 2026-10-05 (Genesys Call Routes report)
+- Added read-only Genesys Admin bottom-menu item `Genesys Call Routes` (label corrected per operator request). Loads the paginated `/api/v2/architect/ivrs` call-routing inventory with no per-route detail calls; lists route name, inbound number, open/closed flow, schedule group, and number format.
 - Preserves every route/number association as a separate table/CSV row, including routes with multiple numbers; routes without numbers remain visible. North American `+1` numbers become 10 digits; other values are retained and flagged rather than truncated. CSV also retains original numbers, route IDs, division, and holiday flow for later lookup/comparison.
 - Local name/number filtering and CSV export reuse the loaded report. Latest successful snapshot is atomically persisted with fsync in `genesys_call_routes_report.json` under the existing Genesys data root (`/opt/cucm-web-data` on Ubuntu by default), survives restarts, and remains available if a refresh fails. All three endpoints require portal authentication; loads are audited and credentials are never persisted in the report.
 - Validation passed: mocked 101-route/707-number inventory across two pages; number formatting, empty routes, failure/page-limit handling, saved-report read-back, authentication, and safe CSV. Rendered full Genesys page: all 19 scripts parsed in a browser; existing/new navigation, load/filter/error handling, multi-number filtering, and desktop/mobile screenshots checked. Live LAB Genesys API/permissions validation remains pending; no PROD rollout instructed.
