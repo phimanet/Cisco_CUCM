@@ -939,6 +939,12 @@ GENESYS_CALL_ROUTES_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesy
 GENESYS_CALL_ROUTES_REPORT_LOCK = threading.Lock()
 GENESYS_DID_NUMBERS_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_did_numbers_report.json")
 GENESYS_DID_NUMBERS_REPORT_LOCK = threading.Lock()
+GENESYS_SINCH_INVENTORY_PATH = os.path.join(_genesys_queue_data_root, "genesys_sinch_inventory.json")
+GENESYS_SINCH_INVENTORY_LOCK = threading.Lock()
+GENESYS_SINCH_INVENTORY_CACHE = {}
+GENESYS_SINCH_INVENTORY_TTL_SECONDS = 900
+GENESYS_USER_EXTRACT_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_user_extract_report.json")
+GENESYS_USER_EXTRACT_REPORT_LOCK = threading.Lock()
 GENESYS_INACTIVE_QUEUE_JOBS = {}
 GENESYS_INACTIVE_QUEUE_LOCK = threading.Lock()
 GENESYS_INACTIVE_QUEUE_WORKER_STARTED = False
@@ -1618,6 +1624,97 @@ def _inteliquent_extract_tn_rows(payload: dict) -> list[dict]:
     seen.add(key)
     deduped.append(row)
   return deduped
+
+
+def _genesys_sinch_source_key() -> str:
+  identity = json.dumps([INTELIQUENT_BASE_URL, INTELIQUENT_API_KEY, INTELIQUENT_PRIVATE_KEY], separators=(",", ":"))
+  return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _genesys_sinch_number_inventory() -> dict:
+  source = _genesys_sinch_source_key()
+  now = time.time()
+  with GENESYS_SINCH_INVENTORY_LOCK:
+    cached = GENESYS_SINCH_INVENTORY_CACHE
+    if not cached:
+      try:
+        with open(GENESYS_SINCH_INVENTORY_PATH, "r", encoding="utf-8") as handle:
+          cached = json.load(handle)
+      except (OSError, ValueError):
+        cached = {}
+    if isinstance(cached, dict) and cached.get("source") == source:
+      try:
+        age = now - float(cached.get("fetched_at") or 0)
+      except (TypeError, ValueError):
+        age = GENESYS_SINCH_INVENTORY_TTL_SECONDS
+      numbers = cached.get("numbers")
+      if 0 <= age < GENESYS_SINCH_INVENTORY_TTL_SECONDS and isinstance(numbers, list) and all(isinstance(number, str) and re.fullmatch(r"[0-9]{10}", number) for number in numbers):
+        GENESYS_SINCH_INVENTORY_CACHE.update(cached)
+        return {**cached, "numbers": set(numbers)}
+    all_numbers = set()
+    for endpoint, search_key, page_size, max_pages in [
+      ("/tnDetail", "tnSearchList", INTELIQUENT_ALL_TN_PAGE_SIZE, INTELIQUENT_ALL_TN_MAX_PAGES),
+      ("/tfDetail", "tfSearchList", INTELIQUENT_ALL_TF_PAGE_SIZE, INTELIQUENT_ALL_TF_MAX_PAGES),
+    ]:
+      page_size = max(1, min(int(page_size or 500), 1000))
+      max_pages = max(1, min(int(max_pages or 20), 200))
+      for page_number in range(1, max_pages + 1):
+        result = _inteliquent_post_json(endpoint, {
+          search_key: {"tnSearchItem" if search_key == "tnSearchList" else "tfSearchItem": [{"tnMask": "xxxxxxxxxx"}]},
+          "pageSort": {"page": page_number, "size": page_size, "direction": "asc", "property": "tn"},
+        })
+        if not result.get("ok"):
+          raise RuntimeError("Sinch inventory lookup failed: " + str(result.get("error") or "Provider unavailable"))
+        payload = result.get("raw") or {}
+        has_collection = any(isinstance(payload.get(key), list) for key in ["tnResult", "items", "results", "data"])
+        has_collection = has_collection or any(isinstance(payload.get(key), dict) and isinstance(payload[key].get(item_key), list) for key, item_key in [("tnList", "tnItem"), ("tfList", "tfItem")])
+        if not has_collection:
+          raise RuntimeError("Sinch inventory returned an unexpected response; incomplete results were refused.")
+        page_rows = _inteliquent_extract_tn_rows(payload)
+        for row in page_rows:
+          raw_number = str(row.get("tn") or row.get("number") or row.get("telephoneNumber") or row.get("tnNumber") or "")
+          if not raw_number.strip():
+            raise RuntimeError("Sinch inventory returned a record without a number.")
+          digits = re.sub(r"\D", "", raw_number)
+          if len(digits) == 11 and digits.startswith("1"):
+            digits = digits[1:]
+          if len(digits) != 10:
+            raise RuntimeError("Sinch inventory returned an invalid North American number.")
+          all_numbers.add(digits)
+        total_pages = int(payload.get("totalPages") or 0)
+        if total_pages > max_pages:
+          raise RuntimeError("Sinch inventory exceeds the configured page limit; incomplete results were refused.")
+        if not page_rows and total_pages > page_number:
+          raise RuntimeError("Sinch inventory returned an empty page before its last page.")
+        if (total_pages and page_number >= total_pages) or (not total_pages and len(page_rows) < page_size):
+          break
+      else:
+        raise RuntimeError("Sinch inventory exceeded its page limit; incomplete results were refused.")
+    snapshot = {"source": source, "fetched_at": time.time(), "numbers": sorted(all_numbers)}
+    os.makedirs(os.path.dirname(GENESYS_SINCH_INVENTORY_PATH), exist_ok=True)
+    temp_path = GENESYS_SINCH_INVENTORY_PATH + "." + uuid4().hex + ".tmp"
+    try:
+      with open(temp_path, "w", encoding="utf-8") as handle:
+        json.dump(snapshot, handle)
+        handle.flush()
+        os.fsync(handle.fileno())
+      os.replace(temp_path, GENESYS_SINCH_INVENTORY_PATH)
+    finally:
+      if os.path.exists(temp_path):
+        os.remove(temp_path)
+    GENESYS_SINCH_INVENTORY_CACHE.clear()
+    GENESYS_SINCH_INVENTORY_CACHE.update(snapshot)
+    return {**snapshot, "numbers": all_numbers}
+
+
+def _genesys_enrich_report_sinch(report: dict) -> None:
+  eligible = any(re.fullmatch(r"[0-9]{10}", str(row.get("telephone_number") or "")) for row in report.get("rows", []))
+  inventory = _genesys_sinch_number_inventory() if eligible else {"numbers": set(), "fetched_at": 0, "source": _genesys_sinch_source_key()}
+  for row in report.get("rows", []):
+    number = str(row.get("telephone_number") or "")
+    row["sinch_status"] = ("Active" if number in inventory["numbers"] else "Not Found") if re.fullmatch(r"[0-9]{10}", number) else "Not Checked"
+  report["sinch_inventory_at"] = inventory["fetched_at"]
+  report["sinch_source"] = inventory["source"]
 
 
 def _inteliquent_tn_detail_lookup(number_value: str, quantity: int = 20) -> dict:
@@ -6735,6 +6832,73 @@ def _build_phone_template_summary(phone_entity: dict, fallback_template: dict) -
     "standalone": standalone,
     "line_count": line_count,
   }
+
+
+def _genesys_extract_user_summary(region: str, access_token: str, last_name: str, first_name: str, username: str, queue_access_token: str = "") -> dict:
+  if "@" in username:
+    search = _genesys_search_users_by_email_targets(region, access_token, {username.strip().lower()})
+  else:
+    search = _genesys_search_users_by_name(region, access_token, last_name, first_name, username)
+  if not search.get("ok"):
+    raise RuntimeError(str(search.get("error") or "Genesys user search failed."))
+  if len(search.get("rows", [])) > 50:
+    raise RuntimeError("More than 50 users matched; narrow the user lookup before extracting details.")
+  _, _, api_base = _genesys_region_to_urls(region)
+  rows = []
+  warnings = []
+  seen = set()
+  for user in search.get("rows", []):
+    user_id = str(user.get("id") or "")
+    if not user_id or user_id in seen:
+      continue
+    seen.add(user_id)
+    row = {"user_id": user_id, "name": str(user.get("name") or ""), "email": str(user.get("email") or ""), "state": str(user.get("state") or ""), "division": "Lookup Failed", "queues": "Lookup Failed", "skills": "Lookup Failed"}
+    ok, profile, error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}")
+    if ok:
+      division = profile.get("division") or {}
+      row["division"] = str(division.get("name") or division.get("id") or "(none)")
+    else:
+      warnings.append(f"{row['name'] or user_id} division: {error}")
+    skill_names = set()
+    for page_number in range(1, 101):
+      ok, payload, error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}/routingskills", {"pageSize": 100, "pageNumber": page_number})
+      if not ok or not isinstance(payload.get("entities"), list):
+        warnings.append(f"{row['name'] or user_id} skills: {error or 'Unexpected response'}")
+        break
+      for skill in payload["entities"]:
+        reference = skill.get("skill") or {}
+        name = str(skill.get("name") or reference.get("name") or skill.get("id") or reference.get("id") or "")
+        if name:
+          skill_names.add(name)
+      if not payload.get("nextUri") and page_number >= int(payload.get("pageCount") or 0) and len(payload["entities"]) < 100:
+        row["skills"] = "; ".join(sorted(skill_names, key=str.lower)) or "(none)"
+        break
+    else:
+      warnings.append(f"{row['name'] or user_id} skills: Page limit exceeded")
+    queues, queue_error, queue_pages = _genesys_get_user_queues_paged(api_base, queue_access_token or access_token, user_id)
+    if queue_pages >= max(1, min(GENESYS_QUEUE_LOOKUP_MAX_PAGES, 500)):
+      queue_error = queue_error or "Queue page limit reached"
+    if queue_error or not queues:
+      fallback_names, fallback_error, fallback_diagnostics = _genesys_lookup_user_queues_via_membership(api_base, queue_access_token or access_token, user_id, row["email"], row["name"])
+      if fallback_names:
+        queues = [{"name": name} for name in fallback_names]
+        queue_error = ""
+      elif fallback_error:
+        queue_error = fallback_error
+      elif isinstance(fallback_diagnostics, dict) and fallback_diagnostics.get("scanned_queue_count") == 0:
+        queue_error = "Queue membership could not be confirmed; no queues are visible to the API client"
+    if queue_error:
+      warnings.append(f"{row['name'] or user_id} queues: {queue_error}")
+    else:
+      queue_names = set()
+      for queue in queues:
+        reference = queue.get("queue") or {}
+        name = str(queue.get("name") or reference.get("name") or queue.get("id") or reference.get("id") or "")
+        if name:
+          queue_names.add(name)
+      row["queues"] = "; ".join(sorted(queue_names, key=str.lower)) or "(none)"
+    rows.append(row)
+  return {"rows": rows, "warnings": warnings, "count": len(rows)}
 
 
 def _genesys_enrich_user_rows(region: str, access_token: str, rows: list[dict], queue_access_token: str = "") -> dict:
@@ -21638,9 +21802,81 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-external-contact-panel" onclick="(function(){var id='genesys-external-contact-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">External Contact Creation/Removal</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-call-routes-panel" onclick="(function(){var id='genesys-call-routes-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Call Routes</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-did-numbers-panel" onclick="(function(){var id='genesys-did-numbers-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys DID Numbers</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-extract-panel" onclick="(function(){var id='genesys-user-extract-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Extract</button>
         </aside>
 
         <section class="portal-main">
+          <div id="genesys-user-extract-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+            <style>
+              #genesys-user-extract-panel input { box-sizing:border-box; max-width:100%; }
+              #genesys-user-extract-output table { min-width:680px; }
+              @media (max-width:760px) {
+                .portal-shell:has(#genesys-user-extract-panel[style*="display: block"]) { grid-template-columns:minmax(0,1fr); }
+                .portal-shell:has(#genesys-user-extract-panel[style*="display: block"]) .portal-sidebar { position:static; }
+                body:has(#genesys-user-extract-panel[style*="display: block"]) .topbar-brand { flex-wrap:wrap; min-width:0; }
+                body:has(#genesys-user-extract-panel[style*="display: block"]) .topbar-status { flex:1 0 100%; }
+                body:has(#genesys-user-extract-panel[style*="display: block"]) .topbar-actions { flex-wrap:wrap; }
+                #genesys-user-extract-panel { overflow-wrap:anywhere; }
+              }
+            </style>
+            <h3 style="margin-top:0;">Genesys User Extract</h3>
+            <form id="genesys-user-extract-form" onsubmit="if(window.lookupGenesysUserExtract){window.lookupGenesysUserExtract(event);}else{document.getElementById('genesys-user-extract-status').textContent='User Extract handler missing (JavaScript did not load).';}return false;">
+              <div class="search-filter-row">
+                <input name="username" aria-label="User email or username" placeholder="Email or username" style="width:280px;">
+                <input name="last_name" aria-label="User last name" placeholder="Last name" style="width:180px;">
+                <input name="first_name" aria-label="User first name" placeholder="First name (optional)" style="width:180px;">
+                <button type="button" id="genesys-user-extract-load" onclick="if(window.lookupGenesysUserExtract){window.lookupGenesysUserExtract(event);}else{document.getElementById('genesys-user-extract-status').textContent='User Extract handler missing (JavaScript did not load).';}return false;">Lookup User</button>
+              </div>
+            </form>
+            <div class="search-filter-row">
+              <input id="genesys-user-extract-filter" aria-label="Filter extracted users" placeholder="Filter by name, division, queue, or skill" style="width:420px;">
+              <a id="genesys-user-extract-download" href="/genesys/user-extract/download" style="display:none;font-weight:700;">Download CSV</a>
+            </div>
+            <p id="genesys-user-extract-status" role="status" style="color:#2c5c8a;min-height:18px;"></p>
+            <div id="genesys-user-extract-output" style="overflow:auto;max-height:640px;"></div>
+            <script>
+              (function () {
+                var form = document.getElementById("genesys-user-extract-form");
+                var button = document.getElementById("genesys-user-extract-load");
+                var filter = document.getElementById("genesys-user-extract-filter");
+                var status = document.getElementById("genesys-user-extract-status");
+                var output = document.getElementById("genesys-user-extract-output");
+                var download = document.getElementById("genesys-user-extract-download");
+                var report = {};
+                var busy = false;
+                function esc(value) { return String(value == null ? "" : value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+                function render() {
+                  var query = filter.value.trim().toLowerCase();
+                  var rows = (report.rows || []).filter(function (row) { return [row.name,row.email,row.division,row.queues,row.skills,row.state].join(" ").toLowerCase().indexOf(query) !== -1; });
+                  var columns = [["name","Name"],["email","Email"],["division","Division"],["queues","Queues"],["skills","ACD Skills"],["state","State"]];
+                  var html = '<table><thead><tr>';
+                  columns.forEach(function (column) { html += '<th>' + esc(column[1]) + '</th>'; });
+                  html += '</tr></thead><tbody>';
+                  rows.forEach(function (row) { html += '<tr>'; columns.forEach(function (column) { html += '<td>' + esc(row[column[0]] || "-") + '</td>'; }); html += '</tr>'; });
+                  output.innerHTML = rows.length ? html + '</tbody></table>' : '<p>No matching users.</p>';
+                  download.style.display = report.fetched_at ? "inline-block" : "none";
+                  status.textContent = report.fetched_at ? rows.length + " of " + report.count + " users | Saved " + report.fetched_at + ((report.warnings || []).length ? " | " + report.warnings.join("; ") : "") : "No saved user extract.";
+                }
+                async function load(refresh) {
+                  if (busy) return;
+                  var data = new FormData(form);
+                  if (refresh && !String(data.get("username") || "").trim() && !String(data.get("last_name") || "").trim()) { status.textContent = "Enter an email, username, or last name."; return; }
+                  busy = true; button.disabled = true;
+                  status.textContent = refresh ? "Looking up Genesys user, division, queues and skills..." : "Loading saved extract...";
+                  try {
+                    var response = await fetch(refresh ? "/genesys/user-extract/load" : "/genesys/user-extract", {method:refresh ? "POST" : "GET",body:refresh ? data : undefined,credentials:"same-origin"});
+                    var result = await response.json();
+                    if (!response.ok || !result.ok) throw new Error(result.error || "User extract failed.");
+                    report = result; render();
+                  } catch (error) { status.textContent = "Lookup failed: " + error.message + (report.fetched_at ? " | Previous saved extract remains available." : ""); }
+                  finally { busy = false; button.disabled = false; }
+                }
+                window.lookupGenesysUserExtract = function (event) { if (event) event.preventDefault(); return load(true); };
+                filter.addEventListener("input", render);
+                load(false);
+              })();
+            </script>
+          </div>
           <div id="genesys-did-numbers-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <style>
               #genesys-did-numbers-filter { box-sizing:border-box; min-width:0; }
@@ -21676,15 +21912,15 @@ def genesys_admin_placeholder(request: Request):
                 function esc(value) { return String(value == null ? "" : value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
                 function render() {
                   var query = filter.value.trim().toLowerCase();
-                  var visible = rows.filter(function (row) { return [row.telephone_number, row.original_number, row.assignee, row.service_provider, row.comments, row.in_cucm_as].join(" ").toLowerCase().indexOf(query) !== -1; });
-                  var columns = [["telephone_number", "DID Number"], ["in_cucm_as", "In CUCM As"], ["assignee", "Assignee"], ["service_provider", "Service Provider"], ["comments", "Comments"]];
+                  var visible = rows.filter(function (row) { return [row.telephone_number, row.original_number, row.assignee, row.service_provider, row.comments, row.in_cucm_as, row.sinch_status].join(" ").toLowerCase().indexOf(query) !== -1; });
+                  var columns = [["telephone_number", "DID Number"], ["in_cucm_as", "In CUCM As"], ["sinch_status", "Sinch"], ["assignee", "Assignee"], ["comments", "Comments"]];
                   var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>';
                   columns.forEach(function (column) { html += '<th style="padding:8px;text-align:left;border-bottom:1px solid #c8dbee;white-space:nowrap;">' + esc(column[1]) + '</th>'; });
                   html += '</tr></thead><tbody>';
                   visible.forEach(function (row) { html += '<tr>'; columns.forEach(function (column) { html += '<td style="padding:8px;border-bottom:1px solid #e0eaf4;vertical-align:top;">' + esc(row[column[0]] || (column[0] === "in_cucm_as" ? "Not Checked" : "-")) + '</td>'; }); html += '</tr>'; });
                   output.innerHTML = visible.length ? html + '</tbody></table>' : '<p>No matching DID numbers.</p>';
                   download.style.display = report.fetched_at ? "inline-block" : "none";
-                  if (!busy) status.textContent = report.fetched_at ? report.number_count + " DID numbers | " + visible.length + " of " + rows.length + " rows | Saved " + report.fetched_at + (report.cucm_checked ? " | CUCM " + report.cucm_host : " | CUCM not checked for current session") : "No saved DID-number report.";
+                  if (!busy) status.textContent = report.fetched_at ? report.number_count + " DID numbers | " + visible.length + " of " + rows.length + " rows | Saved " + report.fetched_at + (report.cucm_checked ? " | CUCM " + report.cucm_host : " | CUCM not checked for current session") + " | Sinch inventory " + (report.sinch_inventory_at ? new Date(report.sinch_inventory_at * 1000).toISOString() : "Not Checked") : "No saved DID-number report.";
                 }
                 async function fetchReport(refresh) {
                   if (busy) return;
@@ -21747,15 +21983,15 @@ def genesys_admin_placeholder(request: Request):
                 function esc(value) { return String(value == null ? "" : value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
                 function render() {
                   var query = filter.value.trim().toLowerCase();
-                  var visible = rows.filter(function (row) { return [row.route_name, row.telephone_number, row.original_number, row.in_cucm_as, row.open_call_flow, row.schedule_group, row.closed_call_flow, row.division].join(" ").toLowerCase().indexOf(query) !== -1; });
-                  var columns = [["route_name", "Name"], ["telephone_number", "Inbound Number"], ["in_cucm_as", "In CUCM As"], ["open", "Open"], ["open_call_flow", "Open Call Flow"]];
+                  var visible = rows.filter(function (row) { return [row.route_name, row.telephone_number, row.original_number, row.in_cucm_as, row.sinch_status, row.open_call_flow, row.schedule_group, row.closed_call_flow, row.division].join(" ").toLowerCase().indexOf(query) !== -1; });
+                  var columns = [["route_name", "Name"], ["telephone_number", "Inbound Number"], ["in_cucm_as", "In CUCM As"], ["sinch_status", "Sinch"], ["open_call_flow", "Open Call Flow"]];
                   var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>';
                   columns.forEach(function (column) { html += '<th style="padding:8px;text-align:left;border-bottom:1px solid #c8dbee;white-space:nowrap;">' + esc(column[1]) + '</th>'; });
                   html += '</tr></thead><tbody>';
                   visible.forEach(function (row) { html += '<tr>'; columns.forEach(function (column) { html += '<td style="padding:8px;border-bottom:1px solid #e0eaf4;vertical-align:top;">' + esc(row[column[0]] || (column[0] === "in_cucm_as" ? "Not Checked" : "-")) + '</td>'; }); html += '</tr>'; });
                   output.innerHTML = visible.length ? html + '</tbody></table>' : '<p>No matching call routes.</p>';
                   download.style.display = report.fetched_at ? "inline-block" : "none";
-                  if (!busy) status.textContent = report.fetched_at ? report.route_count + " routes | " + report.number_count + " numbers | " + visible.length + " of " + rows.length + " rows | Saved " + report.fetched_at + (report.cucm_checked ? " | CUCM " + report.cucm_host : " | CUCM not checked for current session") : "No saved call-route report.";
+                  if (!busy) status.textContent = report.fetched_at ? report.route_count + " routes | " + report.number_count + " numbers | " + visible.length + " of " + rows.length + " rows | Saved " + report.fetched_at + (report.cucm_checked ? " | CUCM " + report.cucm_host : " | CUCM not checked for current session") + " | Sinch inventory " + (report.sinch_inventory_at ? new Date(report.sinch_inventory_at * 1000).toISOString() : "Not Checked") : "No saved call-route report.";
                 }
                 async function fetchReport(refresh) {
                   if (busy) return;
@@ -29201,6 +29437,83 @@ def genesys_user_mark_inactive_route(
   return JSONResponse({"ok": True, "user_id": clean_user_id, "user_email": clean_email, "reason": clean_reason, "state": "inactive", "message": "Genesys user marked inactive and audit event recorded."})
 
 
+def _genesys_saved_user_extract() -> dict:
+  with GENESYS_USER_EXTRACT_REPORT_LOCK:
+    if not os.path.exists(GENESYS_USER_EXTRACT_REPORT_PATH):
+      return {"ok": True, "rows": [], "count": 0, "fetched_at": ""}
+    with open(GENESYS_USER_EXTRACT_REPORT_PATH, "r", encoding="utf-8") as handle:
+      report = json.load(handle)
+  if not isinstance(report, dict) or not isinstance(report.get("rows"), list):
+    raise RuntimeError("Saved user extract is invalid; run the lookup again.")
+  if report.get("region") != (GENESYS_CLOUD_REGION or "usw2").strip().lower():
+    return {"ok": True, "rows": [], "count": 0, "fetched_at": ""}
+  return report
+
+
+@app.get("/genesys/user-extract")
+def genesys_user_extract_saved_route(request: Request):
+  if not (_get_auth_session(request) or {}).get("username"):
+    return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
+  try:
+    return JSONResponse(_genesys_saved_user_extract())
+  except (OSError, ValueError, RuntimeError) as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@app.post("/genesys/user-extract/load")
+def genesys_user_extract_load_route(request: Request, username: str = Form(""), last_name: str = Form(""), first_name: str = Form("")):
+  session = _get_auth_session(request) or {}
+  if not session.get("username"):
+    return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
+  username, last_name, first_name = username.strip(), last_name.strip(), first_name.strip()
+  if not username and not last_name:
+    return JSONResponse({"ok": False, "error": "Enter an email, username, or last name."}, status_code=400)
+  region = (GENESYS_CLOUD_REGION or "usw2").strip().lower()
+  token = _genesys_get_access_token(region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token.get("ok"):
+    return JSONResponse({"ok": False, "error": token.get("error", "Genesys authentication failed.")}, status_code=400)
+  try:
+    queue_token = _genesys_get_queue_access_token(region)
+    report = _genesys_extract_user_summary(region, token.get("access_token", ""), last_name, first_name, username, queue_token.get("access_token", "") if queue_token.get("ok") else "")
+    report.update({"ok": True, "region": region, "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"), "lookup": {"username": username, "last_name": last_name, "first_name": first_name}})
+    with GENESYS_USER_EXTRACT_REPORT_LOCK:
+      os.makedirs(os.path.dirname(GENESYS_USER_EXTRACT_REPORT_PATH), exist_ok=True)
+      temp_path = GENESYS_USER_EXTRACT_REPORT_PATH + "." + uuid4().hex + ".tmp"
+      try:
+        with open(temp_path, "w", encoding="utf-8") as handle:
+          json.dump(report, handle, ensure_ascii=True)
+          handle.flush()
+          os.fsync(handle.fileno())
+        os.replace(temp_path, GENESYS_USER_EXTRACT_REPORT_PATH)
+      finally:
+        if os.path.exists(temp_path):
+          os.remove(temp_path)
+    _append_audit_event(action="genesys_user_extract", cucm_host=str(session.get("cucm_host") or ""), operator=str(session["username"]), target=username or (first_name + " " + last_name).strip(), output_filename="genesys_user_extract.csv", inline_mode=True)
+    return JSONResponse(report)
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@app.get("/genesys/user-extract/download")
+def genesys_user_extract_download_route(request: Request):
+  if not (_get_auth_session(request) or {}).get("username"):
+    return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
+  try:
+    report = _genesys_saved_user_extract()
+    if not report.get("fetched_at"):
+      return JSONResponse({"ok": False, "error": "Lookup a user before downloading."}, status_code=404)
+    columns = [("name", "Name"), ("email", "Email"), ("division", "Division"), ("queues", "Queues"), ("skills", "ACD Skills"), ("state", "State"), ("user_id", "Genesys User ID")]
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow([label for _, label in columns])
+    for row in report["rows"]:
+      values = [str(row.get(key) or "") for key, _ in columns]
+      writer.writerow(["'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value for value in values])
+    return Response(output.getvalue().encode("utf-8-sig"), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="genesys_user_extract.csv"'})
+  except (OSError, ValueError, RuntimeError) as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
 def _genesys_saved_did_numbers(cucm_host: str = "") -> dict:
   with GENESYS_DID_NUMBERS_REPORT_LOCK:
     if not os.path.exists(GENESYS_DID_NUMBERS_REPORT_PATH):
@@ -29219,6 +29532,8 @@ def _genesys_saved_did_numbers(cucm_host: str = "") -> dict:
       row["cucm_matches"] = []
     else:
       row.setdefault("in_cucm_as", "Not Checked")
+    if report.get("sinch_source") != _genesys_sinch_source_key():
+      row["sinch_status"] = "Not Checked"
   return report
 
 
@@ -29247,6 +29562,7 @@ def genesys_did_numbers_load_route(request: Request):
     region, _, api_base = _genesys_region_to_urls(token_result.get("region", clean_region))
     report = _genesys_list_did_numbers(api_base, token_result.get("access_token", ""))
     _genesys_enrich_call_routes_cucm(report, cucm_host, cucm_user, cucm_pass)
+    _genesys_enrich_report_sinch(report)
     report.update({"ok": True, "region": region, "cucm_checked": True, "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")})
     with GENESYS_DID_NUMBERS_REPORT_LOCK:
       os.makedirs(os.path.dirname(GENESYS_DID_NUMBERS_REPORT_PATH), exist_ok=True)
@@ -29280,6 +29596,7 @@ def genesys_did_numbers_download_route(request: Request):
       return JSONResponse({"ok": False, "error": "Load DID numbers before downloading."}, status_code=404)
     columns = [
       ("telephone_number", "DID Number"), ("in_cucm_as", "In CUCM As"),
+      ("sinch_status", "Sinch"),
       ("assignee", "Assignee"), ("service_provider", "Service Provider"), ("comments", "Comments"),
       ("original_number", "Original Number"), ("number_format", "Number Format"), ("did_id", "DID ID"),
       ("assignee_id", "Assignee ID"), ("assignee_type", "Assignee Type"),
@@ -29316,6 +29633,8 @@ def _genesys_saved_call_routes(cucm_host: str = "") -> dict:
       row["cucm_matches"] = []
     else:
       row.setdefault("in_cucm_as", "Not Checked")
+    if report.get("sinch_source") != _genesys_sinch_source_key():
+      row["sinch_status"] = "Not Checked"
   return report
 
 
@@ -29344,6 +29663,7 @@ def genesys_call_routes_load_route(request: Request):
     region, _, api_base = _genesys_region_to_urls(token_result.get("region", clean_region))
     report = _genesys_list_call_routes(api_base, token_result.get("access_token", ""))
     _genesys_enrich_call_routes_cucm(report, cucm_host, cucm_user, cucm_pass)
+    _genesys_enrich_report_sinch(report)
     report["cucm_checked"] = True
     report.update({"ok": True, "region": region, "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")})
     with GENESYS_CALL_ROUTES_REPORT_LOCK:
@@ -29380,6 +29700,7 @@ def genesys_call_routes_download_route(request: Request):
     columns = [
       ("route_name", "Route Name"), ("telephone_number", "Telephone Number"),
       ("in_cucm_as", "In CUCM As"),
+      ("sinch_status", "Sinch"),
       ("original_number", "Original Number"), ("number_format", "Number Format"),
       ("open", "Open"), ("open_call_flow", "Open Call Flow"),
       ("schedule_group", "Schedule Group"), ("closed_call_flow", "Closed Call Flow"),
