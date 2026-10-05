@@ -16728,7 +16728,34 @@ def _greenlight_find_translation_patterns(cucm_host: str, cucm_user: str, cucm_p
   return translation_patterns_by_mask.get(clean_ext, [])
 
 
-def _greenlight_resolve_sms_provider(*values: str) -> dict:
+def _greenlight_batch_twilio_number(phone_number: str, account: str, lookup_context: dict) -> dict:
+  indexes = lookup_context.setdefault("twilio_indexes", {})
+  if account not in indexes:
+    if account == "salesforce":
+      account_sid = _resolve_twilio_salesforce_account_sid()
+      account_token = TWILIO_SALESFORCE_AUTH_TOKEN or TWILIO_AUTH_TOKEN
+      provider = "Twilio - Salesforce"
+    else:
+      account_sid = _resolve_twilio_lookup_account_sid()
+      account_token = _resolve_twilio_lookup_auth_token_for_sid(account_sid)
+      provider = "Twilio - AMIEWeb"
+    index = {}
+    if account_sid and account_token:
+      listed = _list_twilio_incoming_phone_numbers(account_sid, account_token)
+      if not listed.get("ok"):
+        raise RuntimeError(f"{provider} inventory could not be loaded; SMS lookup stopped to avoid incomplete results.")
+      for item in listed.get("numbers", []) or []:
+        if not isinstance(item, dict):
+          continue
+        normalized = _normalize_phone_to_e164(str(item.get("phone_number") or ""))
+        if normalized:
+          index[normalized] = normalized
+    indexes[account] = index
+  matched = indexes[account].get(phone_number, "")
+  return {"found": bool(matched), "phone_number": matched}
+
+
+def _greenlight_resolve_sms_provider(*values: str, lookup_context: dict | None = None) -> dict:
   """Resolve SMS provider by trying normalized phone candidates from known row fields."""
   candidates: list[str] = []
   seen = set()
@@ -16758,36 +16785,47 @@ def _greenlight_resolve_sms_provider(*values: str) -> dict:
       "sms_lookup_basis": "",
     }
 
+  result_key = tuple(candidates)
+  if lookup_context is not None:
+    cached = lookup_context.setdefault("sms_results", {}).get(result_key)
+    if cached is not None:
+      return dict(cached)
+
+  def _result(sms_number: str, provider: str, basis: str) -> dict:
+    result = {"sms_number": sms_number, "sms_provider": provider, "sms_lookup_basis": basis}
+    if lookup_context is not None:
+      lookup_context["sms_results"][result_key] = result
+    return dict(result)
+
+  lookup_failed = False
   for candidate in candidates:
-    twilio_default = _lookup_twilio_number_by_phone(candidate, account="default")
+    twilio_default = (
+      _greenlight_batch_twilio_number(candidate, "default", lookup_context)
+      if lookup_context is not None else _lookup_twilio_number_by_phone(candidate, account="default")
+    )
     if twilio_default.get("found"):
-      return {
-        "sms_number": str(twilio_default.get("phone_number") or candidate).strip(),
-        "sms_provider": "Twilio - AMIEWeb",
-        "sms_lookup_basis": candidate,
-      }
+      return _result(str(twilio_default.get("phone_number") or candidate).strip(), "Twilio - AMIEWeb", candidate)
 
-    twilio_sfdc = _lookup_twilio_number_by_phone(candidate, account="salesforce")
+    twilio_sfdc = (
+      _greenlight_batch_twilio_number(candidate, "salesforce", lookup_context)
+      if lookup_context is not None else _lookup_twilio_number_by_phone(candidate, account="salesforce")
+    )
     if twilio_sfdc.get("found"):
-      return {
-        "sms_number": str(twilio_sfdc.get("phone_number") or candidate).strip(),
-        "sms_provider": "Twilio - Salesforce",
-        "sms_lookup_basis": candidate,
-      }
+      return _result(str(twilio_sfdc.get("phone_number") or candidate).strip(), "Twilio - Salesforce", candidate)
 
-    aerialink = _lookup_aerialink_account_code_by_phone(candidate)
+    if lookup_context is not None:
+      aerialink_results = lookup_context.setdefault("aerialink_results", {})
+      if candidate not in aerialink_results:
+        aerialink_results[candidate] = _lookup_aerialink_account_code_by_phone(candidate)
+      aerialink = aerialink_results[candidate]
+      if aerialink.get("enabled") and not aerialink.get("provisioned") and aerialink.get("status") != "Not provisioned on Aerialink account":
+        lookup_failed = True
+    else:
+      aerialink = _lookup_aerialink_account_code_by_phone(candidate)
     if aerialink.get("provisioned"):
-      return {
-        "sms_number": str(aerialink.get("matched_number") or candidate).strip(),
-        "sms_provider": "Aerialink Classic",
-        "sms_lookup_basis": candidate,
-      }
+      return _result(str(aerialink.get("matched_number") or candidate).strip(), "Aerialink Classic", candidate)
 
-  return {
-    "sms_number": candidates[0],
-    "sms_provider": "Not Found",
-    "sms_lookup_basis": candidates[0],
-  }
+  return _result(candidates[0], "Lookup Failed" if lookup_failed else "Not Found", candidates[0])
 
 
 def _greenlight_collect_people_from_email(cucm_host: str, cucm_user: str, cucm_pass: str, email: str) -> dict[str, dict]:
@@ -17022,6 +17060,7 @@ def _greenlight_build_person_lookup_rows(
   )
   output_rows = []
   translation_patterns_by_mask = None
+  sms_lookup_context = {}
 
   def _identity(person: dict) -> dict:
     """Prefer authoritative AD identity fields over CUCM-derived values."""
@@ -17048,6 +17087,7 @@ def _greenlight_build_person_lookup_rows(
       # number, never from the End User telephone or ipPhone extension.
       sms_lookup = _greenlight_resolve_sms_provider(
         str(person.get("translated_number") or "").strip(),
+        lookup_context=sms_lookup_context,
       )
       ident = _identity(person)
       output_rows.append(
@@ -17087,7 +17127,7 @@ def _greenlight_build_person_lookup_rows(
         ext = _ext_or_ad(person, ext)
         tps = _greenlight_find_translation_patterns(cucm_host, cucm_user, cucm_pass, person, ext, translation_patterns_by_mask)
         # SMS is resolved from the device line directory number only.
-        sms_lookup = _greenlight_resolve_sms_provider(ext)
+        sms_lookup = _greenlight_resolve_sms_provider(ext, lookup_context=sms_lookup_context)
         ident = _identity(person)
         output_rows.append(
           {
@@ -17121,6 +17161,7 @@ def _greenlight_build_person_lookup_rows(
         sms_lookup = _greenlight_resolve_sms_provider(
           line_dn,
           str(line.get("line_mask") or "").strip(),
+          lookup_context=sms_lookup_context,
         )
         ident = _identity(person)
         output_rows.append(

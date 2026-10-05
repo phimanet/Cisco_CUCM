@@ -112,6 +112,13 @@ Priority keys:
 
 ## Conversation Notes
 
+### 2026-10-05 (Project Person Lookup SMS batch caching)
+- Project Person Lookup now lazily builds separate normalized-number indexes for the configured AMIEWeb and Salesforce Twilio accounts once per job, reusing the existing paginated inventory loader and valid five-minute inventory cache. The batch path does not scan unrelated-account caches or force-refresh inventories for each missing number.
+- Aerialink results are cached once per normalized number within the job; completed SMS results are reused for repeated candidate sets. No verified Aerialink bulk-inventory API exists in the current implementation, so its per-number endpoint fallbacks remain intact. All new job-local indexes/results are released when the lookup finishes or fails; credentials are not included in those caches.
+- Twilio inventory failures stop the job rather than produce incomplete Not Found results. Aerialink lookup failures display Lookup Failed; authoritative negative results remain Not Found. Other SMS pages and CUCM/email/device lookups are unchanged.
+- Focused 200-person mocked regression passed: each Twilio account loaded once and 25 distinct Aerialink lookups reused across 200 rows, covering real/fallback lines, normalization, account isolation, fresh next-job snapshots, and failure handling. Live LAB validation remains pending.
+- Standing batch-efficiency rule: prefer job-local inventory indexes and deduplicated read-only lookups wherever the provider API supports them, preserving account boundaries, pagination, and explicit failure reporting.
+
 ### 2026-10-05 (Project Person Lookup translation-pattern matching)
 - Changed the Project Functions Person Lookup to search Translation Patterns by exact Called Party Transform Mask equal to each Jabber CSF line extension, rather than searching the pattern number for the extension. Example: pattern `8004425391` with mask `4697061228` is associated with Jabber extension `4697061228`.
 - Initial correction used one read-only AXL SQL query per extension with no per-pattern detail calls; preserves partitions and existing result/CSV fields. Standalone Translation Pattern Lookup and page scripts are unchanged.
