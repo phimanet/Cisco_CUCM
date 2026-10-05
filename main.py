@@ -6866,7 +6866,8 @@ def _genesys_extract_all_user_summary(region: str, access_token: str, queue_acce
         return list(entities_all.values())
     raise RuntimeError("Genesys inventory exceeded the page limit; incomplete results were refused.")
 
-  users = _inventory("/api/v2/users", access_token, {"state": "any", "expand": "skills"})
+  users = _inventory("/api/v2/users", access_token, {"state": "active", "expand": "skills"})
+  users = [user for user in users if str(user.get("state") or "").strip().lower() == "active"]
   warnings = []
   queues_by_user = {str(user["id"]): set() for user in users}
   queues_complete = True
@@ -6927,6 +6928,7 @@ def _genesys_extract_user_summary(region: str, access_token: str, last_name: str
     search = _genesys_search_users_by_name(region, access_token, last_name, first_name, username)
   if not search.get("ok"):
     raise RuntimeError(str(search.get("error") or "Genesys user search failed."))
+  search["rows"] = [user for user in search.get("rows", []) if str(user.get("state") or "").strip().lower() in {"", "active"}]
   if len(search.get("rows", [])) > 50:
     raise RuntimeError("More than 50 users matched; narrow the user lookup before extracting details.")
   _, _, api_base = _genesys_region_to_urls(region)
@@ -6941,10 +6943,14 @@ def _genesys_extract_user_summary(region: str, access_token: str, last_name: str
     row = {"user_id": user_id, "name": str(user.get("name") or ""), "email": str(user.get("email") or ""), "state": str(user.get("state") or ""), "division": "Lookup Failed", "queues": "Lookup Failed", "skills": "Lookup Failed"}
     ok, profile, error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}")
     if ok:
+      if str(profile.get("state") or "").strip().lower() != "active":
+        continue
+      row["state"] = "active"
       division = profile.get("division") or {}
       row["division"] = str(division.get("name") or division.get("id") or "(none)")
     else:
-      warnings.append(f"{row['name'] or user_id} division: {error}")
+      warnings.append(f"{row['name'] or user_id} active state could not be verified: {error}")
+      continue
     skill_names = set()
     for page_number in range(1, 101):
       ok, payload, error = _genesys_get_json(api_base, access_token, f"/api/v2/users/{user_id}/routingskills", {"pageSize": 100, "pageNumber": page_number})
@@ -21888,7 +21894,7 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-external-contact-panel" onclick="(function(){var id='genesys-external-contact-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">External Contact Creation/Removal</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-call-routes-panel" onclick="(function(){var id='genesys-call-routes-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Call Routes</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-did-numbers-panel" onclick="(function(){var id='genesys-did-numbers-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys DID Numbers</button>
-          <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-extract-panel" onclick="(function(){var id='genesys-user-extract-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Extract</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-extract-panel" onclick="(function(){var id='genesys-user-extract-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Active User Extract</button>
         </aside>
 
         <section class="portal-main">
@@ -21905,15 +21911,15 @@ def genesys_admin_placeholder(request: Request):
                 #genesys-user-extract-panel { overflow-wrap:anywhere; }
               }
             </style>
-            <h3 style="margin-top:0;">Genesys User Extract</h3>
+            <h3 style="margin-top:0;">Genesys Active User Extract</h3>
             <form id="genesys-user-extract-form" onsubmit="if(window.lookupGenesysUserExtract){window.lookupGenesysUserExtract(event);}else{document.getElementById('genesys-user-extract-status').textContent='User Extract handler missing (JavaScript did not load).';}return false;">
               <div class="search-filter-row">
                 <input name="username" aria-label="User email or username" placeholder="Email or username" style="width:280px;">
                 <input name="last_name" aria-label="User last name" placeholder="Last name" style="width:180px;">
                 <input name="first_name" aria-label="User first name" placeholder="First name (optional)" style="width:180px;">
                 <button type="button" id="genesys-user-extract-load" onclick="if(window.lookupGenesysUserExtract){window.lookupGenesysUserExtract(event);}else{document.getElementById('genesys-user-extract-status').textContent='User Extract handler missing (JavaScript did not load).';}return false;">Lookup User</button>
-                <button type="button" id="genesys-user-extract-all" onclick="if(window.queueGenesysAllUserExtract){window.queueGenesysAllUserExtract(event);}else{document.getElementById('genesys-user-extract-all-status').textContent='All-user extraction handler missing (JavaScript did not load).';}return false;">Extract All Users</button>
-                <button type="button" id="genesys-user-extract-view-all" style="display:none;" onclick="if(window.viewGenesysAllUserExtract){window.viewGenesysAllUserExtract(event);}return false;">View Saved All Users</button>
+                <button type="button" id="genesys-user-extract-all" onclick="if(window.queueGenesysAllUserExtract){window.queueGenesysAllUserExtract(event);}else{document.getElementById('genesys-user-extract-all-status').textContent='Active-user extraction handler missing (JavaScript did not load).';}return false;">Extract All Active Users</button>
+                <button type="button" id="genesys-user-extract-view-all" style="display:none;" onclick="if(window.viewGenesysAllUserExtract){window.viewGenesysAllUserExtract(event);}return false;">View Saved Active Users</button>
               </div>
             </form>
             <div class="search-filter-row">
@@ -21950,7 +21956,7 @@ def genesys_admin_placeholder(request: Request):
                   output.innerHTML = rows.length ? html + '</tbody></table>' : '<p>No matching users.</p>';
                   download.style.display = report.fetched_at ? "inline-block" : "none";
                   download.href = "/genesys/user-extract/download" + (report.mode === "all" ? "?all_users=true" : "");
-                  download.textContent = report.mode === "all" ? "Download All Users CSV" : "Download CSV";
+                  download.textContent = report.mode === "all" ? "Download All Active Users CSV" : "Download CSV";
                   status.textContent = report.fetched_at ? rows.length + " of " + matchedRows.length + " matching users | Total " + report.count + " | Saved " + report.fetched_at + ((report.warnings || []).length ? " | " + report.warnings.join("; ") : "") : "No saved user extract.";
                 }
                 async function load(refresh, allUsers) {
@@ -21979,7 +21985,7 @@ def genesys_admin_placeholder(request: Request):
                     var active = job.status === "queued" || job.status === "running";
                     allButton.disabled = active;
                     viewAllButton.style.display = result.has_saved_all ? "inline-block" : "none";
-                    allStatus.textContent = job.status === "idle" ? "" : "All-user job: " + job.status + " | " + (job.progress || "") + (job.error ? " | " + job.error : "") + (job.status === "completed" ? " | " + job.count + " users" : "");
+                    allStatus.textContent = job.status === "idle" ? "" : "Extraction job: " + job.status + " | " + (job.progress || "") + (job.error ? " | " + job.error : "") + (job.status === "completed" ? " | " + job.count + " users" : "");
                     if (active) window.setTimeout(pollAllJob, 3000);
                     else if (job.status === "completed" && showAllOnComplete) {
                       if (busy) window.setTimeout(pollAllJob, 1000);
@@ -21991,7 +21997,7 @@ def genesys_admin_placeholder(request: Request):
                   if (event) event.preventDefault();
                   if (allButton.disabled) return;
                   allButton.disabled = true;
-                  allStatus.textContent = "Queueing all-user extraction...";
+                  allStatus.textContent = "Queueing active-user extraction...";
                   try {
                     var response = await fetch("/genesys/user-extract/all/queue", {method:"POST",credentials:"same-origin"});
                     var result = await response.json();
@@ -29606,7 +29612,7 @@ def _genesys_user_extract_all_update(job_id: str, **changes) -> dict:
 def _run_genesys_user_extract_all_job(job: dict) -> None:
   job_id = str(job["job_id"])
   try:
-    _genesys_user_extract_all_update(job_id, status="running", progress="Starting all-user inventory", error="")
+    _genesys_user_extract_all_update(job_id, status="running", progress="Starting active-user inventory", error="")
     region = (GENESYS_CLOUD_REGION or "usw2").strip().lower()
     if job.get("region") != region:
       raise RuntimeError("Genesys region changed; submit a new extraction.")
@@ -29621,7 +29627,7 @@ def _run_genesys_user_extract_all_job(job: dict) -> None:
     report.update({"ok": True, "region": region, "job_id": job_id, "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")})
     with GENESYS_USER_EXTRACT_REPORT_LOCK:
       _genesys_user_extract_all_write(GENESYS_USER_EXTRACT_ALL_REPORT_PATH, report)
-    _append_audit_event(action="genesys_user_extract_all_completed", cucm_host=str(job.get("cucm_host") or ""), operator=str(job.get("operator") or ""), target=f"users={report['count']}", output_filename="genesys_all_users.csv", inline_mode=True)
+    _append_audit_event(action="genesys_user_extract_all_completed", cucm_host=str(job.get("cucm_host") or ""), operator=str(job.get("operator") or ""), target=f"users={report['count']}", output_filename="genesys_all_active_users.csv", inline_mode=True)
     _genesys_user_extract_all_update(job_id, status="completed", progress="Complete", count=report["count"], warnings=report["warnings"], error="")
   except Exception as exc:
     _genesys_user_extract_all_update(job_id, status="failed", progress="Extraction failed", error=str(exc))
@@ -29660,6 +29666,8 @@ def _genesys_saved_user_extract(all_users: bool = False) -> dict:
     raise RuntimeError("Saved user extract is invalid; run the lookup again.")
   if report.get("region") != (GENESYS_CLOUD_REGION or "usw2").strip().lower():
     return {"ok": True, "rows": [], "count": 0, "fetched_at": ""}
+  report["rows"] = [row for row in report["rows"] if str(row.get("state") or "").strip().lower() == "active"]
+  report["count"] = len(report["rows"])
   return report
 
 
@@ -29701,7 +29709,7 @@ def genesys_user_extract_load_route(request: Request, username: str = Form(""), 
       finally:
         if os.path.exists(temp_path):
           os.remove(temp_path)
-    _append_audit_event(action="genesys_user_extract", cucm_host=str(session.get("cucm_host") or ""), operator=str(session["username"]), target=username or (first_name + " " + last_name).strip(), output_filename="genesys_user_extract.csv", inline_mode=True)
+    _append_audit_event(action="genesys_user_extract", cucm_host=str(session.get("cucm_host") or ""), operator=str(session["username"]), target=username or (first_name + " " + last_name).strip(), output_filename="genesys_active_user_extract.csv", inline_mode=True)
     return JSONResponse(report)
   except Exception as exc:
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
@@ -29722,7 +29730,7 @@ def genesys_user_extract_download_route(request: Request, all_users: bool = Fals
     for row in report["rows"]:
       values = [str(row.get(key) or "") for key, _ in columns]
       writer.writerow(["'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value for value in values])
-    filename = "genesys_all_users.csv" if all_users else "genesys_user_extract.csv"
+    filename = "genesys_all_active_users.csv" if all_users else "genesys_active_user_extract.csv"
     return Response(output.getvalue().encode("utf-8-sig"), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
   except (OSError, ValueError, RuntimeError) as exc:
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
