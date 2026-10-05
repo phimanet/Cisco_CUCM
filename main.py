@@ -2021,6 +2021,72 @@ def _genesys_list_call_routes(api_base: str, access_token: str) -> dict:
   return {"rows": rows, "route_count": len(route_ids), "number_count": sum(bool(row["telephone_number"]) for row in rows), "pages_scanned": page_number}
 
 
+def _genesys_enrich_call_routes_cucm(report: dict, cucm_host: str, cucm_user: str, cucm_pass: str) -> None:
+  numbers = sorted({
+    str(row.get("telephone_number") or "") for row in report.get("rows", [])
+    if re.fullmatch(r"[0-9]{10}", str(row.get("telephone_number") or ""))
+  })
+  matches = {number: [] for number in numbers}
+  for start in range(0, len(numbers), 100):
+    batch_numbers = set(numbers[start:start + 100])
+    pattern_values = ", ".join("'" + _sql_escape_literal(number) + "'" for number in sorted(batch_numbers))
+    select_body = (
+      "n.pkid AS pattern_id, n.dnorpattern AS pattern, n.tkpatternusage AS pattern_usage, "
+      "tpu.name AS type_name, r.name AS route_partition, "
+      "d.name AS device_name, dc.name AS device_class "
+      "FROM numplan n "
+      "LEFT OUTER JOIN typepatternusage tpu ON tpu.enum = n.tkpatternusage "
+      "LEFT OUTER JOIN routepartition r ON r.pkid = n.fkroutepartition "
+      "LEFT OUTER JOIN devicenumplanmap dnm ON dnm.fknumplan = n.pkid "
+      "LEFT OUTER JOIN device d ON d.pkid = dnm.fkdevice "
+      "LEFT OUTER JOIN typeclass dc ON dc.enum = d.tkclass "
+      f"WHERE n.dnorpattern IN ({pattern_values}) ORDER BY n.pkid, d.name"
+    )
+    for page in range(100):
+      sql = f"SELECT SKIP {page * 1000} FIRST 1000 {select_body}"
+      batch = _axl_execute_sql_rows(cucm_host, cucm_user, cucm_pass, sql)
+      for item in batch:
+        pattern = str(item.get("pattern") or "").strip()
+        if pattern not in batch_numbers:
+          continue
+        number = pattern
+        usage = str(item.get("pattern_usage") or "").strip()
+        type_name = re.sub(r"[^a-z]", "", str(item.get("type_name") or "").lower())
+        device_class = re.sub(r"[^a-z]", "", str(item.get("device_class") or "").lower())
+        if usage == "2":
+          category = "CTI Route Point" if device_class == "ctiroutepoint" else "Extension"
+        elif usage in {"3", "15"}:
+          category = "Translation Pattern"
+        elif type_name in {"route", "routepattern"}:
+          category = "Route Pattern"
+        else:
+          category = "Other CUCM Pattern"
+        detail = {
+          "type": category, "pattern": pattern,
+          "route_partition": str(item.get("route_partition") or "").strip(),
+          "device_name": str(item.get("device_name") or "").strip(),
+        }
+        if detail not in matches[number]:
+          matches[number].append(detail)
+      if len(batch) < 1000:
+        break
+    else:
+      raise RuntimeError("CUCM number lookup exceeded its page limit; no incomplete report was saved.")
+  categories = ["Translation Pattern", "Extension", "Route Pattern", "CTI Route Point", "Other CUCM Pattern"]
+  for row in report.get("rows", []):
+    number = str(row.get("telephone_number") or "")
+    details = matches.get(number, [])
+    row["cucm_matches"] = details
+    if not number:
+      row["in_cucm_as"] = "No number"
+    elif number not in matches:
+      row["in_cucm_as"] = "Not checked (non-10-digit)"
+    else:
+      found_types = {detail["type"] for detail in details}
+      row["in_cucm_as"] = "; ".join(category for category in categories if category in found_types) or "Not Found"
+  report["cucm_host"] = cucm_host
+
+
 def _genesys_extract_error_text(body: dict, status_code: int) -> str:
   if not isinstance(body, dict):
     return f"HTTP {int(status_code or 0)}"
@@ -21513,7 +21579,7 @@ def genesys_admin_placeholder(request: Request):
           <div id="genesys-call-routes-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <style>
               #genesys-call-routes-filter { box-sizing:border-box; min-width:0; }
-              #genesys-call-routes-output table { min-width:560px; }
+              #genesys-call-routes-output table { min-width:680px; }
               @media (max-width: 760px) {
                 .portal-shell:has(#genesys-call-routes-panel[style*="display: block"]) { grid-template-columns:minmax(0,1fr); }
                 .portal-shell:has(#genesys-call-routes-panel[style*="display: block"]) .portal-sidebar { position:static; }
@@ -21545,21 +21611,21 @@ def genesys_admin_placeholder(request: Request):
                 function esc(value) { return String(value == null ? "" : value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
                 function render() {
                   var query = filter.value.trim().toLowerCase();
-                  var visible = rows.filter(function (row) { return [row.route_name, row.telephone_number, row.original_number, row.open_call_flow, row.schedule_group, row.closed_call_flow, row.division].join(" ").toLowerCase().indexOf(query) !== -1; });
-                  var columns = [["route_name", "Name"], ["telephone_number", "Inbound Number"], ["open", "Open"], ["open_call_flow", "Open Call Flow"]];
+                  var visible = rows.filter(function (row) { return [row.route_name, row.telephone_number, row.original_number, row.in_cucm_as, row.open_call_flow, row.schedule_group, row.closed_call_flow, row.division].join(" ").toLowerCase().indexOf(query) !== -1; });
+                  var columns = [["route_name", "Name"], ["telephone_number", "Inbound Number"], ["in_cucm_as", "In CUCM As"], ["open", "Open"], ["open_call_flow", "Open Call Flow"]];
                   var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>';
                   columns.forEach(function (column) { html += '<th style="padding:8px;text-align:left;border-bottom:1px solid #c8dbee;white-space:nowrap;">' + esc(column[1]) + '</th>'; });
                   html += '</tr></thead><tbody>';
-                  visible.forEach(function (row) { html += '<tr>'; columns.forEach(function (column) { html += '<td style="padding:8px;border-bottom:1px solid #e0eaf4;vertical-align:top;">' + esc(row[column[0]] || "-") + '</td>'; }); html += '</tr>'; });
+                  visible.forEach(function (row) { html += '<tr>'; columns.forEach(function (column) { html += '<td style="padding:8px;border-bottom:1px solid #e0eaf4;vertical-align:top;">' + esc(row[column[0]] || (column[0] === "in_cucm_as" ? "Not Checked" : "-")) + '</td>'; }); html += '</tr>'; });
                   output.innerHTML = visible.length ? html + '</tbody></table>' : '<p>No matching call routes.</p>';
                   download.style.display = report.fetched_at ? "inline-block" : "none";
-                  if (!busy) status.textContent = report.fetched_at ? report.route_count + " routes | " + report.number_count + " numbers | " + visible.length + " of " + rows.length + " rows | Saved " + report.fetched_at : "No saved call-route report.";
+                  if (!busy) status.textContent = report.fetched_at ? report.route_count + " routes | " + report.number_count + " numbers | " + visible.length + " of " + rows.length + " rows | Saved " + report.fetched_at + (report.cucm_checked ? " | CUCM " + report.cucm_host : " | CUCM not checked for current session") : "No saved call-route report.";
                 }
                 async function fetchReport(refresh) {
                   if (busy) return;
                   busy = true;
                   button.disabled = true;
-                  status.textContent = refresh ? "Loading Genesys call routes..." : "Loading saved report...";
+                  status.textContent = refresh ? "Loading Genesys call routes and CUCM matches..." : "Loading saved report...";
                   try {
                     var response = await fetch(refresh ? "/genesys/call-routes/load" : "/genesys/call-routes", {method: refresh ? "POST" : "GET", credentials: "same-origin"});
                     var data = await response.json();
@@ -28999,7 +29065,7 @@ def genesys_user_mark_inactive_route(
   return JSONResponse({"ok": True, "user_id": clean_user_id, "user_email": clean_email, "reason": clean_reason, "state": "inactive", "message": "Genesys user marked inactive and audit event recorded."})
 
 
-def _genesys_saved_call_routes() -> dict:
+def _genesys_saved_call_routes(cucm_host: str = "") -> dict:
   with GENESYS_CALL_ROUTES_REPORT_LOCK:
     if not os.path.exists(GENESYS_CALL_ROUTES_REPORT_PATH):
       return {"ok": True, "rows": [], "route_count": 0, "number_count": 0, "fetched_at": ""}
@@ -29009,15 +29075,24 @@ def _genesys_saved_call_routes() -> dict:
     raise RuntimeError("Saved call-route report is invalid; load the routes again.")
   if report.get("region") != (GENESYS_CLOUD_REGION or "usw2").strip().lower():
     return {"ok": True, "rows": [], "route_count": 0, "number_count": 0, "fetched_at": ""}
+  same_host = bool(cucm_host) and str(report.get("cucm_host") or "").strip().lower() == cucm_host.strip().lower()
+  report["cucm_checked"] = same_host
+  for row in report["rows"]:
+    if not same_host:
+      row["in_cucm_as"] = "Not Checked"
+      row["cucm_matches"] = []
+    else:
+      row.setdefault("in_cucm_as", "Not Checked")
   return report
 
 
 @app.get("/genesys/call-routes")
 def genesys_call_routes_saved_route(request: Request):
-  if not (_get_auth_session(request) or {}).get("username"):
+  session = _get_auth_session(request) or {}
+  if not session.get("username"):
     return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
   try:
-    return JSONResponse(_genesys_saved_call_routes())
+    return JSONResponse(_genesys_saved_call_routes(str(session.get("cucm_host") or "")))
   except (OSError, ValueError, RuntimeError) as exc:
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
@@ -29032,8 +29107,11 @@ def genesys_call_routes_load_route(request: Request):
   if not token_result.get("ok"):
     return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
   try:
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
     region, _, api_base = _genesys_region_to_urls(token_result.get("region", clean_region))
     report = _genesys_list_call_routes(api_base, token_result.get("access_token", ""))
+    _genesys_enrich_call_routes_cucm(report, cucm_host, cucm_user, cucm_pass)
+    report["cucm_checked"] = True
     report.update({"ok": True, "region": region, "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")})
     with GENESYS_CALL_ROUTES_REPORT_LOCK:
       os.makedirs(os.path.dirname(GENESYS_CALL_ROUTES_REPORT_PATH), exist_ok=True)
@@ -29048,7 +29126,7 @@ def genesys_call_routes_load_route(request: Request):
         if os.path.exists(temp_path):
           os.remove(temp_path)
     _append_audit_event(
-      action="genesys_call_routes_lookup", cucm_host=str(session.get("cucm_host") or ""),
+      action="genesys_call_routes_lookup", cucm_host=cucm_host,
       operator=str(session["username"]), target=f"routes={report['route_count']};numbers={report['number_count']}",
       output_filename="genesys_call_routes.csv", inline_mode=True,
     )
@@ -29059,24 +29137,28 @@ def genesys_call_routes_load_route(request: Request):
 
 @app.get("/genesys/call-routes/download")
 def genesys_call_routes_download_route(request: Request):
-  if not (_get_auth_session(request) or {}).get("username"):
+  session = _get_auth_session(request) or {}
+  if not session.get("username"):
     return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
   try:
-    report = _genesys_saved_call_routes()
+    report = _genesys_saved_call_routes(str(session.get("cucm_host") or ""))
     if not report.get("fetched_at"):
       return JSONResponse({"ok": False, "error": "Load call routes before downloading."}, status_code=404)
     columns = [
       ("route_name", "Route Name"), ("telephone_number", "Telephone Number"),
+      ("in_cucm_as", "In CUCM As"),
       ("original_number", "Original Number"), ("number_format", "Number Format"),
       ("open", "Open"), ("open_call_flow", "Open Call Flow"),
       ("schedule_group", "Schedule Group"), ("closed_call_flow", "Closed Call Flow"),
       ("holiday_call_flow", "Holiday Call Flow"), ("division", "Division"), ("route_id", "Route ID"),
+      ("cucm_match_details", "CUCM Match Details"), ("cucm_host", "CUCM Host"),
     ]
     output = io.StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow([label for _, label in columns])
     for row in report["rows"]:
-      values = [str(row.get(key) or "") for key, _ in columns]
+      export_row = {**row, "cucm_host": report.get("cucm_host", ""), "cucm_match_details": json.dumps(row.get("cucm_matches") or [], ensure_ascii=True)}
+      values = [str(export_row.get(key) or "") for key, _ in columns]
       writer.writerow(["'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value for value in values])
     return Response(output.getvalue().encode("utf-8-sig"), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="genesys_call_routes.csv"'})
   except (OSError, ValueError, RuntimeError) as exc:
