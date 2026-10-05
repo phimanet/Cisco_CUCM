@@ -935,6 +935,8 @@ if not _genesys_queue_data_root:
   _genesys_queue_data_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data") if os.name == "nt" else "/opt/cucm-web-data"
 GENESYS_AD_WEBRTC_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue.json")
 GENESYS_AD_WEBRTC_QUEUE_HISTORY_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue_history.json")
+GENESYS_CALL_ROUTES_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_call_routes_report.json")
+GENESYS_CALL_ROUTES_REPORT_LOCK = threading.Lock()
 GENESYS_INACTIVE_QUEUE_JOBS = {}
 GENESYS_INACTIVE_QUEUE_LOCK = threading.Lock()
 GENESYS_INACTIVE_QUEUE_WORKER_STARTED = False
@@ -1953,6 +1955,70 @@ def _genesys_get_json(api_base: str, access_token: str, path: str, params: dict 
     message = str(payload.get("message", "") or payload.get("error", "")).strip() or f"HTTP {response.status_code}"
     return False, payload if isinstance(payload, dict) else {}, message
   return True, payload if isinstance(payload, dict) else {}, ""
+
+
+def _genesys_list_call_routes(api_base: str, access_token: str) -> dict:
+  rows = []
+  route_ids = set()
+  for page_number in range(1, 101):
+    ok, payload, error = _genesys_get_json(
+      api_base, access_token, "/api/v2/architect/ivrs",
+      {"pageSize": 100, "pageNumber": page_number},
+    )
+    if not ok:
+      raise RuntimeError(f"Genesys call routes lookup failed: {error}")
+    entities = payload.get("entities")
+    if not isinstance(entities, list):
+      raise RuntimeError("Genesys call routes returned an unexpected inventory response.")
+    for entity in entities:
+      if not isinstance(entity, dict) or not entity.get("id"):
+        raise RuntimeError("Genesys call routes returned a route without an ID.")
+      route_id = str(entity["id"])
+      if route_id in route_ids:
+        continue
+      route_ids.add(route_id)
+      def _reference(field: str) -> str:
+        reference = entity.get(field) or {}
+        return str(reference.get("name") or reference.get("id") or "") if isinstance(reference, dict) else ""
+      route = {
+        "route_id": route_id,
+        "route_name": str(entity.get("name") or ""),
+        "open": "Scheduled" if entity.get("scheduleGroup") else "Always",
+        "open_call_flow": _reference("openHoursFlow"),
+        "schedule_group": _reference("scheduleGroup"),
+        "closed_call_flow": _reference("closedHoursFlow"),
+        "holiday_call_flow": _reference("holidayHoursFlow"),
+        "division": _reference("division"),
+      }
+      numbers = entity.get("dnis") or []
+      if not isinstance(numbers, list):
+        raise RuntimeError("Genesys call routes returned an unexpected inbound-number list.")
+      seen_numbers = set()
+      for raw_number in numbers or [""]:
+        original = str(raw_number or "").strip()
+        digits = "".join(character for character in original if character in "0123456789")
+        has_country_code = len(digits) == 11 and digits.startswith("1")
+        if has_country_code:
+          digits = digits[1:]
+        is_ten_digits = len(digits) == 10 and (not original.startswith("+") or has_country_code)
+        number = digits if is_ten_digits else original
+        if number in seen_numbers:
+          continue
+        seen_numbers.add(number)
+        rows.append({
+          **route, "telephone_number": number, "original_number": original,
+          "number_format": "10 digits" if is_ten_digits else "No number" if not original else "Non-10-digit value",
+        })
+    try:
+      page_count = int(payload.get("pageCount") or 0)
+    except (TypeError, ValueError):
+      raise RuntimeError("Genesys call routes returned invalid pagination metadata.")
+    if not payload.get("nextUri") and page_number >= page_count and len(entities) < 100:
+      break
+  else:
+    raise RuntimeError("Genesys call routes exceeded the page limit; no incomplete report was saved.")
+  rows.sort(key=lambda row: (row["route_name"].lower(), row["route_id"], row["telephone_number"]))
+  return {"rows": rows, "route_count": len(route_ids), "number_count": sum(bool(row["telephone_number"]) for row in rows), "pages_scanned": page_number}
 
 
 def _genesys_extract_error_text(body: dict, status_code: int) -> str:
@@ -21440,9 +21506,81 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-group-user-audit-panel" onclick="(function(){var id='genesys-group-user-audit-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Groups and User Cleanup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-set-inactive-panel" onclick="(function(){var id='genesys-set-inactive-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Set User to Inactive</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-external-contact-panel" onclick="(function(){var id='genesys-external-contact-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">External Contact Creation/Removal</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-call-routes-panel" onclick="(function(){var id='genesys-call-routes-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Route Routes</button>
         </aside>
 
         <section class="portal-main">
+          <div id="genesys-call-routes-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+            <style>
+              #genesys-call-routes-filter { box-sizing:border-box; min-width:0; }
+              #genesys-call-routes-output table { min-width:760px; }
+              @media (max-width: 760px) {
+                .portal-shell:has(#genesys-call-routes-panel[style*="display: block"]) { grid-template-columns:minmax(0,1fr); }
+                .portal-shell:has(#genesys-call-routes-panel[style*="display: block"]) .portal-sidebar { position:static; }
+                body:has(#genesys-call-routes-panel[style*="display: block"]) .topbar-brand { flex-wrap:wrap; min-width:0; }
+                body:has(#genesys-call-routes-panel[style*="display: block"]) .topbar-status { flex:1 0 100%; }
+                body:has(#genesys-call-routes-panel[style*="display: block"]) .topbar-actions { flex-wrap:wrap; }
+                #genesys-call-routes-panel .search-filter-row > input { width:100%; }
+                #genesys-call-routes-panel { overflow-wrap:anywhere; }
+              }
+            </style>
+            <h3 style="margin-top:0;">Genesys Route Routes</h3>
+            <div class="search-filter-row" style="flex-wrap:wrap;">
+              <button type="button" id="genesys-call-routes-load" onclick="if(window.loadGenesysCallRoutes){window.loadGenesysCallRoutes(event);}else{document.getElementById('genesys-call-routes-status').textContent='Call routes handler missing (JavaScript did not load).';}return false;">Load Call Routes</button>
+              <input id="genesys-call-routes-filter" aria-label="Filter call routes" placeholder="Filter by route name or number" style="width:360px;max-width:100%;">
+              <a id="genesys-call-routes-download" href="/genesys/call-routes/download" style="display:none;font-weight:700;">Download CSV</a>
+            </div>
+            <p id="genesys-call-routes-status" role="status" style="color:#2c5c8a;min-height:18px;"></p>
+            <div id="genesys-call-routes-output" style="overflow:auto;max-height:640px;"></div>
+            <script>
+              (function () {
+                var button = document.getElementById("genesys-call-routes-load");
+                var filter = document.getElementById("genesys-call-routes-filter");
+                var status = document.getElementById("genesys-call-routes-status");
+                var output = document.getElementById("genesys-call-routes-output");
+                var download = document.getElementById("genesys-call-routes-download");
+                var rows = [];
+                var report = {};
+                var busy = false;
+                function esc(value) { return String(value == null ? "" : value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+                function render() {
+                  var query = filter.value.trim().toLowerCase();
+                  var visible = rows.filter(function (row) { return [row.route_name, row.telephone_number, row.original_number, row.open_call_flow, row.schedule_group, row.closed_call_flow, row.division].join(" ").toLowerCase().indexOf(query) !== -1; });
+                  var columns = [["route_name", "Name"], ["telephone_number", "Inbound Number"], ["open", "Open"], ["open_call_flow", "Open Call Flow"], ["schedule_group", "Schedule Group"], ["closed_call_flow", "Closed Call Flow"], ["number_format", "Number Format"]];
+                  var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>';
+                  columns.forEach(function (column) { html += '<th style="padding:8px;text-align:left;border-bottom:1px solid #c8dbee;white-space:nowrap;">' + esc(column[1]) + '</th>'; });
+                  html += '</tr></thead><tbody>';
+                  visible.forEach(function (row) { html += '<tr>'; columns.forEach(function (column) { html += '<td style="padding:8px;border-bottom:1px solid #e0eaf4;vertical-align:top;">' + esc(row[column[0]] || "-") + '</td>'; }); html += '</tr>'; });
+                  output.innerHTML = visible.length ? html + '</tbody></table>' : '<p>No matching call routes.</p>';
+                  download.style.display = report.fetched_at ? "inline-block" : "none";
+                  if (!busy) status.textContent = report.fetched_at ? report.route_count + " routes | " + report.number_count + " numbers | " + visible.length + " of " + rows.length + " rows | Saved " + report.fetched_at : "No saved call-route report.";
+                }
+                async function fetchReport(refresh) {
+                  if (busy) return;
+                  busy = true;
+                  button.disabled = true;
+                  status.textContent = refresh ? "Loading Genesys call routes..." : "Loading saved report...";
+                  try {
+                    var response = await fetch(refresh ? "/genesys/call-routes/load" : "/genesys/call-routes", {method: refresh ? "POST" : "GET", credentials: "same-origin"});
+                    var data = await response.json();
+                    if (!response.ok || !data.ok) throw new Error(data.error || "Call routes lookup failed.");
+                    report = data;
+                    rows = data.rows || [];
+                    busy = false;
+                    render();
+                  } catch (error) {
+                    status.textContent = "Lookup failed: " + error.message + (report.fetched_at ? " | Previous saved report remains available." : "");
+                  } finally {
+                    busy = false;
+                    button.disabled = false;
+                  }
+                }
+                window.loadGenesysCallRoutes = function (event) { if (event) event.preventDefault(); return fetchReport(true); };
+                filter.addEventListener("input", render);
+                fetchReport(false);
+              })();
+            </script>
+          </div>
           <div id="genesys-missing-webrtc-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <h3 style="margin-top:0;">Users Missing WebRTC Phone</h3>
             <p style="color:#4e6a84;font-size:12px;">Lists active Genesys users with no WebRTC phone tied to them (matched by the phone's WebRTC Person). Select users and build their WebRTC phones using the standard template.</p>
@@ -28859,6 +28997,90 @@ def genesys_user_mark_inactive_route(
     account=clean_email,
   )
   return JSONResponse({"ok": True, "user_id": clean_user_id, "user_email": clean_email, "reason": clean_reason, "state": "inactive", "message": "Genesys user marked inactive and audit event recorded."})
+
+
+def _genesys_saved_call_routes() -> dict:
+  with GENESYS_CALL_ROUTES_REPORT_LOCK:
+    if not os.path.exists(GENESYS_CALL_ROUTES_REPORT_PATH):
+      return {"ok": True, "rows": [], "route_count": 0, "number_count": 0, "fetched_at": ""}
+    with open(GENESYS_CALL_ROUTES_REPORT_PATH, "r", encoding="utf-8") as handle:
+      report = json.load(handle)
+  if not isinstance(report, dict) or not isinstance(report.get("rows"), list):
+    raise RuntimeError("Saved call-route report is invalid; load the routes again.")
+  if report.get("region") != (GENESYS_CLOUD_REGION or "usw2").strip().lower():
+    return {"ok": True, "rows": [], "route_count": 0, "number_count": 0, "fetched_at": ""}
+  return report
+
+
+@app.get("/genesys/call-routes")
+def genesys_call_routes_saved_route(request: Request):
+  if not (_get_auth_session(request) or {}).get("username"):
+    return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
+  try:
+    return JSONResponse(_genesys_saved_call_routes())
+  except (OSError, ValueError, RuntimeError) as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@app.post("/genesys/call-routes/load")
+def genesys_call_routes_load_route(request: Request):
+  session = _get_auth_session(request) or {}
+  if not session.get("username"):
+    return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower()
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  try:
+    region, _, api_base = _genesys_region_to_urls(token_result.get("region", clean_region))
+    report = _genesys_list_call_routes(api_base, token_result.get("access_token", ""))
+    report.update({"ok": True, "region": region, "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")})
+    with GENESYS_CALL_ROUTES_REPORT_LOCK:
+      os.makedirs(os.path.dirname(GENESYS_CALL_ROUTES_REPORT_PATH), exist_ok=True)
+      temp_path = GENESYS_CALL_ROUTES_REPORT_PATH + "." + uuid4().hex + ".tmp"
+      try:
+        with open(temp_path, "w", encoding="utf-8") as handle:
+          json.dump(report, handle, ensure_ascii=True)
+          handle.flush()
+          os.fsync(handle.fileno())
+        os.replace(temp_path, GENESYS_CALL_ROUTES_REPORT_PATH)
+      finally:
+        if os.path.exists(temp_path):
+          os.remove(temp_path)
+    _append_audit_event(
+      action="genesys_call_routes_lookup", cucm_host=str(session.get("cucm_host") or ""),
+      operator=str(session["username"]), target=f"routes={report['route_count']};numbers={report['number_count']}",
+      output_filename="genesys_call_routes.csv", inline_mode=True,
+    )
+    return JSONResponse(report)
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@app.get("/genesys/call-routes/download")
+def genesys_call_routes_download_route(request: Request):
+  if not (_get_auth_session(request) or {}).get("username"):
+    return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
+  try:
+    report = _genesys_saved_call_routes()
+    if not report.get("fetched_at"):
+      return JSONResponse({"ok": False, "error": "Load call routes before downloading."}, status_code=404)
+    columns = [
+      ("route_name", "Route Name"), ("telephone_number", "Telephone Number"),
+      ("original_number", "Original Number"), ("number_format", "Number Format"),
+      ("open", "Open"), ("open_call_flow", "Open Call Flow"),
+      ("schedule_group", "Schedule Group"), ("closed_call_flow", "Closed Call Flow"),
+      ("holiday_call_flow", "Holiday Call Flow"), ("division", "Division"), ("route_id", "Route ID"),
+    ]
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow([label for _, label in columns])
+    for row in report["rows"]:
+      values = [str(row.get(key) or "") for key, _ in columns]
+      writer.writerow(["'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value for value in values])
+    return Response(output.getvalue().encode("utf-8-sig"), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="genesys_call_routes.csv"'})
+  except (OSError, ValueError, RuntimeError) as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
 @app.get("/genesys/users/inactive-candidates")

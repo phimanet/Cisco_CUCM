@@ -112,6 +112,12 @@ Priority keys:
 
 ## Conversation Notes
 
+### 2026-10-05 (Genesys Route Routes report)
+- Added read-only Genesys Admin bottom-menu item `Genesys Route Routes`. Loads the paginated `/api/v2/architect/ivrs` call-routing inventory with no per-route detail calls; lists route name, inbound number, open/closed flow, schedule group, and number format.
+- Preserves every route/number association as a separate table/CSV row, including routes with multiple numbers; routes without numbers remain visible. North American `+1` numbers become 10 digits; other values are retained and flagged rather than truncated. CSV also retains original numbers, route IDs, division, and holiday flow for later lookup/comparison.
+- Local name/number filtering and CSV export reuse the loaded report. Latest successful snapshot is atomically persisted with fsync in `genesys_call_routes_report.json` under the existing Genesys data root (`/opt/cucm-web-data` on Ubuntu by default), survives restarts, and remains available if a refresh fails. All three endpoints require portal authentication; loads are audited and credentials are never persisted in the report.
+- Validation passed: mocked 101-route/707-number inventory across two pages; number formatting, empty routes, failure/page-limit handling, saved-report read-back, authentication, and safe CSV. Rendered full Genesys page: all 19 scripts parsed in a browser; existing/new navigation, load/filter/error handling, multi-number filtering, and desktop/mobile screenshots checked. Live LAB Genesys API/permissions validation remains pending; no PROD rollout instructed.
+
 ### 2026-10-05 (Project Person Lookup SMS batch caching)
 - Project Person Lookup now lazily builds separate normalized-number indexes for the configured AMIEWeb and Salesforce Twilio accounts once per job, reusing the existing paginated inventory loader and valid five-minute inventory cache. The batch path does not scan unrelated-account caches or force-refresh inventories for each missing number.
 - Aerialink results are cached once per normalized number within the job; completed SMS results are reused for repeated candidate sets. No verified Aerialink bulk-inventory API exists in the current implementation, so its per-number endpoint fallbacks remain intact. All new job-local indexes/results are released when the lookup finishes or fails; credentials are not included in those caches.
