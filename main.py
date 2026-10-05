@@ -213,6 +213,7 @@ def _startup_background_services():
   _greenlight_load_state()
   _unity_user_extract_load_state()
   _unity_user_extract_start_worker()
+  _start_genesys_user_extract_all_worker()
   _start_genesys_external_contact_load_worker()
   _start_genesys_cucm_sync_scheduler()
   _start_jabber_pool_scheduler()
@@ -945,6 +946,11 @@ GENESYS_SINCH_INVENTORY_CACHE = {}
 GENESYS_SINCH_INVENTORY_TTL_SECONDS = 900
 GENESYS_USER_EXTRACT_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_user_extract_report.json")
 GENESYS_USER_EXTRACT_REPORT_LOCK = threading.Lock()
+GENESYS_USER_EXTRACT_ALL_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_user_extract_all_report.json")
+GENESYS_USER_EXTRACT_ALL_JOB_PATH = os.path.join(_genesys_queue_data_root, "genesys_user_extract_all_job.json")
+GENESYS_USER_EXTRACT_ALL_JOB_LOCK = threading.Lock()
+GENESYS_USER_EXTRACT_ALL_START_LOCK = threading.Lock()
+GENESYS_USER_EXTRACT_ALL_WORKER_STARTED = False
 GENESYS_INACTIVE_QUEUE_JOBS = {}
 GENESYS_INACTIVE_QUEUE_LOCK = threading.Lock()
 GENESYS_INACTIVE_QUEUE_WORKER_STARTED = False
@@ -6832,6 +6838,86 @@ def _build_phone_template_summary(phone_entity: dict, fallback_template: dict) -
     "standalone": standalone,
     "line_count": line_count,
   }
+
+
+def _genesys_extract_all_user_summary(region: str, access_token: str, queue_access_token: str = "", progress_callback=None) -> dict:
+  _, _, api_base = _genesys_region_to_urls(region)
+
+  def _inventory(path: str, token: str, extra_params: dict | None = None) -> list[dict]:
+    entities_all = {}
+    for page_number in range(1, 1001):
+      params = {"pageSize": 100, "pageNumber": page_number, **(extra_params or {})}
+      ok, payload, error = _genesys_get_json(api_base, token, path, params)
+      if not ok:
+        raise RuntimeError(error or "Genesys inventory lookup failed.")
+      entities = payload.get("entities")
+      if not isinstance(entities, list):
+        raise RuntimeError("Genesys inventory returned an unexpected response.")
+      for entity in entities:
+        reference = entity.get("user") if isinstance(entity, dict) else None
+        entity_id = str(entity.get("id") or (reference or {}).get("id") or "") if isinstance(entity, dict) else ""
+        if not entity_id:
+          raise RuntimeError("Genesys inventory returned an entity without an ID.")
+        entities_all[entity_id] = entity
+      if progress_callback:
+        progress_callback(f"Reading {path}: page {page_number}, {len(entities_all)} records")
+      page_count = int(payload.get("pageCount") or 0)
+      if not payload.get("nextUri") and ((page_count and page_number >= page_count) or (not page_count and len(entities) < 100)):
+        return list(entities_all.values())
+    raise RuntimeError("Genesys inventory exceeded the page limit; incomplete results were refused.")
+
+  users = _inventory("/api/v2/users", access_token, {"state": "any", "expand": "skills"})
+  warnings = []
+  queues_by_user = {str(user["id"]): set() for user in users}
+  queues_complete = True
+  if users:
+    try:
+      queues = _inventory("/api/v2/routing/queues", queue_access_token or access_token)
+      if not queues:
+        raise RuntimeError("No queues are visible to the API client; queue membership could not be confirmed.")
+      for index, queue in enumerate(queues, 1):
+        queue_id = str(queue["id"])
+        try:
+          members = _inventory(f"/api/v2/routing/queues/{queue_id}/members", queue_access_token or access_token)
+        except RuntimeError:
+          members = _inventory(f"/api/v2/routing/queues/{queue_id}/users", queue_access_token or access_token)
+        name = str(queue.get("name") or queue["id"])
+        for member in members:
+          reference = member.get("user") or member.get("member") or member
+          user_id = str(reference.get("id") or "") if isinstance(reference, dict) else ""
+          if user_id in queues_by_user:
+            queues_by_user[user_id].add(name)
+        if progress_callback:
+          progress_callback(f"Reading queue memberships: {index}/{len(queues)} queues")
+    except Exception as exc:
+      queues_complete = False
+      warnings.append("Queue membership lookup incomplete: " + str(exc))
+  rows = []
+  missing_skills = 0
+  for user in users:
+    user_id = str(user["id"])
+    division = user.get("division") or {}
+    skills = user.get("skills")
+    skill_names = set()
+    if isinstance(skills, list):
+      for skill in skills:
+        reference = skill.get("skill") or skill
+        if isinstance(reference, dict):
+          name = str(reference.get("name") or reference.get("id") or "")
+          if name:
+            skill_names.add(name)
+    else:
+      missing_skills += 1
+    rows.append({
+      "user_id": user_id, "name": str(user.get("name") or user_id), "email": str(user.get("email") or ""),
+      "state": str(user.get("state") or ""), "division": str(division.get("name") or division.get("id") or "Not Returned"),
+      "queues": ("; ".join(sorted(queues_by_user[user_id], key=str.lower)) or "(none)") if queues_complete else "Lookup Failed",
+      "skills": ("; ".join(sorted(skill_names, key=str.lower)) or "(none)") if isinstance(skills, list) else "Not Returned",
+    })
+  if missing_skills:
+    warnings.append(f"Skills were not returned by bulk expansion for {missing_skills} user(s); individual skill reads were not performed.")
+  rows.sort(key=lambda row: (row["name"].lower(), row["user_id"]))
+  return {"rows": rows, "count": len(rows), "warnings": warnings, "mode": "all"}
 
 
 def _genesys_extract_user_summary(region: str, access_token: str, last_name: str, first_name: str, username: str, queue_access_token: str = "") -> dict:
@@ -21826,6 +21912,8 @@ def genesys_admin_placeholder(request: Request):
                 <input name="last_name" aria-label="User last name" placeholder="Last name" style="width:180px;">
                 <input name="first_name" aria-label="User first name" placeholder="First name (optional)" style="width:180px;">
                 <button type="button" id="genesys-user-extract-load" onclick="if(window.lookupGenesysUserExtract){window.lookupGenesysUserExtract(event);}else{document.getElementById('genesys-user-extract-status').textContent='User Extract handler missing (JavaScript did not load).';}return false;">Lookup User</button>
+                <button type="button" id="genesys-user-extract-all" onclick="if(window.queueGenesysAllUserExtract){window.queueGenesysAllUserExtract(event);}else{document.getElementById('genesys-user-extract-all-status').textContent='All-user extraction handler missing (JavaScript did not load).';}return false;">Extract All Users</button>
+                <button type="button" id="genesys-user-extract-view-all" style="display:none;" onclick="if(window.viewGenesysAllUserExtract){window.viewGenesysAllUserExtract(event);}return false;">View Saved All Users</button>
               </div>
             </form>
             <div class="search-filter-row">
@@ -21833,6 +21921,7 @@ def genesys_admin_placeholder(request: Request):
               <a id="genesys-user-extract-download" href="/genesys/user-extract/download" style="display:none;font-weight:700;">Download CSV</a>
             </div>
             <p id="genesys-user-extract-status" role="status" style="color:#2c5c8a;min-height:18px;"></p>
+            <p id="genesys-user-extract-all-status" role="status" style="color:#2c5c8a;min-height:18px;"></p>
             <div id="genesys-user-extract-output" style="overflow:auto;max-height:640px;"></div>
             <script>
               (function () {
@@ -21842,12 +21931,17 @@ def genesys_admin_placeholder(request: Request):
                 var status = document.getElementById("genesys-user-extract-status");
                 var output = document.getElementById("genesys-user-extract-output");
                 var download = document.getElementById("genesys-user-extract-download");
+                var allButton = document.getElementById("genesys-user-extract-all");
+                var viewAllButton = document.getElementById("genesys-user-extract-view-all");
+                var allStatus = document.getElementById("genesys-user-extract-all-status");
+                var showAllOnComplete = false;
                 var report = {};
                 var busy = false;
                 function esc(value) { return String(value == null ? "" : value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
                 function render() {
                   var query = filter.value.trim().toLowerCase();
-                  var rows = (report.rows || []).filter(function (row) { return [row.name,row.email,row.division,row.queues,row.skills,row.state].join(" ").toLowerCase().indexOf(query) !== -1; });
+                  var matchedRows = (report.rows || []).filter(function (row) { return [row.name,row.email,row.division,row.queues,row.skills,row.state].join(" ").toLowerCase().indexOf(query) !== -1; });
+                  var rows = matchedRows.slice(0, 500);
                   var columns = [["name","Name"],["email","Email"],["division","Division"],["queues","Queues"],["skills","ACD Skills"],["state","State"]];
                   var html = '<table><thead><tr>';
                   columns.forEach(function (column) { html += '<th>' + esc(column[1]) + '</th>'; });
@@ -21855,16 +21949,19 @@ def genesys_admin_placeholder(request: Request):
                   rows.forEach(function (row) { html += '<tr>'; columns.forEach(function (column) { html += '<td>' + esc(row[column[0]] || "-") + '</td>'; }); html += '</tr>'; });
                   output.innerHTML = rows.length ? html + '</tbody></table>' : '<p>No matching users.</p>';
                   download.style.display = report.fetched_at ? "inline-block" : "none";
-                  status.textContent = report.fetched_at ? rows.length + " of " + report.count + " users | Saved " + report.fetched_at + ((report.warnings || []).length ? " | " + report.warnings.join("; ") : "") : "No saved user extract.";
+                  download.href = "/genesys/user-extract/download" + (report.mode === "all" ? "?all_users=true" : "");
+                  download.textContent = report.mode === "all" ? "Download All Users CSV" : "Download CSV";
+                  status.textContent = report.fetched_at ? rows.length + " of " + matchedRows.length + " matching users | Total " + report.count + " | Saved " + report.fetched_at + ((report.warnings || []).length ? " | " + report.warnings.join("; ") : "") : "No saved user extract.";
                 }
-                async function load(refresh) {
+                async function load(refresh, allUsers) {
                   if (busy) return;
+                  if (refresh) showAllOnComplete = false;
                   var data = new FormData(form);
                   if (refresh && !String(data.get("username") || "").trim() && !String(data.get("last_name") || "").trim()) { status.textContent = "Enter an email, username, or last name."; return; }
                   busy = true; button.disabled = true;
                   status.textContent = refresh ? "Looking up Genesys user, division, queues and skills..." : "Loading saved extract...";
                   try {
-                    var response = await fetch(refresh ? "/genesys/user-extract/load" : "/genesys/user-extract", {method:refresh ? "POST" : "GET",body:refresh ? data : undefined,credentials:"same-origin"});
+                    var response = await fetch(refresh ? "/genesys/user-extract/load" : "/genesys/user-extract" + (allUsers ? "?all_users=true" : ""), {method:refresh ? "POST" : "GET",body:refresh ? data : undefined,credentials:"same-origin"});
                     var result = await response.json();
                     if (!response.ok || !result.ok) throw new Error(result.error || "User extract failed.");
                     report = result; render();
@@ -21872,8 +21969,40 @@ def genesys_admin_placeholder(request: Request):
                   finally { busy = false; button.disabled = false; }
                 }
                 window.lookupGenesysUserExtract = function (event) { if (event) event.preventDefault(); return load(true); };
+                window.viewGenesysAllUserExtract = function (event) { if (event) event.preventDefault(); return load(false, true); };
+                async function pollAllJob() {
+                  try {
+                    var response = await fetch("/genesys/user-extract/all/status", {credentials:"same-origin"});
+                    var result = await response.json();
+                    if (!response.ok || !result.ok) throw new Error(result.error || "Job status unavailable.");
+                    var job = result.job || {};
+                    var active = job.status === "queued" || job.status === "running";
+                    allButton.disabled = active;
+                    viewAllButton.style.display = result.has_saved_all ? "inline-block" : "none";
+                    allStatus.textContent = job.status === "idle" ? "" : "All-user job: " + job.status + " | " + (job.progress || "") + (job.error ? " | " + job.error : "") + (job.status === "completed" ? " | " + job.count + " users" : "");
+                    if (active) window.setTimeout(pollAllJob, 3000);
+                    else if (job.status === "completed" && showAllOnComplete) {
+                      if (busy) window.setTimeout(pollAllJob, 1000);
+                      else { showAllOnComplete = false; await load(false, true); }
+                    }
+                  } catch (error) { allStatus.textContent = "Job status check failed: " + error.message; allButton.disabled = false; }
+                }
+                window.queueGenesysAllUserExtract = async function (event) {
+                  if (event) event.preventDefault();
+                  if (allButton.disabled) return;
+                  allButton.disabled = true;
+                  allStatus.textContent = "Queueing all-user extraction...";
+                  try {
+                    var response = await fetch("/genesys/user-extract/all/queue", {method:"POST",credentials:"same-origin"});
+                    var result = await response.json();
+                    if (!response.ok || !result.ok) throw new Error(result.error || "Unable to queue extraction.");
+                    showAllOnComplete = true;
+                    await pollAllJob();
+                  } catch (error) { allStatus.textContent = "Queue failed: " + error.message; allButton.disabled = false; }
+                };
                 filter.addEventListener("input", render);
                 load(false);
+                pollAllJob();
               })();
             </script>
           </div>
@@ -29437,11 +29566,95 @@ def genesys_user_mark_inactive_route(
   return JSONResponse({"ok": True, "user_id": clean_user_id, "user_email": clean_email, "reason": clean_reason, "state": "inactive", "message": "Genesys user marked inactive and audit event recorded."})
 
 
-def _genesys_saved_user_extract() -> dict:
+def _genesys_user_extract_all_write(path: str, payload: dict) -> None:
+  os.makedirs(os.path.dirname(path), exist_ok=True)
+  temp_path = path + "." + uuid4().hex + ".tmp"
+  try:
+    with open(temp_path, "w", encoding="utf-8") as handle:
+      json.dump(payload, handle, ensure_ascii=True)
+      handle.flush()
+      os.fsync(handle.fileno())
+    os.replace(temp_path, path)
+  finally:
+    if os.path.exists(temp_path):
+      os.remove(temp_path)
+
+
+def _genesys_user_extract_all_read_job() -> dict:
+  if not os.path.exists(GENESYS_USER_EXTRACT_ALL_JOB_PATH):
+    return {"status": "idle"}
+  with open(GENESYS_USER_EXTRACT_ALL_JOB_PATH, "r", encoding="utf-8") as handle:
+    job = json.load(handle)
+  if not isinstance(job, dict) or job.get("status") not in {"idle", "queued", "running", "completed", "failed"}:
+    raise RuntimeError("All-user extraction job state is invalid; it was not overwritten.")
+  if job.get("status") in {"queued", "running"} and (not job.get("job_id") or not job.get("region")):
+    raise RuntimeError("All-user extraction job identity is invalid; it was not overwritten.")
+  return job
+
+
+def _genesys_user_extract_all_update(job_id: str, **changes) -> dict:
+  with GENESYS_USER_EXTRACT_ALL_JOB_LOCK:
+    job = _genesys_user_extract_all_read_job()
+    if job.get("job_id") != job_id:
+      raise RuntimeError("All-user extraction job identity changed.")
+    job.update(changes)
+    job["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    _genesys_user_extract_all_write(GENESYS_USER_EXTRACT_ALL_JOB_PATH, job)
+    return job
+
+
+def _run_genesys_user_extract_all_job(job: dict) -> None:
+  job_id = str(job["job_id"])
+  try:
+    _genesys_user_extract_all_update(job_id, status="running", progress="Starting all-user inventory", error="")
+    region = (GENESYS_CLOUD_REGION or "usw2").strip().lower()
+    if job.get("region") != region:
+      raise RuntimeError("Genesys region changed; submit a new extraction.")
+    token = _genesys_get_access_token(region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+    if not token.get("ok"):
+      raise RuntimeError(str(token.get("error") or "Genesys authentication failed."))
+    queue_token = _genesys_get_queue_access_token(region)
+    report = _genesys_extract_all_user_summary(
+      region, token.get("access_token", ""), queue_token.get("access_token", "") if queue_token.get("ok") else "",
+      progress_callback=lambda message: _genesys_user_extract_all_update(job_id, progress=message),
+    )
+    report.update({"ok": True, "region": region, "job_id": job_id, "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")})
+    with GENESYS_USER_EXTRACT_REPORT_LOCK:
+      _genesys_user_extract_all_write(GENESYS_USER_EXTRACT_ALL_REPORT_PATH, report)
+    _append_audit_event(action="genesys_user_extract_all_completed", cucm_host=str(job.get("cucm_host") or ""), operator=str(job.get("operator") or ""), target=f"users={report['count']}", output_filename="genesys_all_users.csv", inline_mode=True)
+    _genesys_user_extract_all_update(job_id, status="completed", progress="Complete", count=report["count"], warnings=report["warnings"], error="")
+  except Exception as exc:
+    _genesys_user_extract_all_update(job_id, status="failed", progress="Extraction failed", error=str(exc))
+
+
+def _genesys_user_extract_all_worker() -> None:
+  while True:
+    try:
+      with GENESYS_USER_EXTRACT_ALL_JOB_LOCK:
+        job = _genesys_user_extract_all_read_job()
+      if job.get("status") in {"queued", "running"}:
+        _run_genesys_user_extract_all_job(job)
+    except Exception:
+      logger.exception("All-user extraction worker failed; worker remains available")
+      threading.Event().wait(30)
+    threading.Event().wait(2)
+
+
+def _start_genesys_user_extract_all_worker() -> None:
+  global GENESYS_USER_EXTRACT_ALL_WORKER_STARTED
+  with GENESYS_USER_EXTRACT_ALL_START_LOCK:
+    if GENESYS_USER_EXTRACT_ALL_WORKER_STARTED:
+      return
+    threading.Thread(target=_genesys_user_extract_all_worker, daemon=True, name="genesys-user-extract-all").start()
+    GENESYS_USER_EXTRACT_ALL_WORKER_STARTED = True
+
+
+def _genesys_saved_user_extract(all_users: bool = False) -> dict:
+  path = GENESYS_USER_EXTRACT_ALL_REPORT_PATH if all_users else GENESYS_USER_EXTRACT_REPORT_PATH
   with GENESYS_USER_EXTRACT_REPORT_LOCK:
-    if not os.path.exists(GENESYS_USER_EXTRACT_REPORT_PATH):
+    if not os.path.exists(path):
       return {"ok": True, "rows": [], "count": 0, "fetched_at": ""}
-    with open(GENESYS_USER_EXTRACT_REPORT_PATH, "r", encoding="utf-8") as handle:
+    with open(path, "r", encoding="utf-8") as handle:
       report = json.load(handle)
   if not isinstance(report, dict) or not isinstance(report.get("rows"), list):
     raise RuntimeError("Saved user extract is invalid; run the lookup again.")
@@ -29451,11 +29664,11 @@ def _genesys_saved_user_extract() -> dict:
 
 
 @app.get("/genesys/user-extract")
-def genesys_user_extract_saved_route(request: Request):
+def genesys_user_extract_saved_route(request: Request, all_users: bool = False):
   if not (_get_auth_session(request) or {}).get("username"):
     return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
   try:
-    return JSONResponse(_genesys_saved_user_extract())
+    return JSONResponse(_genesys_saved_user_extract(all_users))
   except (OSError, ValueError, RuntimeError) as exc:
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
@@ -29495,11 +29708,11 @@ def genesys_user_extract_load_route(request: Request, username: str = Form(""), 
 
 
 @app.get("/genesys/user-extract/download")
-def genesys_user_extract_download_route(request: Request):
+def genesys_user_extract_download_route(request: Request, all_users: bool = False):
   if not (_get_auth_session(request) or {}).get("username"):
     return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
   try:
-    report = _genesys_saved_user_extract()
+    report = _genesys_saved_user_extract(all_users)
     if not report.get("fetched_at"):
       return JSONResponse({"ok": False, "error": "Lookup a user before downloading."}, status_code=404)
     columns = [("name", "Name"), ("email", "Email"), ("division", "Division"), ("queues", "Queues"), ("skills", "ACD Skills"), ("state", "State"), ("user_id", "Genesys User ID")]
@@ -29509,7 +29722,37 @@ def genesys_user_extract_download_route(request: Request):
     for row in report["rows"]:
       values = [str(row.get(key) or "") for key, _ in columns]
       writer.writerow(["'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value for value in values])
-    return Response(output.getvalue().encode("utf-8-sig"), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="genesys_user_extract.csv"'})
+    filename = "genesys_all_users.csv" if all_users else "genesys_user_extract.csv"
+    return Response(output.getvalue().encode("utf-8-sig"), media_type="text/csv", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+  except (OSError, ValueError, RuntimeError) as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@app.post("/genesys/user-extract/all/queue")
+def genesys_user_extract_all_queue_route(request: Request):
+  session = _get_auth_session(request) or {}
+  if not session.get("username"):
+    return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
+  try:
+    with GENESYS_USER_EXTRACT_ALL_JOB_LOCK:
+      job = _genesys_user_extract_all_read_job()
+      if job.get("status") not in {"queued", "running"}:
+        job = {"job_id": uuid4().hex, "status": "queued", "progress": "Waiting for worker", "error": "", "region": (GENESYS_CLOUD_REGION or "usw2").strip().lower(), "operator": str(session["username"]), "cucm_host": str(session.get("cucm_host") or ""), "created_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
+        _genesys_user_extract_all_write(GENESYS_USER_EXTRACT_ALL_JOB_PATH, job)
+    _start_genesys_user_extract_all_worker()
+    return JSONResponse({"ok": True, "job": job}, status_code=202)
+  except (OSError, ValueError, RuntimeError) as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@app.get("/genesys/user-extract/all/status")
+def genesys_user_extract_all_status_route(request: Request):
+  if not (_get_auth_session(request) or {}).get("username"):
+    return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
+  try:
+    with GENESYS_USER_EXTRACT_ALL_JOB_LOCK:
+      job = _genesys_user_extract_all_read_job()
+    return JSONResponse({"ok": True, "job": job, "has_saved_all": os.path.exists(GENESYS_USER_EXTRACT_ALL_REPORT_PATH)})
   except (OSError, ValueError, RuntimeError) as exc:
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
