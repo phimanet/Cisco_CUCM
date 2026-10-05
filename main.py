@@ -937,6 +937,8 @@ GENESYS_AD_WEBRTC_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_a
 GENESYS_AD_WEBRTC_QUEUE_HISTORY_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue_history.json")
 GENESYS_CALL_ROUTES_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_call_routes_report.json")
 GENESYS_CALL_ROUTES_REPORT_LOCK = threading.Lock()
+GENESYS_DID_NUMBERS_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_did_numbers_report.json")
+GENESYS_DID_NUMBERS_REPORT_LOCK = threading.Lock()
 GENESYS_INACTIVE_QUEUE_JOBS = {}
 GENESYS_INACTIVE_QUEUE_LOCK = threading.Lock()
 GENESYS_INACTIVE_QUEUE_WORKER_STARTED = False
@@ -2019,6 +2021,68 @@ def _genesys_list_call_routes(api_base: str, access_token: str) -> dict:
     raise RuntimeError("Genesys call routes exceeded the page limit; no incomplete report was saved.")
   rows.sort(key=lambda row: (row["route_name"].lower(), row["route_id"], row["telephone_number"]))
   return {"rows": rows, "route_count": len(route_ids), "number_count": sum(bool(row["telephone_number"]) for row in rows), "pages_scanned": page_number}
+
+
+def _genesys_list_did_numbers(api_base: str, access_token: str) -> dict:
+  pages_scanned = {}
+
+  def _inventory(path: str) -> list[dict]:
+    records = {}
+    for page_number in range(1, 101):
+      ok, payload, error = _genesys_get_json(api_base, access_token, path, {"pageSize": 100, "pageNumber": page_number})
+      if not ok:
+        raise RuntimeError(f"Genesys DID inventory failed: {error}")
+      entities = payload.get("entities")
+      if not isinstance(entities, list):
+        raise RuntimeError("Genesys DID inventory returned an unexpected response.")
+      for entity in entities:
+        if not isinstance(entity, dict) or not entity.get("id"):
+          raise RuntimeError("Genesys DID inventory returned a record without an ID.")
+        records.setdefault(str(entity["id"]), entity)
+      try:
+        page_count = int(payload.get("pageCount") or 0)
+      except (TypeError, ValueError):
+        raise RuntimeError("Genesys DID inventory returned invalid pagination metadata.")
+      if not payload.get("nextUri") and page_number >= page_count and len(entities) < 100:
+        break
+    else:
+      raise RuntimeError("Genesys DID inventory exceeded the page limit; no incomplete report was saved.")
+    pages_scanned[path] = page_number
+    return list(records.values())
+
+  dids = _inventory("/api/v2/telephony/providers/edges/dids")
+  pools = {str(pool["id"]): pool for pool in _inventory("/api/v2/telephony/providers/edges/didpools")} if dids else {}
+  rows = []
+  for did in dids:
+    pool_reference = did.get("didPool") or {}
+    owner = did.get("owner") or {}
+    if not isinstance(pool_reference, dict) or not isinstance(owner, dict):
+      raise RuntimeError("Genesys DID inventory returned an unexpected pool or assignee reference.")
+    pool_id = str(pool_reference.get("id") or "")
+    if pool_id and pool_id not in pools:
+      raise RuntimeError("A Genesys DID references a missing pool; no incomplete report was saved.")
+    pool = pools.get(pool_id, pool_reference)
+    original = str(did.get("phoneNumber") or "").strip()
+    if not original:
+      raise RuntimeError("Genesys DID inventory returned a record without a telephone number.")
+    digits = "".join(character for character in original if character in "0123456789")
+    has_country_code = len(digits) == 11 and digits.startswith("1")
+    if has_country_code:
+      digits = digits[1:]
+    is_ten_digits = len(digits) == 10 and (not original.startswith("+") or has_country_code)
+    owner_id = str(owner.get("id") or "")
+    owner_name = str(owner.get("name") or "").strip()
+    rows.append({
+      "did_id": str(did["id"]), "telephone_number": digits if is_ten_digits else original,
+      "original_number": original, "number_format": "10 digits" if is_ten_digits else "Non-10-digit value",
+      "assignee": owner_name or ("Name unavailable: " + owner_id if owner_id else "Unassigned"),
+      "assignee_id": owner_id, "assignee_type": str(did.get("ownerType") or ""),
+      "service_provider": str(pool.get("name") or pool.get("provider") or ""),
+      "provider_code": str(pool.get("provider") or ""), "comments": str(pool.get("comments") or ""),
+      "did_pool_id": pool_id,
+    })
+  rows.sort(key=lambda row: (row["telephone_number"], row["did_id"]))
+  return {"rows": rows, "number_count": len(rows), "pool_count": len(pools), "pages_scanned": pages_scanned}
 
 
 def _genesys_enrich_call_routes_cucm(report: dict, cucm_host: str, cucm_user: str, cucm_pass: str) -> None:
@@ -21573,9 +21637,81 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-set-inactive-panel" onclick="(function(){var id='genesys-set-inactive-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Set User to Inactive</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-external-contact-panel" onclick="(function(){var id='genesys-external-contact-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">External Contact Creation/Removal</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-call-routes-panel" onclick="(function(){var id='genesys-call-routes-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys Call Routes</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-did-numbers-panel" onclick="(function(){var id='genesys-did-numbers-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys DID Numbers</button>
         </aside>
 
         <section class="portal-main">
+          <div id="genesys-did-numbers-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+            <style>
+              #genesys-did-numbers-filter { box-sizing:border-box; min-width:0; }
+              #genesys-did-numbers-output table { min-width:680px; }
+              @media (max-width: 760px) {
+                .portal-shell:has(#genesys-did-numbers-panel[style*="display: block"]) { grid-template-columns:minmax(0,1fr); }
+                .portal-shell:has(#genesys-did-numbers-panel[style*="display: block"]) .portal-sidebar { position:static; }
+                body:has(#genesys-did-numbers-panel[style*="display: block"]) .topbar-brand { flex-wrap:wrap; min-width:0; }
+                body:has(#genesys-did-numbers-panel[style*="display: block"]) .topbar-status { flex:1 0 100%; }
+                body:has(#genesys-did-numbers-panel[style*="display: block"]) .topbar-actions { flex-wrap:wrap; }
+                #genesys-did-numbers-panel .search-filter-row > input { width:100%; }
+                #genesys-did-numbers-panel { overflow-wrap:anywhere; }
+              }
+            </style>
+            <h3 style="margin-top:0;">Genesys DID Numbers</h3>
+            <div class="search-filter-row">
+              <button type="button" id="genesys-did-numbers-load" onclick="if(window.loadGenesysDIDNumbers){window.loadGenesysDIDNumbers(event);}else{document.getElementById('genesys-did-numbers-status').textContent='DID numbers handler missing (JavaScript did not load).';}return false;">Load DID Numbers</button>
+              <input id="genesys-did-numbers-filter" aria-label="Filter DID numbers" placeholder="Filter by number, assignee, provider, or CUCM type" style="width:420px;max-width:100%;">
+              <a id="genesys-did-numbers-download" href="/genesys/did-numbers/download" style="display:none;font-weight:700;">Download CSV</a>
+            </div>
+            <p id="genesys-did-numbers-status" role="status" style="color:#2c5c8a;min-height:18px;"></p>
+            <div id="genesys-did-numbers-output" style="overflow:auto;max-height:640px;"></div>
+            <script>
+              (function () {
+                var button = document.getElementById("genesys-did-numbers-load");
+                var filter = document.getElementById("genesys-did-numbers-filter");
+                var status = document.getElementById("genesys-did-numbers-status");
+                var output = document.getElementById("genesys-did-numbers-output");
+                var download = document.getElementById("genesys-did-numbers-download");
+                var rows = [];
+                var report = {};
+                var busy = false;
+                function esc(value) { return String(value == null ? "" : value).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
+                function render() {
+                  var query = filter.value.trim().toLowerCase();
+                  var visible = rows.filter(function (row) { return [row.telephone_number, row.original_number, row.assignee, row.service_provider, row.comments, row.in_cucm_as].join(" ").toLowerCase().indexOf(query) !== -1; });
+                  var columns = [["telephone_number", "DID Number"], ["in_cucm_as", "In CUCM As"], ["assignee", "Assignee"], ["service_provider", "Service Provider"], ["comments", "Comments"]];
+                  var html = '<table style="width:100%;border-collapse:collapse;font-size:12px;"><thead><tr>';
+                  columns.forEach(function (column) { html += '<th style="padding:8px;text-align:left;border-bottom:1px solid #c8dbee;white-space:nowrap;">' + esc(column[1]) + '</th>'; });
+                  html += '</tr></thead><tbody>';
+                  visible.forEach(function (row) { html += '<tr>'; columns.forEach(function (column) { html += '<td style="padding:8px;border-bottom:1px solid #e0eaf4;vertical-align:top;">' + esc(row[column[0]] || (column[0] === "in_cucm_as" ? "Not Checked" : "-")) + '</td>'; }); html += '</tr>'; });
+                  output.innerHTML = visible.length ? html + '</tbody></table>' : '<p>No matching DID numbers.</p>';
+                  download.style.display = report.fetched_at ? "inline-block" : "none";
+                  if (!busy) status.textContent = report.fetched_at ? report.number_count + " DID numbers | " + visible.length + " of " + rows.length + " rows | Saved " + report.fetched_at + (report.cucm_checked ? " | CUCM " + report.cucm_host : " | CUCM not checked for current session") : "No saved DID-number report.";
+                }
+                async function fetchReport(refresh) {
+                  if (busy) return;
+                  busy = true;
+                  button.disabled = true;
+                  status.textContent = refresh ? "Loading Genesys DID numbers and CUCM matches..." : "Loading saved report...";
+                  try {
+                    var response = await fetch(refresh ? "/genesys/did-numbers/load" : "/genesys/did-numbers", {method: refresh ? "POST" : "GET", credentials: "same-origin"});
+                    var data = await response.json();
+                    if (!response.ok || !data.ok) throw new Error(data.error || "DID numbers lookup failed.");
+                    report = data;
+                    rows = data.rows || [];
+                    busy = false;
+                    render();
+                  } catch (error) {
+                    status.textContent = "Lookup failed: " + error.message + (report.fetched_at ? " | Previous saved report remains available." : "");
+                  } finally {
+                    busy = false;
+                    button.disabled = false;
+                  }
+                }
+                window.loadGenesysDIDNumbers = function (event) { if (event) event.preventDefault(); return fetchReport(true); };
+                filter.addEventListener("input", render);
+                fetchReport(false);
+              })();
+            </script>
+          </div>
           <div id="genesys-call-routes-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
             <style>
               #genesys-call-routes-filter { box-sizing:border-box; min-width:0; }
@@ -29063,6 +29199,103 @@ def genesys_user_mark_inactive_route(
     account=clean_email,
   )
   return JSONResponse({"ok": True, "user_id": clean_user_id, "user_email": clean_email, "reason": clean_reason, "state": "inactive", "message": "Genesys user marked inactive and audit event recorded."})
+
+
+def _genesys_saved_did_numbers(cucm_host: str = "") -> dict:
+  with GENESYS_DID_NUMBERS_REPORT_LOCK:
+    if not os.path.exists(GENESYS_DID_NUMBERS_REPORT_PATH):
+      return {"ok": True, "rows": [], "number_count": 0, "fetched_at": ""}
+    with open(GENESYS_DID_NUMBERS_REPORT_PATH, "r", encoding="utf-8") as handle:
+      report = json.load(handle)
+  if not isinstance(report, dict) or not isinstance(report.get("rows"), list):
+    raise RuntimeError("Saved DID-number report is invalid; load the numbers again.")
+  if report.get("region") != (GENESYS_CLOUD_REGION or "usw2").strip().lower():
+    return {"ok": True, "rows": [], "number_count": 0, "fetched_at": ""}
+  same_host = bool(cucm_host) and str(report.get("cucm_host") or "").strip().lower() == cucm_host.strip().lower()
+  report["cucm_checked"] = same_host
+  for row in report["rows"]:
+    if not same_host:
+      row["in_cucm_as"] = "Not Checked"
+      row["cucm_matches"] = []
+    else:
+      row.setdefault("in_cucm_as", "Not Checked")
+  return report
+
+
+@app.get("/genesys/did-numbers")
+def genesys_did_numbers_saved_route(request: Request):
+  session = _get_auth_session(request) or {}
+  if not session.get("username"):
+    return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
+  try:
+    return JSONResponse(_genesys_saved_did_numbers(str(session.get("cucm_host") or "")))
+  except (OSError, ValueError, RuntimeError) as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+
+@app.post("/genesys/did-numbers/load")
+def genesys_did_numbers_load_route(request: Request):
+  session = _get_auth_session(request) or {}
+  if not session.get("username"):
+    return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower()
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  try:
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
+    region, _, api_base = _genesys_region_to_urls(token_result.get("region", clean_region))
+    report = _genesys_list_did_numbers(api_base, token_result.get("access_token", ""))
+    _genesys_enrich_call_routes_cucm(report, cucm_host, cucm_user, cucm_pass)
+    report.update({"ok": True, "region": region, "cucm_checked": True, "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")})
+    with GENESYS_DID_NUMBERS_REPORT_LOCK:
+      os.makedirs(os.path.dirname(GENESYS_DID_NUMBERS_REPORT_PATH), exist_ok=True)
+      temp_path = GENESYS_DID_NUMBERS_REPORT_PATH + "." + uuid4().hex + ".tmp"
+      try:
+        with open(temp_path, "w", encoding="utf-8") as handle:
+          json.dump(report, handle, ensure_ascii=True)
+          handle.flush()
+          os.fsync(handle.fileno())
+        os.replace(temp_path, GENESYS_DID_NUMBERS_REPORT_PATH)
+      finally:
+        if os.path.exists(temp_path):
+          os.remove(temp_path)
+    _append_audit_event(
+      action="genesys_did_numbers_lookup", cucm_host=cucm_host, operator=str(session["username"]),
+      target=f"numbers={report['number_count']};pools={report['pool_count']}", output_filename="genesys_did_numbers.csv", inline_mode=True,
+    )
+    return JSONResponse(report)
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
+@app.get("/genesys/did-numbers/download")
+def genesys_did_numbers_download_route(request: Request):
+  session = _get_auth_session(request) or {}
+  if not session.get("username"):
+    return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
+  try:
+    report = _genesys_saved_did_numbers(str(session.get("cucm_host") or ""))
+    if not report.get("fetched_at"):
+      return JSONResponse({"ok": False, "error": "Load DID numbers before downloading."}, status_code=404)
+    columns = [
+      ("telephone_number", "DID Number"), ("in_cucm_as", "In CUCM As"),
+      ("assignee", "Assignee"), ("service_provider", "Service Provider"), ("comments", "Comments"),
+      ("original_number", "Original Number"), ("number_format", "Number Format"), ("did_id", "DID ID"),
+      ("assignee_id", "Assignee ID"), ("assignee_type", "Assignee Type"),
+      ("did_pool_id", "DID Pool ID"), ("provider_code", "Provider Code"),
+      ("cucm_match_details", "CUCM Match Details"), ("cucm_host", "CUCM Host"),
+    ]
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow([label for _, label in columns])
+    for row in report["rows"]:
+      export_row = {**row, "cucm_host": report.get("cucm_host", ""), "cucm_match_details": json.dumps(row.get("cucm_matches") or [], ensure_ascii=True)}
+      values = [str(export_row.get(key) or "") for key, _ in columns]
+      writer.writerow(["'" + value if value.lstrip().startswith(("=", "+", "-", "@")) else value for value in values])
+    return Response(output.getvalue().encode("utf-8-sig"), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="genesys_did_numbers.csv"'})
+  except (OSError, ValueError, RuntimeError) as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
 
 
 def _genesys_saved_call_routes(cucm_host: str = "") -> dict:
