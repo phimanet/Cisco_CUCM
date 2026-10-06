@@ -52091,7 +52091,7 @@ def page3_twilio_items(request: Request):
               <input id="twilio-recents-filter" placeholder="Filter number or friendly name" aria-label="Filter number or friendly name" style="width:260px;min-width:0;max-width:100%;">
               <select id="twilio-recents-outcome" aria-label="Log lookup outcome" style="max-width:100%;"><option value="">All Numbers</option><option value="Found">Outbound Log Found</option><option value="No outbound log available">No Outbound Log</option><option value="Lookup Failed">Lookup Failed</option><option value="Pending">Pending</option></select>
               <select id="twilio-recents-zone" aria-label="Log timestamp timezone"><option value="America/Los_Angeles">Pacific Time (PST/PDT)</option><option value="UTC">UTC</option></select>
-              <select id="twilio-recents-sort" aria-label="Log sort order"><option value="newest">Newest First</option><option value="oldest">Oldest First</option><option value="number">Number</option></select>
+              <select id="twilio-recents-sort" aria-label="Log sort order"><option value="newest">Newest First</option><option value="oldest">Oldest First</option><option value="number">Number (Ascending)</option><option value="number-desc">Number (Descending)</option><option value="name">Friendly Name (A-Z)</option><option value="name-desc">Friendly Name (Z-A)</option></select>
             </div>
             <p id="twilio-recents-status" role="status" style="color:#2c5c8a;min-height:18px;"></p>
             <p id="twilio-recents-scope" style="color:#9a4b00;font-size:12px;">AMIEWeb only. Outbound log timestamps are not delivery confirmation. No outbound log does not establish inactivity; Twilio history retention/deletion limits apply.</p>
@@ -52129,11 +52129,16 @@ def page3_twilio_items(request: Request):
                 var filter = filterEl.value.trim().toLowerCase();
                 var digits = /^[+0-9(). -]+$/.test(filter) ? filter.replace(/[^0-9]/g, "") : "";
                 var rows = report.rows.filter(function (row) { return (!filter || String(row.friendly_name || "").toLowerCase().indexOf(filter) >= 0 || row.phone_number.toLowerCase().indexOf(filter) >= 0 || (digits && row.phone_number.replace(/[^0-9]/g, "").indexOf(digits) >= 0)) && (!outcomeEl.value || row.status === outcomeEl.value); });
+                var sortColumn = sortEl.value.indexOf("number") === 0 ? "number" : sortEl.value.indexOf("name") === 0 ? "name" : "date";
+                var descending = sortEl.value === "newest" || sortEl.value.endsWith("-desc");
                 rows.sort(function (first, second) {
-                  if (sortEl.value === "number") return first.phone_number.localeCompare(second.phone_number);
-                  if (!first.latest_outbound_at || !second.latest_outbound_at) return first.latest_outbound_at ? -1 : second.latest_outbound_at ? 1 : first.phone_number.localeCompare(second.phone_number);
-                  var order = first.latest_outbound_at.localeCompare(second.latest_outbound_at);
-                  return sortEl.value === "oldest" ? order : -order;
+                  var numberOrder = first.phone_number.localeCompare(second.phone_number, "en", {numeric:true});
+                  if (sortColumn === "number") return descending ? -numberOrder : numberOrder;
+                  var firstValue = sortColumn === "name" ? String(first.friendly_name || "").trim() : first.latest_outbound_at;
+                  var secondValue = sortColumn === "name" ? String(second.friendly_name || "").trim() : second.latest_outbound_at;
+                  if (!firstValue || !secondValue) return firstValue ? -1 : secondValue ? 1 : numberOrder;
+                  var order = sortColumn === "name" ? firstValue.localeCompare(secondValue, "en", {sensitivity:"base",numeric:true}) : Date.parse(firstValue) - Date.parse(secondValue);
+                  return order ? (descending ? -order : order) : numberOrder;
                 });
                 statusEl.style.color = report.failed || report.status === "failed" ? "#b42318" : "#2c5c8a";
                 statusEl.textContent = (savedView ? "Saved report. " : "") + report.account_name + ": " + report.completed + "/" + report.total + " numbers checked; " + report.found + " outbound logs, " + report.no_history + " no log available, " + report.failed + " lookup failed. " + report.status + ". Checked at " + displayTime(report.updated_at) + "." + (report.retry_after ? " Twilio retry pending." : "") + (rows.length > 500 ? " Showing 500 of " + rows.length + " filtered rows; CSV includes all filtered rows." : "") + (report.error ? " " + report.error : "");
@@ -52142,7 +52147,22 @@ def page3_twilio_items(request: Request):
                 resultsEl.replaceChildren();
                 var table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:13px;";
                 var head = table.createTHead().insertRow(); head.style.cssText = "background:#005eb8;color:#fff;";
-                ["SMS Number", "Friendly Name", "Latest Outbound Log (" + (zoneEl.value === "UTC" ? "UTC" : "PST/PDT") + ")"].forEach(function (label) { var cell = document.createElement("th"); cell.textContent = label; cell.style.cssText = "padding:8px;text-align:left;"; head.appendChild(cell); });
+                ["SMS Number", "Friendly Name", "Latest Outbound Log (" + (zoneEl.value === "UTC" ? "UTC" : "PST/PDT") + ")"].forEach(function (label, index) {
+                  var column = ["number", "name", "date"][index];
+                  var active = sortColumn === column;
+                  var nextSort = column === "date" ? (active && descending ? "oldest" : "newest") : column + (active && !descending ? "-desc" : "");
+                  var nextDescending = nextSort === "newest" || nextSort.endsWith("-desc");
+                  var cell = document.createElement("th"); cell.scope = "col"; cell.setAttribute("aria-sort", active ? (descending ? "descending" : "ascending") : "none"); cell.style.cssText = "padding:8px;text-align:left;cursor:pointer;";
+                  var button = document.createElement("button"); button.type = "button"; button.id = "twilio-recents-sort-" + column;
+                  button.style.cssText = "all:unset;display:inline-flex;align-items:center;gap:6px;width:100%;cursor:pointer;font:inherit;color:inherit;outline-offset:2px;";
+                  button.title = "Sort by " + label + " " + (nextDescending ? "descending" : "ascending"); button.setAttribute("aria-label",button.title);
+                  var text = document.createElement("span"); text.textContent = label;
+                  var arrow = document.createElement("span"); arrow.setAttribute("aria-hidden","true"); arrow.style.cssText = "flex:0 0 1em;text-align:center;"; arrow.textContent = String.fromCharCode(active ? (descending ? 9660 : 9650) : 8597);
+                  button.appendChild(text); button.appendChild(arrow); cell.appendChild(button); head.appendChild(cell);
+                  button.addEventListener("focus",function () { button.style.outline = "2px solid #fff"; });
+                  button.addEventListener("blur",function () { button.style.outline = ""; });
+                  cell.addEventListener("click",function () { sortEl.value = nextSort; render(); document.getElementById("twilio-recents-sort-" + column).focus(); });
+                });
                 var body = table.createTBody();
                 rows.slice(0,500).forEach(function (row, index) {
                   var tr = body.insertRow(); tr.style.background = index % 2 ? "#ffffff" : "#f7fbff";
