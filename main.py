@@ -68,6 +68,7 @@ from toolkit.translation_pattern_lookup import (
   get_translation_pattern_full,
 )
 from toolkit.route_plan_report import lookup_route_plan
+from toolkit.cucm_number_usage import lookup_number_usage, create_deep_scan, advance_deep_scan
 from toolkit.create_teams_telephony_user import create_teams_telephony_user
 from toolkit.remove_teams_telephony_user import (
   lookup_teams_telephony_removal_candidate,
@@ -938,6 +939,8 @@ GENESYS_AD_WEBRTC_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_a
 GENESYS_AD_WEBRTC_QUEUE_HISTORY_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue_history.json")
 GENESYS_CALL_ROUTES_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_call_routes_report.json")
 GENESYS_CALL_ROUTES_REPORT_LOCK = threading.Lock()
+CUCM_NUMBER_USAGE_REPORT_DIR = os.path.join(_genesys_queue_data_root, "cucm_number_usage")
+CUCM_NUMBER_USAGE_REPORT_LOCK = threading.Lock()
 GENESYS_DID_NUMBERS_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_did_numbers_report.json")
 GENESYS_DID_NUMBERS_REPORT_LOCK = threading.Lock()
 GENESYS_SINCH_INVENTORY_PATH = os.path.join(_genesys_queue_data_root, "genesys_sinch_inventory.json")
@@ -46044,6 +46047,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="delete-unassigned-dn">Delete Directory Number from CUCM</button>
             <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
             <button type="button" class="portal-nav-btn" data-panel="route-plan-report">CUCM Route Plan Report</button>
+            <button type="button" class="portal-nav-btn" data-panel="forwarding-masking-lookup">Cisco Forwarding/Masking Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="translookup">Translation Pattern Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="transtemplate">Translation Pattern Template</button>
             <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
@@ -46398,6 +46402,131 @@ def menu_admin_page(request: Request):
               statusEl.textContent = "Done: " + built + " built, " + failed + " failed.";
               return false;
             };
+          })();
+        </script>
+      </section>
+
+      <section class="panel tool-panel" data-panel="forwarding-masking-lookup">
+        <h3>Cisco Forwarding/Masking Lookup</h3>
+        <form id="admin-number-usage-form" action="javascript:void(0)" onsubmit="if(window.runCucmNumberUsage){return window.runCucmNumberUsage(event);} document.getElementById('admin-number-usage-status').textContent='Lookup handler missing (JavaScript did not load).'; return false;">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <div class="compact-inline-row" style="flex-wrap:wrap;">
+            <label for="admin-number-usage-number">Number Contains:</label>
+            <input id="admin-number-usage-number" name="number" placeholder="5932, 2105932 or 2142105932" required minlength="4" maxlength="40" style="width:260px;max-width:100%;min-width:0;">
+            <select name="mode" id="admin-number-usage-mode" aria-label="Lookup mode" style="max-width:100%;">
+              <option value="focused">Forwarding / Masking</option>
+              <option value="deep">Deep Scan</option>
+            </select>
+            <button type="button" id="admin-number-usage-search" onclick="if(window.runCucmNumberUsage){return window.runCucmNumberUsage(event);} document.getElementById('admin-number-usage-status').textContent='Lookup handler missing (JavaScript did not load).'; return false;">Find References</button>
+            <button type="button" id="admin-number-usage-saved">View Saved Lookup</button>
+            <button type="button" id="admin-number-usage-pause" disabled>Pause</button>
+            <button type="button" id="admin-number-usage-resume" disabled>Resume Deep Scan</button>
+            <button type="button" id="admin-number-usage-download" disabled>Download CSV</button>
+          </div>
+        </form>
+        <p id="admin-number-usage-status" role="status" style="color:#2c5c8a;min-height:18px;"></p>
+        <p id="admin-number-usage-scope" style="color:#9a4b00;">Read-only. No matches is not deletion clearance. Deep Scan excludes sensitive and unsupported fields; external systems and wildcard-derived uses are not checked.</p>
+        <div id="admin-number-usage-results" style="overflow-x:auto;"></div>
+        <details style="margin-top:12px;"><summary>Checked Fields / Exclusions / Errors</summary><pre id="admin-number-usage-debug" style="white-space:pre-wrap;overflow-wrap:anywhere;"></pre></details>
+        <script>
+          (function () {
+            var form = document.getElementById("admin-number-usage-form");
+            var statusEl = document.getElementById("admin-number-usage-status");
+            var resultsEl = document.getElementById("admin-number-usage-results");
+            var debugEl = document.getElementById("admin-number-usage-debug");
+            var scopeEl = document.getElementById("admin-number-usage-scope");
+            var searchBtn = document.getElementById("admin-number-usage-search");
+            var savedBtn = document.getElementById("admin-number-usage-saved");
+            var pauseBtn = document.getElementById("admin-number-usage-pause");
+            var resumeBtn = document.getElementById("admin-number-usage-resume");
+            var downloadBtn = document.getElementById("admin-number-usage-download");
+            var modeEl = document.getElementById("admin-number-usage-mode");
+            var report = null;
+            var busy = false;
+            var paused = false;
+            var headings = ["Reference", "Object / DN", "Partition", "CUCM Field", "Stored Value", "Devices", "Description", "Pattern Usage", "Object ID"];
+            function cells(row) { return [row.category, row.pattern, row.route_partition, row.field, row.destination, (row.devices || []).join(" | "), row.description, row.pattern_usage, row.object_id]; }
+            function controls() {
+              searchBtn.disabled = busy; savedBtn.disabled = busy; modeEl.disabled = busy;
+              pauseBtn.disabled = !busy || !report || report.mode !== "deep" || paused;
+              resumeBtn.disabled = busy || !report || report.mode !== "deep" || report.status === "completed";
+              downloadBtn.disabled = busy || !report || !report.total_matches;
+            }
+            function render(payload, saved) {
+              report = payload;
+              var rows = payload.results || [];
+              var failures = payload.failures || [];
+              var skipped = payload.skipped_fields || [];
+              var warnings = payload.warnings || [];
+              statusEl.style.color = failures.length || warnings.length ? "#9a4b00" : "#2c5c8a";
+              statusEl.textContent = (saved ? "Saved lookup: " : "") + payload.total_matches + " reference(s) containing " + payload.query + " on " + payload.cucm_host + ". " + (payload.mode === "deep" ? payload.status + ": " + payload.tasks_done + "/" + payload.tasks_total + " field batches; " + failures.length + " failed, " + skipped.length + " fields excluded. " : payload.forwarding_matches + " forwarding match(es). ") + "Checked at " + payload.updated_at + "." + (payload.preview_truncated ? " Preview limited to 500 rows; CSV retains all matches." : "") + (warnings.length ? " " + warnings.join(" ") : "");
+              scopeEl.textContent = payload.scope_note;
+              debugEl.textContent = JSON.stringify({match_rule:payload.match_rule, checked_fields:payload.checked_fields, skipped_fields:skipped, failures:failures, warnings:warnings, host:payload.cucm_host, updated_at:payload.updated_at}, null, 2);
+              resultsEl.replaceChildren();
+              if (!rows.length) { resultsEl.textContent = payload.status === "completed" ? "No references found in the checked fields. Not deletion clearance." : "No references found yet; scan is incomplete."; controls(); return; }
+              var table = document.createElement("table");
+              table.style.cssText = "width:100%;border-collapse:collapse;font-size:13px;";
+              var head = table.createTHead().insertRow(); head.style.cssText = "background:#005eb8;color:white;";
+              headings.forEach(function (label) { var cell = document.createElement("th"); cell.textContent = label; cell.style.cssText = "padding:8px;text-align:left;"; head.appendChild(cell); });
+              var body = table.createTBody();
+              rows.forEach(function (row, index) {
+                var tr = body.insertRow(); tr.style.background = index % 2 ? "#ffffff" : "#f7fbff";
+                cells(row).forEach(function (value) { var td = tr.insertCell(); td.textContent = value || ""; td.style.cssText = "padding:8px;border-bottom:1px solid #c8dbee;overflow-wrap:anywhere;max-width:300px;"; });
+              });
+              resultsEl.appendChild(table); controls();
+            }
+            async function post(action) {
+              var data = new FormData(form);
+              data.set("mode", report && action === "step" ? report.mode : modeEl.value);
+              data.set("action", action);
+              if (action === "step" && report) data.set("job_id", report.job_id);
+              var response = await fetch("/admin/forwarding-masking-lookup", {method:"POST",body:data,credentials:"same-origin"});
+              var payload = await response.json();
+              if (!response.ok || !payload.ok) throw new Error(payload.error || "Lookup failed.");
+              return payload;
+            }
+            async function continueScan() {
+              while (report && report.mode === "deep" && report.status !== "completed" && !paused) {
+                render(await post("step"), false);
+                await new Promise(function (resolve) { setTimeout(resolve, 250); });
+              }
+            }
+            function failed(error) {
+              statusEl.style.color = "#b42318";
+              statusEl.textContent = "Lookup incomplete: " + error.message + ". No deletion clearance. Reload the saved lookup before resuming.";
+              debugEl.textContent = error.message;
+            }
+            async function run(event, saved) {
+              if (event) event.preventDefault();
+              if (busy || (!saved && !form.reportValidity())) return false;
+              busy = true; paused = false; report = null; controls(); resultsEl.replaceChildren(); debugEl.textContent = "";
+              statusEl.style.color = "#2c5c8a"; statusEl.textContent = saved ? "Loading saved lookup..." : "Reading CUCM references...";
+              try {
+                if (saved) {
+                  var response = await fetch("/admin/forwarding-masking-lookup/saved?mode=" + modeEl.value, {credentials:"same-origin"});
+                  var payload = await response.json();
+                  if (!response.ok || !payload.ok) throw new Error(payload.error || "Saved lookup unavailable.");
+                  render(payload, true);
+                } else { render(await post("start"), false); await continueScan(); }
+              } catch (error) { failed(error); }
+              finally { busy = false; controls(); }
+              return false;
+            }
+            window.runCucmNumberUsage = function (event) { run(event, false); return false; };
+            savedBtn.addEventListener("click", function (event) { run(event, true); });
+            pauseBtn.addEventListener("click", function () { paused = true; pauseBtn.disabled = true; });
+            resumeBtn.addEventListener("click", async function () {
+              if (busy || !report) return;
+              busy = true; paused = false; controls();
+              try { await continueScan(); } catch (error) { failed(error); }
+              finally { busy = false; controls(); }
+            });
+            downloadBtn.addEventListener("click", function () {
+              if (!report) return;
+              window.location.href = "/admin/forwarding-masking-lookup/csv?mode=" + report.mode + "&job_id=" + encodeURIComponent(report.job_id || "");
+            });
           })();
         </script>
       </section>
@@ -59618,6 +59747,136 @@ def lookup_translation_pattern_route(
 
     results = lookup_translation_patterns(cucm_host, cucm_user, cucm_pass, clean_pattern)
     return JSONResponse({"ok": True, "query": clean_pattern, "results": results})
+
+
+def _cucm_number_usage_path(host: str, mode: str) -> str:
+  if mode not in ("focused", "deep"):
+    raise ValueError("Unknown lookup mode.")
+  key = hashlib.sha256(host.strip().lower().encode("utf-8")).hexdigest()
+  return os.path.join(CUCM_NUMBER_USAGE_REPORT_DIR, key + "." + mode + ".json")
+
+
+def _cucm_number_usage_read(host: str, mode: str) -> dict:
+  with open(_cucm_number_usage_path(host, mode), "r", encoding="utf-8") as handle:
+    report = json.load(handle)
+  if not isinstance(report, dict) or report.get("schema_version") != 1 or report.get("mode") != mode or str(report.get("cucm_host", "")).strip().lower() != host.strip().lower() or not isinstance(report.get("results"), list):
+    raise ValueError("Saved lookup is invalid or belongs to another CUCM host.")
+  return report
+
+
+def _cucm_number_usage_write(report: dict) -> None:
+  os.makedirs(CUCM_NUMBER_USAGE_REPORT_DIR, exist_ok=True)
+  temp_path = ""
+  try:
+    with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=CUCM_NUMBER_USAGE_REPORT_DIR, suffix=".tmp", delete=False) as handle:
+      temp_path = handle.name
+      json.dump(report, handle, ensure_ascii=True)
+      handle.flush()
+      os.fsync(handle.fileno())
+    os.replace(temp_path, _cucm_number_usage_path(report["cucm_host"], report["mode"]))
+    temp_path = ""
+  finally:
+    if temp_path:
+      try:
+        os.unlink(temp_path)
+      except OSError:
+        logger.warning("Unable to remove temporary CUCM number-usage snapshot.")
+
+
+def _cucm_number_usage_public(report: dict) -> dict:
+  public = {key: value for key, value in report.items() if key != "tasks"}
+  public["results"] = report["results"][:500]
+  public["preview_truncated"] = len(report["results"]) > 500
+  public["tasks_total"] = len(report.get("tasks", []))
+  public["tasks_done"] = report.get("task_index", 0)
+  public["coverage_incomplete"] = bool(report.get("skipped_fields") or report.get("failures") or report.get("warnings") or report.get("status") != "completed")
+  return public
+
+
+@app.post("/admin/forwarding-masking-lookup")
+def cucm_number_usage_route(
+    request: Request,
+    cucm_host: str = Form(""),
+    cucm_user: str = Form(""),
+    cucm_pass: str = Form(""),
+    number: str = Form(""),
+    mode: str = Form("focused"),
+    action: str = Form("start"),
+    job_id: str = Form(""),
+):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Not authorized for Cisco Forwarding/Masking Lookup."}, status_code=403)
+  try:
+    if mode not in ("focused", "deep") or action not in ("start", "step") or (action == "step" and mode != "deep"):
+      raise ValueError("Invalid lookup mode or action.")
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+    if mode == "focused":
+      report = lookup_number_usage(cucm_host, cucm_user, cucm_pass, number)
+      report.update({"schema_version": 1, "job_id": uuid4().hex, "cucm_host": cucm_host, "operator": operator,
+                     "updated_at": datetime.datetime.now(datetime.timezone.utc).isoformat()})
+      with CUCM_NUMBER_USAGE_REPORT_LOCK:
+        _cucm_number_usage_write(report)
+    else:
+      with CUCM_NUMBER_USAGE_REPORT_LOCK:
+        if action == "start":
+          report = create_deep_scan(cucm_host, cucm_user, cucm_pass, number)
+          report.update({"schema_version": 1, "job_id": uuid4().hex, "cucm_host": cucm_host, "operator": operator})
+        else:
+          report = _cucm_number_usage_read(cucm_host, mode)
+          if not job_id or report.get("job_id") != job_id:
+            return JSONResponse({"ok": False, "error": "The saved Deep Scan changed. Reload it before resuming."}, status_code=409)
+          advance_deep_scan(report, cucm_host, cucm_user, cucm_pass)
+        report["updated_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        _cucm_number_usage_write(report)
+    if action == "start" or report["status"] == "completed":
+      _append_audit_event(action="cucm_forwarding_masking_lookup", cucm_host=cucm_host, operator=operator,
+                          target=f"mode={mode};number={report['query']};status={report['status']};matches={report['total_matches']}", output_filename="", inline_mode=True)
+    return JSONResponse({"ok": True, **_cucm_number_usage_public(report)}, headers={"Cache-Control": "no-store"})
+  except ValueError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+  except FileNotFoundError:
+    return JSONResponse({"ok": False, "error": "No saved scan for this CUCM host. Start a new lookup."}, status_code=404)
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+
+
+@app.get("/admin/forwarding-masking-lookup/saved")
+@app.get("/admin/forwarding-masking-lookup/csv")
+def cucm_number_usage_saved_route(request: Request, mode: str = Query("focused"), job_id: str = Query("")):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", "") or "").strip()):
+    return JSONResponse({"ok": False, "error": "Not authorized."}, status_code=403)
+  host = str(session.get("cucm_host", "") or "").strip()
+  if not host:
+    return JSONResponse({"ok": False, "error": "CUCM host is unavailable; sign in again."}, status_code=422)
+  try:
+    with CUCM_NUMBER_USAGE_REPORT_LOCK:
+      report = _cucm_number_usage_read(host, mode)
+    if job_id and report.get("job_id") != job_id:
+      return JSONResponse({"ok": False, "error": "Saved lookup changed. Reload it before exporting."}, status_code=409)
+    if request.url.path.endswith("/csv"):
+      def safe_cell(value):
+        text = str(value or "")
+        return "'" + text if text.lstrip().startswith(("=", "+", "-", "@")) else text
+      output = io.StringIO()
+      writer = csv.writer(output)
+      writer.writerow(["Reference", "Object / DN", "Partition", "CUCM Field", "Stored Value", "Devices", "Description", "Pattern Usage", "Object ID", "Number Contains", "CUCM Host", "Checked At", "Scan Status", "Excluded Fields", "Failed Batches"])
+      for row in report["results"]:
+        writer.writerow([safe_cell(value) for value in (
+          row.get("category"), row.get("pattern"), row.get("route_partition"), row.get("field"), row.get("destination"),
+          " | ".join(row.get("devices", [])), row.get("description"), row.get("pattern_usage"), row.get("object_id"),
+          report["query"], host, report["updated_at"], report["status"], len(report.get("skipped_fields", [])), len(report.get("failures", [])),
+        )])
+      return Response(content=output.getvalue(), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=cucm_forwarding_masking_{mode}_{report['query']}.csv", "Cache-Control": "no-store"})
+    return JSONResponse({"ok": True, **_cucm_number_usage_public(report)}, headers={"Cache-Control": "no-store"})
+  except FileNotFoundError:
+    return JSONResponse({"ok": False, "error": "No saved lookup for this CUCM host and mode."}, status_code=404)
+  except ValueError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+  except Exception as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
 
 
 @app.post("/admin/route-plan-report")

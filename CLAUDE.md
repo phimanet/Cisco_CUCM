@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-10-05
+- Date: 2026-10-06
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -111,6 +111,13 @@ Priority keys:
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
+
+### 2026-10-06 (Cisco Forwarding/Masking Lookup)
+- Added isolated Page 2 menu/panel `Cisco Forwarding/Masking Lookup`, with normalized contains searches accepting 4-15 digits (for example `5932`, `2105932`, or `2142105932`). Read-only; existing forwarding mutation tools are unchanged.
+- Focused mode discovers DN forwarding destination fields, reads Forward All from `callforwarddynamic`, and checks stored patterns, calling/called transformation masks and other number-plan masks/prefixes, per-device External Phone Number Masks, remote destinations and end-user telephone numbers. Paged SQL candidate reads and batched device resolution avoid per-line AXL calls; missing optional schema is visible and required-schema/query failures do not claim no matches.
+- Optional Deep Scan pages the CUCM catalog and searches accessible user-table text/numeric/date scalar fields in bounded batches. Reports table/field, stored value and object identifier; password/token/certificate fields and unsupported binary/large-object types are explicitly excluded. Failed batches remain visible and are never marked checked. System catalogs/views, wildcard-derived usage, Unity, Sinch and external applications are not checked; neither mode establishes deletion clearance.
+- Deep Scan is browser-driven, with one bounded read per request and Pause/Resume controls. Each cursor/result update is atomically persisted with fsync; after browser/service restart, select Deep Scan, View Saved Lookup, then Resume. Credentials are never persisted. Per-host/per-mode snapshots under the existing external data root preserve focused/deep separation; failed refreshes retain prior snapshots. All endpoints require admin authentication; stale job IDs are rejected. Preview is capped at 500 rows; formula-safe CSV retains every match and scan/exclusion/failure metadata.
+- Local validation passed: 11 backend regression tests; isolated route-state checks for authentication, persistence/restart read-back, host isolation, stale IDs, failure retention and 601-row CSV; all 27 Page 2 script elements parsed in the browser; existing/new navigation, contains inputs, escaped values, pause/saved/resume, empty/failure warnings and mobile controls checked. Existing shared-header overflow at 390px is unchanged. Local FastAPI runtime is unavailable, so full ASGI and live CUCM schema/permissions/load validation remain pending in LAB; no PROD rollout instructed.
 
 ### 2026-10-05 (Genesys Active User Extract)
 - Renamed the menu and heading to `Genesys Active User Extract`, with `Extract All Active Users`, `View Saved Active Users`, and active-user CSV labels/filenames. Panel IDs, endpoints, snapshot paths, and the restart-safe queue remain compatible with the prior implementation.
