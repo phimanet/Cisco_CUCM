@@ -93,6 +93,7 @@ Priority keys:
 - [x] Completed HTTPS cutover with internally signed enterprise certificate, Nginx TLS termination, and HTTP -> HTTPS redirect.
 
 ## Key Decisions
+- 2026-10-06: Every queue/history workflow must preserve active state, progress, retained outcomes/history, and saved reports across browser/service/server restarts and normal source-code pulls/checkouts. Use external atomic/fsync persistence, safe startup recovery without blindly repeating completed mutations, and explicit history retention. Latest-job/latest-report-only storage must be labeled as such, not an archive of every past job. Runtime-data deletion and older VM/data restores remain recovery limits. The standing rule is enforced through `.github/instructions/queue-history-persistence.instructions.md`; older workflows still require individual implementation/test verification before being declared compliant.
 - 2026-09-16: All portal web pages must use the Page 1 visual shell and navigation language: shared AMN top bar, responsive left-side menu, consistent buttons, spacing, colors, and authenticated navigation links. New pages must reuse existing page/menu patterns before introducing custom UI.
 - 2026-04-30: Use `CLAUDE.md` as the canonical running log for goals, pending tasks, and key decisions for this repository.
 - 2026-04-30: Treat current `main.py` routes and `toolkit/` scripts as the stable working baseline.
@@ -111,6 +112,9 @@ Priority keys:
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
+
+### 2026-10-06 (Global Queue/History Persistence Rule)
+- Operator confirmed restart-safe queue/history behavior is a standing requirement for all workflows, not just Twilio. Added file-specific Python instructions covering durable state/history, safe resume, latest-only versus archived retention, failed-refresh retention, credential/account isolation, worker survival and focused recovery tests. This change records the global standard; it does not claim every legacy queue has been audited or add an all-jobs archive to the current latest-only Twilio report.
 
 ### 2026-10-06 (Twilio All Acount Recent Logs Queue)
 - Added isolated SMS-page menu/panel `Twilio All Acount Recent Logs` (operator-requested spelling), plus links in the existing Twilio sidebars. Displays Account, SMS Number, Friendly Name and latest retained outbound log time in Pacific Time (PST/PDT), with optional UTC, account/name/number and outcome filters, sortable headers, 500-row preview and full filtered formula-safe CSV.
