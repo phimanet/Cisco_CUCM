@@ -83,6 +83,7 @@ from toolkit.ad_phone_fields import (
 )
 from toolkit.unity_user_extract import extract_unity_users
 from toolkit import ms_graph_calling
+from toolkit import twilio_recent_logs
 from toolkit.transunion_sdpr import (
   integration_status as transunion_integration_status,
   list_caller_profiles as transunion_list_caller_profiles,
@@ -941,6 +942,8 @@ GENESYS_CALL_ROUTES_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesy
 GENESYS_CALL_ROUTES_REPORT_LOCK = threading.Lock()
 CUCM_NUMBER_USAGE_REPORT_DIR = os.path.join(_genesys_queue_data_root, "cucm_number_usage")
 CUCM_NUMBER_USAGE_REPORT_LOCK = threading.Lock()
+TWILIO_RECENT_LOGS_DATA_DIR = os.path.join(_genesys_queue_data_root, "twilio_amieweb_recent_logs")
+TWILIO_RECENT_LOGS_LOCK = threading.Lock()
 GENESYS_DID_NUMBERS_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_did_numbers_report.json")
 GENESYS_DID_NUMBERS_REPORT_LOCK = threading.Lock()
 GENESYS_SINCH_INVENTORY_PATH = os.path.join(_genesys_queue_data_root, "genesys_sinch_inventory.json")
@@ -52056,6 +52059,7 @@ def page3_twilio_items(request: Request):
           <button type="button" class="portal-nav-btn__TWILIO_LOOKUP_ACTIVE_CLASS__" data-panel="twilio-lookup">AMIEWeb-Twilio Number Lookup</button>
           <a class="portal-nav-btn" href="/twilio/amieweb/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio Active Number Lookup</a>
           <a class="portal-nav-btn" href="/twilio/amieweb/messaging-webhook-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio - Messaging and Webhook</a>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-amieweb-recent-logs">AMIE-Web-Twilio-Recents Logs</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-all-account-inventory">Twilio All Accounts Number Inventory</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">SalesForce-Twilio Number Lookup</button>
           <a class="portal-nav-btn" href="/twilio/salesforce/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">SalesForce-Twilio Number Lookup</a>
@@ -52073,6 +52077,119 @@ def page3_twilio_items(request: Request):
         __SMS_LOOK_PANEL__
         __SMS_EXPERIMENTAL_PANEL__
         __AERIALINK_LOA_PANEL__
+        <section class="tool-panel" data-panel="twilio-amieweb-recent-logs">
+          <div class="panel">
+            <h3>AMIE-Web-Twilio-Recents Logs</h3>
+            <div class="search-filter-row" style="flex-wrap:wrap;">
+              <button type="button" id="twilio-recents-load" onclick="if(window.runTwilioRecentLogs){return window.runTwilioRecentLogs(event);} document.getElementById('twilio-recents-status').textContent='Recent Logs handler missing (JavaScript did not load).'; return false;">Load Recent Logs</button>
+              <button type="button" id="twilio-recents-saved">View Saved Logs</button>
+              <button type="button" id="twilio-recents-pause" disabled>Pause</button>
+              <button type="button" id="twilio-recents-resume" disabled>Resume</button>
+              <button type="button" id="twilio-recents-download" disabled>Download CSV</button>
+            </div>
+            <div class="search-filter-row" style="flex-wrap:wrap;margin-top:10px;">
+              <input id="twilio-recents-filter" placeholder="Filter number or friendly name" aria-label="Filter number or friendly name" style="width:260px;min-width:0;max-width:100%;">
+              <select id="twilio-recents-outcome" aria-label="Log lookup outcome" style="max-width:100%;"><option value="">All Numbers</option><option value="Found">Outbound Log Found</option><option value="No outbound log available">No Outbound Log</option><option value="Lookup Failed">Lookup Failed</option><option value="Pending">Pending</option></select>
+              <select id="twilio-recents-zone" aria-label="Log timestamp timezone"><option value="America/Los_Angeles">Pacific Time (PST/PDT)</option><option value="UTC">UTC</option></select>
+              <select id="twilio-recents-sort" aria-label="Log sort order"><option value="newest">Newest First</option><option value="oldest">Oldest First</option><option value="number">Number</option></select>
+            </div>
+            <p id="twilio-recents-status" role="status" style="color:#2c5c8a;min-height:18px;"></p>
+            <p id="twilio-recents-scope" style="color:#9a4b00;font-size:12px;">AMIEWeb only. Outbound log timestamps are not delivery confirmation. No outbound log does not establish inactivity; Twilio history retention/deletion limits apply.</p>
+            <div id="twilio-recents-results" style="overflow-x:auto;"></div>
+            <details style="margin-top:10px;"><summary>Lookup Errors</summary><pre id="twilio-recents-errors" style="white-space:pre-wrap;overflow-wrap:anywhere;"></pre></details>
+          </div>
+          <script>
+            (function () {
+              var loadBtn = document.getElementById("twilio-recents-load");
+              var savedBtn = document.getElementById("twilio-recents-saved");
+              var pauseBtn = document.getElementById("twilio-recents-pause");
+              var resumeBtn = document.getElementById("twilio-recents-resume");
+              var downloadBtn = document.getElementById("twilio-recents-download");
+              var filterEl = document.getElementById("twilio-recents-filter");
+              var outcomeEl = document.getElementById("twilio-recents-outcome");
+              var zoneEl = document.getElementById("twilio-recents-zone");
+              var sortEl = document.getElementById("twilio-recents-sort");
+              var statusEl = document.getElementById("twilio-recents-status");
+              var resultsEl = document.getElementById("twilio-recents-results");
+              var report = null;
+              var busy = false;
+              var paused = false;
+              var savedView = false;
+              function controls() {
+                loadBtn.disabled = busy; savedBtn.disabled = busy;
+                pauseBtn.disabled = !busy || paused || !report || report.status !== "paused";
+                resumeBtn.disabled = busy || !report || report.status !== "paused" || savedView;
+                downloadBtn.disabled = !report || !report.rows.length;
+              }
+              function displayTime(value) {
+                return new Intl.DateTimeFormat("en-CA", {timeZone:zoneEl.value,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23",timeZoneName:"short"}).format(new Date(value));
+              }
+              function render() {
+                if (!report) return;
+                var filter = filterEl.value.trim().toLowerCase();
+                var digits = /^[+0-9(). -]+$/.test(filter) ? filter.replace(/[^0-9]/g, "") : "";
+                var rows = report.rows.filter(function (row) { return (!filter || String(row.friendly_name || "").toLowerCase().indexOf(filter) >= 0 || row.phone_number.toLowerCase().indexOf(filter) >= 0 || (digits && row.phone_number.replace(/[^0-9]/g, "").indexOf(digits) >= 0)) && (!outcomeEl.value || row.status === outcomeEl.value); });
+                rows.sort(function (first, second) {
+                  if (sortEl.value === "number") return first.phone_number.localeCompare(second.phone_number);
+                  if (!first.latest_outbound_at || !second.latest_outbound_at) return first.latest_outbound_at ? -1 : second.latest_outbound_at ? 1 : first.phone_number.localeCompare(second.phone_number);
+                  var order = first.latest_outbound_at.localeCompare(second.latest_outbound_at);
+                  return sortEl.value === "oldest" ? order : -order;
+                });
+                statusEl.style.color = report.failed || report.status === "failed" ? "#b42318" : "#2c5c8a";
+                statusEl.textContent = (savedView ? "Saved report. " : "") + report.account_name + ": " + report.completed + "/" + report.total + " numbers checked; " + report.found + " outbound logs, " + report.no_history + " no log available, " + report.failed + " lookup failed. " + report.status + ". Checked at " + displayTime(report.updated_at) + "." + (report.retry_after ? " Twilio retry pending." : "") + (rows.length > 500 ? " Showing 500 of " + rows.length + " filtered rows; CSV includes all filtered rows." : "") + (report.error ? " " + report.error : "");
+                document.getElementById("twilio-recents-scope").textContent = report.scope_note;
+                document.getElementById("twilio-recents-errors").textContent = report.rows.filter(function (row) { return row.error; }).map(function (row) { return row.phone_number + ": " + row.error; }).concat(report.error ? [report.error] : []).join(String.fromCharCode(10));
+                resultsEl.replaceChildren();
+                var table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:13px;";
+                var head = table.createTHead().insertRow(); head.style.cssText = "background:#005eb8;color:#fff;";
+                ["SMS Number", "Friendly Name", "Latest Outbound Log (" + (zoneEl.value === "UTC" ? "UTC" : "PST/PDT") + ")"].forEach(function (label) { var cell = document.createElement("th"); cell.textContent = label; cell.style.cssText = "padding:8px;text-align:left;"; head.appendChild(cell); });
+                var body = table.createTBody();
+                rows.slice(0,500).forEach(function (row, index) {
+                  var tr = body.insertRow(); tr.style.background = index % 2 ? "#ffffff" : "#f7fbff";
+                  [row.phone_number, row.friendly_name || "", row.latest_outbound_at ? displayTime(row.latest_outbound_at) : row.status].forEach(function (value) { var cell = tr.insertCell(); cell.textContent = value; cell.style.cssText = "padding:8px;border-bottom:1px solid #c8dbee;overflow-wrap:anywhere;"; });
+                  tr.cells[2].title = row.timestamp_source === "date_created" ? "Record created time; a sent time was not returned." : row.error || "Twilio DateSent";
+                });
+                if (!rows.length) { resultsEl.textContent = "No SMS numbers match this view."; } else resultsEl.appendChild(table);
+                downloadBtn.onclick = function () {
+                  function cell(value) { var text = String(value || ""); if (/^[=+@-]/.test(text.trimStart())) text = "'" + text; return '"' + text.replace(/"/g, '""') + '"'; }
+                  var lines = [["SMS Number", "Friendly Name", "Latest Outbound Log (" + (zoneEl.value === "UTC" ? "UTC" : "PST/PDT") + ")"].map(cell).join(",")];
+                  rows.forEach(function (row) { lines.push([row.phone_number,row.friendly_name || "",row.latest_outbound_at ? displayTime(row.latest_outbound_at) : row.status].map(cell).join(",")); });
+                  var url = URL.createObjectURL(new Blob([lines.join(String.fromCharCode(13,10))], {type:"text/csv;charset=utf-8"}));
+                  var link = document.createElement("a"); link.href = url; link.download = "amieweb_twilio_recent_logs_" + report.job_id + ".csv"; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url);
+                };
+                controls();
+              }
+              async function request(action) {
+                var data = new FormData(); data.set("action",action); if (report) data.set("job_id",report.job_id);
+                var response = await fetch("/twilio/amieweb/recent-logs", {method:"POST",body:data,credentials:"same-origin"});
+                var payload = await response.json(); if (!response.ok || !payload.ok) throw new Error(payload.error || "Recent-log lookup failed."); return payload;
+              }
+              async function continueJob() {
+                while (report && report.status === "paused" && !paused) {
+                  var delay = Math.max(500,Math.ceil((report.retry_after || 0) * 1000));
+                  await new Promise(function (resolve) { setTimeout(resolve,delay); });
+                  if (paused) break;
+                  report = await request("step"); render();
+                }
+              }
+              function failed(error) { report = null; resultsEl.replaceChildren(); statusEl.style.color = "#b42318"; statusEl.textContent = "Lookup incomplete: " + error.message + ". Saved report is retained; load again to resume."; }
+              window.runTwilioRecentLogs = function (event) {
+                if (event) event.preventDefault(); if (busy) return false;
+                busy = true; paused = false; savedView = false; controls(); statusEl.textContent = "Loading AMIEWeb SMS numbers...";
+                (async function () { try { report = await request("start"); render(); await continueJob(); } catch(error) { failed(error); } finally { busy = false; controls(); } })();
+                return false;
+              };
+              savedBtn.addEventListener("click", async function () {
+                if (busy) return; busy = true; controls();
+                try { var response = await fetch("/twilio/amieweb/recent-logs/saved",{credentials:"same-origin"}); var payload = await response.json(); if (!response.ok || !payload.ok) throw new Error(payload.error || "Saved logs unavailable."); report = payload; savedView = true; render(); } catch(error) { failed(error); } finally { busy = false; controls(); }
+              });
+              pauseBtn.addEventListener("click", function () { paused = true; controls(); });
+              resumeBtn.addEventListener("click", function (event) { window.runTwilioRecentLogs(event); });
+              [filterEl,outcomeEl,zoneEl,sortEl].forEach(function (element) { element.addEventListener(element === filterEl ? "input" : "change",render); });
+              fetch("/twilio/amieweb/recent-logs/status",{credentials:"same-origin"}).then(function (response) { return response.json(); }).then(function (payload) { if (payload.ok && !busy && !report) { report = payload; render(); } }).catch(function () {});
+            })();
+          </script>
+        </section>
         <section class="tool-panel" data-panel="twilio-all-account-inventory">
           <div class="panel">
             <h3>Twilio All Accounts Number Inventory</h3>
@@ -63803,6 +63920,71 @@ def _twilio_csv_download_html(rows: list[dict], columns: list[tuple[str, str]], 
   )
 
 
+def _twilio_recent_logs_context(request: Request) -> tuple[dict, str, str, str]:
+  session = _require_twilio_active_number_admin(request)
+  account_sid = _resolve_twilio_lookup_account_sid()
+  if not account_sid or account_sid == TWILIO_ACCOUNT_SID or account_sid == TWILIO_SALESFORCE_SUBACCOUNT_SID:
+    raise ValueError("A separate AMIEWeb subaccount must be configured; parent/Salesforce accounts are not allowed.")
+  token = _resolve_twilio_lookup_auth_token_for_sid(account_sid)
+  auth_sid = account_sid if TWILIO_SUBACCOUNT_AUTH_TOKEN else TWILIO_ACCOUNT_SID
+  if not token or not auth_sid:
+    raise ValueError("AMIEWeb Twilio authentication is not configured.")
+  return session, account_sid, auth_sid, token
+
+
+@app.post("/twilio/amieweb/recent-logs")
+def twilio_recent_logs_route(request: Request, action: str = Form("start"), job_id: str = Form("")):
+  try:
+    session, account_sid, auth_sid, token = _twilio_recent_logs_context(request)
+    if action not in ("start", "step"):
+      raise ValueError("Invalid recent-log action.")
+    with TWILIO_RECENT_LOGS_LOCK:
+      try:
+        state = twilio_recent_logs.load_state(TWILIO_RECENT_LOGS_DATA_DIR, account_sid)
+      except FileNotFoundError:
+        state = None
+      if action == "start":
+        if state is None or state["status"] != "paused":
+          inventory = _list_twilio_incoming_phone_numbers(account_sid, token, auth_account_sid=auth_sid)
+          if not inventory.get("ok") or not isinstance(inventory.get("numbers"), list):
+            raise RuntimeError(str(inventory.get("status", "AMIEWeb SMS inventory lookup failed.")))
+          state = twilio_recent_logs.create_job(inventory["numbers"], account_sid, TWILIO_SUBACCOUNT_NAME)
+          twilio_recent_logs.save_state(TWILIO_RECENT_LOGS_DATA_DIR, state)
+          _append_audit_event(action="twilio_amieweb_recent_logs", cucm_host="", operator=str(session.get("username", "")),
+                              target=f"started;numbers={len(state['rows'])}", output_filename="", inline_mode=True)
+      else:
+        if state is None or not job_id or state["job_id"] != job_id:
+          return JSONResponse({"ok": False, "error": "Recent-log job changed or was not found. Load it again before resuming."}, status_code=409)
+        twilio_recent_logs.advance_job(state, account_sid, auth_sid, token)
+        twilio_recent_logs.save_state(TWILIO_RECENT_LOGS_DATA_DIR, state)
+      if state["status"] == "completed":
+        twilio_recent_logs.save_state(TWILIO_RECENT_LOGS_DATA_DIR, state, "report")
+    return JSONResponse({"ok": True, **twilio_recent_logs.public_state(state)}, headers={"Cache-Control": "no-store"})
+  except PermissionError:
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  except ValueError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+  except Exception:
+    return JSONResponse({"ok": False, "error": "AMIEWeb recent-log lookup could not complete. Previous saved results are retained."}, status_code=502)
+
+
+@app.get("/twilio/amieweb/recent-logs/status")
+@app.get("/twilio/amieweb/recent-logs/saved")
+def twilio_recent_logs_saved_route(request: Request):
+  try:
+    _, account_sid, _, _ = _twilio_recent_logs_context(request)
+    kind = "report" if request.url.path.endswith("/saved") else "job"
+    with TWILIO_RECENT_LOGS_LOCK:
+      state = twilio_recent_logs.load_state(TWILIO_RECENT_LOGS_DATA_DIR, account_sid, kind)
+    return JSONResponse({"ok": True, **twilio_recent_logs.public_state(state)}, headers={"Cache-Control": "no-store"})
+  except PermissionError:
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  except FileNotFoundError:
+    return JSONResponse({"ok": False, "error": "No saved recent logs for the configured AMIEWeb account."}, status_code=404)
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Saved AMIEWeb recent logs could not be read. They have not been overwritten."}, status_code=502)
+
+
 @app.post("/twilio/amieweb/active-numbers")
 def twilio_amieweb_active_numbers_route(request: Request):
   try:
@@ -63861,6 +64043,7 @@ def _twilio_lookup_sidebar_html(active_key: str) -> str:
     ("amieweb-lookup", "AMIEWeb-Twilio Number Lookup", "/page3?panel=twilio-lookup"),
     ("amieweb-active", "AMIEWeb-Twilio Active Number Lookup", "/twilio/amieweb/active-numbers-page"),
     ("amieweb-messaging", "AMIEWeb-Twilio - Messaging and Webhook", "/twilio/amieweb/messaging-webhook-page"),
+    ("amieweb-recents", "AMIE-Web-Twilio-Recents Logs", "/page3?panel=twilio-amieweb-recent-logs"),
     ("salesforce-lookup", "SalesForce-Twilio Number Lookup", "/page3?panel=twilio-lookup-sfdc"),
     ("salesforce-configuration", "SalesForce-Twilio Configuration Lookup", "/twilio/salesforce/configuration-page"),
     ("salesforce-active", "SalesForce-Twilio Active Number Lookup", "/twilio/salesforce/active-numbers-page"),
