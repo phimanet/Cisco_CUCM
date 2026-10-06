@@ -8,6 +8,7 @@ from unittest.mock import patch
 import requests
 
 from toolkit import twilio_recent_logs as logs
+from toolkit import twilio_all_recent_logs as all_logs
 
 
 ACCOUNT = "AC" + "a" * 32
@@ -182,6 +183,126 @@ class StateTests(unittest.TestCase):
             Path(logs.state_path(root, ACCOUNT, "job")).write_text('{"account_sid":"wrong"}')
             with self.assertRaises(ValueError):
                 logs.load_state(root, ACCOUNT)
+
+
+class AllAccountQueueTests(unittest.TestCase):
+    def roots(self):
+        return [{"sid": ACCOUNT, "name": "AMIEWeb", "auth_token": "SECRET AMIE"},
+                {"sid": OTHER_ACCOUNT, "name": "PA Org Prod", "auth_token": "SECRET PA"}]
+
+    def row(self, index, account=ACCOUNT, root=ACCOUNT):
+        return {"account_sid": account, "account_name": "AMIEWeb" if account == ACCOUNT else "PA Org Prod",
+                "root_account_sid": root, "root_account_name": "Root",
+                "phone_number": "+1555" + str(1000000 + index), "friendly_name": "Person " + str(index), "capabilities": "SMS"}
+
+    def inventory(self, rows, failures=None):
+        accounts = [{"sid": sid, "friendly_name": "Account", "root_account_sid": sid} for sid in {row["account_sid"] for row in rows}]
+        return {"rows": rows, "accounts": accounts, "failures": failures or []}
+
+    def test_thirteen_hundred_numbers_restart_resume_and_full_report(self):
+        state = all_logs.create_job(self.roots(), "operator")
+        self.assertEqual(state["status"], "queued")
+        self.assertFalse(state["inventory_ready"])
+        rows = [self.row(index, ACCOUNT if index < 650 else OTHER_ACCOUNT, ACCOUNT if index < 650 else OTHER_ACCOUNT) for index in range(1300)]
+        all_logs.initialize_inventory(state, self.inventory(rows))
+        result = {"status": "Found", "latest_outbound_at": "2026-10-06T16:30:00+00:00", "timestamp_source": "date_sent"}
+        with tempfile.TemporaryDirectory() as directory, patch.object(logs, "read_latest_outbound_page", return_value=result) as read:
+            for _ in range(650):
+                all_logs.advance_job(state, self.roots())
+            all_logs.save_state(directory, state)
+            restored = all_logs.load_state(directory)
+            for _ in range(650):
+                all_logs.advance_job(restored, self.roots())
+            self.assertEqual(read.call_count, 1300)
+            self.assertEqual(len({(call.args[0], call.args[3]) for call in read.call_args_list}), 1300)
+            self.assertEqual(restored["status"], "completed")
+            all_logs.save_state(directory, restored, "report")
+            self.assertEqual(len(all_logs.load_state(directory, "report")["rows"]), 1300)
+            self.assertNotIn("SECRET", json.dumps(restored))
+            self.assertEqual(all_logs.public_state(restored, include_rows=False)["found"], 1300)
+            self.assertNotIn("rows", all_logs.public_state(restored, include_rows=False))
+
+    def test_same_number_deduplicated_per_account_not_across_accounts(self):
+        state = all_logs.create_job(self.roots(), "operator")
+        rows = [self.row(1), self.row(1), self.row(1, OTHER_ACCOUNT, OTHER_ACCOUNT)]
+        all_logs.initialize_inventory(state, self.inventory(rows))
+        self.assertEqual(len(state["rows"]), 2)
+
+    def test_explicit_child_credentials_override_parent_auth(self):
+        state = all_logs.create_job(self.roots(), "operator")
+        all_logs.initialize_inventory(state, self.inventory([self.row(1, OTHER_ACCOUNT, ACCOUNT)]))
+        with patch.object(logs, "read_latest_outbound_page", return_value={"status": "No outbound log available"}) as read:
+            all_logs.advance_job(state, self.roots())
+        self.assertEqual(read.call_args.args[:3], (OTHER_ACCOUNT, OTHER_ACCOUNT, "SECRET PA"))
+
+    def test_child_only_account_uses_parent_auth_without_switching_inventory(self):
+        state = all_logs.create_job([self.roots()[0]], "operator")
+        all_logs.initialize_inventory(state, self.inventory([self.row(1, OTHER_ACCOUNT, ACCOUNT)]))
+        with patch.object(logs, "read_latest_outbound_page", return_value={"status": "No outbound log available"}) as read:
+            all_logs.advance_job(state, [self.roots()[0]])
+        self.assertEqual(read.call_args.args[:3], (OTHER_ACCOUNT, ACCOUNT, "SECRET AMIE"))
+
+    def test_account_failure_skips_its_remaining_numbers_and_continues_others(self):
+        state = all_logs.create_job(self.roots(), "operator")
+        all_logs.initialize_inventory(state, self.inventory([self.row(1), self.row(2), self.row(3, OTHER_ACCOUNT, OTHER_ACCOUNT)]))
+        with patch.object(logs, "read_latest_outbound_page", side_effect=[{"status": "Account Error", "error": "HTTP 403"}, {"status": "Found", "latest_outbound_at": "2026-10-06T16:30:00+00:00", "timestamp_source": "date_sent"}]) as read:
+            all_logs.advance_job(state, self.roots())
+            self.assertEqual(state["cursor"], 2)
+            all_logs.advance_job(state, self.roots())
+        self.assertEqual(read.call_count, 2)
+        self.assertEqual(state["status"], "completed")
+        self.assertEqual(all_logs.public_state(state)["failed"], 2)
+        self.assertEqual(all_logs.public_state(state)["found"], 1)
+        self.assertEqual(all_logs.public_state(state)["no_history"], 0)
+
+    def test_inventory_failures_and_non_sms_exclusions_are_visible(self):
+        state = all_logs.create_job(self.roots(), "operator")
+        non_sms = {**self.row(2), "capabilities": "VOICE"}
+        failures = [{"account_sid": OTHER_ACCOUNT, "account_name": "PA Org Prod", "error": "HTTP 403 SECRET SHOULD NEVER BE SAVED"}]
+        all_logs.initialize_inventory(state, self.inventory([self.row(1), non_sms], failures))
+        self.assertEqual(state["excluded_non_sms"], 1)
+        self.assertEqual(len(state["inventory_failures"]), 1)
+        self.assertIn("HTTP 403", state["inventory_failures"][0]["error"])
+        self.assertNotIn("SECRET", json.dumps(state))
+
+    def test_out_of_scope_account_and_root_change_fail_closed(self):
+        state = all_logs.create_job(self.roots(), "operator")
+        with self.assertRaises(ValueError):
+            all_logs.initialize_inventory(state, self.inventory([self.row(1, ACCOUNT, "AC" + "c" * 32)]))
+        all_logs.initialize_inventory(state, self.inventory([self.row(1)]))
+        with patch.object(logs, "read_latest_outbound_page") as read, self.assertRaises(ValueError):
+            all_logs.advance_job(state, [self.roots()[0]])
+        read.assert_not_called()
+
+    def test_failed_atomic_write_retains_prior_report_and_corrupt_state_is_refused(self):
+        state = all_logs.create_job(self.roots(), "operator")
+        all_logs.initialize_inventory(state, self.inventory([]))
+        with tempfile.TemporaryDirectory() as directory:
+            all_logs.save_state(directory, state, "report")
+            before = Path(directory, "report.json").read_text()
+            with patch.object(all_logs.os, "replace", side_effect=OSError("disk full")), self.assertRaises(OSError):
+                all_logs.save_state(directory, state, "report")
+            self.assertEqual(before, Path(directory, "report.json").read_text())
+            Path(directory, "job.json").write_text("{}")
+            with self.assertRaises(ValueError):
+                all_logs.load_state(directory)
+
+    def test_all_inventory_failed_is_not_successful_empty_report(self):
+        state = all_logs.create_job(self.roots(), "operator")
+        all_logs.initialize_inventory(state, self.inventory([], [{"account_sid": ACCOUNT, "account_name": "Root", "error": "HTTP 403"}]))
+        self.assertEqual(state["status"], "failed")
+        self.assertTrue(state["error"])
+
+    def test_all_message_lookups_failed_is_not_a_completed_report(self):
+        state = all_logs.create_job(self.roots(), "operator")
+        all_logs.initialize_inventory(state, self.inventory([self.row(1), self.row(2, OTHER_ACCOUNT, OTHER_ACCOUNT)]))
+        with patch.object(logs, "read_latest_outbound_page", return_value={"status": "Account Error", "error": "HTTP 403"}):
+            all_logs.advance_job(state, self.roots())
+            all_logs.advance_job(state, self.roots())
+        self.assertEqual(state["status"], "failed")
+        self.assertEqual(state["cursor"], 2)
+        self.assertEqual(all_logs.public_state(state)["failed"], 2)
+        self.assertIn("previous completed report is retained", state["error"])
 
 
 if __name__ == "__main__":
