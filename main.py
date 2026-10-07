@@ -85,6 +85,7 @@ from toolkit.unity_user_extract import extract_unity_users
 from toolkit import ms_graph_calling
 from toolkit import twilio_recent_logs
 from toolkit import twilio_all_recent_logs
+from toolkit import webex_admin
 from toolkit.transunion_sdpr import (
   integration_status as transunion_integration_status,
   list_caller_profiles as transunion_list_caller_profiles,
@@ -951,6 +952,8 @@ TWILIO_ALL_RECENT_LOGS_JOB_LOCK = threading.Lock()
 TWILIO_ALL_RECENT_LOGS_START_LOCK = threading.Lock()
 TWILIO_ALL_RECENT_LOGS_WORKER_STARTED = False
 TWILIO_ALL_RECENT_LOGS_REQUESTS_PER_SECOND = min(5.0, max(0.1, float(os.getenv("TWILIO_ALL_RECENT_LOGS_REQUESTS_PER_SECOND", "2") or "2")))
+WEBEX_LICENSE_REPORT_DIR = os.path.join(_genesys_queue_data_root, "webex_license_lookup")
+WEBEX_LICENSE_REPORT_LOCK = threading.Lock()
 GENESYS_DID_NUMBERS_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_did_numbers_report.json")
 GENESYS_DID_NUMBERS_REPORT_LOCK = threading.Lock()
 GENESYS_SINCH_INVENTORY_PATH = os.path.join(_genesys_queue_data_root, "genesys_sinch_inventory.json")
@@ -46079,6 +46082,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/opentext-admin'">OpenText Admin</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/webex-admin'">Cisco Webex Admin</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/sinch-work'">Sinch Admin Page</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">SMS Item Menu (Page 3)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">DN Prefix Settings</button>
@@ -55662,6 +55666,85 @@ def _render_ms_calling_page(request: Request, path: str):
     .replace("__CRED_EXPIRES_MS__", str(credential_expires_at_ms))
   )
   return HTMLResponse(content=html)
+
+
+WEBEX_ADMIN_PAGE_BODY = """<body>
+<style>
+*{box-sizing:border-box}.topbar{flex-wrap:wrap}.topbar-brand{flex-wrap:wrap}.portal-sidebar,.portal-main{border-radius:8px}.row input{min-width:0;width:320px;max-width:100%}.portal-nav a{display:block;text-decoration:none}.content>h2{font-size:22px;margin:16px 0 10px}.portal-shell{margin-top:10px}.row button:disabled{opacity:.5;cursor:default}#webex-status,#webex-person{overflow-wrap:anywhere}@media(max-width:900px){.portal-sidebar{position:static}.portal-main{padding:12px}.topbar-brand strong{font-size:14px}}
+</style>
+<header class="topbar"><div class="topbar-brand"><span class="brand-fallback">AMN Healthcare</span><strong>Voice Operations Portal</strong></div><div class="topbar-status"><span>Authenticated Operator: __AUTH_USER__</span><span>__ENV_TEXT__</span><span>Read-Only</span></div><a class="topbar-btn" href="/logout">Log Out</a></header>
+<main class="content"><h2 class="page-title">Cisco Webex Admin</h2><div class="portal-shell">
+<aside class="portal-sidebar"><h4>Cisco Webex Admin Menu</h4><div class="portal-nav"><button type="button" class="portal-nav-btn active" id="webex-nav-lookup">License Lookup</button><a class="portal-nav-btn" href="/menu">Main Operations (Page 1)</a><a class="portal-nav-btn" href="/page2">Administrative Items (Page 2)</a><a class="portal-nav-btn" href="/page3">SMS Item Menu (Page 3)</a></div></aside>
+<section class="portal-main"><h3 style="margin-top:0;">User Licenses</h3><p id="webex-configuration" class="muted" role="status">Checking configuration...</p>
+<form id="webex-lookup-form" action="javascript:void(0)" onsubmit="if(window.runWebexLookup){return window.runWebexLookup(event);}document.getElementById('webex-status').textContent='Webex lookup handler missing (JavaScript did not load).';return false;"><div class="row"><label for="webex-email">Employee Email:</label><input type="email" name="email" id="webex-email" required autocomplete="off" placeholder="first.last@amnhealthcare.com"><button type="button" class="btn-action" id="webex-lookup" onclick="if(window.runWebexLookup){return window.runWebexLookup(event);}document.getElementById('webex-status').textContent='Webex lookup handler missing (JavaScript did not load).';return false;">Lookup Licenses</button><button type="button" class="btn-action" id="webex-saved">View Latest Saved Lookup</button><button type="button" class="btn-action" id="webex-csv" disabled>Download CSV</button></div></form>
+<p id="webex-status" class="muted" role="status" style="min-height:18px;"></p><p id="webex-person"></p><div id="webex-license-results" style="overflow-x:auto;"></div><p id="webex-retention" class="muted"></p>
+</section></div></main>
+<script>
+(function(){
+  var form=document.getElementById("webex-lookup-form"),lookupBtn=document.getElementById("webex-lookup"),savedBtn=document.getElementById("webex-saved"),csvBtn=document.getElementById("webex-csv"),statusEl=document.getElementById("webex-status"),resultsEl=document.getElementById("webex-license-results"),report=null,busy=false,configured=false;
+  function controls(){lookupBtn.disabled=busy || !configured;savedBtn.disabled=busy;csvBtn.disabled=busy || !report;}
+  function time(value){return new Intl.DateTimeFormat("en-CA",{timeZone:"America/Los_Angeles",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23",timeZoneName:"short"}).format(new Date(value));}
+  function render(payload,saved){report=payload;resultsEl.replaceChildren();document.getElementById("webex-person").textContent=payload.display_name+" | "+payload.emails.join(", ")+" | Login Enabled: "+(payload.login_enabled===null?"Not Returned":payload.login_enabled?"Yes":"No");document.getElementById("webex-retention").textContent=payload.retention;statusEl.style.color=payload.warnings.length?"#9a4b00":"#16733b";statusEl.textContent=(saved?"Saved lookup. ":"")+payload.license_count+" assigned license(s). Checked at "+time(payload.checked_at)+". "+payload.warnings.join(" ");if(!payload.licenses.length){resultsEl.textContent="No assigned license IDs were returned for this user.";return;}var table=document.createElement("table"),head=table.createTHead().insertRow();["License","License ID","Meetings Site","Catalog Status"].forEach(function(label){var cell=document.createElement("th");cell.textContent=label;head.appendChild(cell);});var body=table.createTBody();payload.licenses.forEach(function(item){var row=body.insertRow();[item.name,item.id,item.site_url,item.catalog_status].forEach(function(value){row.insertCell().textContent=value || "";});});resultsEl.appendChild(table);}
+  async function run(event,saved){if(event)event.preventDefault();if(busy || (!saved && (!configured || !form.reportValidity())))return false;busy=true;controls();statusEl.style.color="#4e6a84";statusEl.textContent=saved?"Loading latest saved lookup...":"Reading Cisco Webex licenses...";try{var response=await fetch("/webex-admin/"+(saved?"saved":"lookup"),saved?{credentials:"same-origin"}:{method:"POST",body:new FormData(form),credentials:"same-origin"});var payload=await response.json();if(!response.ok || !payload.ok)throw new Error(payload.error || "Cisco Webex lookup failed.");render(payload.report,saved);}catch(error){report=null;resultsEl.replaceChildren();document.getElementById("webex-person").textContent="";statusEl.style.color="#a12626";statusEl.textContent="Lookup incomplete: "+error.message+" Previous saved data is unchanged.";}finally{busy=false;controls();}return false;}
+  window.runWebexLookup=function(event){run(event,false);return false;};savedBtn.addEventListener("click",function(event){run(event,true);});document.getElementById("webex-nav-lookup").addEventListener("click",function(){document.getElementById("webex-email").focus();});
+  csvBtn.addEventListener("click",function(){if(!report)return;function cell(value){var text=String(value || "");if(/^[=+@-]/.test(text.trimStart()))text="'"+text;return '"'+text.replace(/"/g,'""')+'"';}var rows=report.licenses.length?report.licenses:[{name:"No assigned license IDs",id:"",site_url:"",catalog_status:""}];var lines=[["Name","Email","Person ID","License","License ID","Meetings Site","Catalog Status","Checked At (Pacific)"].map(cell).join(",")];rows.forEach(function(item){lines.push([report.display_name,report.emails.join(" | "),report.person_id,item.name,item.id,item.site_url,item.catalog_status,time(report.checked_at)].map(cell).join(","));});var url=URL.createObjectURL(new Blob([lines.join(String.fromCharCode(13,10))],{type:"text/csv;charset=utf-8"}));var link=document.createElement("a");link.href=url;link.download="cisco_webex_licenses.csv";document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);});
+  controls();fetch("/webex-admin/status",{credentials:"same-origin"}).then(function(response){if(!response.ok)throw new Error("Configuration access denied.");return response.json();}).then(function(payload){if(!payload.ok)throw new Error(payload.error || "Configuration unavailable.");configured=payload.status.configured;document.getElementById("webex-configuration").textContent=configured?"Configured for read-only Cisco Webex access.":"Not configured: "+[payload.status.token_configured?"":"WEBEX_ACCESS_TOKEN",payload.status.org_configured?"":"WEBEX_ORG_ID"].filter(Boolean).join(", ");controls();}).catch(function(error){document.getElementById("webex-configuration").textContent=error.message;controls();});
+})();
+</script></body></html>"""
+
+
+@app.get("/webex", response_class=HTMLResponse)
+@app.get("/webex-admin", response_class=HTMLResponse)
+def webex_admin_page(request: Request):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", "") or "")):
+    return HTMLResponse(content="<h3>403 Forbidden</h3>", status_code=403)
+  env_text, _ = _get_environment_label(str(session.get("cucm_host", "") or ""))
+  head = MS_CALLING_PAGE_TEMPLATE.split("<body>", 1)[0].replace("__PAGE_TITLE__", "Cisco Webex Admin")
+  head = head.replace('<meta charset="utf-8">', '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">')
+  html = head + WEBEX_ADMIN_PAGE_BODY.replace("__AUTH_USER__", escape(str(session.get("username", "")))).replace("__ENV_TEXT__", escape(env_text))
+  return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/webex-admin/status")
+def webex_admin_status_route(request: Request):
+  if not _is_admin_user(str((_get_auth_session(request) or {}).get("username", "") or "")):
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  return JSONResponse({"ok": True, "status": webex_admin.configuration_status()}, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/webex-admin/lookup")
+def webex_admin_lookup_route(request: Request, email: str = Form("")):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", "") or "")):
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  try:
+    report = webex_admin.lookup_licenses(email)
+    with WEBEX_LICENSE_REPORT_LOCK:
+      webex_admin.save_report(WEBEX_LICENSE_REPORT_DIR, report)
+    _append_audit_event(action="webex_license_lookup", cucm_host="", operator=str(session.get("username", "")),
+                        target=f"email={report['query']};licenses={report['license_count']}", output_filename="", inline_mode=True)
+    return JSONResponse({"ok": True, "report": report}, headers={"Cache-Control": "no-store"})
+  except ValueError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+  except webex_admin.WebexError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=502)
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Cisco Webex lookup could not be saved; previous saved data is retained."}, status_code=502)
+
+
+@app.get("/webex-admin/saved")
+def webex_admin_saved_route(request: Request):
+  if not _is_admin_user(str((_get_auth_session(request) or {}).get("username", "") or "")):
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  try:
+    with WEBEX_LICENSE_REPORT_LOCK:
+      report = webex_admin.load_report(WEBEX_LICENSE_REPORT_DIR, os.getenv("WEBEX_ORG_ID", "").strip())
+    return JSONResponse({"ok": True, "report": report}, headers={"Cache-Control": "no-store"})
+  except FileNotFoundError:
+    return JSONResponse({"ok": False, "error": "No saved lookup for this Cisco Webex organization."}, status_code=404)
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Saved Cisco Webex lookup is unavailable or not configured; data was not overwritten."}, status_code=502)
 
 
 @app.get("/microsoft-calling-plan", response_class=HTMLResponse)

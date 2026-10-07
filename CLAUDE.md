@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-10-06
+- Date: 2026-10-07
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -93,6 +93,7 @@ Priority keys:
 - [x] Completed HTTPS cutover with internally signed enterprise certificate, Nginx TLS termination, and HTTP -> HTTPS redirect.
 
 ## Key Decisions
+- 2026-10-07: The new integration page is named `Cisco Webex Admin`; "Cisco" in this workflow means Cisco Webex, not CUCM. Future Webex person add/remove is a two-step process: update the employee's LDAP membership in the existing security group `SSO_WebEX_AMNHealthcare`, and perform/verify the corresponding Cisco Webex person provisioning/deprovisioning step. Both outcomes require separate verification; directory-sync behavior and ordering must be validated in LAB before enabling writes. License changes are separately approved actions. Initial implementation is read-only user/license lookup only.
 - 2026-10-06: Every queue/history workflow must preserve active state, progress, retained outcomes/history, and saved reports across browser/service/server restarts and normal source-code pulls/checkouts. Use external atomic/fsync persistence, safe startup recovery without blindly repeating completed mutations, and explicit history retention. Latest-job/latest-report-only storage must be labeled as such, not an archive of every past job. Runtime-data deletion and older VM/data restores remain recovery limits. The standing rule is enforced through `.github/instructions/queue-history-persistence.instructions.md`; older workflows still require individual implementation/test verification before being declared compliant.
 - 2026-09-16: All portal web pages must use the Page 1 visual shell and navigation language: shared AMN top bar, responsive left-side menu, consistent buttons, spacing, colors, and authenticated navigation links. New pages must reuse existing page/menu patterns before introducing custom UI.
 - 2026-04-30: Use `CLAUDE.md` as the canonical running log for goals, pending tasks, and key decisions for this repository.
@@ -112,6 +113,14 @@ Priority keys:
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
+
+### 2026-10-07 (Cisco Webex Admin Staging)
+- Added authenticated administrator page `/webex-admin` (alias `/webex`) named `Cisco Webex Admin`, accessible from the Page 2 Administrative Items menu. Reuses the portal's shared visual shell and left navigation. Initial controls are exact-email license lookup, latest saved lookup, and formula-safe CSV; no Webex user/license or LDAP mutations are implemented.
+- `toolkit/webex_admin.py` makes GET-only Webex API reads: organization-scoped exact-email people lookup, identity read-back, and one paginated organization license catalog. Requires server-only `WEBEX_ACCESS_TOKEN` and `WEBEX_ORG_ID`. Administrator people/license read permissions are required; token issuance/renewal, tenant scopes and connectivity remain to be configured/validated in LAB. The page visibly stays unconfigured until both values are present; it does not claim that configuration proves API access.
+- Missing license data, permission failures, malformed/cross-organization responses and unsafe pagination fail visibly rather than claim no licenses. An explicitly returned empty license list remains distinct; unresolved license names retain their assigned IDs with warnings. Only selected identity/license fields are returned or saved; raw provider payloads and tokens are not persisted.
+- Latest successful lookup per organization is saved atomically with fsync under the existing external runtime root in `webex_license_lookup`, not a full history archive. Saved reads survive restart/token expiry when the organization remains configured; failed refreshes/writes preserve the prior result and corrupt state is refused.
+- Recorded the operator's two-step LDAP/Webex add/remove requirement and exact group `SSO_WebEX_AMNHealthcare` in Key Decisions and persistent voice memory. Later writes must verify both systems and account for directory synchronization, not assume removing group membership alone deletes a Webex person.
+- Local checks passed: nine backend regressions plus isolated admin-route/persistence checks; full Webex page script, unconfigured/assigned/empty/failure/saved/CSV/escaping/mobile checks; all 27 Administrative Items scripts and existing/new navigation parsed/click-tested. Main Operations has pre-existing script parse failures and was left unchanged; the new navigation is isolated on Page 2. Local FastAPI runtime and live Webex API access are unavailable, so full ASGI/tenant/permission validation remains pending in LAB. No PROD rollout instructed.
 
 ### 2026-10-06 (Global Queue/History Persistence Rule)
 - Operator confirmed restart-safe queue/history behavior is a standing requirement for all workflows, not just Twilio. Added file-specific Python instructions covering durable state/history, safe resume, latest-only versus archived retention, failed-refresh retention, credential/account isolation, worker survival and focused recovery tests. This change records the global standard; it does not claim every legacy queue has been audited or add an all-jobs archive to the current latest-only Twilio report.
