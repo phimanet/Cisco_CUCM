@@ -633,6 +633,7 @@ class UnitySearchRouteTests(unittest.TestCase):
         def response(content=None, status_code=200, headers=None, **kwargs):
             return SimpleNamespace(content=content, body=json.dumps(content).encode(), status_code=status_code, headers=headers)
         self.scope = {"unity_number_search": search, "UNITY_NUMBER_SEARCH_DIR": self.directory.name,
+                      "UNITY_REFERENCE_SEARCH_ENABLED": True,
                       "UNITY_NUMBER_SEARCH_LOCK": threading.Lock(), "json": json, "escape": escape,
                       "JSONResponse": response, "HTMLResponse": response, "Request": object,
                       "Form": lambda value: value, "_get_auth_session": lambda request: self.session,
@@ -702,7 +703,7 @@ class UnitySearchRouteTests(unittest.TestCase):
 
     def test_full_page_has_host_escaping_and_navigation(self):
         response = self.call("unity_connection_page")
-        self.assertIn("Unity Connection Search", response.content)
+        self.assertIn("Unity Connection User Extract", response.content)
         self.assertIn('href="/page2"', response.content)
         self.assertIn("Unity host: unity.example", response.content)
         self.assertNotIn("SECRET", response.content)

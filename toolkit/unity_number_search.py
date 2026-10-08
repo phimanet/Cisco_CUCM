@@ -308,6 +308,9 @@ def _records(payload, depth=0):
 
 
 def _schedule(state, resource, label, owner=None):
+    if state.get("purpose") == "mailbox_number_extract" and not any(resource == prefix or resource.startswith(prefix + "/") for prefix in state["mailbox_resources"]):
+        state["excluded_links"].append({"resource": resource, "reason": "Outside the selected user mailbox; reference was not followed."})
+        return
     scheduled = state.get("_scheduled_index")
     if scheduled is None:
         scheduled = dict.fromkeys(state["scheduled"])

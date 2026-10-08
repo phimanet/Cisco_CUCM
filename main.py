@@ -82,6 +82,7 @@ from toolkit.ad_phone_fields import (
   lookup_ad_identities_by_email,
 )
 from toolkit.unity_user_extract import extract_unity_users
+from toolkit import unity_user_extract
 from toolkit import ms_graph_calling
 from toolkit import twilio_recent_logs
 from toolkit import twilio_all_recent_logs
@@ -957,6 +958,8 @@ WEBEX_LICENSE_REPORT_DIR = os.path.join(_genesys_queue_data_root, "webex_license
 WEBEX_LICENSE_REPORT_LOCK = threading.Lock()
 UNITY_NUMBER_SEARCH_DIR = os.path.join(_genesys_queue_data_root, "unity_number_search")
 UNITY_NUMBER_SEARCH_LOCK = threading.Lock()
+UNITY_PERSON_NUMBER_EXTRACT_DIR = os.path.join(_genesys_queue_data_root, "unity_person_number_extract")
+UNITY_REFERENCE_SEARCH_ENABLED = False
 GENESYS_DID_NUMBERS_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_did_numbers_report.json")
 GENESYS_DID_NUMBERS_REPORT_LOCK = threading.Lock()
 GENESYS_SINCH_INVENTORY_PATH = os.path.join(_genesys_queue_data_root, "genesys_sinch_inventory.json")
@@ -55675,7 +55678,7 @@ def _render_ms_calling_page(request: Request, path: str):
   return HTMLResponse(content=html)
 
 
-UNITY_SEARCH_PAGE_BODY = """<body>
+UNITY_REFERENCE_SEARCH_PAGE_BODY = """<body>
 <style>
 *{box-sizing:border-box}.topbar,.topbar-brand{flex-wrap:wrap}.portal-sidebar,.portal-main{border-radius:8px}.portal-nav a{display:block;text-decoration:none}.content>h2{font-size:22px;margin:16px 0 10px}.row input{min-width:0;width:230px;max-width:100%}.row select{padding:7px;border:1px solid var(--amn-border);border-radius:6px}.row button:disabled{opacity:.5;cursor:default}.unity-scroll{max-width:100%;overflow:auto;max-height:600px}#unity-status,#unity-summary,#unity-limits,#unity-retention{overflow-wrap:anywhere}td{overflow-wrap:anywhere;min-width:95px}details{margin-top:12px}#unity-debug{background:#f1f6fa;color:#12304a;white-space:pre-wrap;overflow-wrap:anywhere}.portal-main{border-radius:0;box-shadow:none}input[type=search]{width:320px;max-width:100%}@media(max-width:900px){.portal-sidebar{position:static}.portal-main{padding:12px}.topbar-brand strong{font-size:14px}.content{padding:0 8px}.row{align-items:stretch}.row input,.row select{max-width:100%}}
 </style>
@@ -55717,6 +55720,42 @@ UNITY_SEARCH_PAGE_BODY = """<body>
 </script></body></html>"""
 
 
+UNITY_SEARCH_PAGE_BODY = """<body>
+<style>
+*{box-sizing:border-box}.topbar,.topbar-brand{flex-wrap:wrap}.portal-sidebar,.portal-main{border-radius:8px}.portal-nav a{display:block;text-decoration:none}.content>h2{font-size:22px;margin:16px 0 10px}.row input{min-width:0;width:300px;max-width:100%}.row select{padding:7px;border:1px solid var(--amn-border);border-radius:6px}.row button:disabled{opacity:.5;cursor:default}.unity-scroll{max-width:100%;overflow:auto;max-height:600px}#person-status,#person-identity,#person-summary{overflow-wrap:anywhere}td{overflow-wrap:anywhere;min-width:85px}details{margin-top:12px}#person-debug{background:#f1f6fa;color:#12304a;white-space:pre-wrap;overflow-wrap:anywhere}.portal-main{border-radius:0;box-shadow:none}@media(max-width:900px){.portal-sidebar{position:static}.portal-main{padding:12px}.topbar-brand strong{font-size:14px}.content{padding:0 8px}}
+</style>
+<header class="topbar"><div class="topbar-brand"><span class="brand-fallback">AMN Healthcare</span><strong>Voice Operations Portal</strong></div><div class="topbar-status"><span>Authenticated Operator: __AUTH_USER__</span><span>__ENV_TEXT__</span><span>Read-Only</span></div><a class="topbar-btn" href="/logout">Log Out</a></header>
+<main class="content"><h2 class="page-title">Unity Connection User Extract</h2><div class="portal-shell"><aside class="portal-sidebar"><h4>Unity Tools</h4><div class="portal-nav"><button type="button" class="portal-nav-btn active" id="person-nav">User Extract</button><a class="portal-nav-btn" href="/menu">Main Operations (Page 1)</a><a class="portal-nav-btn" href="/page2">Administrative Items (Page 2)</a><a class="portal-nav-btn" href="/page3">SMS Item Menu (Page 3)</a></div></aside>
+<section class="portal-main"><h3 style="margin-top:0;">User Extract</h3><p class="muted">Unity host: __UNITY_HOST__</p>
+<form id="person-form" onsubmit="if(window.findUnityUser){return window.findUnityUser(event);}document.getElementById('person-status').textContent='User lookup handler missing (JavaScript did not load).';return false;"><div class="row"><label for="person-search-by">Search By:</label><select id="person-search-by" name="search_by"><option value="extension">Primary Extension</option><option value="name">Name</option><option value="email">Email</option></select><label for="person-value">User:</label><input id="person-value" name="value" required autocomplete="off" placeholder="Primary extension"><button type="button" class="btn-action" id="person-find" onclick="if(window.findUnityUser){return window.findUnityUser(event);}document.getElementById('person-status').textContent='User lookup handler missing (JavaScript did not load).';return false;">Find User</button></div></form>
+<div id="person-candidates" class="unity-scroll"></div><div class="row"><button type="button" class="btn-action" id="person-pause" disabled>Pause</button><button type="button" class="btn-action" id="person-resume" disabled>Resume</button><button type="button" class="btn-action" id="person-cancel" disabled>Cancel Extract</button><button type="button" class="btn-action" id="person-scan">View Latest Extract</button><button type="button" class="btn-action" id="person-saved">View Last Completed Extract</button><button type="button" class="btn-action" id="person-csv" disabled>Download CSV</button></div>
+<p id="person-status" class="muted" role="status" aria-live="polite"></p><p id="person-identity"></p><p id="person-summary" class="muted"></p><div class="row"><label for="person-filter">Filter Number Fields:</label><input type="search" id="person-filter" placeholder="Field, stored number, rule context"></div><div id="person-fields" class="unity-scroll"></div>
+<details><summary>Coverage and References</summary><div id="person-coverage" class="unity-scroll"></div></details><details><summary>Extract Diagnostics</summary><pre id="person-debug"></pre></details><p id="person-limits" class="muted"></p><p id="person-retention" class="muted"></p>
+</section></div></main><script>
+(function(){
+  var report=null,busy=false,auto=false,timer=null,status=document.getElementById('person-status');
+  var columns=[['Setting / Field','field'],['Stored Number / Dial String','value'],['Setting Owner','object_name'],['Rule Context','context'],['Resource','resource']];
+  function controls(){var active=report && ['running','paused'].indexOf(report.status)>=0;document.getElementById('person-find').disabled=busy || !!active;document.getElementById('person-pause').disabled=!active || !auto;document.getElementById('person-resume').disabled=busy || !active || auto;document.getElementById('person-cancel').disabled=!active;document.getElementById('person-scan').disabled=busy;document.getElementById('person-saved').disabled=busy;document.getElementById('person-csv').disabled=!report || busy;}
+  function table(target,labels,rows){target.replaceChildren();var element=document.createElement('table'),head=element.createTHead().insertRow();labels.forEach(function(label){var cell=document.createElement('th');cell.textContent=label;head.appendChild(cell);});var body=element.createTBody();rows.forEach(function(values){var row=body.insertRow();values.forEach(function(value){row.insertCell().textContent=value==null?'':String(value);});});target.appendChild(element);return element;}
+  function filtered(){var term=document.getElementById('person-filter').value.toLowerCase();return (report?report.rows:[]).filter(function(row){return !term || columns.some(function(column){return String(row[column[1]] || '').toLowerCase().indexOf(term)>=0;});});}
+  function render(){if(!report)return;var person=report.person,rows=filtered();document.getElementById('person-identity').textContent=person.name+' | '+person.alias+' | '+person.email+' | Primary extension: '+person.extension;document.getElementById('person-summary').textContent=report.scope+' | '+rows.length+' filtered / '+report.field_count+' number fields | '+report.requests+' reads | '+report.pending_resources+' resources pending | '+report.checked_at;table(document.getElementById('person-fields'),columns.map(function(column){return column[0];}),rows.slice(0,500).map(function(row){return columns.map(function(column){return row[column[1]];});}));var coverage=report.coverage.map(function(item){return [item.resource,item.status,item.detail];}).concat(report.excluded_links.map(function(item){return [item.resource,'Not followed',item.reason];}),report.references.map(function(item){return [item.resource,'Handler reference',item.field+' -> '+item.target+'; '+item.context];}));table(document.getElementById('person-coverage'),['Resource','Outcome','Details'],coverage);document.getElementById('person-debug').textContent=JSON.stringify({job_id:report.job_id,status:report.status,person_id:person.object_id,requests:report.requests,pending_resources:report.pending_resources,coverage_gaps:report.coverage_gaps},null,2);document.getElementById('person-limits').textContent=report.limitations;document.getElementById('person-retention').textContent=report.retention;}
+  function stop(){auto=false;clearTimeout(timer);}
+  function body(){var data=new FormData();data.append('job_id',report.job_id);return data;}
+  async function request(operation,data){var response=await fetch('/unity-connection/users/'+operation,data?{method:'POST',body:data,credentials:'same-origin'}:{credentials:'same-origin'});var payload=await response.json();if(!response.ok || !payload.ok)throw new Error(payload.error || 'Unity user extraction failed.');if(payload.report){report=payload.report;render();}return payload;}
+  function schedule(){if(auto && report && report.status==='running')timer=setTimeout(advance,300);}
+  async function advance(){if(!auto || busy)return;busy=true;controls();try{await request('advance',body());status.textContent=report.status==='running'?'Extracting selected mailbox settings; results are partial.':report.complete?'Selected mailbox extract completed.':'Extract finished with coverage gaps; review diagnostics.';if(report.status!=='running')stop();}catch(error){stop();status.textContent='Extract paused: '+error.message+' Saved progress and prior completed extract are retained.';}finally{busy=false;controls();schedule();}}
+  async function startExtract(person){if(busy)return;stop();busy=true;controls();status.textContent='Reading '+person.name+' mailbox number fields...';var data=new FormData();data.append('object_id',person.object_id);try{await request('extract',data);auto=report.status==='running';status.textContent=auto?'Extracting selected mailbox settings; results are partial.':'Selected mailbox extract restored.';}catch(error){status.textContent=error.message;}finally{busy=false;controls();schedule();}}
+  window.findUnityUser=function(event){if(event)event.preventDefault();if(busy || !document.getElementById('person-form').reportValidity())return false;stop();busy=true;controls();status.textContent='Finding Unity user...';request('find',new FormData(document.getElementById('person-form'))).then(function(payload){var users=payload.lookup.users,target=document.getElementById('person-candidates');target.replaceChildren();status.textContent=users.length?users.length+' matching user(s).':'No matching Unity user returned; the previous saved extract is unchanged.';if(!users.length)return;var element=table(target,['Name','Email','Primary Extension','Alias',''],users.map(function(person){return [person.name,person.email,person.extension,person.alias,''];}));Array.from(element.tBodies[0].rows).forEach(function(row,index){var button=document.createElement('button');button.type='button';button.className='btn-action';button.textContent='Extract Numbers';button.addEventListener('click',function(){startExtract(users[index]);});row.cells[4].appendChild(button);});}).catch(function(error){status.textContent=error.message;}).finally(function(){busy=false;controls();});return false;};
+  async function control(action){stop();var data=body();data.append('action',action);try{await request('control',data);auto=action==='resume';status.textContent=action==='resume'?'Resuming selected-user extract...':action==='pause'?'Extract paused; progress saved.':'Extract cancelled; previous completed extract retained.';}catch(error){status.textContent=error.message;}controls();schedule();}
+  document.getElementById('person-pause').addEventListener('click',function(){control('pause');});document.getElementById('person-resume').addEventListener('click',function(){control('resume');});document.getElementById('person-cancel').addEventListener('click',function(){control('cancel');});
+  async function saved(operation,initial){stop();busy=true;controls();try{await request(operation);status.textContent=report.status==='running' || report.status==='paused'?'Saved extract restored; select Resume to continue.':report.complete?'Saved completed extract restored.':'Saved partial extract restored; review coverage gaps.';}catch(error){if(!initial)status.textContent=error.message;}finally{busy=false;controls();}}
+  document.getElementById('person-scan').addEventListener('click',function(){saved('scan',false);});document.getElementById('person-saved').addEventListener('click',function(){saved('saved',false);});document.getElementById('person-filter').addEventListener('input',render);document.getElementById('person-nav').addEventListener('click',function(){document.getElementById('person-value').focus();});document.getElementById('person-search-by').addEventListener('change',function(){var kind=this.value,input=document.getElementById('person-value');input.type=kind==='email'?'email':'text';input.placeholder=kind==='name'?'Last name or First Last':kind==='email'?'Email address':'Primary extension';input.value='';});
+  document.getElementById('person-csv').addEventListener('click',function(){if(!report)return;function cell(value){var text=String(value==null?'':value);if(/^[=+@-]/.test(text.trimStart()))text="'"+text;return '"'+text.replace(/"/g,'""')+'"';}var person=report.person,lines=[['Record Type','Name','Alias','Email','Primary Extension','User ID','Setting / Field','Stored Value','Rule Context','Resource','Details','Extracted At'].map(cell).join(',')];filtered().forEach(function(item){lines.push(['Number Field',person.name,person.alias,person.email,person.extension,person.object_id,item.field,item.value,item.context,item.resource,'',report.checked_at].map(cell).join(','));});report.coverage.forEach(function(item){lines.push(['Coverage',person.name,person.alias,person.email,person.extension,person.object_id,'','','',item.resource,item.status+': '+item.detail,report.checked_at].map(cell).join(','));});report.references.forEach(function(item){lines.push(['Reference',person.name,person.alias,person.email,person.extension,person.object_id,item.field,item.target,item.context,item.resource,'Stored reference; not verified active call path',report.checked_at].map(cell).join(','));});report.excluded_links.forEach(function(item){lines.push(['Excluded',person.name,person.alias,person.email,person.extension,person.object_id,'','','',item.resource,item.reason,report.checked_at].map(cell).join(','));});lines.push(['Status',person.name,person.alias,person.email,person.extension,person.object_id,'','','','',report.status+'; pending='+report.pending_resources+'; '+report.limitations+' '+report.retention,report.checked_at].map(cell).join(','));var url=URL.createObjectURL(new Blob([lines.join(String.fromCharCode(13,10))],{type:'text/csv;charset=utf-8'})),link=document.createElement('a');link.href=url;link.download='unity_user_number_fields.csv';document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);});
+  controls();saved('scan',true);
+})();
+</script></body></html>"""
+
+
 @app.get("/unity-connection", response_class=HTMLResponse)
 def unity_connection_page(request: Request):
   session = _get_auth_session(request) or {}
@@ -55724,7 +55763,7 @@ def unity_connection_page(request: Request):
     return HTMLResponse(content="<h3>403 Forbidden</h3>", status_code=403)
   host = _get_unity_server_for_session(request)
   env_text, _ = _get_environment_label(str(session.get("cucm_host", "") or ""))
-  head = MS_CALLING_PAGE_TEMPLATE.split("<body>", 1)[0].replace("__PAGE_TITLE__", "Unity Connection Search")
+  head = MS_CALLING_PAGE_TEMPLATE.split("<body>", 1)[0].replace("__PAGE_TITLE__", "Unity Connection User Extract")
   head = head.replace('<meta charset="utf-8">', '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">')
   html = head + UNITY_SEARCH_PAGE_BODY.replace("__AUTH_USER__", escape(str(session.get("username", "")))).replace("__ENV_TEXT__", escape(env_text)).replace("__UNITY_HOST__", escape(host))
   return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
@@ -55734,6 +55773,8 @@ def _unity_search_access(request: Request):
   session = _get_auth_session(request) or {}
   if not _is_admin_user(str(session.get("username", "") or "")):
     raise PermissionError("Administrator authentication required.")
+  if not UNITY_REFERENCE_SEARCH_ENABLED and request.url.path.startswith("/unity-connection/search/"):
+    raise RuntimeError("Number Reference Search has been retired. Open Unity Tools to use the selected-user extract.")
   return unity_number_search.normalize_host(_get_unity_server_for_session(request))
 
 
@@ -55894,6 +55935,106 @@ def unity_search_control(request: Request, job_id: str = Form(""), action: str =
       state["updated_at"] = unity_number_search.timestamp()
       unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, state)
     return _unity_search_result(state)
+  except Exception as exc:
+    return _unity_search_failure(exc)
+
+
+@app.post("/unity-connection/users/find")
+def unity_person_find(request: Request, search_by: str = Form("extension"), value: str = Form("")):
+  try:
+    host = _unity_search_access(request)
+    username, password = _resolve_unity_credentials(request, "", "")
+    result = unity_user_extract.find_unity_person(host, username, password, search_by, value)
+    return JSONResponse({"ok": True, "lookup": result}, headers={"Cache-Control": "no-store"})
+  except Exception as exc:
+    return _unity_search_failure(exc)
+
+
+def _unity_person_result(state):
+  return JSONResponse({"ok": True, "report": unity_user_extract.person_number_report(state)}, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/unity-connection/users/extract")
+def unity_person_extract(request: Request, object_id: str = Form("")):
+  try:
+    host = _unity_search_access(request)
+    username, password = _resolve_unity_credentials(request, "", "")
+    with UNITY_NUMBER_SEARCH_LOCK:
+      try:
+        current = unity_number_search.load(UNITY_PERSON_NUMBER_EXTRACT_DIR, host)
+      except FileNotFoundError:
+        current = None
+      if current and current["status"] in {"running", "paused"}:
+        if current["person"]["object_id"] != object_id:
+          raise ValueError("A selected-user extract is active; Pause or Cancel it before choosing another user.")
+        return _unity_person_result(current)
+      state = unity_user_extract.start_person_number_extract(host, username, password, object_id)
+      unity_number_search.save(UNITY_PERSON_NUMBER_EXTRACT_DIR, state)
+    return _unity_person_result(state)
+  except Exception as exc:
+    return _unity_search_failure(exc)
+
+
+@app.get("/unity-connection/users/scan")
+@app.get("/unity-connection/users/saved")
+def unity_person_saved(request: Request):
+  try:
+    host = _unity_search_access(request)
+    kind = "report" if request.url.path.endswith("/saved") else "scan"
+    with UNITY_NUMBER_SEARCH_LOCK:
+      state = unity_number_search.load(UNITY_PERSON_NUMBER_EXTRACT_DIR, host, kind)
+    if kind == "report":
+      return JSONResponse({"ok": True, "report": state}, headers={"Cache-Control": "no-store"})
+    return _unity_person_result(state)
+  except Exception as exc:
+    return _unity_search_failure(exc)
+
+
+@app.post("/unity-connection/users/advance")
+def unity_person_advance(request: Request, job_id: str = Form("")):
+  try:
+    host = _unity_search_access(request)
+    with UNITY_NUMBER_SEARCH_LOCK:
+      state = unity_number_search.load(UNITY_PERSON_NUMBER_EXTRACT_DIR, host)
+      if state["job_id"] != job_id:
+        raise ValueError("Stale user-extract ID; view the latest extract.")
+      if state["status"] != "running":
+        return _unity_person_result(state)
+      username, password = _resolve_unity_credentials(request, "", "")
+      state = unity_number_search.enable_incremental(UNITY_PERSON_NUMBER_EXTRACT_DIR, state)
+      try:
+        unity_number_search.advance_parallel(state, username, password, lambda value: unity_number_search.save(UNITY_PERSON_NUMBER_EXTRACT_DIR, value))
+      except unity_number_search.UnitySearchError:
+        unity_number_search.save(UNITY_PERSON_NUMBER_EXTRACT_DIR, state)
+        raise
+      if state["status"] == "completed":
+        report = unity_user_extract.person_number_report(state)
+        if report["complete"]:
+          unity_number_search.save(UNITY_PERSON_NUMBER_EXTRACT_DIR, report, "report")
+        _append_audit_event(action="unity_user_number_extract", cucm_host=host, operator=str((_get_auth_session(request) or {}).get("username", "")), target=f"user_id={state['person']['object_id']};fields={report['field_count']};complete={report['complete']}", output_filename="", inline_mode=True)
+      unity_number_search.save(UNITY_PERSON_NUMBER_EXTRACT_DIR, state)
+    return _unity_person_result(state)
+  except Exception as exc:
+    return _unity_search_failure(exc)
+
+
+@app.post("/unity-connection/users/control")
+def unity_person_control(request: Request, job_id: str = Form(""), action: str = Form("")):
+  try:
+    host = _unity_search_access(request)
+    if action not in {"pause", "resume", "cancel"}:
+      raise ValueError("Choose Pause, Resume, or Cancel.")
+    with UNITY_NUMBER_SEARCH_LOCK:
+      state = unity_number_search.load(UNITY_PERSON_NUMBER_EXTRACT_DIR, host)
+      if state["job_id"] != job_id or state["status"] not in {"running", "paused"}:
+        raise ValueError("This extract is stale or already finished; view the latest extract.")
+      if action == "resume":
+        _resolve_unity_credentials(request, "", "")
+        state = unity_number_search.enable_incremental(UNITY_PERSON_NUMBER_EXTRACT_DIR, state)
+      state["status"] = {"pause": "paused", "resume": "running", "cancel": "cancelled"}[action]
+      state["updated_at"] = unity_number_search.timestamp()
+      unity_number_search.save(UNITY_PERSON_NUMBER_EXTRACT_DIR, state)
+    return _unity_person_result(state)
   except Exception as exc:
     return _unity_search_failure(exc)
 
