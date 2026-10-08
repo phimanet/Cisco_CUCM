@@ -31723,6 +31723,8 @@ def genesys_catalog_options_route():
       row_name = str(row.get("name", "") or "").strip()
       if not row_id:
         continue
+      if row.get("missing") or row.get("selectable") is False:
+        continue
       if "(missing in api catalog)" in row_name.lower():
         continue
       dedupe_key = (row_id.lower(), row_name.lower())
