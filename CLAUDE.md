@@ -19,6 +19,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [x] Centralize environment-specific values — AD LDAP config deployed via `/opt/cucm-web/.env` + systemd EnvironmentFile on both LAB and PROD.
 - [ ] Add lightweight health check and structured error responses for web routes.
 - [ ] Add minimal regression tests for toolkit functions that generate CSV outputs.
+- [ ] [P2][In Progress] Unity Connection Search implemented locally; validate read-only number-reference coverage, host selection, permissions, paging, scan recovery, and load in LAB before PROD rollout.
 
 ## Code Improvement Backlog
 _Identified 2026-08-06 by full codebase efficiency audit. Do NOT implement without explicit approval — safe fallback tag `websave-2026-08-06` (commit `365a9a4`) is the reference point._
@@ -113,6 +114,14 @@ Priority keys:
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
+
+### 2026-10-08 (Unity Connection Number Reference Search)
+- Added authenticated administrator page `/unity-connection`, named `Unity Connection Search`, with an isolated Page 2 menu link and the existing AMN portal shell. Reuses the existing runtime/session Unity host resolver and cached Unity credentials; no new `.env` settings or Unity writes.
+- Exact/Contains number search scans scalar fields in CUPI call-handler/user inventories and details, transfer options (including disabled settings), caller-input entries, greetings/after-actions, alternate extensions, notification devices and MWI. Also attempts directory/interview handlers, routing rules and linked conditions, contacts, templates, phone systems/port groups, restrictions and configuration resources. Unsupported endpoints, malformed/repeated pages, denied access, excluded links and read failures stay visible; API-version-specific coverage is not claimed until LAB validation.
+- Results retain object type/name/ID, exact field, stored value, rule context, resource and direct/indirect reference evidence. Cycle-safe handler-reference traversal preserves distinct caller-input keys; stored references are not proof of active call paths. Recorded audio/messages, credentials, binary data, inaccessible/unadvertised resources, personal call-transfer rules and external systems are excluded. No-match results are never deletion clearance.
+- Browser-driven, one bounded GET per advance, with Pause/Resume/Cancel, stale-ID rejection and duplicate-start reuse. Completed resource/page progress is atomically persisted with fsync under `unity_number_search` in the existing external runtime root; browser closure stops further reads, and View Latest Scan plus Resume continues with valid credentials after restart. No plaintext credentials or raw provider payloads are saved.
+- Retention is latest scan plus latest completed failure-free lookup per Unity host only, not a history archive. Failed/partial refreshes preserve the prior completed lookup; corrupt/unreadable files are refused. CSV includes all filtered matches beyond the 500-row preview plus coverage/exclusions/limitations. Normal code pulls/restarts preserve data; deletion or older VM/data restores remain recovery limits.
+- Local validation passed: 19 focused scanner/isolated-route tests for matching, indirect keys/cycles, primary-handler identity, paging, GET-only calls, auth, host isolation, stale IDs, restart recovery, corruption and write-failure retention. Full Unity page script and all 27 Page 2 scripts parsed in the browser; existing/new navigation, search, saved/pause/resume/cancel, escaping, 601-row filtering/CSV and desktop/mobile checks passed. FastAPI/Uvicorn are unavailable locally; full ASGI and live Unity permissions/schema/load validation remain pending in LAB. No PROD rollout instructed.
 
 ### 2026-10-08 (Twilio Greenlight Subaccount Inventory Confirmation)
 - Operator confirmed all four Greenlight subaccounts belong to the already configured AMN Healthcare parent and appeared in the SMS All Accounts Number Inventory extract. Existing parent credentials discover them automatically; no separate subaccount Auth Tokens, `.env` changes, or code changes were needed.

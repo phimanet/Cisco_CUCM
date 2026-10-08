@@ -86,6 +86,7 @@ from toolkit import ms_graph_calling
 from toolkit import twilio_recent_logs
 from toolkit import twilio_all_recent_logs
 from toolkit import webex_admin
+from toolkit import unity_number_search
 from toolkit.transunion_sdpr import (
   integration_status as transunion_integration_status,
   list_caller_profiles as transunion_list_caller_profiles,
@@ -954,6 +955,8 @@ TWILIO_ALL_RECENT_LOGS_WORKER_STARTED = False
 TWILIO_ALL_RECENT_LOGS_REQUESTS_PER_SECOND = min(5.0, max(0.1, float(os.getenv("TWILIO_ALL_RECENT_LOGS_REQUESTS_PER_SECOND", "2") or "2")))
 WEBEX_LICENSE_REPORT_DIR = os.path.join(_genesys_queue_data_root, "webex_license_lookup")
 WEBEX_LICENSE_REPORT_LOCK = threading.Lock()
+UNITY_NUMBER_SEARCH_DIR = os.path.join(_genesys_queue_data_root, "unity_number_search")
+UNITY_NUMBER_SEARCH_LOCK = threading.Lock()
 GENESYS_DID_NUMBERS_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_did_numbers_report.json")
 GENESYS_DID_NUMBERS_REPORT_LOCK = threading.Lock()
 GENESYS_SINCH_INVENTORY_PATH = os.path.join(_genesys_queue_data_root, "genesys_sinch_inventory.json")
@@ -46083,6 +46086,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/opentext-admin'">OpenText Admin</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/webex-admin'">Cisco Webex Admin</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/unity-connection'">Unity Connection Search</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/sinch-work'">Sinch Admin Page</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/page3?panel=sms-number-look'">SMS Item Menu (Page 3)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-info" style="background:#2563eb;border-color:#2563eb;" onclick="window.location.href='/settings'">DN Prefix Settings</button>
@@ -55666,6 +55670,162 @@ def _render_ms_calling_page(request: Request, path: str):
     .replace("__CRED_EXPIRES_MS__", str(credential_expires_at_ms))
   )
   return HTMLResponse(content=html)
+
+
+UNITY_SEARCH_PAGE_BODY = """<body>
+<style>
+*{box-sizing:border-box}.topbar,.topbar-brand{flex-wrap:wrap}.portal-sidebar,.portal-main{border-radius:8px}.portal-nav a{display:block;text-decoration:none}.content>h2{font-size:22px;margin:16px 0 10px}.row input{min-width:0;width:230px;max-width:100%}.row select{padding:7px;border:1px solid var(--amn-border);border-radius:6px}.row button:disabled{opacity:.5;cursor:default}.unity-scroll{max-width:100%;overflow:auto;max-height:600px}#unity-status,#unity-summary,#unity-limits,#unity-retention{overflow-wrap:anywhere}td{overflow-wrap:anywhere;min-width:95px}details{margin-top:12px}#unity-debug{background:#f1f6fa;color:#12304a;white-space:pre-wrap;overflow-wrap:anywhere}.portal-main{border-radius:0;box-shadow:none}input[type=search]{width:320px;max-width:100%}@media(max-width:900px){.portal-sidebar{position:static}.portal-main{padding:12px}.topbar-brand strong{font-size:14px}.content{padding:0 8px}.row{align-items:stretch}.row input,.row select{max-width:100%}}
+</style>
+<header class="topbar"><div class="topbar-brand"><span class="brand-fallback">AMN Healthcare</span><strong>Voice Operations Portal</strong></div><div class="topbar-status"><span>Authenticated Operator: __AUTH_USER__</span><span>__ENV_TEXT__</span><span>Read-Only</span></div><a class="topbar-btn" href="/logout">Log Out</a></header>
+<main class="content"><h2 class="page-title">Unity Connection Search</h2><div class="portal-shell">
+<aside class="portal-sidebar"><h4>Unity Connection Menu</h4><div class="portal-nav"><button type="button" class="portal-nav-btn active" id="unity-nav-search">Number Reference Search</button><a class="portal-nav-btn" href="/menu">Main Operations (Page 1)</a><a class="portal-nav-btn" href="/page2">Administrative Items (Page 2)</a><a class="portal-nav-btn" href="/page3">SMS Item Menu (Page 3)</a></div></aside>
+<section class="portal-main"><h3 style="margin-top:0;">Number Reference Search</h3><p class="muted">Unity host: __UNITY_HOST__</p>
+<form id="unity-search-form" onsubmit="if(window.runUnitySearch){return window.runUnitySearch(event);}document.getElementById('unity-status').textContent='Unity search handler missing (JavaScript did not load).';return false;">
+<div class="row"><label for="unity-number">Number:</label><input id="unity-number" name="number" required autocomplete="off" inputmode="tel" placeholder="Extension, number, or fragment"><label for="unity-mode">Match:</label><select id="unity-mode" name="mode"><option value="contains">Contains</option><option value="exact">Exact</option></select><button type="button" class="btn-action" id="unity-start" onclick="if(window.runUnitySearch){return window.runUnitySearch(event);}document.getElementById('unity-status').textContent='Unity search handler missing (JavaScript did not load).';return false;">Search Unity</button></div></form>
+<div class="row"><button type="button" class="btn-action" id="unity-pause" disabled>Pause</button><button type="button" class="btn-action" id="unity-resume" disabled>Resume</button><button type="button" class="btn-action" id="unity-cancel" disabled>Cancel Scan</button><button type="button" class="btn-action" id="unity-scan">View Latest Scan</button><button type="button" class="btn-action" id="unity-saved">View Latest Completed Lookup</button><button type="button" class="btn-action" id="unity-csv" disabled>Download CSV</button></div>
+<p id="unity-status" class="muted" role="status" aria-live="polite"></p><p id="unity-summary" class="muted"></p><div class="row"><label for="unity-filter">Filter Results:</label><input type="search" id="unity-filter" placeholder="Object, setting, value, reference"><label for="unity-reference">Reference:</label><select id="unity-reference"><option value="">All</option><option>Direct</option><option>Indirect</option></select></div>
+<div id="unity-results" class="unity-scroll"></div><details id="unity-coverage"><summary>Checked Resources and Coverage Gaps</summary><div id="unity-coverage-results" class="unity-scroll"></div></details><details><summary>Scan Diagnostics</summary><pre id="unity-debug"></pre></details>
+<p id="unity-limits" class="muted"></p><p class="muted">Browser-driven scan: closing this page pauses further reads. Saved progress survives reloads and service restarts; View Latest Scan, then Resume with a valid login. No Unity settings are changed.</p><p id="unity-retention" class="muted"></p>
+</section></div></main>
+<script>
+(function(){
+  var report=null,jobId='',auto=false,busy=false,timer=null,status=document.getElementById('unity-status');
+  var columns=[['Object Type','object_type'],['Object Name','object_name'],['Setting / Field','field'],['Stored Value','value'],['Reference','reference'],['Reference Path','path'],['Rule Context','context'],['Resource','resource']];
+  function controls(){var active=report && ['running','paused'].indexOf(report.status)>=0;document.getElementById('unity-start').disabled=busy || !!active;document.getElementById('unity-pause').disabled=!active || !auto;document.getElementById('unity-resume').disabled=busy || !active || auto;document.getElementById('unity-cancel').disabled=!active;document.getElementById('unity-scan').disabled=busy;document.getElementById('unity-saved').disabled=busy;document.getElementById('unity-csv').disabled=!report || busy;}
+  function filtered(){var text=document.getElementById('unity-filter').value.toLowerCase(),kind=document.getElementById('unity-reference').value;return (report?report.rows:[]).filter(function(row){return (!kind || row.reference===kind) && (!text || columns.some(function(column){return String(row[column[1]] || '').toLowerCase().indexOf(text)>=0;}));});}
+  function table(target,labels,rows){target.replaceChildren();var element=document.createElement('table'),head=element.createTHead().insertRow();labels.forEach(function(label){var cell=document.createElement('th');cell.textContent=label;head.appendChild(cell);});var body=element.createTBody();rows.forEach(function(values){var row=body.insertRow();values.forEach(function(value){row.insertCell().textContent=value==null?'':String(value);});});target.appendChild(element);}
+  function render(){if(!report)return;var rows=filtered();table(document.getElementById('unity-results'),columns.map(function(column){return column[0];}),rows.slice(0,500).map(function(row){return columns.map(function(column){return row[column[1]];});}));document.getElementById('unity-summary').textContent=report.host+' | '+report.mode+' '+report.query+' | '+rows.length+' filtered / '+report.match_count+' references | Showing up to 500 rows | '+report.requests+' reads | '+report.pending_resources+' resources pending | '+report.checked_at;var coverage=report.coverage.map(function(item){return [item.resource,item.status,item.detail];}).concat(report.excluded_links.map(function(item){return [item.resource,'Not searched',item.reason];}));table(document.getElementById('unity-coverage-results'),['Resource','Outcome','Details'],coverage);document.getElementById('unity-debug').textContent=JSON.stringify({job_id:report.job_id,status:report.status,requests:report.requests,records:report.records,pending_resources:report.pending_resources,failures:report.failures,excluded_links:report.excluded_links},null,2);document.getElementById('unity-limits').textContent=report.limitations;document.getElementById('unity-retention').textContent=report.retention;}
+  function stop(){auto=false;clearTimeout(timer);controls();}
+  async function request(operation,body){var response=await fetch('/unity-connection/search/'+operation,body?{method:'POST',body:body,credentials:'same-origin'}:{credentials:'same-origin'});var payload=await response.json();if(!response.ok || !payload.ok)throw new Error(payload.error || 'Unity search failed.');report=payload.report;jobId=report.job_id;render();controls();return report;}
+  function formBody(){var body=new FormData();body.append('job_id',jobId);return body;}
+  function schedule(){if(auto && report && report.status==='running')timer=setTimeout(advance,300);}
+  async function advance(){if(!auto || busy)return;busy=true;controls();try{await request('advance',formBody());status.textContent=report.status==='completed'?(report.complete?'Requested resources checked. ':'Scan finished with coverage gaps. ')+(report.match_count?'References found.':'No matches in checked fields; not deletion clearance.'):report.status==='failed'?'Scan limit reached; results are incomplete.':'Scanning Unity configuration...';if(report.status!=='running')stop();}catch(error){stop();status.textContent='Scan paused: '+error.message+' Saved progress and previous completed lookup are retained.';}finally{busy=false;controls();schedule();}}
+  window.runUnitySearch=function(event){if(event)event.preventDefault();if(busy || !document.getElementById('unity-search-form').reportValidity())return false;stop();busy=true;controls();status.textContent='Starting read-only Unity scan...';request('start',new FormData(document.getElementById('unity-search-form'))).then(function(){auto=true;status.textContent='Scanning Unity configuration...';}).catch(function(error){status.textContent=error.message;}).finally(function(){busy=false;controls();schedule();});return false;};
+  async function control(action){stop();var body=formBody();body.append('action',action);try{await request('control',body);auto=action==='resume';status.textContent=action==='resume'?'Resuming saved scan...':action==='cancel'?'Scan cancelled; completed saved lookup unchanged.':'Scan paused; progress saved.';}catch(error){status.textContent=error.message;}controls();schedule();}
+  document.getElementById('unity-pause').addEventListener('click',function(){control('pause');});document.getElementById('unity-resume').addEventListener('click',function(){control('resume');});document.getElementById('unity-cancel').addEventListener('click',function(){control('cancel');});
+  async function saved(operation,initial){stop();busy=true;controls();try{await request(operation);status.textContent=(operation==='saved'?'Latest completed lookup. ':'Latest scan restored. ')+(report.status==='running' || report.status==='paused'?'Select Resume to continue.':report.complete?'Requested resources checked.':'Review coverage gaps.');if(operation==='scan'){document.getElementById('unity-number').value=report.query;document.getElementById('unity-mode').value=report.mode;}}catch(error){if(!initial)status.textContent=error.message;}finally{busy=false;controls();}}
+  document.getElementById('unity-scan').addEventListener('click',function(){saved('scan',false);});document.getElementById('unity-saved').addEventListener('click',function(){saved('saved',false);});document.getElementById('unity-filter').addEventListener('input',render);document.getElementById('unity-reference').addEventListener('change',render);document.getElementById('unity-nav-search').addEventListener('click',function(){document.getElementById('unity-number').focus();});
+  document.getElementById('unity-csv').addEventListener('click',function(){if(!report)return;function cell(value){var text=String(value==null?'':value);if(/^[=+@-]/.test(text.trimStart()))text="'"+text;return '"'+text.replace(/"/g,'""')+'"';}var lines=[['Record Type','Unity Host','Query','Mode','Object Type','Object Name','Object ID','Setting / Field','Stored Value','Reference','Reference Path','Rule Context','Resource','Outcome / Details','Checked At'].map(cell).join(',')];filtered().forEach(function(row){lines.push(['Match',report.host,report.query,report.mode,row.object_type,row.object_name,row.object_id,row.field,row.value,row.reference,row.path,row.context,row.resource,'',report.checked_at].map(cell).join(','));});report.coverage.forEach(function(item){lines.push(['Coverage',report.host,report.query,report.mode,'','','','','','','','',item.resource,item.status+': '+item.detail,report.checked_at].map(cell).join(','));});report.excluded_links.forEach(function(item){lines.push(['Excluded',report.host,report.query,report.mode,'','','','','','','','',item.resource,item.reason,report.checked_at].map(cell).join(','));});lines.push(['Limitations',report.host,report.query,report.mode,'','','','','','','','','',report.limitations,report.checked_at].map(cell).join(','));lines.push(['Scan Status',report.host,report.query,report.mode,'','','','','','','','','',report.status+'; Pending resources: '+report.pending_resources+'; '+report.retention,report.checked_at].map(cell).join(','));var url=URL.createObjectURL(new Blob([lines.join(String.fromCharCode(13,10))],{type:'text/csv;charset=utf-8'})),link=document.createElement('a');link.href=url;link.download='unity_number_references.csv';document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);});
+  controls();saved('scan',true);
+})();
+</script></body></html>"""
+
+
+@app.get("/unity-connection", response_class=HTMLResponse)
+def unity_connection_page(request: Request):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", "") or "")):
+    return HTMLResponse(content="<h3>403 Forbidden</h3>", status_code=403)
+  host = _get_unity_server_for_session(request)
+  env_text, _ = _get_environment_label(str(session.get("cucm_host", "") or ""))
+  head = MS_CALLING_PAGE_TEMPLATE.split("<body>", 1)[0].replace("__PAGE_TITLE__", "Unity Connection Search")
+  head = head.replace('<meta charset="utf-8">', '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">')
+  html = head + UNITY_SEARCH_PAGE_BODY.replace("__AUTH_USER__", escape(str(session.get("username", "")))).replace("__ENV_TEXT__", escape(env_text)).replace("__UNITY_HOST__", escape(host))
+  return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
+
+
+def _unity_search_access(request: Request):
+  session = _get_auth_session(request) or {}
+  if not _is_admin_user(str(session.get("username", "") or "")):
+    raise PermissionError("Administrator authentication required.")
+  return unity_number_search.normalize_host(_get_unity_server_for_session(request))
+
+
+def _unity_search_failure(exc):
+  if isinstance(exc, PermissionError):
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
+  if isinstance(exc, FileNotFoundError):
+    return JSONResponse({"ok": False, "error": "No saved Unity lookup for this host."}, status_code=404)
+  if isinstance(exc, (ValueError, unity_number_search.UnitySearchError, RuntimeError)) and not isinstance(exc, json.JSONDecodeError):
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+  return JSONResponse({"ok": False, "error": "Unity saved state could not be read/written; prior saved data was not overwritten."}, status_code=502)
+
+
+def _unity_search_result(state):
+  return JSONResponse({"ok": True, "report": unity_number_search.scan_report(state)}, headers={"Cache-Control": "no-store"})
+
+
+@app.post("/unity-connection/search/start")
+def unity_search_start(request: Request, number: str = Form(""), mode: str = Form("contains")):
+  try:
+    host = _unity_search_access(request)
+    _resolve_unity_credentials(request, "", "")
+    state = unity_number_search.new_scan(host, number, mode)
+    with UNITY_NUMBER_SEARCH_LOCK:
+      try:
+        existing = unity_number_search.load(UNITY_NUMBER_SEARCH_DIR, host)
+      except FileNotFoundError:
+        existing = None
+      if existing and existing["status"] in {"running", "paused"}:
+        if existing["query"] != state["query"] or existing["mode"] != mode:
+          raise ValueError("A scan is already active for this Unity host; Cancel it before starting another number.")
+        return _unity_search_result(existing)
+      unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, state)
+    return _unity_search_result(state)
+  except Exception as exc:
+    return _unity_search_failure(exc)
+
+
+@app.get("/unity-connection/search/scan")
+@app.get("/unity-connection/search/saved")
+def unity_search_saved(request: Request):
+  try:
+    host = _unity_search_access(request)
+    kind = "report" if request.url.path.endswith("/saved") else "scan"
+    with UNITY_NUMBER_SEARCH_LOCK:
+      value = unity_number_search.load(UNITY_NUMBER_SEARCH_DIR, host, kind)
+    return JSONResponse({"ok": True, "report": value if kind == "report" else unity_number_search.scan_report(value)}, headers={"Cache-Control": "no-store"})
+  except Exception as exc:
+    return _unity_search_failure(exc)
+
+
+@app.post("/unity-connection/search/advance")
+def unity_search_advance(request: Request, job_id: str = Form("")):
+  try:
+    host = _unity_search_access(request)
+    with UNITY_NUMBER_SEARCH_LOCK:
+      state = unity_number_search.load(UNITY_NUMBER_SEARCH_DIR, host)
+      if state["job_id"] != job_id:
+        raise ValueError("Stale Unity scan ID; load the latest scan.")
+      if state["status"] != "running":
+        return _unity_search_result(state)
+      username, password = _resolve_unity_credentials(request, "", "")
+      try:
+        unity_number_search.advance_scan(state, username, password)
+      except unity_number_search.UnitySearchError:
+        unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, state)
+        raise
+      if state["status"] == "completed":
+        report = unity_number_search.scan_report(state)
+        if report["complete"]:
+          unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, report, "report")
+        _append_audit_event(action="unity_number_reference_search", cucm_host=host, operator=str((_get_auth_session(request) or {}).get("username", "")), target=f"number={state['query']};matches={report['match_count']};failures={len(report['failures'])}", output_filename="", inline_mode=True)
+      unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, state)
+    return _unity_search_result(state)
+  except Exception as exc:
+    return _unity_search_failure(exc)
+
+
+@app.post("/unity-connection/search/control")
+def unity_search_control(request: Request, job_id: str = Form(""), action: str = Form("")):
+  try:
+    host = _unity_search_access(request)
+    if action not in {"pause", "resume", "cancel"}:
+      raise ValueError("Choose Pause, Resume, or Cancel.")
+    with UNITY_NUMBER_SEARCH_LOCK:
+      state = unity_number_search.load(UNITY_NUMBER_SEARCH_DIR, host)
+      if state["job_id"] != job_id:
+        raise ValueError("Stale Unity scan ID; load the latest scan.")
+      if state["status"] not in {"running", "paused"}:
+        raise ValueError("This scan is already finished or cancelled.")
+      if action == "resume":
+        _resolve_unity_credentials(request, "", "")
+      state["status"] = {"pause": "paused", "resume": "running", "cancel": "cancelled"}[action]
+      state["updated_at"] = unity_number_search.timestamp()
+      unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, state)
+    return _unity_search_result(state)
+  except Exception as exc:
+    return _unity_search_failure(exc)
 
 
 WEBEX_ADMIN_PAGE_BODY = """<body>
