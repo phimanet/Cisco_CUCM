@@ -2,6 +2,7 @@ import ast
 import json
 import tempfile
 import threading
+import time
 import unittest
 from html import escape
 from datetime import datetime, timedelta, timezone
@@ -340,6 +341,191 @@ class UnityNumberSearchTests(unittest.TestCase):
             self.assertEqual(replace.call_count, 3)
             self.assertEqual(search.load(root, "unity.example", "cache")["job_id"], cache["job_id"])
 
+    def test_incremental_migration_preserves_paused_legacy_state(self):
+        state = search.new_cache_scan("unity.example", "1228")
+        state.update(status="paused", requests=729, records=6000)
+        state["tasks"][0].update(page=1, count_only_retry=True, count_only_total=3392, consumed=200)
+        with tempfile.TemporaryDirectory() as root:
+            search.save(root, state)
+            original = Path(search._path(root, state["host"], "scan")).read_bytes()
+            migrated = search.enable_incremental(root, state)
+            self.assertEqual(migrated["job_id"], state["job_id"])
+            self.assertEqual(migrated["status"], "paused")
+            self.assertEqual(migrated["requests"], 729)
+            self.assertEqual(migrated["tasks"], state["tasks"])
+            self.assertEqual(Path(search._path(root, state["host"], "scan")).read_bytes(), original)
+            migrated.update(status="running", requests=730)
+            migrated["coverage"].append({"resource": "/checked", "status": "Checked", "detail": "one read"})
+            migrated["tasks"].pop(0)
+            search.save(root, migrated)
+            restored = search.load(root, state["host"])
+            self.assertEqual(restored["requests"], 730)
+            self.assertEqual(restored["tasks"], migrated["tasks"])
+            self.assertEqual(restored["coverage"], migrated["coverage"])
+
+    def test_incremental_checkpoint_rejects_stale_updates(self):
+        state = self.single_task()
+        with tempfile.TemporaryDirectory() as root:
+            search.save(root, state)
+            current = search.enable_incremental(root, state)
+            stale = search.load(root, state["host"])
+            current["requests"] = 1
+            search.save(root, current)
+            with self.assertRaises(search.UnitySearchError):
+                search.save(root, stale)
+            self.assertEqual(search.load(root, state["host"])["requests"], 1)
+
+    def test_incremental_pause_exports_latest_compatible_json(self):
+        state = self.single_task()
+        with tempfile.TemporaryDirectory() as root:
+            search.save(root, state)
+            current = search.enable_incremental(root, state)
+            current.update(status="paused", requests=729)
+            search.save(root, current)
+            exported = search.load(root, state["host"], _json_only=True)
+            self.assertEqual(exported["requests"], 729)
+            self.assertEqual(exported["status"], "paused")
+            self.assertEqual(exported["job_id"], state["job_id"])
+            self.assertFalse(any(key.startswith("_") for key in exported))
+
+    def test_corrupt_incremental_checkpoint_is_refused(self):
+        state = self.single_task()
+        with tempfile.TemporaryDirectory() as root:
+            search.save(root, state)
+            search.enable_incremental(root, state)
+            Path(search._scan_db_path(root, state["host"])).write_bytes(b"corrupt")
+            with self.assertRaises(search.UnitySearchError):
+                search.load(root, state["host"])
+
+    def test_parallel_reader_preserves_pages_and_uses_bounded_batch(self):
+        state = search.new_cache_scan("unity.example")
+        state["tasks"] = state["tasks"][:4]
+        clients = []
+        def factory():
+            client = MagicMock()
+            client.get.return_value = self.response({"@total": "0"})
+            clients.append(client)
+            return client
+        checkpoints = []
+        search.advance_parallel(state, "admin", "SECRET", lambda value: checkpoints.append(value["requests"]), factory)
+        self.assertEqual(state["requests"], 4)
+        self.assertEqual(state["status"], "completed")
+        self.assertEqual(checkpoints, [1, 2, 3])
+        self.assertLessEqual(len(clients), 2)
+        self.assertEqual(sum(client.get.call_count for client in clients), 4)
+        self.assertNotIn("SECRET", json.dumps(search.progress_report(state)))
+
+    def test_progress_payload_is_small_for_large_paused_job(self):
+        state = search.new_cache_scan("unity.example")
+        state["status"] = "paused"
+        state["tasks"] *= 2500
+        state["coverage"] = [{"resource": "/checked/" + str(index), "status": "Checked", "detail": "read"} for index in range(20000)]
+        report = search.progress_report(state)
+        self.assertLess(len(json.dumps(report)), 3000)
+        self.assertEqual(report["pending_resources"], 30000)
+        self.assertEqual(report["checked_resources"], 20000)
+        self.assertTrue(report["progress_only"])
+
+    def test_complete_collection_reuse_requires_detail_match(self):
+        state = search.new_cache_scan("unity.example")
+        owner = {"id": "one", "name": "One", "type": "Handler"}
+        root = "/vmrest/handlers/callhandlers/one/transferoptions"
+        record = {key: "" for key in search.COLLECTION_REQUIRED_FIELDS["transferoptions"]}
+        record.update(URI=root + "/Standard", CallHandlerObjectId="one", TransferOptionType="Standard", Extension="1228", Enabled="true")
+        collection = {"resource": root, "label": "Handler", "page": 0, "owner": owner}
+        search._ingest(state, record, collection)
+        self.assertIn(root + "/Standard", [task["resource"] for task in state["tasks"]])
+        detail = next(task for task in state["tasks"] if task["resource"] == root + "/Standard")
+        search._ingest(state, record, detail)
+        alternate = dict(record, URI=root + "/Alternate", TransferOptionType="Alternate")
+        search._ingest(state, alternate, collection)
+        self.assertNotIn(root + "/Alternate", [task["resource"] for task in state["tasks"]])
+        self.assertTrue(any(item["resource"] == root + "/Alternate" and "collection record" in item["detail"] for item in state["coverage"]))
+
+    def test_collection_detail_mismatch_keeps_individual_reads(self):
+        state = search.new_cache_scan("unity.example")
+        owner = {"id": "one", "name": "One", "type": "Handler"}
+        root = "/vmrest/handlers/callhandlers/one/transferoptions"
+        record = {key: "" for key in search.COLLECTION_REQUIRED_FIELDS["transferoptions"]}
+        record.update(URI=root + "/Standard", Extension="1228")
+        collection = {"resource": root, "label": "Handler", "page": 0, "owner": owner}
+        search._ingest(state, record, collection)
+        detail = next(task for task in state["tasks"] if task["resource"] == root + "/Standard")
+        search._ingest(state, dict(record, ExtraNumber="9999"), detail)
+        search._ingest(state, dict(record, URI=root + "/Alternate"), collection)
+        self.assertIn(root + "/Alternate", [task["resource"] for task in state["tasks"]])
+
+    def test_two_hundred_full_collection_records_reuse_verified_family(self):
+        state = search.new_cache_scan("unity.example")
+        base = {key: "" for key in search.COLLECTION_REQUIRED_FIELDS["transferoptions"]}
+        for index in range(200):
+            identity = str(index)
+            owner = {"id": identity, "name": "Handler " + identity, "type": "Handler"}
+            root = "/vmrest/handlers/callhandlers/" + identity + "/transferoptions"
+            record = dict(base, URI=root + "/Standard", CallHandlerObjectId=identity, TransferOptionType="Standard", Extension="1228")
+            collection = {"resource": root, "label": "Handler", "page": 0, "owner": owner}
+            search._ingest(state, record, collection)
+            if index == 0:
+                detail = next(task for task in state["tasks"] if task["resource"] == record["URI"])
+                search._ingest(state, record, detail)
+        detail_tasks = [task for task in state["tasks"] if task["resource"].endswith("/transferoptions/Standard")]
+        self.assertEqual(len(detail_tasks), 1)
+        self.assertEqual(len(state["fields"]), 201)
+        self.assertEqual(sum("collection record reused" in item["detail"] for item in state["coverage"]), 199)
+
+    def test_parallel_reads_overlap_but_do_not_exceed_two(self):
+        state = search.new_cache_scan("unity.example")
+        state["tasks"] = state["tasks"][:4]
+        lock = threading.Lock()
+        active = [0]
+        maximum = [0]
+        starts = []
+        def get(*args, **kwargs):
+            with lock:
+                active[0] += 1
+                maximum[0] = max(maximum[0], active[0])
+                starts.append(time.monotonic())
+            threading.Event().wait(0.65)
+            with lock:
+                active[0] -= 1
+            return self.response({"@total": "0"})
+        def factory():
+            client = MagicMock()
+            client.get.side_effect = get
+            return client
+        search.advance_parallel(state, "admin", "pass", lambda value: None, factory)
+        self.assertEqual(maximum[0], 2)
+        self.assertTrue(all(second - first >= 0.45 for first, second in zip(starts, starts[1:])))
+
+    def test_parallel_auth_failure_preserves_unfinished_tasks(self):
+        state = search.new_cache_scan("unity.example")
+        state["tasks"] = state["tasks"][:4]
+        client = MagicMock()
+        client.get.return_value = self.response({}, 403)
+        checkpoints = []
+        with self.assertRaises(search.UnitySearchError):
+            search.advance_parallel(state, "admin", "pass", lambda value: checkpoints.append(value["status"]), lambda: client)
+        self.assertEqual(state["status"], "paused")
+        self.assertEqual(len(state["tasks"]), 4)
+        self.assertEqual(checkpoints, ["paused"])
+
+    def test_incremental_failure_rolls_back_checkpoint(self):
+        state = self.single_task()
+        with tempfile.TemporaryDirectory() as root:
+            search.save(root, state)
+            current = search.enable_incremental(root, state)
+            connection = search.sqlite3.connect(search._scan_db_path(root, state["host"]))
+            connection.execute("CREATE TRIGGER refuse_progress BEFORE UPDATE ON metadata BEGIN SELECT RAISE(ABORT,'blocked'); END")
+            connection.commit()
+            connection.close()
+            current["requests"] = 123
+            current["coverage"].append({"resource": "/new", "status": "Checked", "detail": "read"})
+            with self.assertRaises(search.sqlite3.Error):
+                search.save(root, current)
+            restored = search.load(root, state["host"])
+            self.assertEqual(restored["requests"], 0)
+            self.assertEqual(restored["coverage"], [])
+
 
 class UnitySearchRouteTests(unittest.TestCase):
     @classmethod
@@ -590,6 +776,36 @@ class UnitySearchRouteTests(unittest.TestCase):
         self.assertEqual(cached.content["report"]["source"], "cache")
         self.assertEqual(cached.content["report"]["match_count"], 1)
         self.assertEqual(client.get.call_count, 2)
+
+    def test_optimized_advance_returns_small_progress_and_keeps_coverage(self):
+        state = search.new_cache_scan("unity.example", "1228")
+        state["tasks"] = state["tasks"][:6]
+        search.save(self.directory.name, state)
+        client = MagicMock()
+        client.get.return_value = SimpleNamespace(status_code=200, json=lambda: {"@total": "0"})
+        with patch.object(search.requests, "Session", return_value=client):
+            response = self.call("unity_search_advance", job_id=state["job_id"])
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(response.content["report"]["progress_only"])
+        self.assertEqual(response.content["report"]["requests"], 4)
+        self.assertEqual(response.content["report"]["coverage"], [])
+        self.assertLess(len(response.body), 4000)
+        restored = self.call("unity_search_saved").content["report"]
+        self.assertEqual(len(restored["coverage"]), 4)
+        self.assertEqual(restored["pending_resources"], 2)
+
+    def test_legacy_paused_job_resumes_with_same_identity_and_progress(self):
+        state = search.new_cache_scan("unity.example", "1228")
+        state.update(status="paused", requests=729, records=7000)
+        search.save(self.directory.name, state)
+        response = self.call("unity_search_control", job_id=state["job_id"], action="resume")
+        self.assertEqual(response.status_code, 200, response.content)
+        restored = search.load(self.directory.name, "unity.example")
+        self.assertEqual(restored["job_id"], state["job_id"])
+        self.assertEqual(restored["requests"], 729)
+        self.assertEqual(restored["records"], 7000)
+        self.assertEqual(restored["tasks"], state["tasks"])
+        self.assertTrue(restored["_incremental"])
 
 
 if __name__ == "__main__":

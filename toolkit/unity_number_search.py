@@ -2,11 +2,15 @@ import hashlib
 import json
 import os
 import re
+import sqlite3
 import tempfile
+import threading
 import time
 import uuid
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
 import requests
@@ -257,11 +261,16 @@ def _records(payload, depth=0):
 
 
 def _schedule(state, resource, label, owner=None):
-    if resource in state["scheduled"]:
+    scheduled = state.get("_scheduled_index")
+    if scheduled is None:
+        scheduled = dict.fromkeys(state["scheduled"])
+        state["_scheduled_index"] = scheduled
+    if resource in scheduled:
         return
     if len(state["scheduled"]) >= MAX_REQUESTS:
         raise UnitySearchError("CUPI resource limit reached; scan is incomplete.")
     state["scheduled"].append(resource)
+    scheduled[resource] = None
     state["tasks"].append({"resource": resource, "label": label, "page": 0, "owner": owner})
 
 
@@ -272,6 +281,55 @@ def _matches_query(field, state):
         if (state["mode"] == "exact" and digits == state["query"]) or (state["mode"] == "contains" and state["query"] in digits):
             return True
     return False
+
+
+COLLECTION_REQUIRED_FIELDS = {
+    "greetings": {"URI", "CallHandlerObjectId", "GreetingType", "AfterGreetingAction", "AfterGreetingTargetConversation", "AfterGreetingTargetHandlerObjectId", "TimeExpires", "Enabled", "IgnoreDigits", "PlayWhat", "RepromptDelay", "Reprompts"},
+    "transferoptions": {"URI", "CallHandlerObjectId", "TransferOptionType", "Action", "Extension", "RnaAction", "TimeExpires", "TransferType", "UsePrimaryExtension", "PersonalCallTransfer", "Enabled"},
+}
+
+
+def _collection_fingerprint(record):
+    def sanitized(value):
+        if isinstance(value, dict):
+            return {str(key): sanitized(item) for key, item in value.items() if not EXCLUDED.search(str(key))}
+        if isinstance(value, list):
+            return [sanitized(item) for item in value]
+        return value
+    value = sanitized(record)
+    schema = hashlib.sha256(json.dumps(sorted(value), ensure_ascii=True).encode()).hexdigest()
+    fingerprint = hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
+    return schema, fingerprint
+
+
+def _collection_reusable(state, record, task, resource):
+    candidates = state.setdefault("collection_candidates", {})
+    verified = state.setdefault("verified_collection_schemas", {})
+    mismatches = state.setdefault("collection_mismatch_families", {})
+    candidate = candidates.get(task["resource"])
+    if candidate and not mismatches.get(candidate["family"]):
+        schema, fingerprint = _collection_fingerprint(record)
+        if schema == candidate["schema"] and fingerprint == candidate["fingerprint"]:
+            verified[candidate["family"]] = schema
+            inflight = state.get("_inflight_resources", {})
+            for pending in list(state["tasks"]):
+                evidence = candidates.get(pending["resource"])
+                if evidence and pending["resource"] != task["resource"] and pending["resource"] not in inflight and evidence["family"] == candidate["family"] and evidence["schema"] == schema and not pending.get("page"):
+                    state["tasks"].remove(pending)
+                    state["coverage"].append({"resource": pending["resource"], "status": "Checked", "detail": "Complete collection record reused after matching detail verification."})
+        else:
+            mismatches[candidate["family"]] = True
+            verified.pop(candidate["family"], None)
+    family = task["resource"].rsplit("/", 1)[-1]
+    required = COLLECTION_REQUIRED_FIELDS.get(family)
+    if not required or not required.issubset(record) or not resource.startswith(task["resource"] + "/"):
+        return False
+    if not task["resource"].startswith(("/vmrest/handlers/callhandlers/", "/vmrest/callhandlertemplates/")):
+        return False
+    family = task["resource"].split("/")[2] + "/" + family
+    schema, fingerprint = _collection_fingerprint(record)
+    candidates[resource] = {"family": family, "schema": schema, "fingerprint": fingerprint}
+    return not mismatches.get(family) and verified.get(family) == schema
 
 
 def _ingest(state, record, task):
@@ -290,6 +348,11 @@ def _ingest(state, record, task):
             owner["type"] = "Call Handler (type not returned)" if "IsPrimary" not in record else "Primary user call handler" if str(record["IsPrimary"]).lower() == "true" else "System Call Handler"
         state["objects"][identity] = owner
     item_resource = str(record.get("URI") or resource)
+    try:
+        canonical_item = safe_resource(item_resource, state["host"])
+    except UnitySearchError:
+        canonical_item = resource
+    reusable = _collection_reusable(state, record, task, canonical_item)
     fields, edges = record_evidence(record, owner, item_resource)
     if state.get("collect_all_numbers"):
         state["fields"].extend(field for field in fields if any(len(re.sub(r"[^0-9]", "", token)) >= 3 for token in re.findall(r"[0-9]+(?:[ ().+-]*[0-9]+)*", field["value"])))
@@ -324,7 +387,16 @@ def _ingest(state, record, task):
                 state["objects"].setdefault(identity, linked_owner)
             _schedule(state, link, linked_owner["type"], linked_owner)
         elif is_child:
-            _schedule(state, link, owner["type"], owner)
+            if leaf == "uri" and reusable and link == canonical_item:
+                state["coverage"].append({"resource": link, "status": "Checked", "detail": "Complete collection record reused after matching detail verification."})
+            else:
+                _schedule(state, link, owner["type"], owner)
+                candidate = state["collection_candidates"].get(link)
+                if candidate and not state["verified_collection_schemas"].get(candidate["family"]):
+                    for pending in reversed(state["tasks"]):
+                        if pending["resource"] == link:
+                            pending["probe"] = True
+                            break
         elif leaf != "uri":
             state["excluded_links"].append({"resource": item_resource, "reason": f"{field}: resource outside covered child collections"})
     if task["owner"] is None and record.get("URI"):
@@ -341,7 +413,7 @@ def _ingest(state, record, task):
             state["coverage"].append({"resource": resource, "status": "Failed", "detail": str(exc)})
 
 
-def advance_scan(state, username, password, session=None):
+def advance_scan(state, username, password, session=None, task=None):
     if state["status"] != "running":
         return state
     if not username or not password:
@@ -350,7 +422,8 @@ def advance_scan(state, username, password, session=None):
         state["status"] = "completed" if not state["tasks"] else "failed"
         state["updated_at"] = timestamp()
         return state
-    task = state["tasks"][0]
+    task = task or state["tasks"][0]
+    state.setdefault("_dirty_tasks", {})[task["resource"]] = None
     resource = safe_resource(task["resource"], state["host"])
     owned_session = session is None
     client = session or requests.Session()
@@ -364,7 +437,7 @@ def advance_scan(state, username, password, session=None):
             raise UnitySearchError(f"Unity denied read access (HTTP {response.status_code}); renew credentials/permissions and Resume.")
         state["requests"] += 1
         if response.status_code == 404 and resource in OPTIONAL_ROOTS and task["page"] == 0 and state.get("collect_all_numbers"):
-            state["tasks"].pop(0)
+            state["tasks"].remove(task)
             detail = "Optional CUPI inventory endpoint is not supported (HTTP 404); this resource was not searched."
             state["coverage"].append({"resource": resource, "status": "Unsupported", "detail": detail})
             state["excluded_links"].append({"resource": resource, "reason": detail})
@@ -384,6 +457,7 @@ def advance_scan(state, username, password, session=None):
             raise UnitySearchError("CUPI repeated a page; pagination incomplete.")
         if records:
             previous.append(signature)
+            state.setdefault("_dirty_mappings", {}).setdefault("page_signatures", {})[resource] = None
         if not records and total and task.get("consumed", 0) < total:
             raise UnitySearchError("CUPI returned an empty page before the reported total.")
         for record in records:
@@ -397,7 +471,7 @@ def advance_scan(state, username, password, session=None):
             task["consumed"] = consumed
             task["page"] += 1
         else:
-            state["tasks"].pop(0)
+            state["tasks"].remove(task)
             state["coverage"].append({"resource": resource, "status": "Checked", "detail": f"{consumed} records read"})
     except UnityCountOnlyPage as exc:
         if task["page"] == 0 and not task.get("consumed", 0):
@@ -405,16 +479,16 @@ def advance_scan(state, username, password, session=None):
             task["count_only_retry"] = True
             task["count_only_total"] = exc.total
         else:
-            state["tasks"].pop(0)
+            state["tasks"].remove(task)
             state["coverage"].append({"resource": resource, "status": "Failed", "detail": str(exc) + " Page-1 retry did not return records."})
     except UnitySearchError as exc:
         if state["status"] == "paused":
             raise
-        state["tasks"].pop(0)
+        state["tasks"].remove(task)
         state["coverage"].append({"resource": resource, "status": "Failed", "detail": str(exc)})
     except (requests.RequestException, ValueError):
         state["requests"] += 1
-        state["tasks"].pop(0)
+        state["tasks"].remove(task)
         state["coverage"].append({"resource": resource, "status": "Failed", "detail": "CUPI network/JSON read failed; resource not checked."})
     finally:
         if owned_session:
@@ -439,6 +513,86 @@ def scan_report(state):
             "retention": RETENTION, "limitations": LIMITS, "cache_build": bool(state.get("collect_all_numbers"))}
 
 
+def progress_report(state):
+    if state["status"] not in {"running", "paused"}:
+        return scan_report(state)
+    report = {"schema_version": 1, "host": state["host"], "job_id": state["job_id"], "query": state["query"],
+              "mode": state["mode"], "status": state["status"], "started_at": state["started_at"], "checked_at": state["updated_at"],
+              "rows": [], "match_count": 0, "requests": state["requests"], "records": state["records"],
+              "pending_resources": len(state["tasks"]), "coverage": [], "failures": [], "excluded_links": [],
+              "complete": False, "cache_ready": False, "cache_build": bool(state.get("collect_all_numbers")),
+              "retention": RETENTION, "limitations": LIMITS, "progress_only": True,
+              "checked_resources": len(state["coverage"]), "concurrency": 2, "requests_per_second": 2}
+    for item in state["coverage"]:
+        if item["status"] not in {"Checked", "Unsupported"}:
+            report["failures"].append(item)
+    report["failure_count"] = len(report["failures"])
+    report["failures"] = report["failures"][-20:]
+    return report
+
+
+class _BufferedRead:
+    def __init__(self, future):
+        self.future = future
+
+    def get(self, *args, **kwargs):
+        return self.future.result()
+
+
+def advance_parallel(state, username, password, checkpoint, session_factory=None):
+    if state["status"] != "running":
+        return state
+    if not username or not password:
+        raise UnitySearchError("Unity session credentials expired; log in again, then Resume.")
+    tasks = sorted(state["tasks"], key=lambda task: not task.get("probe", False))[:min(4, max(0, MAX_REQUESTS - state["requests"]))]
+    if not tasks:
+        return advance_scan(state, username, password)
+    session_factory = session_factory or requests.Session
+    local = threading.local()
+    clients = []
+    lock = threading.Lock()
+    cancelled = threading.Event()
+    last_started = [min(float(state.get("last_read_started_at", 0)), time.time())]
+    state["_inflight_resources"] = dict.fromkeys(task["resource"] for task in tasks)
+
+    def fetch(task):
+        resource = safe_resource(task["resource"], state["host"])
+        with lock:
+            wait = max(0, 0.5 - (time.time() - last_started[0]))
+            if cancelled.wait(wait):
+                raise requests.RequestException("Parallel read cancelled before submission.")
+            last_started[0] = time.time()
+        if not hasattr(local, "client"):
+            local.client = session_factory()
+            with lock:
+                clients.append(local.client)
+        return local.client.get("https://" + state["host"] + resource,
+                                params={"rowsPerPage": PAGE_SIZE, "pageNumber": task["page"]},
+                                auth=(username, password), headers={"Accept": "application/json"},
+                                verify=False, timeout=(5, 15), allow_redirects=False)
+
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futures = [(task, executor.submit(fetch, dict(task))) for task in tasks]
+            for task, future in futures:
+                try:
+                    advance_scan(state, username, password, _BufferedRead(future), task=task)
+                except UnitySearchError:
+                    cancelled.set()
+                    state["last_read_started_at"] = last_started[0]
+                    checkpoint(state)
+                    raise
+                state["last_read_started_at"] = last_started[0]
+                if state["status"] != "completed":
+                    checkpoint(state)
+    finally:
+        cancelled.set()
+        state.pop("_inflight_resources", None)
+        for client in clients:
+            client.close()
+    return state
+
+
 def cache_metadata(cache, now=None):
     now = now or datetime.now(timezone.utc)
     try:
@@ -453,6 +607,25 @@ def cache_metadata(cache, now=None):
     return {"available": True, "fresh": age < CACHE_TTL_SECONDS, "cached_at": cached_at.isoformat(),
             "loaded_at": cache["loaded_at"], "expires_at": (cached_at + timedelta(seconds=CACHE_TTL_SECONDS)).isoformat(),
             "age_seconds": int(age), "ttl_seconds": CACHE_TTL_SECONDS, "field_count": len(cache["fields"]) if "fields" in cache else cache["field_count"]}
+
+
+_CACHE_INFO = {}
+_CACHE_INFO_LOCK = threading.Lock()
+
+
+def cache_info(root, host):
+    path = _path(root, host, "cache")
+    try:
+        details = os.stat(path)
+    except FileNotFoundError:
+        return {"available": False, "fresh": False, "ttl_seconds": CACHE_TTL_SECONDS}
+    signature = (details.st_mtime_ns, details.st_size, details.st_ino)
+    with _CACHE_INFO_LOCK:
+        previous = _CACHE_INFO.get(path)
+        if previous is None or previous[0] != signature:
+            metadata = cache_metadata(load(root, host, "cache"))
+            _CACHE_INFO[path] = (signature, metadata)
+        return cache_metadata(_CACHE_INFO[path][1])
 
 
 def completed_cache(state):
@@ -486,9 +659,12 @@ def _path(root, host, kind):
     return os.path.join(root, hashlib.sha256(normalize_host(host).encode()).hexdigest() + "_" + kind + ".json")
 
 
-def load(root, host, kind="scan"):
-    with open(_path(root, host, kind), encoding="utf-8") as handle:
-        value = json.load(handle)
+def load(root, host, kind="scan", _json_only=False):
+    if kind == "scan" and not _json_only and os.path.exists(_scan_db_path(root, host)):
+        value = _load_incremental(root, host)
+    else:
+        with open(_path(root, host, kind), encoding="utf-8") as handle:
+            value = json.load(handle)
     lists = ("tasks", "fields", "edges", "coverage", "excluded_links", "scheduled") if kind == "scan" else ("fields", "edges", "coverage", "excluded_links") if kind == "cache" else ("rows", "coverage", "failures", "excluded_links")
     if not isinstance(value, dict) or value.get("schema_version") != 1 or value.get("host") != normalize_host(host) or any(not isinstance(value.get(key), list) for key in lists) or not value.get("job_id") or value.get("status") not in {"running", "paused", "cancelled", "failed", "completed"}:
         raise UnitySearchError("Saved Unity lookup is invalid; it was not overwritten.")
@@ -499,17 +675,21 @@ def load(root, host, kind="scan"):
     return value
 
 
-def save(root, value, kind="scan"):
+def save(root, value, kind="scan", _json_only=False):
+    if kind == "scan" and not _json_only and (value.get("_incremental") or os.path.exists(_scan_db_path(root, value["host"]))):
+        _save_incremental(root, value)
+        return
+    value = {key: item for key, item in value.items() if not key.startswith("_")}
     path = _path(root, value["host"], kind)
     os.makedirs(root, exist_ok=True)
     if os.path.exists(path):
-        load(root, value["host"], kind)
+        load(root, value["host"], kind, _json_only=_json_only)
     temp_path = ""
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=root, delete=False) as handle:
             temp_path = handle.name
             os.chmod(temp_path, 0o600)
-            json.dump(value, handle, ensure_ascii=True)
+            handle.write(json.dumps(value, ensure_ascii=True, separators=(",", ":")))
             handle.flush()
             os.fsync(handle.fileno())
         for attempt in range(3):
@@ -530,3 +710,172 @@ def save(root, value, kind="scan"):
     finally:
         if temp_path:
             os.unlink(temp_path)
+
+
+SCAN_ARRAYS = ("fields", "edges", "coverage", "excluded_links", "scheduled")
+SCAN_MAPPINGS = {"objects": "objects", "page_signatures": "signatures", "collection_candidates": "collection_candidates", "verified_collection_schemas": "verified_collection_schemas", "collection_mismatch_families": "collection_mismatch_families"}
+SCAN_STRUCTURES = set(SCAN_ARRAYS) | {"tasks"} | set(SCAN_MAPPINGS)
+
+
+def _compact(value):
+    return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+
+
+def _scan_db_path(root, host):
+    return _path(root, host, "scan") + ".sqlite3"
+
+
+def _scan_metadata(state):
+    return {key: value for key, value in state.items() if key not in SCAN_STRUCTURES and not key.startswith("_")}
+
+
+def _load_incremental(root, host):
+    path = _scan_db_path(root, host)
+    connection = sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True)
+    try:
+        connection.execute("BEGIN")
+        metadata = dict(connection.execute("SELECT name, data FROM metadata"))
+        state = {key: json.loads(value) for key, value in metadata.items() if not key.startswith("_")}
+        state["_db_revision"] = int(metadata["_revision"])
+        task_rows = list(connection.execute("SELECT resource, position, data FROM tasks ORDER BY position"))
+        state["tasks"] = [json.loads(row[2]) for row in task_rows]
+        state["_db_tasks"] = {row[0]: (row[1], row[2]) for row in task_rows}
+        state["_db_task_ids"] = {task["resource"]: id(task) for task in state["tasks"]}
+        state["_db_position"] = max((row[1] for row in task_rows), default=-1)
+        for category in SCAN_ARRAYS:
+            state[category] = [json.loads(row[0]) for row in connection.execute("SELECT data FROM arrays WHERE category=? ORDER BY position", (category,))]
+        for key, category in SCAN_MAPPINGS.items():
+            state[key] = {identity: json.loads(data) for identity, data in connection.execute("SELECT identity, data FROM mappings WHERE category=?", (category,))}
+        state["_db_counts"] = {key: len(state[key]) for key in SCAN_ARRAYS}
+        state["_db_array_ids"] = {key: id(state[key]) for key in SCAN_ARRAYS}
+        state["_db_mappings"] = {key: {identity: _compact(value) for identity, value in state[key].items()} for key in SCAN_MAPPINGS}
+        state["_db_mapping_ids"] = {key: {identity: id(value) for identity, value in state[key].items()} for key in SCAN_MAPPINGS}
+        state["_incremental"] = True
+        return state
+    except (sqlite3.Error, KeyError, ValueError, TypeError) as exc:
+        raise UnitySearchError("Incremental Unity scan checkpoint is invalid; it was not overwritten.") from exc
+    finally:
+        connection.close()
+
+
+def _db_schema(connection):
+    connection.execute("CREATE TABLE metadata (name TEXT PRIMARY KEY, data TEXT NOT NULL)")
+    connection.execute("CREATE TABLE tasks (resource TEXT PRIMARY KEY, position INTEGER NOT NULL, data TEXT NOT NULL)")
+    connection.execute("CREATE TABLE arrays (category TEXT NOT NULL, position INTEGER NOT NULL, data TEXT NOT NULL, PRIMARY KEY(category, position))")
+    connection.execute("CREATE TABLE mappings (category TEXT NOT NULL, identity TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(category, identity))")
+
+
+def _db_seed(connection, state, revision=0):
+    for table in ("metadata", "tasks", "arrays", "mappings"):
+        connection.execute("DELETE FROM " + table)
+    connection.executemany("INSERT INTO metadata VALUES (?,?)", ((key, _compact(value)) for key, value in _scan_metadata(state).items()))
+    connection.execute("INSERT INTO metadata VALUES ('_revision',?)", (str(revision),))
+    connection.executemany("INSERT INTO tasks VALUES (?,?,?)", ((task["resource"], index, _compact(task)) for index, task in enumerate(state["tasks"])))
+    for category in SCAN_ARRAYS:
+        connection.executemany("INSERT INTO arrays VALUES (?,?,?)", ((category, index, _compact(value)) for index, value in enumerate(state[category])))
+    for key, category in SCAN_MAPPINGS.items():
+        connection.executemany("INSERT INTO mappings VALUES (?,?,?)", ((category, identity, _compact(value)) for identity, value in state.get(key, {}).items()))
+
+
+def enable_incremental(root, state):
+    if state.get("_incremental"):
+        return state
+    path = _scan_db_path(root, state["host"])
+    if os.path.exists(path):
+        existing = load(root, state["host"])
+        if existing["job_id"] != state["job_id"]:
+            raise UnitySearchError("Unity scan changed; reload the latest scan before resuming.")
+        return existing
+    load(root, state["host"])
+    os.makedirs(root, exist_ok=True)
+    temporary = ""
+    try:
+        with tempfile.NamedTemporaryFile(dir=root, delete=False) as handle:
+            temporary = handle.name
+        os.chmod(temporary, 0o600)
+        connection = sqlite3.connect(temporary)
+        try:
+            connection.execute("PRAGMA synchronous=FULL")
+            with connection:
+                _db_schema(connection)
+                _db_seed(connection, state)
+        finally:
+            connection.close()
+        os.replace(temporary, path)
+        temporary = ""
+        if os.name != "nt":
+            directory = os.open(root, os.O_RDONLY)
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+    finally:
+        if temporary:
+            os.unlink(temporary)
+    return load(root, state["host"])
+
+
+def _save_incremental(root, state):
+    path = _scan_db_path(root, state["host"])
+    connection = sqlite3.connect(path)
+    try:
+        connection.execute("PRAGMA synchronous=FULL")
+        connection.execute("BEGIN IMMEDIATE")
+        metadata = dict(connection.execute("SELECT name, data FROM metadata"))
+        revision = int(metadata["_revision"])
+        if json.loads(metadata["job_id"]) != state["job_id"]:
+            _db_seed(connection, state, revision + 1)
+        else:
+            if state.get("_db_revision", revision) != revision:
+                raise UnitySearchError("Unity scan changed in another request; reload saved progress.")
+            previous_tasks = state.get("_db_tasks") or {resource: (position, data) for resource, position, data in connection.execute("SELECT resource, position, data FROM tasks")}
+            current_tasks = {task["resource"]: task for task in state["tasks"]}
+            removed = previous_tasks.keys() - current_tasks.keys()
+            connection.executemany("DELETE FROM tasks WHERE resource=?", ((resource,) for resource in removed))
+            next_position = max(state.get("_db_position", -1), max((value[0] for value in previous_tasks.values()), default=-1))
+            task_values = {}
+            for resource, task in current_tasks.items():
+                previous = previous_tasks.get(resource)
+                unchanged = previous and state.get("_db_task_ids", {}).get(resource) == id(task) and resource not in state.get("_dirty_tasks", {})
+                data = previous[1] if unchanged else _compact(task)
+                if previous is None:
+                    next_position += 1
+                position = previous[0] if previous else next_position
+                task_values[resource] = (position, data)
+                if previous is None or data != previous[1]:
+                    connection.execute("INSERT OR REPLACE INTO tasks VALUES (?,?,?)", (resource, position, data))
+            for category in SCAN_ARRAYS:
+                count = state.get("_db_counts", {}).get(category)
+                if count is None:
+                    count = connection.execute("SELECT COUNT(*) FROM arrays WHERE category=?", (category,)).fetchone()[0]
+                if len(state[category]) < count or state.get("_db_array_ids", {}).get(category, id(state[category])) != id(state[category]):
+                    connection.execute("DELETE FROM arrays WHERE category=?", (category,))
+                    count = 0
+                connection.executemany("INSERT INTO arrays VALUES (?,?,?)", ((category, index, _compact(value)) for index, value in enumerate(state[category][count:], count)))
+            mapping_values = {}
+            for key, category in SCAN_MAPPINGS.items():
+                previous = state.get("_db_mappings", {}).get(key)
+                if previous is None:
+                    previous = dict(connection.execute("SELECT identity, data FROM mappings WHERE category=?", (category,)))
+                values = {identity: previous[identity] if identity in previous and state.get("_db_mapping_ids", {}).get(key, {}).get(identity) == id(value) and identity not in state.get("_dirty_mappings", {}).get(key, {}) else _compact(value) for identity, value in state.get(key, {}).items()}
+                mapping_values[key] = values
+                connection.executemany("DELETE FROM mappings WHERE category=? AND identity=?", ((category, identity) for identity in previous.keys() - values.keys()))
+                connection.executemany("INSERT OR REPLACE INTO mappings VALUES (?,?,?)", ((category, identity, data) for identity, data in values.items() if previous.get(identity) != data))
+            connection.executemany("INSERT OR REPLACE INTO metadata VALUES (?,?)", ((key, _compact(value)) for key, value in _scan_metadata(state).items()))
+            connection.execute("UPDATE metadata SET data=? WHERE name='_revision'", (str(revision + 1),))
+        connection.commit()
+        state["_db_revision"] = revision + 1
+        state["_db_tasks"] = {task["resource"]: (index, _compact(task)) for index, task in enumerate(state["tasks"])} if json.loads(metadata["job_id"]) != state["job_id"] else task_values
+        state["_db_position"] = max((value[0] for value in state["_db_tasks"].values()), default=-1)
+        state["_db_task_ids"] = {task["resource"]: id(task) for task in state["tasks"]}
+        state["_db_counts"] = {key: len(state[key]) for key in SCAN_ARRAYS}
+        state["_db_array_ids"] = {key: id(state[key]) for key in SCAN_ARRAYS}
+        state["_db_mappings"] = {key: {identity: _compact(value) for identity, value in state.get(key, {}).items()} for key in SCAN_MAPPINGS} if json.loads(metadata["job_id"]) != state["job_id"] else mapping_values
+        state["_db_mapping_ids"] = {key: {identity: id(value) for identity, value in state.get(key, {}).items()} for key in SCAN_MAPPINGS}
+        state.pop("_dirty_tasks", None)
+        state.pop("_dirty_mappings", None)
+        state["_incremental"] = True
+    finally:
+        connection.close()
+    if state["status"] in {"paused", "cancelled", "completed", "failed"}:
+        save(root, state, _json_only=True)
