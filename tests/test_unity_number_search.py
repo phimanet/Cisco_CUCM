@@ -237,6 +237,99 @@ class UnityNumberSearchTests(unittest.TestCase):
         state = {"query": "4697061228", "mode": "exact", "fields": fields, "objects": {"one": owner}, "edges": []}
         self.assertEqual(len(search.find_matches(state)), 3)
 
+    def test_number_entry_focus_excludes_non_dialing_digits(self):
+        owner = {"id": "one", "name": "One", "type": "Handler"}
+        record = {"DtmfAccessId": "1228", "Extension": "1228", "Description": "old 1228", "Language": "1228", "TransferRings": 1228,
+                  "TimeExpires": "2026-12-28", "PrependDigits": "1228", "AfterGreetingTargetHandlerObjectId": "other",
+                  "Inputs": [{"TransferNumber": "1228"}]}
+        fields, edges = search.record_evidence(record, owner, "/vmrest/handlers/callhandlers/one", number_entry_only=True)
+        self.assertEqual({field["field"] for field in fields}, {"DtmfAccessId", "Extension", "PrependDigits", "Inputs[0].TransferNumber"})
+        self.assertEqual(edges[0]["target"], "other")
+
+    def test_number_entry_focus_keeps_routing_and_restriction_values(self):
+        owner = {"id": "one", "name": "One", "type": "Rule"}
+        for resource in ("/vmrest/routingrules/one/conditions/two", "/vmrest/restrictiontables/one/patterns/two"):
+            fields, _ = search.record_evidence({"Value": "1228", "Pattern": "1228", "Priority": 1228}, owner, resource, number_entry_only=True)
+            self.assertEqual({field["field"] for field in fields}, {"Value", "Pattern"})
+
+    def test_number_entry_focus_migrates_without_losing_number_evidence(self):
+        state = search.new_cache_scan("unity.example", "1228")
+        state.pop("number_entry_focus")
+        state["requests"] = 1020
+        owner = {"id": "one", "name": "One", "type": "Handler"}
+        fields, edges = search.record_evidence({"Extension": "1228", "Language": "1228", "TargetHandlerObjectId": "other"}, owner, "/vmrest/handlers/callhandlers/one")
+        state.update(fields=fields, edges=edges)
+        state["tasks"].append({"resource": "/vmrest/users/one/notificationdevices/smtpdevices/two", "label": "Notification", "owner": owner, "page": 0})
+        search.focus_number_entry(state)
+        self.assertEqual(state["requests"], 1020)
+        self.assertEqual([item["field"] for item in state["fields"]], ["Extension"])
+        self.assertEqual(state["edges"], edges)
+        self.assertFalse(any("smtpdevices" in task["resource"] for task in state["tasks"]))
+        self.assertTrue(state["excluded_links"])
+
+    def test_number_entry_resources_keep_phone_pager_callback_and_mwi(self):
+        for family in ("phonedevices", "pagerdevices", "htmldevices", "messagewaitingindicators", "alternateextensions"):
+            self.assertTrue(search.number_entry_resource("/vmrest/users/one/" + family))
+        self.assertFalse(search.number_entry_resource("/vmrest/users/one/notificationdevices/smtpdevices/two"))
+
+    def test_user_collection_reuse_keeps_number_child_discovery(self):
+        state = search.new_cache_scan("unity.example")
+        root = {"resource": "/vmrest/users", "label": "Users", "page": 0, "owner": None}
+        first = {"URI": "/vmrest/users/one", "ObjectId": "one", "Alias": "One", "DtmfAccessId": "1228"}
+        search._ingest(state, first, root)
+        detail = next(task for task in state["tasks"] if task["resource"] == first["URI"])
+        search._ingest(state, first, detail)
+        second = dict(first, URI="/vmrest/users/two", ObjectId="two", Alias="Two")
+        search._ingest(state, second, root)
+        resources = [task["resource"] for task in state["tasks"]]
+        self.assertNotIn("/vmrest/users/two", resources)
+        self.assertIn("/vmrest/users/two/alternateextensions", resources)
+        self.assertIn("/vmrest/users/two/usernotificationdevices", resources)
+        self.assertIn("/vmrest/users/two/messagewaitingindicators", resources)
+
+    def test_focused_search_filters_legacy_cache_without_unity_reads(self):
+        cache = self.cache_fixture()
+        cache.pop("number_entry_focus", None)
+        item = dict(cache["fields"][0], field="Language", value="1228")
+        cache["fields"].append(item)
+        with patch.object(search.requests, "Session") as client:
+            report = search.search_cache(cache, "1228")
+        client.assert_not_called()
+        self.assertEqual(report["match_count"], 1)
+        self.assertEqual(report["scope"], "Number-entry settings")
+        self.assertIn("Descriptions, dates, language codes", report["limitations"])
+
+    def test_focused_migration_persists_job_and_filtered_evidence(self):
+        state = search.new_cache_scan("unity.example", "1228")
+        state.pop("number_entry_focus")
+        owner = {"id": "one", "name": "One", "type": "Handler"}
+        state["fields"], _ = search.record_evidence({"Extension": "1228", "Language": "1228"}, owner, "/one")
+        state.update(status="paused", requests=1020)
+        with tempfile.TemporaryDirectory() as root:
+            search.save(root, state)
+            converted = search.enable_incremental(root, state)
+            restored = search.load(root, state["host"])
+            self.assertEqual(converted["job_id"], state["job_id"])
+            self.assertEqual(restored["requests"], 1020)
+            self.assertTrue(restored["number_entry_focus"])
+            self.assertEqual([item["field"] for item in restored["fields"]], ["Extension"])
+
+    def test_handler_collection_reuse_keeps_all_transfer_and_caller_settings(self):
+        state = search.new_cache_scan("unity.example")
+        root = {"resource": "/vmrest/handlers/callhandlers", "label": "Handlers", "page": 0, "owner": None}
+        first = {"URI": "/vmrest/handlers/callhandlers/one", "ObjectId": "one", "DtmfAccessId": "1228", "IsPrimary": "false",
+                 "TransferOptionsURI": "/vmrest/handlers/callhandlers/one/transferoptions", "MenuEntriesURI": "/vmrest/handlers/callhandlers/one/menuentries", "GreetingsURI": "/vmrest/handlers/callhandlers/one/greetings"}
+        search._ingest(state, first, root)
+        detail = next(task for task in state["tasks"] if task["resource"] == first["URI"])
+        search._ingest(state, first, detail)
+        second = {key: value.replace("/one", "/two") if isinstance(value, str) else value for key, value in first.items()}
+        second["ObjectId"] = "two"
+        search._ingest(state, second, root)
+        resources = [task["resource"] for task in state["tasks"]]
+        self.assertNotIn("/vmrest/handlers/callhandlers/two", resources)
+        for child in ("transferoptions", "menuentries", "greetings"):
+            self.assertIn("/vmrest/handlers/callhandlers/two/" + child, resources)
+
     def test_failed_endpoint_does_not_claim_complete(self):
         state = self.single_task()
         client = MagicMock()

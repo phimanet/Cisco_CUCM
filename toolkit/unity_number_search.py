@@ -28,6 +28,13 @@ class UnityCountOnlyPage(UnitySearchError):
 
 EXCLUDED = re.compile(r"password|passwd|credential|secret|token|pin(?:hash|digest|$)|certificate|authorizationcode|voicename|voicefile|streamfile|recording", re.I)
 NUMBER_FIELD = re.compile(r"extension|dtmfaccessid|phone|dial|callback|contactnumber|transfernumber|callingnumber|callednumber|forwardingnumber", re.I)
+NUMBER_ENTRY_FIELDS = {"dtmfaccessid", "extension", "extensions", "extensionnumber", "extensionnumbers", "alternateextension",
+                       "phonenumber", "phonenumbers", "telephone", "telephonenumber", "mobile", "mobilephone", "homephone", "workphone", "faxnumber",
+                       "transfernumber", "transferaltcontactnumber", "alternatecontactnumber", "contactnumber", "callbacknumber", "outdialnumber",
+                       "callednumber", "callingnumber", "forwardingnumber", "forwardednumber", "destinationnumber", "targetnumber", "pilotnumber",
+                       "mwiextension", "mwinumber", "notificationnumber", "dialstring", "dialdigits", "prependdigits", "postdialdigits", "afterdialdigits",
+                       "dialingprefix", "dialprefix", "prefix", "trunkaccesscode", "accessdigits", "dialoutnumber", "transferextension"}
+NUMBER_ENTRY_SCOPE = "Number-entry settings only: extensions, transfer/alternate-contact destinations, dial strings/prefixes, notification/MWI numbers and number-rule values, plus indirect handler references. Descriptions, dates, language codes, counters and other non-dialing scalar fields are excluded."
 UUID = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$", re.I)
 CACHE_TTL_SECONDS = 8 * 60 * 60
 RETENTION = "Latest configuration cache, latest scan and latest completed lookup per Unity host only; not an archive. Cache expires after eight hours from the beginning of its load. External runtime data survives normal restarts and code pulls, not data deletion or older data/VM restores."
@@ -67,7 +74,17 @@ def scalar_fields(value, prefix=""):
         yield prefix, str(value)
 
 
-def record_evidence(record, owner, resource):
+def is_number_entry(field, resource):
+    leaf = re.sub(r"\[[0-9]+\]$", "", field.rsplit(".", 1)[-1])
+    key = re.sub(r"[^a-z]", "", leaf.lower())
+    if key in NUMBER_ENTRY_FIELDS:
+        return True
+    parts = resource.lower().split("/")
+    rule = any(part in {"ruleconditions", "routingruleconditions", "conditions", "restrictionpatterns", "patterns"} for part in parts)
+    return rule and key in {"value", "conditionvalue", "operand", "operandvalue", "fieldvalue", "leftoperand", "rightoperand", "pattern", "numberpattern", "dialpattern", "digits"}
+
+
+def record_evidence(record, owner, resource, number_entry_only=False):
     context = "; ".join(f"{key}={record[key]}" for key in (
         "TransferOptionType", "GreetingType", "TouchtoneKey", "Key", "Action",
         "AfterGreetingAction", "AfterMessageAction", "TargetConversation",
@@ -83,10 +100,12 @@ def record_evidence(record, owner, resource):
                           "resource": resource, "context": context})
         if lower.endswith(("uri", "url", "objectid", "objectids")) or lower.startswith("@") or UUID.fullmatch(text):
             continue
+        if number_entry_only and not is_number_entry(field, resource):
+            continue
         matches.append({"object_id": owner["id"], "object_name": owner["name"],
                         "object_type": owner["type"], "field": field, "value": text,
                         "resource": resource, "context": context,
-                        "kind": "Number field" if NUMBER_FIELD.search(leaf) else "Text / setting occurrence"})
+                        "kind": "Number-entry field" if number_entry_only else "Number field" if NUMBER_FIELD.search(leaf) else "Text / setting occurrence"})
     return matches, edges
 
 
@@ -95,6 +114,8 @@ def find_matches(state):
     mode = state["mode"]
     rows, keys = [], set()
     for item in state["fields"]:
+        if state.get("number_entry_focus") and not is_number_entry(item["field"], item["resource"]):
+            continue
         text = item["value"]
         tokens = re.findall(r"[0-9]+(?:[ ().+-]*[0-9]+)*", text)
         numbers = [re.sub(r"[^0-9]", "", token) for token in tokens]
@@ -167,6 +188,31 @@ MAX_REQUESTS = 50000
 PAGE_SIZE = 200
 
 
+def number_entry_resource(resource):
+    parts = resource.lower().strip("/").split("/")
+    return not any(part in {"smtpdevices", "ports", "callhandlerowners", "messageagingpolicies"} for part in parts)
+
+
+def focus_number_entry(state):
+    if not state.get("collect_all_numbers") or state.get("number_entry_focus"):
+        return state
+    state["number_entry_focus"] = True
+    state["fields"] = [item for item in state["fields"] if is_number_entry(item["field"], item["resource"])]
+    pending = []
+    for task in state["tasks"]:
+        if number_entry_resource(task["resource"]):
+            pending.append(task)
+        else:
+            state["excluded_links"].append({"resource": task["resource"], "reason": "Excluded by number-entry focus: non-dialing resource."})
+    state["tasks"] = pending
+    for label, resource in SEEDS[:2]:
+        if not any(task["resource"] == resource for task in state["tasks"]):
+            state["page_signatures"].pop(resource, None)
+            state.setdefault("_dirty_mappings", {}).setdefault("page_signatures", {})[resource] = None
+            state["tasks"].insert(0, {"resource": resource, "label": label, "page": 0, "owner": None, "probe": True})
+    return state
+
+
 def safe_resource(value, host):
     parsed = urlsplit(str(value or ""))
     if parsed.scheme or parsed.netloc:
@@ -199,6 +245,7 @@ def new_cache_scan(host, query="", mode="contains"):
     state = new_scan(host, query or "000", mode)
     state["query"] = normalize_query(query) if query else ""
     state["collect_all_numbers"] = True
+    state["number_entry_focus"] = True
     return state
 
 
@@ -284,6 +331,8 @@ def _matches_query(field, state):
 
 
 COLLECTION_REQUIRED_FIELDS = {
+    "callhandlers": {"URI", "ObjectId", "DtmfAccessId", "IsPrimary", "TransferOptionsURI", "MenuEntriesURI", "GreetingsURI"},
+    "users": {"URI", "ObjectId", "Alias", "DtmfAccessId"},
     "greetings": {"URI", "CallHandlerObjectId", "GreetingType", "AfterGreetingAction", "AfterGreetingTargetConversation", "AfterGreetingTargetHandlerObjectId", "TimeExpires", "Enabled", "IgnoreDigits", "PlayWhat", "RepromptDelay", "Reprompts"},
     "transferoptions": {"URI", "CallHandlerObjectId", "TransferOptionType", "Action", "Extension", "RnaAction", "TimeExpires", "TransferType", "UsePrimaryExtension", "PersonalCallTransfer", "Enabled"},
 }
@@ -324,7 +373,7 @@ def _collection_reusable(state, record, task, resource):
     required = COLLECTION_REQUIRED_FIELDS.get(family)
     if not required or not required.issubset(record) or not resource.startswith(task["resource"] + "/"):
         return False
-    if not task["resource"].startswith(("/vmrest/handlers/callhandlers/", "/vmrest/callhandlertemplates/")):
+    if task["resource"] not in {"/vmrest/handlers/callhandlers", "/vmrest/users"} and not task["resource"].startswith(("/vmrest/handlers/callhandlers/", "/vmrest/callhandlertemplates/")):
         return False
     family = task["resource"].split("/")[2] + "/" + family
     schema, fingerprint = _collection_fingerprint(record)
@@ -353,7 +402,7 @@ def _ingest(state, record, task):
     except UnitySearchError:
         canonical_item = resource
     reusable = _collection_reusable(state, record, task, canonical_item)
-    fields, edges = record_evidence(record, owner, item_resource)
+    fields, edges = record_evidence(record, owner, item_resource, number_entry_only=bool(state.get("number_entry_focus")))
     if state.get("collect_all_numbers"):
         state["fields"].extend(field for field in fields if any(len(re.sub(r"[^0-9]", "", token)) >= 3 for token in re.findall(r"[0-9]+(?:[ ().+-]*[0-9]+)*", field["value"])))
     else:
@@ -371,6 +420,9 @@ def _ingest(state, record, task):
             if leaf not in {"uri", "voicenameuri", "voicefileuri"}:
                 state["excluded_links"].append({"resource": item_resource, "reason": f"{field}: excluded/untrusted resource link"})
             continue
+        if state.get("number_entry_focus") and not number_entry_resource(link):
+            state["excluded_links"].append({"resource": link, "reason": "Excluded by number-entry focus: non-dialing resource."})
+            continue
         parts = link.strip("/").split("/")
         is_root_item = len(parts) == (4 if parts[1].lower() == "handlers" else 3)
         is_child = any(part.lower() in ALLOWED_CHILDREN for part in parts[2:])
@@ -385,7 +437,16 @@ def _ingest(state, record, task):
                     "name": owner["name"] + " (primary handler)" if primary else identity,
                     "type": "Primary user call handler" if primary else parts[-2]})
                 state["objects"].setdefault(identity, linked_owner)
-            _schedule(state, link, linked_owner["type"], linked_owner)
+            if leaf == "uri" and reusable and link == canonical_item:
+                state["coverage"].append({"resource": link, "status": "Checked", "detail": "Complete collection record reused after matching detail verification."})
+            else:
+                _schedule(state, link, linked_owner["type"], linked_owner)
+                candidate = state["collection_candidates"].get(link)
+                if candidate and not state["verified_collection_schemas"].get(candidate["family"]):
+                    for pending in reversed(state["tasks"]):
+                        if pending["resource"] == link:
+                            pending["probe"] = True
+                            break
         elif is_child:
             if leaf == "uri" and reusable and link == canonical_item:
                 state["coverage"].append({"resource": link, "status": "Checked", "detail": "Complete collection record reused after matching detail verification."})
@@ -402,7 +463,8 @@ def _ingest(state, record, task):
     if task["owner"] is None and record.get("URI"):
         try:
             detail = safe_resource(record["URI"], state["host"])
-            _schedule(state, detail, owner["type"], owner)
+            if not reusable:
+                _schedule(state, detail, owner["type"], owner)
             if resource == "/vmrest/handlers/callhandlers":
                 for child in ("transferoptions", "menuentries", "greetings"):
                     _schedule(state, detail + "/" + child, owner["type"], owner)
@@ -510,7 +572,8 @@ def scan_report(state):
             "pending_resources": len(state["tasks"]), "coverage": state["coverage"], "failures": failures,
             "excluded_links": excluded, "complete": state["status"] == "completed" and not gaps,
             "cache_ready": state["status"] == "completed" and not failures, "coverage_gaps": gaps,
-            "retention": RETENTION, "limitations": LIMITS, "cache_build": bool(state.get("collect_all_numbers"))}
+            "retention": RETENTION, "limitations": LIMITS + (" " + NUMBER_ENTRY_SCOPE if state.get("number_entry_focus") else " Legacy broad scalar-field scope."),
+            "scope": "Number-entry settings" if state.get("number_entry_focus") else "Legacy broad configuration", "cache_build": bool(state.get("collect_all_numbers"))}
 
 
 def progress_report(state):
@@ -521,7 +584,8 @@ def progress_report(state):
               "rows": [], "match_count": 0, "requests": state["requests"], "records": state["records"],
               "pending_resources": len(state["tasks"]), "coverage": [], "failures": [], "excluded_links": [],
               "complete": False, "cache_ready": False, "cache_build": bool(state.get("collect_all_numbers")),
-              "retention": RETENTION, "limitations": LIMITS, "progress_only": True,
+              "retention": RETENTION, "limitations": LIMITS + (" " + NUMBER_ENTRY_SCOPE if state.get("number_entry_focus") else ""),
+              "scope": "Number-entry settings" if state.get("number_entry_focus") else "Legacy broad configuration", "progress_only": True,
               "checked_resources": len(state["coverage"]), "concurrency": 2, "requests_per_second": 2}
     for item in state["coverage"]:
         if item["status"] not in {"Checked", "Unsupported"}:
@@ -634,6 +698,7 @@ def completed_cache(state):
     cache = {key: state[key] for key in ("schema_version", "host", "job_id", "status", "started_at", "updated_at",
                                         "objects", "edges", "coverage", "excluded_links", "requests", "records")}
     cache.update(cache_version=1, query="", mode="contains", collect_all_numbers=True,
+                 number_entry_focus=bool(state.get("number_entry_focus")),
                  fields=list({(item["object_id"], item["resource"], item["field"], item["value"]): item for item in state["fields"]}.values()),
                  tasks=[], cached_at=state["started_at"], loaded_at=state["updated_at"])
     cache_metadata(cache)
@@ -647,7 +712,7 @@ def search_cache(cache, query, mode="contains", now=None):
     if mode not in {"exact", "contains"}:
         raise ValueError("Choose Exact or Contains matching.")
     state = dict(cache, query=normalize_query(query), mode=mode, job_id=uuid.uuid4().hex,
-                 updated_at=(now or datetime.now(timezone.utc)).isoformat())
+                 updated_at=(now or datetime.now(timezone.utc)).isoformat(), number_entry_focus=True)
     report = scan_report(state)
     report.update(cache=metadata, cache_build=False, source="cache")
     return report
@@ -778,7 +843,11 @@ def _db_seed(connection, state, revision=0):
 
 
 def enable_incremental(root, state):
+    focused_before = bool(state.get("number_entry_focus"))
+    focus_number_entry(state)
     if state.get("_incremental"):
+        if not focused_before:
+            save(root, state)
         return state
     path = _scan_db_path(root, state["host"])
     if os.path.exists(path):
