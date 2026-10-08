@@ -252,6 +252,13 @@ class UnitySearchRouteTests(unittest.TestCase):
         self.assertIn("Unity host: unity.example", response.content)
         self.assertNotIn("SECRET", response.content)
 
+    def test_administrative_unity_tools_links(self):
+        function = next(node for node in self.tree.body if isinstance(node, ast.FunctionDef) and node.name == "menu_admin_page")
+        html = max((node.value for node in ast.walk(function) if isinstance(node, ast.Constant) and isinstance(node.value, str) and "<html>" in node.value), key=len)
+        self.assertIn('<a class="hero-link-card" href="/unity-connection">', html)
+        self.assertIn("<strong>Unity Tools</strong>", html)
+        self.assertIn("onclick=\"window.location.href='/unity-connection'\">Unity Tools</button>", html)
+
 
 if __name__ == "__main__":
     unittest.main()
