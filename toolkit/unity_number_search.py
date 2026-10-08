@@ -16,6 +16,12 @@ class UnitySearchError(RuntimeError):
     pass
 
 
+class UnityCountOnlyPage(UnitySearchError):
+    def __init__(self, total):
+        super().__init__("CUPI returned a positive collection count without records; inventory is not empty.")
+        self.total = total
+
+
 EXCLUDED = re.compile(r"password|passwd|credential|secret|token|pin(?:hash|digest|$)|certificate|authorizationcode|voicename|voicefile|streamfile|recording", re.I)
 NUMBER_FIELD = re.compile(r"extension|dtmfaccessid|phone|dial|callback|contactnumber|transfernumber|callingnumber|callednumber|forwardingnumber", re.I)
 UUID = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$", re.I)
@@ -240,6 +246,8 @@ def _records(payload, depth=0):
     if len(containers) != 1:
         if total == 0 and not containers:
             return [], 0
+        if total is not None and total > 0 and not containers:
+            raise UnityCountOnlyPage(total)
         raise UnitySearchError("CUPI collection records were not identifiable; response shape: " + _response_shape(payload))
     container = containers[0]
     records = container if isinstance(container, list) else [container]
@@ -366,13 +374,17 @@ def advance_scan(state, username, password, session=None):
         if response.status_code != 200:
             raise UnitySearchError(f"CUPI read failed HTTP {response.status_code}; resource not checked.")
         records, total = _records(response.json())
+        if task.get("count_only_retry") and not records and not task.get("consumed", 0):
+            raise UnitySearchError("CUPI page 1 returned no records after a positive count-only page 0; inventory remains incomplete.")
+        if total is None and task.get("count_only_total") is not None:
+            total = task["count_only_total"]
         signature = hashlib.sha256(json.dumps(records, sort_keys=True).encode()).hexdigest()
         previous = state["page_signatures"].setdefault(resource, [])
         if records and signature in previous:
             raise UnitySearchError("CUPI repeated a page; pagination incomplete.")
         if records:
             previous.append(signature)
-        if not records and total and task["page"] * PAGE_SIZE < total:
+        if not records and total and task.get("consumed", 0) < total:
             raise UnitySearchError("CUPI returned an empty page before the reported total.")
         for record in records:
             _ingest(state, record, task)
@@ -387,6 +399,14 @@ def advance_scan(state, username, password, session=None):
         else:
             state["tasks"].pop(0)
             state["coverage"].append({"resource": resource, "status": "Checked", "detail": f"{consumed} records read"})
+    except UnityCountOnlyPage as exc:
+        if task["page"] == 0 and not task.get("consumed", 0):
+            task["page"] = 1
+            task["count_only_retry"] = True
+            task["count_only_total"] = exc.total
+        else:
+            state["tasks"].pop(0)
+            state["coverage"].append({"resource": resource, "status": "Failed", "detail": str(exc) + " Page-1 retry did not return records."})
     except UnitySearchError as exc:
         if state["status"] == "paused":
             raise

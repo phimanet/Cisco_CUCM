@@ -78,6 +78,57 @@ class UnityNumberSearchTests(unittest.TestCase):
         self.assertEqual(state["coverage"][0]["status"], "Failed")
         self.assertIn("repeated", state["coverage"][0]["detail"])
 
+    def test_count_only_first_page_retries_page_one_then_pages_normally(self):
+        state = self.single_task()
+        client = MagicMock()
+        client.get.side_effect = [self.response({"@total": "2"}),
+                                  self.response({"@total": "2", "Callhandler": [{"ObjectId": "one", "DtmfAccessId": "1228"}]}),
+                                  self.response({"@total": "2", "Callhandler": [{"ObjectId": "two", "DtmfAccessId": "9999"}]})]
+        search.advance_scan(state, "admin", "pass", client)
+        self.assertEqual(state["tasks"][0]["page"], 1)
+        self.assertEqual(state["coverage"], [])
+        self.assertEqual(state["requests"], 1)
+        search.advance_scan(state, "admin", "pass", client)
+        search.advance_scan(state, "admin", "pass", client)
+        self.assertEqual([call.kwargs["params"]["pageNumber"] for call in client.get.call_args_list], [0, 1, 2])
+        self.assertEqual(state["coverage"][0]["status"], "Checked")
+        self.assertEqual(state["records"], 2)
+        self.assertEqual(len(search.find_matches(state)), 1)
+
+    def test_count_only_retry_is_persisted_across_restart(self):
+        state = self.single_task()
+        client = MagicMock()
+        client.get.side_effect = [self.response({"@total": "1"}),
+                                  self.response({"@total": "1", "Callhandler": [{"ObjectId": "one", "DtmfAccessId": "1228"}]})]
+        search.advance_scan(state, "admin", "pass", client)
+        with tempfile.TemporaryDirectory() as root:
+            search.save(root, state)
+            restored = search.load(root, "unity.example")
+            search.advance_scan(restored, "admin", "pass", client)
+        self.assertEqual([call.kwargs["params"]["pageNumber"] for call in client.get.call_args_list], [0, 1])
+        self.assertEqual(restored["status"], "completed")
+
+    def test_count_only_retry_cannot_claim_empty_or_retry_forever(self):
+        for second_page in ({"@total": "5"}, {"@total": "0"}, {"@total": "5", "Callhandler": []}):
+            state = self.single_task()
+            client = MagicMock()
+            client.get.side_effect = [self.response({"@total": "5"}), self.response(second_page)]
+            search.advance_scan(state, "admin", "pass", client)
+            search.advance_scan(state, "admin", "pass", client)
+            self.assertEqual(client.get.call_count, 2)
+            self.assertFalse(search.scan_report(state)["cache_ready"])
+            self.assertEqual(state["coverage"][0]["status"], "Failed")
+
+    def test_count_only_later_page_remains_a_failure(self):
+        state = self.single_task()
+        client = MagicMock()
+        client.get.side_effect = [self.response({"@total": "2", "Callhandler": [{"ObjectId": "one", "DtmfAccessId": "1228"}]}),
+                                  self.response({"@total": "2"})]
+        search.advance_scan(state, "admin", "pass", client)
+        search.advance_scan(state, "admin", "pass", client)
+        self.assertFalse(search.scan_report(state)["cache_ready"])
+        self.assertEqual(state["coverage"][0]["status"], "Failed")
+
     def test_named_collections_with_metadata_and_wrappers(self):
         record = {"ObjectId": "one", "URI": "/vmrest/handlers/callhandlers/one", "DtmfAccessId": "1228"}
         for payload in ({"@total": "1", "Callhandler": [record], "links": [{"rel": "self"}], "metadata": {"count": 1}},
@@ -518,6 +569,27 @@ class UnitySearchRouteTests(unittest.TestCase):
         self.assertEqual(result.content["report"]["source"], "cache")
         self.assertEqual(result.content["report"]["match_count"], 1)
         self.assertTrue(result.content["report"]["coverage_gaps"])
+
+    def test_count_only_first_page_recovery_finishes_cache_load(self):
+        initial = self.call("unity_search_start", number="1228").content["report"]
+        state = search.load(self.directory.name, "unity.example")
+        state["tasks"] = state["tasks"][:1]
+        search.save(self.directory.name, state)
+        client = MagicMock()
+        client.get.side_effect = [SimpleNamespace(status_code=200, json=lambda: {"@total": "1"}),
+                                  SimpleNamespace(status_code=200, json=lambda: {"@total": "1", "Callhandler": [{"ObjectId": "one", "DtmfAccessId": "1228", "TransferNumber": "9999"}]})]
+        with patch.object(search.requests, "Session", return_value=client):
+            first = self.call("unity_search_advance", job_id=initial["job_id"])
+            self.assertEqual(first.content["report"]["status"], "running")
+            self.assertEqual(search.load(self.directory.name, "unity.example")["tasks"][0]["page"], 1)
+            second = self.call("unity_search_advance", job_id=initial["job_id"])
+            cached = self.call("unity_search_start", number="9999")
+        self.assertEqual(second.status_code, 200, second.content)
+        self.assertTrue(second.content["report"]["cache"]["fresh"])
+        self.assertEqual(second.content["report"]["match_count"], 1)
+        self.assertEqual(cached.content["report"]["source"], "cache")
+        self.assertEqual(cached.content["report"]["match_count"], 1)
+        self.assertEqual(client.get.call_count, 2)
 
 
 if __name__ == "__main__":
