@@ -1,10 +1,9 @@
 import hashlib
+import importlib.util
 import json
 import os
 import re
 import shlex
-import shutil
-import subprocess
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -26,33 +25,24 @@ def configuration_status(environ=None):
     environ = os.environ if environ is None else environ
     enabled = str(environ.get("UNITY_SQL_LOOKUP_ENABLED", "")).strip().lower() in {"1", "true", "yes", "on"}
     required = (
-        "UNITY_SQL_LOOKUP_LAB_SSH_HOST",
         "UNITY_SQL_LOOKUP_SSH_USER",
-        "UNITY_SQL_LOOKUP_SSH_KEY_FILE",
+        "UNITY_SQL_LOOKUP_SSH_PASSWORD",
         "UNITY_SQL_LOOKUP_KNOWN_HOSTS_FILE",
     )
     missing = [name for name in required if not str(environ.get(name, "")).strip()]
     if enabled and not missing:
-        host = str(environ["UNITY_SQL_LOOKUP_LAB_SSH_HOST"]).strip()
         username = str(environ["UNITY_SQL_LOOKUP_SSH_USER"]).strip()
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}", host):
-            missing.append("UNITY_SQL_LOOKUP_LAB_SSH_HOST (invalid)")
-        if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", username):
+        if not username or len(username) > 128 or any(not (character.isalnum() or character in "._@\\-") for character in username):
             missing.append("UNITY_SQL_LOOKUP_SSH_USER (invalid)")
-        key_file = os.path.abspath(os.path.expanduser(str(environ["UNITY_SQL_LOOKUP_SSH_KEY_FILE"]).strip()))
         known_hosts_file = os.path.abspath(os.path.expanduser(str(environ["UNITY_SQL_LOOKUP_KNOWN_HOSTS_FILE"]).strip()))
-        if not os.path.isfile(key_file):
-            missing.append("UNITY_SQL_LOOKUP_SSH_KEY_FILE (unavailable)")
-        elif os.name != "nt" and os.stat(key_file).st_mode & 0o077:
-            missing.append("UNITY_SQL_LOOKUP_SSH_KEY_FILE (permissions must exclude group/other)")
         if not os.path.isfile(known_hosts_file):
             missing.append("UNITY_SQL_LOOKUP_KNOWN_HOSTS_FILE (unavailable)")
-        if not shutil.which("ssh"):
-            missing.append("OpenSSH client")
+        if importlib.util.find_spec("paramiko") is None:
+            missing.append("Paramiko library")
     return {"enabled": enabled, "configured": enabled and not missing, "missing": missing, "read_only": True}
 
 
-def _ssh_configuration(environ=None):
+def _ssh_configuration(unity_host, environ=None):
     environ = os.environ if environ is None else environ
     status = configuration_status(environ)
     if not status["enabled"]:
@@ -60,73 +50,73 @@ def _ssh_configuration(environ=None):
     if status["missing"]:
         raise UnitySqlError("Unity SQL Lookup prerequisites are missing or invalid: " + ", ".join(status["missing"]) + ".")
 
-    host = str(environ["UNITY_SQL_LOOKUP_LAB_SSH_HOST"]).strip()
+    host = str(unity_host or "").strip()
     username = str(environ["UNITY_SQL_LOOKUP_SSH_USER"]).strip()
+    password = str(environ["UNITY_SQL_LOOKUP_SSH_PASSWORD"])
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}", host):
-        raise UnitySqlError("Configured LAB SSH host is invalid.")
-    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", username):
-        raise UnitySqlError("Configured SSH username is invalid.")
+        raise UnitySqlError("Configured LAB Unity host is invalid.")
 
-    key_file = os.path.abspath(os.path.expanduser(str(environ["UNITY_SQL_LOOKUP_SSH_KEY_FILE"]).strip()))
     known_hosts_file = os.path.abspath(os.path.expanduser(str(environ["UNITY_SQL_LOOKUP_KNOWN_HOSTS_FILE"]).strip()))
-    if not os.path.isfile(key_file):
-        raise UnitySqlError("Configured SSH key file is unavailable to the portal service account.")
     if not os.path.isfile(known_hosts_file):
         raise UnitySqlError("Configured SSH known-hosts file is unavailable; host-key verification is required.")
-    return {"host": host, "username": username, "key_file": key_file, "known_hosts_file": known_hosts_file}
+    return {
+        "host": host,
+        "username": username,
+        "password": str(password),
+        "known_hosts_file": known_hosts_file,
+    }
 
 
-def _ssh_argv(config, command):
-    ssh = shutil.which("ssh")
-    if not ssh:
-        raise UnitySqlError("OpenSSH client is unavailable on the portal server.")
-    return [
-        ssh,
-        "-T",
-        "-i", config["key_file"],
-        "-o", "BatchMode=yes",
-        "-o", "IdentitiesOnly=yes",
-        "-o", "PasswordAuthentication=no",
-        "-o", "KbdInteractiveAuthentication=no",
-        "-o", "PreferredAuthentications=publickey",
-        "-o", "StrictHostKeyChecking=yes",
-        "-o", "UserKnownHostsFile=" + config["known_hosts_file"],
-        "-o", "ConnectTimeout=4",
-        "-o", "ServerAliveInterval=4",
-        "-o", "ServerAliveCountMax=2",
-        "-o", "LogLevel=ERROR",
-        config["username"] + "@" + config["host"],
-        shlex.quote(command),
-    ]
+def _execute_ssh_command(config, command, client_factory=None, reject_policy_factory=None):
+    if client_factory is None or reject_policy_factory is None:
+        try:
+            import paramiko
+        except ImportError as exc:
+            raise UnitySqlError("Paramiko is unavailable on the portal server.") from exc
+        client_factory = client_factory or paramiko.SSHClient
+        reject_policy_factory = reject_policy_factory or paramiko.RejectPolicy
+    client = client_factory()
+    try:
+        client.load_host_keys(config["known_hosts_file"])
+        client.set_missing_host_key_policy(reject_policy_factory())
+        client.connect(
+            hostname=config["host"],
+            username=config["username"],
+            password=config["password"],
+            look_for_keys=False,
+            allow_agent=False,
+            timeout=4,
+            banner_timeout=4,
+            auth_timeout=4,
+        )
+        _, stdout, stderr = client.exec_command(shlex.quote(command), timeout=SSH_TIMEOUT_SECONDS, get_pty=False)
+        channel = stdout.channel
+        channel.settimeout(SSH_TIMEOUT_SECONDS)
+        output = stdout.read(MAX_OUTPUT_BYTES + 1)
+        if len(output) > MAX_OUTPUT_BYTES:
+            raise UnitySqlError("Unity CLI output exceeded the safe response limit; narrow the search.")
+        stderr.read(65536)
+        if channel.recv_exit_status() != 0:
+            raise UnitySqlError("Unity SSH/CLI request failed; no incomplete report was saved.")
+        return output.decode("utf-8", errors="replace") if isinstance(output, bytes) else str(output or "")
+    except TimeoutError as exc:
+        raise UnitySqlError("Unity SSH lookup timed out; no incomplete report was saved.") from exc
+    except UnitySqlError:
+        raise
+    except Exception as exc:
+        raise UnitySqlError("Unity SSH authentication or connection failed; verify the LAB credentials and pinned host key.") from exc
+    finally:
+        client.close()
 
 
-def lookup_report(number, mode="exact", unity_host="", runner=None, environ=None):
+def lookup_report(number, mode="exact", unity_host="", environ=None, client_factory=None, reject_policy_factory=None):
     commands = command_templates(number, mode)
-    config = _ssh_configuration(environ)
+    config = _ssh_configuration(unity_host, environ)
     if not unity_host or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}", str(unity_host).strip()):
         raise ValueError("A verified Unity host label is required.")
-    runner = runner or subprocess.run
     rows = []
     for label, command in commands:
-        try:
-            result = runner(
-                _ssh_argv(config, command),
-                stdin=subprocess.DEVNULL,
-                capture_output=True,
-                text=True,
-                timeout=SSH_TIMEOUT_SECONDS,
-                check=False,
-                shell=False,
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise UnitySqlError("Unity SSH lookup timed out; no incomplete report was saved.") from exc
-        except OSError as exc:
-            raise UnitySqlError("Unity SSH lookup could not start; verify OpenSSH and service-account access.") from exc
-        output = result.stdout or ""
-        if len(output.encode("utf-8", errors="replace")) > MAX_OUTPUT_BYTES:
-            raise UnitySqlError("Unity CLI output exceeded the safe response limit; narrow the search.")
-        if result.returncode != 0:
-            raise UnitySqlError("Unity SSH/CLI request failed; no incomplete report was saved.")
+        output = _execute_ssh_command(config, command, client_factory, reject_policy_factory)
         for row in parse_cli_rows(output):
             rows.append(dict(row, query_type=label))
 

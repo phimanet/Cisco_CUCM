@@ -55786,7 +55786,7 @@ UNITY_SQL_LOOKUP_PAGE_BODY = """<body>
   document.getElementById('unity-sql-saved').addEventListener('click',function(){if(busy)return;busy=true;controls();status.textContent='Loading latest saved LAB lookup...';request('saved').then(function(payload){report=payload.report;render();status.textContent='Latest saved lookup loaded.';}).catch(function(error){status.textContent=error.message;}).finally(function(){busy=false;controls();});});
   document.getElementById('unity-sql-filter').addEventListener('input',render);
   document.getElementById('unity-sql-csv').addEventListener('click',function(){if(!report)return;function cell(value){var text=String(value==null?'':value);if(/^[=+@-]/.test(text.trimStart()))text="'"+text;return '"'+text.replace(/"/g,'""')+'"';}var lines=[['Query Type','Owner','Primary Extension','Matched Field','Stored Number','Setting','Unity Host','Mode','Query','Checked At'].map(cell).join(',')];filtered().forEach(function(row){lines.push([row.query_type,row.owner_name,row.primary_extension,row.matched_field,row.matched_number,row.setting,report.host,report.mode,report.query,report.checked_at].map(cell).join(','));});var url=URL.createObjectURL(new Blob([lines.join(String.fromCharCode(13,10))],{type:'text/csv;charset=utf-8'})),link=document.createElement('a');link.href=url;link.download='unity_sql_lookup.csv';document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);});
-  controls();request('status').then(function(payload){var config=payload.configuration||{},search=document.getElementById('unity-sql-search');search.dataset.configured=config.configured?'true':'';search.disabled=!config.configured;var missing=Array.isArray(config.missing)?config.missing:[];document.getElementById('unity-sql-config').textContent=config.target_rejected?'Configured SSH target matches Production Unity; lookup is blocked.':config.configured?'LAB SSH lookup is configured. The private key remains on the server.':config.enabled?'Lookup is not ready; missing or inaccessible prerequisites: '+missing.join(', '):'Lookup is disabled until explicitly enabled on LAB.';}).catch(function(error){document.getElementById('unity-sql-config').textContent='Configuration unavailable: '+error.message;});
+  controls();request('status').then(function(payload){var config=payload.configuration||{},search=document.getElementById('unity-sql-search');search.dataset.configured=config.configured?'true':'';search.disabled=!config.configured;var missing=Array.isArray(config.missing)?config.missing:[];document.getElementById('unity-sql-config').textContent=config.configured?'LAB SSH lookup is configured. SSH credentials stay server-side.':config.enabled?'Lookup is not ready; missing or inaccessible prerequisites: '+missing.join(', '):'Lookup is disabled until explicitly enabled on LAB.';}).catch(function(error){document.getElementById('unity-sql-config').textContent='Configuration unavailable: '+error.message;});
 })();
 </script></body></html>"""
 
@@ -55815,9 +55815,6 @@ def _unity_sql_lookup_access(request: Request):
   unity_host = _get_unity_server_for_session(request)
   if unity_host.strip().lower() != LAB_UNITY_HOST.lower():
     raise PermissionError("Unity SQL Lookup refused a non-LAB Unity target.")
-  configured_ssh_host = (os.getenv("UNITY_SQL_LOOKUP_LAB_SSH_HOST", "") or "").strip()
-  if configured_ssh_host.lower() == PROD_UNITY_HOST.lower():
-    raise PermissionError("Configured SSH target matches Production Unity and is blocked.")
   return unity_host, session
 
 
@@ -55850,10 +55847,6 @@ def unity_sql_lookup_status(request: Request):
   try:
     host, _ = _unity_sql_lookup_access(request)
     configuration = unity_sql_lookup.configuration_status()
-    target = (os.getenv("UNITY_SQL_LOOKUP_LAB_SSH_HOST", "") or "").strip().lower()
-    if target == PROD_UNITY_HOST.lower():
-      configuration["configured"] = False
-      configuration["target_rejected"] = True
     return JSONResponse({"ok": True, "host": host, "configuration": configuration}, headers={"Cache-Control": "no-store"})
   except Exception as exc:
     return _unity_sql_lookup_failure(exc)
