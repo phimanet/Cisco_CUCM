@@ -1,6 +1,11 @@
 __pycache__/
 *.py[cod]
 
+# Local environment configuration can contain service credentials.
+.env
+.env.*
+!.env.example
+
 # Persisted Project Greenlight job history and CSV outputs (may contain PII)
 data/greenlight_jobs/
 

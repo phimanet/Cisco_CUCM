@@ -88,6 +88,7 @@ from toolkit import twilio_recent_logs
 from toolkit import twilio_all_recent_logs
 from toolkit import webex_admin
 from toolkit import unity_number_search
+from toolkit import unity_sql_lookup
 from toolkit.transunion_sdpr import (
   integration_status as transunion_integration_status,
   list_caller_profiles as transunion_list_caller_profiles,
@@ -959,6 +960,8 @@ WEBEX_LICENSE_REPORT_LOCK = threading.Lock()
 UNITY_NUMBER_SEARCH_DIR = os.path.join(_genesys_queue_data_root, "unity_number_search")
 UNITY_NUMBER_SEARCH_LOCK = threading.Lock()
 UNITY_PERSON_NUMBER_EXTRACT_DIR = os.path.join(_genesys_queue_data_root, "unity_person_number_extract")
+UNITY_SQL_LOOKUP_DIR = os.path.join(_genesys_queue_data_root, "unity_sql_lookup")
+UNITY_SQL_LOOKUP_LOCK = threading.Lock()
 UNITY_REFERENCE_SEARCH_ENABLED = False
 GENESYS_DID_NUMBERS_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_did_numbers_report.json")
 GENESYS_DID_NUMBERS_REPORT_LOCK = threading.Lock()
@@ -55727,7 +55730,7 @@ UNITY_SEARCH_PAGE_BODY = """<body>
 *{box-sizing:border-box}.topbar,.topbar-brand{flex-wrap:wrap}.portal-sidebar,.portal-main{border-radius:8px}.portal-nav a{display:block;text-decoration:none}.content>h2{font-size:22px;margin:16px 0 10px}.row input{min-width:0;width:300px;max-width:100%}.row select{padding:7px;border:1px solid var(--amn-border);border-radius:6px}.row button:disabled{opacity:.5;cursor:default}.unity-scroll{max-width:100%;overflow:auto;max-height:600px}#person-status,#person-identity,#person-summary{overflow-wrap:anywhere}td{overflow-wrap:anywhere;min-width:85px}details{margin-top:12px}#person-debug{background:#f1f6fa;color:#12304a;white-space:pre-wrap;overflow-wrap:anywhere}.portal-main{border-radius:0;box-shadow:none}@media(max-width:900px){.portal-sidebar{position:static}.portal-main{padding:12px}.topbar-brand strong{font-size:14px}.content{padding:0 8px}}
 </style>
 <header class="topbar"><div class="topbar-brand"><span class="brand-fallback">AMN Healthcare</span><strong>Voice Operations Portal</strong></div><div class="topbar-status"><span>Authenticated Operator: __AUTH_USER__</span><span>__ENV_TEXT__</span><span>Read-Only</span></div><a class="topbar-btn" href="/logout">Log Out</a></header>
-<main class="content"><h2 class="page-title">Unity Connection User Extract</h2><div class="portal-shell"><aside class="portal-sidebar"><h4>Unity Tools</h4><div class="portal-nav"><button type="button" class="portal-nav-btn active" id="person-nav">User Extract</button><a class="portal-nav-btn" href="/menu">Main Operations (Page 1)</a><a class="portal-nav-btn" href="/page2">Administrative Items (Page 2)</a><a class="portal-nav-btn" href="/page3">SMS Item Menu (Page 3)</a></div></aside>
+<main class="content"><h2 class="page-title">Unity Connection User Extract</h2><div class="portal-shell"><aside class="portal-sidebar"><h4>Unity Tools</h4><div class="portal-nav"><button type="button" class="portal-nav-btn active" id="person-nav">User Extract</button><a class="portal-nav-btn" href="/unity-connection/sql-lookup">Direct SQL Lookup (LAB)</a><a class="portal-nav-btn" href="/menu">Main Operations (Page 1)</a><a class="portal-nav-btn" href="/page2">Administrative Items (Page 2)</a><a class="portal-nav-btn" href="/page3">SMS Item Menu (Page 3)</a></div></aside>
 <section class="portal-main"><h3 style="margin-top:0;">User Extract</h3><p class="muted">Unity host: __UNITY_HOST__</p>
 <form id="person-form" onsubmit="if(window.findUnityUser){return window.findUnityUser(event);}document.getElementById('person-status').textContent='User lookup handler missing (JavaScript did not load).';return false;"><div class="row"><label for="person-search-by">Search By:</label><select id="person-search-by" name="search_by"><option value="extension">Primary Extension</option><option value="name">Name</option><option value="email">Email</option></select><label for="person-value">User:</label><input id="person-value" name="value" required autocomplete="off" placeholder="Primary extension"><button type="button" class="btn-action" id="person-find" onclick="if(window.findUnityUser){return window.findUnityUser(event);}document.getElementById('person-status').textContent='User lookup handler missing (JavaScript did not load).';return false;">Find User</button></div></form>
 <div id="person-candidates" class="unity-scroll"></div><div class="row"><button type="button" class="btn-action" id="person-pause" disabled>Pause</button><button type="button" class="btn-action" id="person-resume" disabled>Resume</button><button type="button" class="btn-action" id="person-cancel" disabled>Cancel Extract</button><button type="button" class="btn-action" id="person-scan">View Latest Extract</button><button type="button" class="btn-action" id="person-saved">View Last Completed Extract</button><button type="button" class="btn-action" id="person-csv" disabled>Download CSV</button></div>
@@ -55758,6 +55761,36 @@ UNITY_SEARCH_PAGE_BODY = """<body>
 </script></body></html>"""
 
 
+UNITY_SQL_LOOKUP_PAGE_BODY = """<body>
+<style>
+*{box-sizing:border-box}.topbar,.topbar-brand{flex-wrap:wrap}.portal-sidebar,.portal-main{border-radius:8px}.portal-nav a{display:block;text-decoration:none}.content>h2{font-size:22px;margin:16px 0 10px}.row input{min-width:0;width:300px;max-width:100%}.row select{padding:7px;border:1px solid var(--amn-border);border-radius:6px}.row button:disabled{opacity:.5;cursor:default}.unity-scroll{max-width:100%;overflow:auto;max-height:600px}#unity-sql-status,#unity-sql-summary,#unity-sql-config,#unity-sql-limits,#unity-sql-retention{overflow-wrap:anywhere}td{overflow-wrap:anywhere;min-width:100px}.portal-main{border-radius:0;box-shadow:none}@media(max-width:900px){.portal-sidebar{position:static}.portal-main{padding:12px}.topbar-brand strong{font-size:14px}.content{padding:0 8px}.row{align-items:stretch}.row input,.row select{max-width:100%}}
+</style>
+<header class="topbar"><div class="topbar-brand"><span class="brand-fallback">AMN Healthcare</span><strong>Voice Operations Portal</strong></div><div class="topbar-status"><span>Authenticated Operator: __AUTH_USER__</span><span>__ENV_TEXT__</span><span>LAB Read-Only</span></div><a class="topbar-btn" href="/logout">Log Out</a></header>
+<main class="content"><h2 class="page-title">Unity Connection Direct SQL Lookup</h2><div class="portal-shell"><aside class="portal-sidebar"><h4>Unity Tools</h4><div class="portal-nav"><a class="portal-nav-btn" href="/unity-connection">User Extract</a><button type="button" class="portal-nav-btn active" id="unity-sql-nav">Direct SQL Lookup (LAB)</button><a class="portal-nav-btn" href="/menu">Main Operations (Page 1)</a><a class="portal-nav-btn" href="/page2">Administrative Items (Page 2)</a><a class="portal-nav-btn" href="/page3">SMS Item Menu (Page 3)</a></div></aside>
+<section class="portal-main"><h3 style="margin-top:0;">Read-Only Number Lookup</h3><p class="muted">LAB Unity host: __UNITY_HOST__. The server runs four fixed SELECT queries; arbitrary SQL and Unity changes are not available.</p>
+<p id="unity-sql-config" class="muted" role="status">Checking LAB SSH configuration...</p>
+<form id="unity-sql-form" onsubmit="if(window.runUnitySqlLookup){return window.runUnitySqlLookup(event);}document.getElementById('unity-sql-status').textContent='Lookup handler missing (JavaScript did not load).';return false;"><div class="row"><label for="unity-sql-number">Number:</label><input id="unity-sql-number" name="number" required autocomplete="off" inputmode="tel" placeholder="3-15 digits; stored prefixes are preserved"><label for="unity-sql-mode">Match:</label><select id="unity-sql-mode" name="mode"><option value="exact">Exact</option><option value="contains">Contains</option></select><button type="button" class="btn-action" id="unity-sql-search" onclick="if(window.runUnitySqlLookup){return window.runUnitySqlLookup(event);}document.getElementById('unity-sql-status').textContent='Lookup handler missing (JavaScript did not load).';return false;">Search LAB Unity</button></div></form>
+<div class="row"><button type="button" class="btn-action" id="unity-sql-saved">View Latest Saved Lookup</button><button type="button" class="btn-action" id="unity-sql-csv" disabled>Download CSV</button></div>
+<p id="unity-sql-status" class="muted" role="status" aria-live="polite"></p><p id="unity-sql-summary" class="muted"></p><div class="row"><label for="unity-sql-filter">Filter Results:</label><input type="search" id="unity-sql-filter" placeholder="Owner, setting, stored digits"></div><div id="unity-sql-results" class="unity-scroll"></div>
+<details><summary>Query Coverage</summary><div id="unity-sql-coverage" class="unity-scroll"></div></details><details><summary>Lookup Diagnostics</summary><pre id="unity-sql-debug"></pre></details><p id="unity-sql-limits" class="muted"></p><p id="unity-sql-retention" class="muted"></p>
+</section></div></main><script>
+(function(){
+  var report=null,busy=false,status=document.getElementById('unity-sql-status');
+  var columns=[['Query Type','query_type'],['Owner','owner_name'],['Primary Extension','primary_extension'],['Matched Field','matched_field'],['Stored Number','matched_number'],['Setting','setting']];
+  function controls(){document.getElementById('unity-sql-search').disabled=busy || !document.getElementById('unity-sql-search').dataset.configured;document.getElementById('unity-sql-saved').disabled=busy;document.getElementById('unity-sql-csv').disabled=busy || !report;}
+  function table(target,labels,rows){target.replaceChildren();var element=document.createElement('table'),head=element.createTHead().insertRow();labels.forEach(function(label){var cell=document.createElement('th');cell.textContent=label;head.appendChild(cell);});var body=element.createTBody();rows.forEach(function(values){var row=body.insertRow();values.forEach(function(value){row.insertCell().textContent=value==null?'':String(value);});});target.appendChild(element);}
+  function filtered(){var term=document.getElementById('unity-sql-filter').value.toLowerCase();return (report?report.rows:[]).filter(function(row){return !term || columns.some(function(column){return String(row[column[1]] || '').toLowerCase().indexOf(term)>=0;});});}
+  function render(){if(!report)return;var rows=filtered();table(document.getElementById('unity-sql-results'),columns.map(function(column){return column[0];}),rows.slice(0,500).map(function(row){return columns.map(function(column){return row[column[1]];});}));document.getElementById('unity-sql-summary').textContent=report.host+' | '+report.mode+' '+report.query+' | '+rows.length+' filtered / '+report.match_count+' matches | '+report.checked_at;table(document.getElementById('unity-sql-coverage'),['Verified query'],(report.coverage || []).map(function(item){return [item];}));document.getElementById('unity-sql-limits').textContent=report.limitations;document.getElementById('unity-sql-retention').textContent=report.retention;document.getElementById('unity-sql-debug').textContent=JSON.stringify({host:report.host,mode:report.mode,query:report.query,match_count:report.match_count,coverage:report.coverage,checked_at:report.checked_at},null,2);controls();}
+  async function request(path,options){var response=await fetch('/unity-connection/sql-lookup/'+path,options || {credentials:'same-origin'}),payload=await response.json();if(!response.ok || !payload.ok)throw new Error(payload.error || 'Unity SQL lookup failed.');return payload;}
+  window.runUnitySqlLookup=function(event){if(event)event.preventDefault();var form=document.getElementById('unity-sql-form'),number=document.getElementById('unity-sql-number').value.trim(),mode=document.getElementById('unity-sql-mode').value;if(busy || !form.reportValidity())return false;busy=true;controls();status.textContent='Running four fixed read-only queries against LAB Unity...';var body=new FormData(form);request('lookup',{method:'POST',body:body,credentials:'same-origin'}).then(function(payload){report=payload.report;render();status.textContent='Lookup complete. All verified query groups were checked.';}).catch(function(error){status.textContent='Lookup incomplete: '+error.message+' The previous saved report is retained.';}).finally(function(){busy=false;controls();});return false;};
+  document.getElementById('unity-sql-saved').addEventListener('click',function(){if(busy)return;busy=true;controls();status.textContent='Loading latest saved LAB lookup...';request('saved').then(function(payload){report=payload.report;render();status.textContent='Latest saved lookup loaded.';}).catch(function(error){status.textContent=error.message;}).finally(function(){busy=false;controls();});});
+  document.getElementById('unity-sql-filter').addEventListener('input',render);
+  document.getElementById('unity-sql-csv').addEventListener('click',function(){if(!report)return;function cell(value){var text=String(value==null?'':value);if(/^[=+@-]/.test(text.trimStart()))text="'"+text;return '"'+text.replace(/"/g,'""')+'"';}var lines=[['Query Type','Owner','Primary Extension','Matched Field','Stored Number','Setting','Unity Host','Mode','Query','Checked At'].map(cell).join(',')];filtered().forEach(function(row){lines.push([row.query_type,row.owner_name,row.primary_extension,row.matched_field,row.matched_number,row.setting,report.host,report.mode,report.query,report.checked_at].map(cell).join(','));});var url=URL.createObjectURL(new Blob([lines.join(String.fromCharCode(13,10))],{type:'text/csv;charset=utf-8'})),link=document.createElement('a');link.href=url;link.download='unity_sql_lookup.csv';document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);});
+  controls();request('status').then(function(payload){var config=payload.configuration||{},search=document.getElementById('unity-sql-search');search.dataset.configured=config.configured?'true':'';search.disabled=!config.configured;var missing=Array.isArray(config.missing)?config.missing:[];document.getElementById('unity-sql-config').textContent=config.target_rejected?'Configured SSH target matches Production Unity; lookup is blocked.':config.configured?'LAB SSH lookup is configured. The private key remains on the server.':config.enabled?'Lookup is not ready; missing or inaccessible prerequisites: '+missing.join(', '):'Lookup is disabled until explicitly enabled on LAB.';}).catch(function(error){document.getElementById('unity-sql-config').textContent='Configuration unavailable: '+error.message;});
+})();
+</script></body></html>"""
+
+
 @app.get("/unity-connection", response_class=HTMLResponse)
 def unity_connection_page(request: Request):
   session = _get_auth_session(request) or {}
@@ -55769,6 +55802,104 @@ def unity_connection_page(request: Request):
   head = head.replace('<meta charset="utf-8">', '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">')
   html = head + UNITY_SEARCH_PAGE_BODY.replace("__AUTH_USER__", escape(str(session.get("username", "")))).replace("__ENV_TEXT__", escape(env_text)).replace("__UNITY_HOST__", escape(host))
   return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
+
+
+def _unity_sql_lookup_access(request: Request):
+  session = _get_auth_session(request) or {}
+  username = str(session.get("username", "") or "").strip()
+  cucm_host = str(session.get("cucm_host", "") or "").strip()
+  if not _is_admin_user(username):
+    raise PermissionError("Administrator authentication required.")
+  if not _is_lab_host(cucm_host) or not _is_lab_environment(cucm_host):
+    raise PermissionError("Unity SQL Lookup is available only from a LAB session on the LAB portal.")
+  unity_host = _get_unity_server_for_session(request)
+  if unity_host.strip().lower() != LAB_UNITY_HOST.lower():
+    raise PermissionError("Unity SQL Lookup refused a non-LAB Unity target.")
+  configured_ssh_host = (os.getenv("UNITY_SQL_LOOKUP_LAB_SSH_HOST", "") or "").strip()
+  if configured_ssh_host.lower() == PROD_UNITY_HOST.lower():
+    raise PermissionError("Configured SSH target matches Production Unity and is blocked.")
+  return unity_host, session
+
+
+def _unity_sql_lookup_failure(exc):
+  if isinstance(exc, PermissionError):
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
+  if isinstance(exc, FileNotFoundError):
+    return JSONResponse({"ok": False, "error": "No saved Unity SQL lookup exists for LAB."}, status_code=404)
+  if isinstance(exc, (ValueError, unity_sql_lookup.UnitySqlError)):
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+  logger.warning("Unity SQL lookup failed: %s", type(exc).__name__)
+  return JSONResponse({"ok": False, "error": "Unity SQL lookup failed; the previous saved report was not replaced."}, status_code=502)
+
+
+@app.get("/unity-connection/sql-lookup", response_class=HTMLResponse)
+def unity_sql_lookup_page(request: Request):
+  try:
+    host, session = _unity_sql_lookup_access(request)
+  except Exception as exc:
+    return _unity_sql_lookup_failure(exc)
+  env_text, _ = _get_environment_label(str(session.get("cucm_host", "") or ""))
+  head = MS_CALLING_PAGE_TEMPLATE.split("<body>", 1)[0].replace("__PAGE_TITLE__", "Unity Connection Direct SQL Lookup")
+  head = head.replace('<meta charset="utf-8">', '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">')
+  html = head + UNITY_SQL_LOOKUP_PAGE_BODY.replace("__AUTH_USER__", escape(str(session.get("username", "")))).replace("__ENV_TEXT__", escape(env_text)).replace("__UNITY_HOST__", escape(host))
+  return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/unity-connection/sql-lookup/status")
+def unity_sql_lookup_status(request: Request):
+  try:
+    host, _ = _unity_sql_lookup_access(request)
+    configuration = unity_sql_lookup.configuration_status()
+    target = (os.getenv("UNITY_SQL_LOOKUP_LAB_SSH_HOST", "") or "").strip().lower()
+    if target == PROD_UNITY_HOST.lower():
+      configuration["configured"] = False
+      configuration["target_rejected"] = True
+    return JSONResponse({"ok": True, "host": host, "configuration": configuration}, headers={"Cache-Control": "no-store"})
+  except Exception as exc:
+    return _unity_sql_lookup_failure(exc)
+
+
+@app.get("/unity-connection/sql-lookup/saved")
+def unity_sql_lookup_saved(request: Request):
+  try:
+    host, _ = _unity_sql_lookup_access(request)
+    with UNITY_SQL_LOOKUP_LOCK:
+      report = unity_sql_lookup.load_report(UNITY_SQL_LOOKUP_DIR, host)
+    return JSONResponse({"ok": True, "report": report}, headers={"Cache-Control": "no-store"})
+  except Exception as exc:
+    return _unity_sql_lookup_failure(exc)
+
+
+@app.post("/unity-connection/sql-lookup/lookup")
+def unity_sql_lookup_run(request: Request, number: str = Form(""), mode: str = Form("exact")):
+  session = None
+  host = ""
+  clean_number = re.sub(r"[^0-9]", "", str(number or ""))[:15]
+  try:
+    host, session = _unity_sql_lookup_access(request)
+    with UNITY_SQL_LOOKUP_LOCK:
+      report = unity_sql_lookup.lookup_report(number, mode, unity_host=host)
+      unity_sql_lookup.save_report(UNITY_SQL_LOOKUP_DIR, report)
+    _append_audit_event(
+      action="unity_sql_number_lookup",
+      cucm_host=LAB_CUCM_HOST,
+      operator=str(session.get("username", "") or ""),
+      target=f"number={report['query']};mode={report['mode']};matches={report['match_count']};status=complete",
+      output_filename="",
+      inline_mode=True,
+    )
+    return JSONResponse({"ok": True, "report": report}, headers={"Cache-Control": "no-store"})
+  except Exception as exc:
+    if session and host:
+      _append_audit_event(
+        action="unity_sql_number_lookup",
+        cucm_host=LAB_CUCM_HOST,
+        operator=str(session.get("username", "") or ""),
+        target=f"number={clean_number};mode={mode};status=failed",
+        output_filename="",
+        inline_mode=True,
+      )
+    return _unity_sql_lookup_failure(exc)
 
 
 def _unity_search_access(request: Request):
