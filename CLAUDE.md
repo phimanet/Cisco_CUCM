@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-10-07
+- Date: 2026-10-08
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -113,6 +113,11 @@ Priority keys:
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
+
+### 2026-10-08 (Twilio Greenlight Subaccount Inventory Confirmation)
+- Operator confirmed all four Greenlight subaccounts belong to the already configured AMN Healthcare parent and appeared in the SMS All Accounts Number Inventory extract. Existing parent credentials discover them automatically; no separate subaccount Auth Tokens, `.env` changes, or code changes were needed.
+- Confirmed accounts: AMN Greenlight Prod, AMN Greenlight Int, AMN Greenlight QA, and AMN Greenlight Dev.
+- Full account-name/SID mappings retained in persistent voice memory only with operator approval because GitHub push protection flags Twilio SIDs. No Auth Tokens recorded. Validation environment was not specified by the operator.
 
 ### 2026-10-07 (Cisco Webex Admin Staging)
 - Added authenticated administrator page `/webex-admin` (alias `/webex`) named `Cisco Webex Admin`, accessible from the Page 2 Administrative Items menu. Reuses the portal's shared visual shell and left navigation. Initial controls are exact-email license lookup, latest saved lookup, and formula-safe CSV; no Webex user/license or LDAP mutations are implemented.
