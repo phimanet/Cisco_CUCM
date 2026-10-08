@@ -147,6 +147,7 @@ SEEDS = (
     ("Restriction tables", "/vmrest/restrictiontables"),
     ("System configuration", "/vmrest/configuration"),
 )
+OPTIONAL_ROOTS = {path for _, path in SEEDS[2:]}
 ALLOWED_ROOTS = {path.split("/")[2] for _, path in SEEDS}
 ALLOWED_CHILDREN = {"greetings", "transferoptions", "menuentries", "alternateextensions",
                     "usernotificationdevices", "notificationdevices", "phonedevices", "pagerdevices",
@@ -191,7 +192,18 @@ def new_cache_scan(host, query="", mode="contains"):
     return state
 
 
-def _records(payload):
+COLLECTION_NAMES = {"callhandler", "user", "directoryhandler", "interviewhandler", "routingrule", "contact",
+                    "callhandlertemplate", "usertemplate", "phonesystem", "portgroup", "restrictiontable",
+                    "transferoption", "greeting", "menuentry", "alternateextension", "notificationdevice",
+                    "usernotificationdevice", "phonedevice", "pagerdevice", "htmldevice", "messagewaitingindicator",
+                    "rulecondition", "routingrulecondition", "condition", "restrictionpattern", "pattern"}
+
+
+def _response_shape(payload):
+    return ", ".join(str(key)[:60] + ":" + type(value).__name__ for key, value in list(payload.items())[:20])
+
+
+def _records(payload, depth=0):
     if not isinstance(payload, dict):
         raise UnitySearchError("CUPI returned an unexpected JSON shape.")
     if "URI" in payload or "ObjectId" in payload:
@@ -203,11 +215,32 @@ def _records(payload):
         raise UnitySearchError("CUPI returned an invalid collection count.") from None
     if total is not None and total < 0:
         raise UnitySearchError("CUPI returned a negative collection count.")
-    containers = [value for key, value in payload.items() if not key.startswith("@") and isinstance(value, (dict, list))]
+    named = []
+    for key, value in payload.items():
+        name = re.sub(r"[^a-z]", "", str(key).lower())
+        singular = name[:-3] + "y" if name.endswith("ies") else name[:-1] if name.endswith("s") else name
+        if name in COLLECTION_NAMES or singular in COLLECTION_NAMES:
+            named.append(value)
+    if len(named) > 1:
+        raise UnitySearchError("CUPI returned ambiguous collections; response shape: " + _response_shape(payload))
+    if named:
+        container = named[0]
+        if isinstance(container, dict) and "URI" not in container and "ObjectId" not in container and any(isinstance(value, (dict, list)) for value in container.values()):
+            if depth >= 3:
+                raise UnitySearchError("CUPI collection wrapper depth exceeded.")
+            records, nested_total = _records(container, depth + 1)
+            return records, total if total is not None else nested_total
+        if container is None and total == 0:
+            return [], 0
+        records = container if isinstance(container, list) else [container]
+        if any(not isinstance(item, dict) for item in records):
+            raise UnitySearchError("CUPI collection contains invalid records; response shape: " + _response_shape(payload))
+        return records, total
+    containers = [value for key, value in payload.items() if not str(key).startswith("@") and str(key).lower() not in {"links", "link", "metadata", "paging", "pagination"} and isinstance(value, (dict, list))]
     if len(containers) != 1:
         if total == 0 and not containers:
             return [], 0
-        raise UnitySearchError("CUPI collection records were not identifiable; not treated as empty.")
+        raise UnitySearchError("CUPI collection records were not identifiable; response shape: " + _response_shape(payload))
     container = containers[0]
     records = container if isinstance(container, list) else [container]
     if any(not isinstance(item, dict) for item in records):
@@ -322,6 +355,14 @@ def advance_scan(state, username, password, session=None):
             state["status"] = "paused"
             raise UnitySearchError(f"Unity denied read access (HTTP {response.status_code}); renew credentials/permissions and Resume.")
         state["requests"] += 1
+        if response.status_code == 404 and resource in OPTIONAL_ROOTS and task["page"] == 0 and state.get("collect_all_numbers"):
+            state["tasks"].pop(0)
+            detail = "Optional CUPI inventory endpoint is not supported (HTTP 404); this resource was not searched."
+            state["coverage"].append({"resource": resource, "status": "Unsupported", "detail": detail})
+            state["excluded_links"].append({"resource": resource, "reason": detail})
+            if not state["tasks"]:
+                state["status"] = "completed"
+            return state
         if response.status_code != 200:
             raise UnitySearchError(f"CUPI read failed HTTP {response.status_code}; resource not checked.")
         records, total = _records(response.json())
@@ -366,13 +407,15 @@ def advance_scan(state, username, password, session=None):
 
 def scan_report(state):
     rows = find_matches(state) if state["query"] and not (state.get("collect_all_numbers") and state["status"] != "completed") else []
-    failures = [item for item in state["coverage"] if item["status"] != "Checked"]
+    failures = [item for item in state["coverage"] if item["status"] not in {"Checked", "Unsupported"}]
+    gaps = [item for item in state["coverage"] if item["status"] != "Checked"]
     excluded = list({(item["resource"], item["reason"]): item for item in state["excluded_links"]}.values())
     return {"schema_version": 1, "host": state["host"], "job_id": state["job_id"], "query": state["query"],
             "mode": state["mode"], "status": state["status"], "started_at": state["started_at"], "checked_at": state["updated_at"],
             "rows": rows, "match_count": len(rows), "requests": state["requests"], "records": state["records"],
             "pending_resources": len(state["tasks"]), "coverage": state["coverage"], "failures": failures,
-            "excluded_links": excluded, "complete": state["status"] == "completed" and not failures,
+            "excluded_links": excluded, "complete": state["status"] == "completed" and not gaps,
+            "cache_ready": state["status"] == "completed" and not failures, "coverage_gaps": gaps,
             "retention": RETENTION, "limitations": LIMITS, "cache_build": bool(state.get("collect_all_numbers"))}
 
 
@@ -393,7 +436,7 @@ def cache_metadata(cache, now=None):
 
 
 def completed_cache(state):
-    if not state.get("collect_all_numbers") or state["status"] != "completed" or state["tasks"] or any(item["status"] != "Checked" for item in state["coverage"]):
+    if not state.get("collect_all_numbers") or state["status"] != "completed" or state["tasks"] or any(item["status"] not in {"Checked", "Unsupported"} for item in state["coverage"]):
         raise UnitySearchError("Cache load is incomplete; previous cache is retained.")
     cache = {key: state[key] for key in ("schema_version", "host", "job_id", "status", "started_at", "updated_at",
                                         "objects", "edges", "coverage", "excluded_links", "requests", "records")}
@@ -430,7 +473,7 @@ def load(root, host, kind="scan"):
     if not isinstance(value, dict) or value.get("schema_version") != 1 or value.get("host") != normalize_host(host) or any(not isinstance(value.get(key), list) for key in lists) or not value.get("job_id") or value.get("status") not in {"running", "paused", "cancelled", "failed", "completed"}:
         raise UnitySearchError("Saved Unity lookup is invalid; it was not overwritten.")
     if kind == "cache":
-        if value.get("cache_version") != 1 or not isinstance(value.get("objects"), dict) or value["status"] != "completed" or value.get("tasks") != [] or not value.get("collect_all_numbers") or any(item.get("status") != "Checked" for item in value["coverage"]):
+        if value.get("cache_version") != 1 or not isinstance(value.get("objects"), dict) or value["status"] != "completed" or value.get("tasks") != [] or not value.get("collect_all_numbers") or any(item.get("status") not in {"Checked", "Unsupported"} for item in value["coverage"]):
             raise UnitySearchError("Unity configuration cache is invalid; it was not overwritten.")
         cache_metadata(value)
     return value

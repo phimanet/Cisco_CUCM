@@ -78,6 +78,52 @@ class UnityNumberSearchTests(unittest.TestCase):
         self.assertEqual(state["coverage"][0]["status"], "Failed")
         self.assertIn("repeated", state["coverage"][0]["detail"])
 
+    def test_named_collections_with_metadata_and_wrappers(self):
+        record = {"ObjectId": "one", "URI": "/vmrest/handlers/callhandlers/one", "DtmfAccessId": "1228"}
+        for payload in ({"@total": "1", "Callhandler": [record], "links": [{"rel": "self"}], "metadata": {"count": 1}},
+                        {"Callhandlers": {"@total": "1", "Callhandler": [record]}},
+                        {"@total": "1", "Users": [record], "paging": {"offset": 0}}):
+            rows, total = search._records(payload)
+            self.assertEqual(rows, [record])
+            self.assertEqual(total, 1)
+
+    def test_parse_failure_diagnostics_expose_shape_not_values(self):
+        with self.assertRaises(search.UnitySearchError) as context:
+            search._records({"unknown1": {}, "unknown2": [], "Password": "SECRET"})
+        self.assertIn("unknown1:dict", str(context.exception))
+        self.assertNotIn("SECRET", str(context.exception))
+
+    def test_optional_404_is_cacheable_but_stays_a_coverage_gap(self):
+        state = search.new_cache_scan("unity.example")
+        state["tasks"] = [{"resource": "/vmrest/configuration", "label": "System configuration", "page": 0, "owner": None}]
+        client = MagicMock()
+        client.get.return_value = self.response({}, 404)
+        search.advance_scan(state, "admin", "pass", client)
+        report = search.scan_report(state)
+        self.assertTrue(report["cache_ready"])
+        self.assertFalse(report["complete"])
+        self.assertEqual(report["coverage_gaps"][0]["status"], "Unsupported")
+        self.assertEqual(report["failures"], [])
+        cache = search.completed_cache(state)
+        self.assertTrue(search.cache_metadata(cache)["fresh"])
+        self.assertTrue(search.search_cache(cache, "1228")["coverage_gaps"])
+
+    def test_required_and_child_404_still_block_cache(self):
+        for resource in ("/vmrest/handlers/callhandlers", "/vmrest/users", "/vmrest/handlers/callhandlers/one/greetings"):
+            state = search.new_cache_scan("unity.example")
+            state["tasks"] = [{"resource": resource, "label": "Required resource", "page": 0, "owner": None}]
+            client = MagicMock()
+            client.get.return_value = self.response({}, 404)
+            search.advance_scan(state, "admin", "pass", client)
+            self.assertFalse(search.scan_report(state)["cache_ready"])
+            with self.assertRaises(search.UnitySearchError):
+                search.completed_cache(state)
+
+    def test_named_empty_collection_is_not_invalid_or_missing_records(self):
+        self.assertEqual(search._records({"@total": "0", "User": None}), ([], 0))
+        with self.assertRaises(search.UnitySearchError):
+            search._records({"@total": "1", "User": None})
+
     def test_restart_does_not_repeat_completed_resource(self):
         state = self.single_task()
         client = MagicMock()
@@ -456,6 +502,22 @@ class UnitySearchRouteTests(unittest.TestCase):
         self.assertEqual(response.content["report"]["job_id"], result["job_id"])
         self.assertTrue(response.content["report"]["cache"]["available"])
         self.assertTrue(response.content["report"]["cache"]["fresh"])
+
+    def test_supported_inventory_is_saved_with_explicit_unsupported_gap(self):
+        state = search.new_cache_scan("unity.example", "1228")
+        inventory = UnityNumberSearchTests().cache_fixture()
+        state.update(fields=inventory["fields"], edges=inventory["edges"], objects=inventory["objects"],
+                     tasks=[], coverage=[{"resource": "/vmrest/configuration", "status": "Unsupported", "detail": "HTTP 404; not searched"}])
+        search.save(self.directory.name, state)
+        response = self.call("unity_search_advance", job_id=state["job_id"])
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertTrue(response.content["report"]["cache_ready"])
+        self.assertFalse(response.content["report"]["complete"])
+        self.assertEqual(search.load(self.directory.name, "unity.example", "cache")["coverage"][0]["status"], "Unsupported")
+        result = self.call("unity_search_start", number="9999")
+        self.assertEqual(result.content["report"]["source"], "cache")
+        self.assertEqual(result.content["report"]["match_count"], 1)
+        self.assertTrue(result.content["report"]["coverage_gaps"])
 
 
 if __name__ == "__main__":
