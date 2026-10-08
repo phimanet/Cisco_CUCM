@@ -4,6 +4,7 @@ import tempfile
 import threading
 import unittest
 from html import escape
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -166,6 +167,82 @@ class UnityNumberSearchTests(unittest.TestCase):
         self.assertEqual(len(rows), 3)
         self.assertEqual({row["context"] for row in rows if row["reference"] == "Indirect"}, {"Key=1", "Key=2"})
 
+    def cache_fixture(self):
+        state = search.new_cache_scan("unity.example")
+        task = {"resource": "/vmrest/handlers/callhandlers", "owner": None, "label": "Handlers"}
+        search._ingest(state, {"ObjectId": "one", "URI": "/vmrest/handlers/callhandlers/one", "DisplayName": "One",
+                              "DtmfAccessId": "1228", "TransferNumber": "9999", "Password": "SECRET", "Pin": "1234"}, task)
+        state.update(status="completed", tasks=[])
+        return search.completed_cache(state)
+
+    def test_cache_search_reuses_inventory_for_different_numbers(self):
+        cache = self.cache_fixture()
+        with patch.object(search.requests, "Session") as client:
+            first = search.search_cache(cache, "1228", "exact")
+            second = search.search_cache(cache, "9999", "exact")
+        client.assert_not_called()
+        self.assertEqual(first["rows"][0]["field"], "DtmfAccessId")
+        self.assertEqual(second["rows"][0]["field"], "TransferNumber")
+        self.assertNotIn("SECRET", json.dumps(cache))
+        self.assertNotIn('"Pin"', json.dumps(cache))
+
+    def test_cache_expires_at_eight_hours_and_survives_restart(self):
+        cache = self.cache_fixture()
+        beginning = datetime.fromisoformat(cache["cached_at"])
+        self.assertTrue(search.cache_metadata(cache, beginning + timedelta(hours=8, seconds=-1))["fresh"])
+        self.assertFalse(search.cache_metadata(cache, beginning + timedelta(hours=8))["fresh"])
+        with self.assertRaises(search.UnitySearchError):
+            search.search_cache(cache, "1228", now=beginning + timedelta(hours=8, seconds=1))
+        with tempfile.TemporaryDirectory() as root:
+            search.save(root, cache, "cache")
+            self.assertEqual(search.search_cache(search.load(root, "unity.example", "cache"), "9999")["match_count"], 1)
+            with self.assertRaises(FileNotFoundError):
+                search.load(root, "other.example", "cache")
+
+    def test_failed_cache_build_does_not_replace_previous_cache(self):
+        cache = self.cache_fixture()
+        with tempfile.TemporaryDirectory() as root:
+            search.save(root, cache, "cache")
+            state = search.new_cache_scan("unity.example")
+            state.update(status="completed", tasks=[], coverage=[{"resource": "/vmrest/users", "status": "Failed", "detail": "HTTP 500"}])
+            with self.assertRaises(search.UnitySearchError):
+                search.completed_cache(state)
+            self.assertEqual(search.load(root, "unity.example", "cache")["job_id"], cache["job_id"])
+
+    def test_invalid_cache_timestamp_is_not_fresh(self):
+        cache = self.cache_fixture()
+        for timestamp in ("broken", "2026-10-08T00:00:00", (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()):
+            cache["cached_at"] = timestamp
+            with self.assertRaises(search.UnitySearchError):
+                search.cache_metadata(cache)
+
+    def test_windows_transient_file_lock_has_bounded_retry(self):
+        cache = self.cache_fixture()
+        replace = search.os.replace
+        calls = []
+        def locked_once(source, target):
+            calls.append(target)
+            if len(calls) == 1:
+                raise PermissionError("locked")
+            return replace(source, target)
+        with tempfile.TemporaryDirectory() as root:
+            with patch.object(search.os, "name", "nt"), patch.object(search.os, "replace", side_effect=locked_once), patch.object(search.time, "sleep") as delay:
+                search.save(root, cache, "cache")
+            self.assertEqual(len(calls), 2)
+            delay.assert_called_once_with(0.05)
+            self.assertEqual(search.load(root, "unity.example", "cache")["job_id"], cache["job_id"])
+
+    def test_windows_permanent_file_lock_preserves_cache(self):
+        cache = self.cache_fixture()
+        with tempfile.TemporaryDirectory() as root:
+            search.save(root, cache, "cache")
+            updated = dict(cache, job_id="replacement")
+            with patch.object(search.os, "name", "nt"), patch.object(search.os, "replace", side_effect=PermissionError("locked")) as replace, patch.object(search.time, "sleep"):
+                with self.assertRaises(PermissionError):
+                    search.save(root, updated, "cache")
+            self.assertEqual(replace.call_count, 3)
+            self.assertEqual(search.load(root, "unity.example", "cache")["job_id"], cache["job_id"])
+
 
 class UnitySearchRouteTests(unittest.TestCase):
     @classmethod
@@ -201,7 +278,8 @@ class UnitySearchRouteTests(unittest.TestCase):
         self.session["username"] = "not-admin"
         for name, arguments in (("unity_connection_page", {}), ("unity_search_start", {"number": "1228"}),
                                 ("unity_search_saved", {}), ("unity_search_advance", {"job_id": "one"}),
-                                ("unity_search_control", {"job_id": "one", "action": "resume"})):
+                                ("unity_search_control", {"job_id": "one", "action": "resume"}),
+                                ("unity_search_cache_status", {}), ("unity_search_load_cache", {})):
             self.assertEqual(self.call(name, **arguments).status_code, 403)
 
     def test_duplicate_stale_pause_resume_cancel(self):
@@ -212,6 +290,7 @@ class UnitySearchRouteTests(unittest.TestCase):
         self.assertEqual(self.call("unity_search_advance", job_id="stale").status_code, 422)
         for action, status in (("pause", "paused"), ("resume", "running"), ("cancel", "cancelled")):
             result = self.call("unity_search_control", job_id=first["job_id"], action=action)
+            self.assertEqual(result.status_code, 200, result.content)
             self.assertEqual(result.content["report"]["status"], status)
         self.assertEqual(self.call("unity_search_control", job_id=first["job_id"], action="resume").status_code, 422)
 
@@ -258,6 +337,125 @@ class UnitySearchRouteTests(unittest.TestCase):
         self.assertIn('<a class="hero-link-card" href="/unity-connection">', html)
         self.assertIn("<strong>Unity Tools</strong>", html)
         self.assertIn("onclick=\"window.location.href='/unity-connection'\">Unity Tools</button>", html)
+
+    def cached_inventory(self):
+        cache = UnityNumberSearchTests().cache_fixture()
+        search.save(self.directory.name, cache, "cache")
+        return cache
+
+    def test_fresh_cache_search_makes_no_unity_reads(self):
+        self.cached_inventory()
+        self.scope["_resolve_unity_credentials"] = MagicMock(side_effect=RuntimeError("expired"))
+        with patch.object(search.requests, "Session") as client:
+            first = self.call("unity_search_start", number="1228", mode="exact")
+            second = self.call("unity_search_start", number="9999", mode="exact")
+        client.assert_not_called()
+        self.assertEqual(first.status_code, 200, first.content)
+        self.assertEqual(second.status_code, 200, second.content)
+        self.assertEqual(first.content["report"]["source"], "cache")
+        self.assertEqual(second.content["report"]["rows"][0]["field"], "TransferNumber")
+        self.scope["_resolve_unity_credentials"].assert_not_called()
+        self.assertEqual(len(self.audit), 2)
+        self.assertTrue(all("source=cache" in event["target"] for event in self.audit))
+        with self.assertRaises(FileNotFoundError):
+            search.load(self.directory.name, "unity.example")
+
+    def test_expired_cache_automatically_starts_refresh(self):
+        cache = self.cached_inventory()
+        cache["cached_at"] = (datetime.now(timezone.utc) - timedelta(hours=8, seconds=1)).isoformat()
+        search.save(self.directory.name, cache, "cache")
+        response = self.call("unity_search_start", number="9999")
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.content["report"]["status"], "running")
+        self.assertTrue(response.content["report"]["cache_build"])
+        self.assertFalse(response.content["report"]["cache"]["fresh"])
+        self.assertEqual(search.load(self.directory.name, "unity.example", "cache")["job_id"], cache["job_id"])
+
+    def test_load_cache_forces_refresh_and_reuses_active_load(self):
+        cache = self.cached_inventory()
+        first = self.call("unity_search_load_cache").content["report"]
+        second = self.call("unity_search_load_cache").content["report"]
+        self.assertEqual(first["status"], "running")
+        self.assertEqual(first["job_id"], second["job_id"])
+        self.assertEqual(first["query"], "")
+        self.assertNotEqual(first["job_id"], cache["job_id"])
+        attached = self.call("unity_search_start", number="1228")
+        self.assertEqual(attached.content["report"]["source"], "cache")
+
+    def test_missing_cache_load_finishes_pending_search_and_reuses_cache(self):
+        result = self.call("unity_search_start", number="1228").content["report"]
+        state = search.load(self.directory.name, "unity.example")
+        inventory = UnityNumberSearchTests().cache_fixture()
+        state.update(fields=inventory["fields"], edges=inventory["edges"], objects=inventory["objects"], tasks=[])
+        search.save(self.directory.name, state)
+        with patch.object(search.requests, "Session") as client:
+            completed = self.call("unity_search_advance", job_id=result["job_id"])
+            next_search = self.call("unity_search_start", number="9999")
+        client.assert_not_called()
+        self.assertEqual(completed.status_code, 200, completed.content)
+        self.assertEqual(completed.content["report"]["match_count"], 1)
+        self.assertTrue(search.load(self.directory.name, "unity.example", "cache")["collect_all_numbers"])
+        self.assertEqual(next_search.content["report"]["source"], "cache")
+        self.assertEqual(next_search.content["report"]["match_count"], 1)
+
+    def test_failed_refresh_keeps_cache_and_last_search(self):
+        cache = self.cached_inventory()
+        prior = self.call("unity_search_start", number="1228").content["report"]
+        load = self.call("unity_search_load_cache").content["report"]
+        state = search.load(self.directory.name, "unity.example")
+        state["tasks"] = state["tasks"][:1]
+        search.save(self.directory.name, state)
+        client = MagicMock()
+        client.get.return_value = SimpleNamespace(status_code=500)
+        with patch.object(search.requests, "Session", return_value=client):
+            failed = self.call("unity_search_advance", job_id=load["job_id"])
+        self.assertFalse(failed.content["report"]["complete"])
+        self.assertEqual(search.load(self.directory.name, "unity.example", "cache")["job_id"], cache["job_id"])
+        self.assertEqual(search.load(self.directory.name, "unity.example", "report")["job_id"], prior["job_id"])
+
+    def test_cache_write_failure_does_not_finish_load(self):
+        cache = self.cached_inventory()
+        load = self.call("unity_search_load_cache").content["report"]
+        state = search.load(self.directory.name, "unity.example")
+        state["tasks"] = []
+        search.save(self.directory.name, state)
+        actual_save = search.save
+        def failing_save(root, value, kind="scan"):
+            if kind == "cache":
+                raise OSError("full")
+            return actual_save(root, value, kind)
+        with patch.object(search, "save", side_effect=failing_save):
+            response = self.call("unity_search_advance", job_id=load["job_id"])
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(search.load(self.directory.name, "unity.example")["status"], "running")
+        self.assertEqual(search.load(self.directory.name, "unity.example", "cache")["job_id"], cache["job_id"])
+
+    def test_corrupt_cache_is_not_replaced_or_used(self):
+        self.cached_inventory()
+        path = Path(search._path(self.directory.name, "unity.example", "cache"))
+        path.write_text("broken", encoding="utf-8")
+        self.assertEqual(self.call("unity_search_start", number="1228").status_code, 502)
+        self.assertEqual(self.call("unity_search_load_cache").status_code, 502)
+        self.assertEqual(path.read_text(encoding="utf-8"), "broken")
+
+    def test_saved_report_recomputes_its_original_cache_age(self):
+        self.cached_inventory()
+        report = self.call("unity_search_start", number="1228").content["report"]
+        report["cache"]["cached_at"] = (datetime.now(timezone.utc) - timedelta(hours=9)).isoformat()
+        search.save(self.directory.name, report, "report")
+        self.request.url.path = "/unity-connection/search/saved"
+        response = self.call("unity_search_saved")
+        self.assertFalse(response.content["report"]["cache"]["fresh"])
+        self.assertGreater(response.content["report"]["cache"]["age_seconds"], 8 * 3600)
+
+    def test_saved_scan_returns_cache_freshness_after_restart(self):
+        self.cached_inventory()
+        result = self.call("unity_search_load_cache").content["report"]
+        response = self.call("unity_search_saved")
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.content["report"]["job_id"], result["job_id"])
+        self.assertTrue(response.content["report"]["cache"]["available"])
+        self.assertTrue(response.content["report"]["cache"]["fresh"])
 
 
 if __name__ == "__main__":

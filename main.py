@@ -55682,34 +55682,37 @@ UNITY_SEARCH_PAGE_BODY = """<body>
 <header class="topbar"><div class="topbar-brand"><span class="brand-fallback">AMN Healthcare</span><strong>Voice Operations Portal</strong></div><div class="topbar-status"><span>Authenticated Operator: __AUTH_USER__</span><span>__ENV_TEXT__</span><span>Read-Only</span></div><a class="topbar-btn" href="/logout">Log Out</a></header>
 <main class="content"><h2 class="page-title">Unity Connection Search</h2><div class="portal-shell">
 <aside class="portal-sidebar"><h4>Unity Connection Menu</h4><div class="portal-nav"><button type="button" class="portal-nav-btn active" id="unity-nav-search">Number Reference Search</button><a class="portal-nav-btn" href="/menu">Main Operations (Page 1)</a><a class="portal-nav-btn" href="/page2">Administrative Items (Page 2)</a><a class="portal-nav-btn" href="/page3">SMS Item Menu (Page 3)</a></div></aside>
-<section class="portal-main"><h3 style="margin-top:0;">Number Reference Search</h3><p class="muted">Unity host: __UNITY_HOST__</p>
+<section class="portal-main"><h3 style="margin-top:0;">Number Reference Search</h3><p class="muted">Unity host: __UNITY_HOST__</p><div class="row"><button type="button" class="btn-action" id="unity-load-cache" onclick="if(window.loadUnityCache){return window.loadUnityCache(event);}document.getElementById('unity-status').textContent='Unity cache handler missing (JavaScript did not load).';return false;">Load Cache</button><span id="unity-cache-status" class="muted" role="status">Checking cache...</span></div>
 <form id="unity-search-form" onsubmit="if(window.runUnitySearch){return window.runUnitySearch(event);}document.getElementById('unity-status').textContent='Unity search handler missing (JavaScript did not load).';return false;">
 <div class="row"><label for="unity-number">Number:</label><input id="unity-number" name="number" required autocomplete="off" inputmode="tel" placeholder="Extension, number, or fragment"><label for="unity-mode">Match:</label><select id="unity-mode" name="mode"><option value="contains">Contains</option><option value="exact">Exact</option></select><button type="button" class="btn-action" id="unity-start" onclick="if(window.runUnitySearch){return window.runUnitySearch(event);}document.getElementById('unity-status').textContent='Unity search handler missing (JavaScript did not load).';return false;">Search Unity</button></div></form>
 <div class="row"><button type="button" class="btn-action" id="unity-pause" disabled>Pause</button><button type="button" class="btn-action" id="unity-resume" disabled>Resume</button><button type="button" class="btn-action" id="unity-cancel" disabled>Cancel Scan</button><button type="button" class="btn-action" id="unity-scan">View Latest Scan</button><button type="button" class="btn-action" id="unity-saved">View Latest Completed Lookup</button><button type="button" class="btn-action" id="unity-csv" disabled>Download CSV</button></div>
 <p id="unity-status" class="muted" role="status" aria-live="polite"></p><p id="unity-summary" class="muted"></p><div class="row"><label for="unity-filter">Filter Results:</label><input type="search" id="unity-filter" placeholder="Object, setting, value, reference"><label for="unity-reference">Reference:</label><select id="unity-reference"><option value="">All</option><option>Direct</option><option>Indirect</option></select></div>
 <div id="unity-results" class="unity-scroll"></div><details id="unity-coverage"><summary>Checked Resources and Coverage Gaps</summary><div id="unity-coverage-results" class="unity-scroll"></div></details><details><summary>Scan Diagnostics</summary><pre id="unity-debug"></pre></details>
-<p id="unity-limits" class="muted"></p><p class="muted">Browser-driven scan: closing this page pauses further reads. Saved progress survives reloads and service restarts; View Latest Scan, then Resume with a valid login. No Unity settings are changed.</p><p id="unity-retention" class="muted"></p>
+<p id="unity-limits" class="muted"></p><p class="muted">Cache loading is browser-driven: closing this page pauses further reads. Saved progress survives reloads and service restarts; View Latest Scan, then Resume with a valid login. Search refreshes missing or expired cache automatically after eight hours. No Unity settings are changed; cached results are not deletion clearance.</p><p id="unity-retention" class="muted"></p>
 </section></div></main>
 <script>
 (function(){
   var report=null,jobId='',auto=false,busy=false,timer=null,status=document.getElementById('unity-status');
   var columns=[['Object Type','object_type'],['Object Name','object_name'],['Setting / Field','field'],['Stored Value','value'],['Reference','reference'],['Reference Path','path'],['Rule Context','context'],['Resource','resource']];
-  function controls(){var active=report && ['running','paused'].indexOf(report.status)>=0;document.getElementById('unity-start').disabled=busy || !!active;document.getElementById('unity-pause').disabled=!active || !auto;document.getElementById('unity-resume').disabled=busy || !active || auto;document.getElementById('unity-cancel').disabled=!active;document.getElementById('unity-scan').disabled=busy;document.getElementById('unity-saved').disabled=busy;document.getElementById('unity-csv').disabled=!report || busy;}
+  function controls(){var active=report && ['running','paused'].indexOf(report.status)>=0;document.getElementById('unity-start').disabled=busy || !!active;document.getElementById('unity-load-cache').disabled=busy || !!active;document.getElementById('unity-pause').disabled=!active || !auto;document.getElementById('unity-resume').disabled=busy || !active || auto;document.getElementById('unity-cancel').disabled=!active;document.getElementById('unity-scan').disabled=busy;document.getElementById('unity-saved').disabled=busy;document.getElementById('unity-csv').disabled=!report || !report.query || busy;}
+  function cacheStatus(cache){var element=document.getElementById('unity-cache-status');if(!cache || !cache.available){element.textContent='No reusable cache loaded. Refresh interval: 8 hours.';return;}element.textContent=(cache.fresh?'Fresh cache':'Expired cache')+' | Data since '+cache.cached_at+' | Loaded '+cache.loaded_at+' | '+cache.field_count+' searchable fields | Expires '+cache.expires_at;element.style.color=cache.fresh?'#16733b':'#9a4b00';}
+  function completion(){if(report.status==='failed')return 'Cache load limit reached; previous cache is retained.';if(report.cache_build && report.status==='completed' && !report.complete)return 'Cache load incomplete; review coverage gaps. Previous cache and saved lookup are retained.';if(!report.query && report.status==='completed')return 'Cache loaded. Enter a number to search.';return (report.source==='cache'?'Searched cached configuration. ':report.complete?'Requested resources checked. ':'Scan finished with coverage gaps. ')+(report.match_count?'References found.':'No matches in checked fields; not deletion clearance.');}
   function filtered(){var text=document.getElementById('unity-filter').value.toLowerCase(),kind=document.getElementById('unity-reference').value;return (report?report.rows:[]).filter(function(row){return (!kind || row.reference===kind) && (!text || columns.some(function(column){return String(row[column[1]] || '').toLowerCase().indexOf(text)>=0;}));});}
   function table(target,labels,rows){target.replaceChildren();var element=document.createElement('table'),head=element.createTHead().insertRow();labels.forEach(function(label){var cell=document.createElement('th');cell.textContent=label;head.appendChild(cell);});var body=element.createTBody();rows.forEach(function(values){var row=body.insertRow();values.forEach(function(value){row.insertCell().textContent=value==null?'':String(value);});});target.appendChild(element);}
-  function render(){if(!report)return;var rows=filtered();table(document.getElementById('unity-results'),columns.map(function(column){return column[0];}),rows.slice(0,500).map(function(row){return columns.map(function(column){return row[column[1]];});}));document.getElementById('unity-summary').textContent=report.host+' | '+report.mode+' '+report.query+' | '+rows.length+' filtered / '+report.match_count+' references | Showing up to 500 rows | '+report.requests+' reads | '+report.pending_resources+' resources pending | '+report.checked_at;var coverage=report.coverage.map(function(item){return [item.resource,item.status,item.detail];}).concat(report.excluded_links.map(function(item){return [item.resource,'Not searched',item.reason];}));table(document.getElementById('unity-coverage-results'),['Resource','Outcome','Details'],coverage);document.getElementById('unity-debug').textContent=JSON.stringify({job_id:report.job_id,status:report.status,requests:report.requests,records:report.records,pending_resources:report.pending_resources,failures:report.failures,excluded_links:report.excluded_links},null,2);document.getElementById('unity-limits').textContent=report.limitations;document.getElementById('unity-retention').textContent=report.retention;}
+  function render(){if(!report)return;cacheStatus(report.cache);var rows=filtered();table(document.getElementById('unity-results'),columns.map(function(column){return column[0];}),rows.slice(0,500).map(function(row){return columns.map(function(column){return row[column[1]];});}));document.getElementById('unity-summary').textContent=report.host+' | '+(report.query?report.mode+' '+report.query:'Configuration cache load')+' | '+rows.length+' filtered / '+report.match_count+' references | Showing up to 500 rows | '+report.requests+' cache/scan reads | '+report.pending_resources+' resources pending | '+report.checked_at;var coverage=report.coverage.map(function(item){return [item.resource,item.status,item.detail];}).concat(report.excluded_links.map(function(item){return [item.resource,'Not searched',item.reason];}));table(document.getElementById('unity-coverage-results'),['Resource','Outcome','Details'],coverage);document.getElementById('unity-debug').textContent=JSON.stringify({job_id:report.job_id,status:report.status,source:report.source,cache:report.cache,requests:report.requests,records:report.records,pending_resources:report.pending_resources,failures:report.failures,excluded_links:report.excluded_links},null,2);document.getElementById('unity-limits').textContent=report.limitations;document.getElementById('unity-retention').textContent=report.retention;}
   function stop(){auto=false;clearTimeout(timer);controls();}
   async function request(operation,body){var response=await fetch('/unity-connection/search/'+operation,body?{method:'POST',body:body,credentials:'same-origin'}:{credentials:'same-origin'});var payload=await response.json();if(!response.ok || !payload.ok)throw new Error(payload.error || 'Unity search failed.');report=payload.report;jobId=report.job_id;render();controls();return report;}
   function formBody(){var body=new FormData();body.append('job_id',jobId);return body;}
   function schedule(){if(auto && report && report.status==='running')timer=setTimeout(advance,300);}
-  async function advance(){if(!auto || busy)return;busy=true;controls();try{await request('advance',formBody());status.textContent=report.status==='completed'?(report.complete?'Requested resources checked. ':'Scan finished with coverage gaps. ')+(report.match_count?'References found.':'No matches in checked fields; not deletion clearance.'):report.status==='failed'?'Scan limit reached; results are incomplete.':'Scanning Unity configuration...';if(report.status!=='running')stop();}catch(error){stop();status.textContent='Scan paused: '+error.message+' Saved progress and previous completed lookup are retained.';}finally{busy=false;controls();schedule();}}
-  window.runUnitySearch=function(event){if(event)event.preventDefault();if(busy || !document.getElementById('unity-search-form').reportValidity())return false;stop();busy=true;controls();status.textContent='Starting read-only Unity scan...';request('start',new FormData(document.getElementById('unity-search-form'))).then(function(){auto=true;status.textContent='Scanning Unity configuration...';}).catch(function(error){status.textContent=error.message;}).finally(function(){busy=false;controls();schedule();});return false;};
+  async function advance(){if(!auto || busy)return;busy=true;controls();try{await request('advance',formBody());status.textContent=report.status==='completed' || report.status==='failed'?completion():report.status==='paused'?'Cache load paused; select Resume to continue.':'Loading Unity configuration cache...';if(report.status!=='running')stop();}catch(error){stop();status.textContent='Cache load paused: '+error.message+' Saved progress, previous cache and completed lookup are retained.';}finally{busy=false;controls();schedule();}}
+  function begin(event,cacheOnly){if(event)event.preventDefault();if(busy || (!cacheOnly && !document.getElementById('unity-search-form').reportValidity()))return false;stop();busy=true;controls();status.textContent=cacheOnly?'Loading fresh Unity cache...':'Searching Unity cache; expired cache refreshes automatically...';request(cacheOnly?'cache/load':'start',cacheOnly?new FormData():new FormData(document.getElementById('unity-search-form'))).then(function(){auto=report.status==='running';status.textContent=auto?'Loading Unity configuration cache...':report.status==='paused'?'Saved cache load is paused; select Resume to continue.':completion();}).catch(function(error){status.textContent=error.message;}).finally(function(){busy=false;controls();schedule();});return false;}
+  window.runUnitySearch=function(event){return begin(event,false);};window.loadUnityCache=function(event){return begin(event,true);};
   async function control(action){stop();var body=formBody();body.append('action',action);try{await request('control',body);auto=action==='resume';status.textContent=action==='resume'?'Resuming saved scan...':action==='cancel'?'Scan cancelled; completed saved lookup unchanged.':'Scan paused; progress saved.';}catch(error){status.textContent=error.message;}controls();schedule();}
   document.getElementById('unity-pause').addEventListener('click',function(){control('pause');});document.getElementById('unity-resume').addEventListener('click',function(){control('resume');});document.getElementById('unity-cancel').addEventListener('click',function(){control('cancel');});
   async function saved(operation,initial){stop();busy=true;controls();try{await request(operation);status.textContent=(operation==='saved'?'Latest completed lookup. ':'Latest scan restored. ')+(report.status==='running' || report.status==='paused'?'Select Resume to continue.':report.complete?'Requested resources checked.':'Review coverage gaps.');if(operation==='scan'){document.getElementById('unity-number').value=report.query;document.getElementById('unity-mode').value=report.mode;}}catch(error){if(!initial)status.textContent=error.message;}finally{busy=false;controls();}}
   document.getElementById('unity-scan').addEventListener('click',function(){saved('scan',false);});document.getElementById('unity-saved').addEventListener('click',function(){saved('saved',false);});document.getElementById('unity-filter').addEventListener('input',render);document.getElementById('unity-reference').addEventListener('change',render);document.getElementById('unity-nav-search').addEventListener('click',function(){document.getElementById('unity-number').focus();});
-  document.getElementById('unity-csv').addEventListener('click',function(){if(!report)return;function cell(value){var text=String(value==null?'':value);if(/^[=+@-]/.test(text.trimStart()))text="'"+text;return '"'+text.replace(/"/g,'""')+'"';}var lines=[['Record Type','Unity Host','Query','Mode','Object Type','Object Name','Object ID','Setting / Field','Stored Value','Reference','Reference Path','Rule Context','Resource','Outcome / Details','Checked At'].map(cell).join(',')];filtered().forEach(function(row){lines.push(['Match',report.host,report.query,report.mode,row.object_type,row.object_name,row.object_id,row.field,row.value,row.reference,row.path,row.context,row.resource,'',report.checked_at].map(cell).join(','));});report.coverage.forEach(function(item){lines.push(['Coverage',report.host,report.query,report.mode,'','','','','','','','',item.resource,item.status+': '+item.detail,report.checked_at].map(cell).join(','));});report.excluded_links.forEach(function(item){lines.push(['Excluded',report.host,report.query,report.mode,'','','','','','','','',item.resource,item.reason,report.checked_at].map(cell).join(','));});lines.push(['Limitations',report.host,report.query,report.mode,'','','','','','','','','',report.limitations,report.checked_at].map(cell).join(','));lines.push(['Scan Status',report.host,report.query,report.mode,'','','','','','','','','',report.status+'; Pending resources: '+report.pending_resources+'; '+report.retention,report.checked_at].map(cell).join(','));var url=URL.createObjectURL(new Blob([lines.join(String.fromCharCode(13,10))],{type:'text/csv;charset=utf-8'})),link=document.createElement('a');link.href=url;link.download='unity_number_references.csv';document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);});
-  controls();saved('scan',true);
+  document.getElementById('unity-csv').addEventListener('click',function(){if(!report)return;function cell(value){var text=String(value==null?'':value);if(/^[=+@-]/.test(text.trimStart()))text="'"+text;return '"'+text.replace(/"/g,'""')+'"';}var lines=[['Record Type','Unity Host','Query','Mode','Object Type','Object Name','Object ID','Setting / Field','Stored Value','Reference','Reference Path','Rule Context','Resource','Outcome / Details','Checked At'].map(cell).join(',')];filtered().forEach(function(row){lines.push(['Match',report.host,report.query,report.mode,row.object_type,row.object_name,row.object_id,row.field,row.value,row.reference,row.path,row.context,row.resource,'',report.checked_at].map(cell).join(','));});report.coverage.forEach(function(item){lines.push(['Coverage',report.host,report.query,report.mode,'','','','','','','','',item.resource,item.status+': '+item.detail,report.checked_at].map(cell).join(','));});report.excluded_links.forEach(function(item){lines.push(['Excluded',report.host,report.query,report.mode,'','','','','','','','',item.resource,item.reason,report.checked_at].map(cell).join(','));});lines.push(['Limitations',report.host,report.query,report.mode,'','','','','','','','','',report.limitations,report.checked_at].map(cell).join(','));lines.push(['Cache',report.host,report.query,report.mode,'','','','','','','','','',JSON.stringify(report.cache || {}),report.checked_at].map(cell).join(','));lines.push(['Scan Status',report.host,report.query,report.mode,'','','','','','','','','',report.status+'; Pending resources: '+report.pending_resources+'; '+report.retention,report.checked_at].map(cell).join(','));var url=URL.createObjectURL(new Blob([lines.join(String.fromCharCode(13,10))],{type:'text/csv;charset=utf-8'})),link=document.createElement('a');link.href=url;link.download='unity_number_references.csv';document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);});
+  controls();saved('scan',true);fetch('/unity-connection/search/cache-status',{credentials:'same-origin'}).then(function(response){return response.json();}).then(function(payload){if(!payload.ok)throw new Error(payload.error || 'Cache status unavailable.');cacheStatus(payload.cache);}).catch(function(error){document.getElementById('unity-cache-status').textContent=error.message;});
 })();
 </script></body></html>"""
 
@@ -55745,26 +55748,81 @@ def _unity_search_failure(exc):
 
 
 def _unity_search_result(state):
-  return JSONResponse({"ok": True, "report": unity_number_search.scan_report(state)}, headers={"Cache-Control": "no-store"})
+  report = unity_number_search.scan_report(state)
+  report["cache"] = _unity_search_cache_info(state["host"])
+  if report["cache_build"] and report["complete"] and report["cache"]["fresh"]:
+    report["source"] = "cache"
+  return JSONResponse({"ok": True, "report": report}, headers={"Cache-Control": "no-store"})
+
+
+def _unity_search_cache_info(host):
+  try:
+    cache = unity_number_search.load(UNITY_NUMBER_SEARCH_DIR, host, "cache")
+  except FileNotFoundError:
+    return {"available": False, "fresh": False, "ttl_seconds": unity_number_search.CACHE_TTL_SECONDS}
+  return unity_number_search.cache_metadata(cache)
+
+
+def _unity_search_begin_cache(request: Request, host: str, query: str = "", mode: str = "contains"):
+  _resolve_unity_credentials(request, "", "")
+  state = unity_number_search.new_cache_scan(host, query, mode)
+  try:
+    existing = unity_number_search.load(UNITY_NUMBER_SEARCH_DIR, host)
+  except FileNotFoundError:
+    existing = None
+  if existing and existing["status"] in {"running", "paused"}:
+    if not existing.get("collect_all_numbers"):
+      raise ValueError("A legacy number-only scan is active; finish or Cancel it before loading reusable cache.")
+    if query and existing["query"] and (existing["query"] != state["query"] or existing["mode"] != mode):
+      raise ValueError("A cache load already has a pending number search; finish it before searching another number.")
+    if query and not existing["query"]:
+      existing.update(query=state["query"], mode=mode)
+      unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, existing)
+    return _unity_search_result(existing)
+  unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, state)
+  return _unity_search_result(state)
+
+
+@app.get("/unity-connection/search/cache-status")
+def unity_search_cache_status(request: Request):
+  try:
+    host = _unity_search_access(request)
+    with UNITY_NUMBER_SEARCH_LOCK:
+      cache = _unity_search_cache_info(host)
+    return JSONResponse({"ok": True, "cache": cache}, headers={"Cache-Control": "no-store"})
+  except Exception as exc:
+    return _unity_search_failure(exc)
+
+
+@app.post("/unity-connection/search/cache/load")
+def unity_search_load_cache(request: Request):
+  try:
+    host = _unity_search_access(request)
+    with UNITY_NUMBER_SEARCH_LOCK:
+      _unity_search_cache_info(host)
+      return _unity_search_begin_cache(request, host)
+  except Exception as exc:
+    return _unity_search_failure(exc)
 
 
 @app.post("/unity-connection/search/start")
 def unity_search_start(request: Request, number: str = Form(""), mode: str = Form("contains")):
   try:
     host = _unity_search_access(request)
-    _resolve_unity_credentials(request, "", "")
-    state = unity_number_search.new_scan(host, number, mode)
+    query = unity_number_search.normalize_query(number)
+    if mode not in {"exact", "contains"}:
+      raise ValueError("Choose Exact or Contains matching.")
     with UNITY_NUMBER_SEARCH_LOCK:
       try:
-        existing = unity_number_search.load(UNITY_NUMBER_SEARCH_DIR, host)
+        cache = unity_number_search.load(UNITY_NUMBER_SEARCH_DIR, host, "cache")
       except FileNotFoundError:
-        existing = None
-      if existing and existing["status"] in {"running", "paused"}:
-        if existing["query"] != state["query"] or existing["mode"] != mode:
-          raise ValueError("A scan is already active for this Unity host; Cancel it before starting another number.")
-        return _unity_search_result(existing)
-      unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, state)
-    return _unity_search_result(state)
+        cache = None
+      if cache and unity_number_search.cache_metadata(cache)["fresh"]:
+        report = unity_number_search.search_cache(cache, query, mode)
+        unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, report, "report")
+        _append_audit_event(action="unity_number_reference_search", cucm_host=host, operator=str((_get_auth_session(request) or {}).get("username", "")), target=f"number={query};matches={report['match_count']};source=cache", output_filename="", inline_mode=True)
+        return JSONResponse({"ok": True, "report": report}, headers={"Cache-Control": "no-store"})
+      return _unity_search_begin_cache(request, host, query, mode)
   except Exception as exc:
     return _unity_search_failure(exc)
 
@@ -55777,7 +55835,11 @@ def unity_search_saved(request: Request):
     kind = "report" if request.url.path.endswith("/saved") else "scan"
     with UNITY_NUMBER_SEARCH_LOCK:
       value = unity_number_search.load(UNITY_NUMBER_SEARCH_DIR, host, kind)
-    return JSONResponse({"ok": True, "report": value if kind == "report" else unity_number_search.scan_report(value)}, headers={"Cache-Control": "no-store"})
+      if kind == "report" and value.get("cache"):
+        value["cache"] = unity_number_search.cache_metadata(value["cache"])
+    if kind == "scan":
+      return _unity_search_result(value)
+    return JSONResponse({"ok": True, "report": value}, headers={"Cache-Control": "no-store"})
   except Exception as exc:
     return _unity_search_failure(exc)
 
@@ -55801,7 +55863,14 @@ def unity_search_advance(request: Request, job_id: str = Form("")):
       if state["status"] == "completed":
         report = unity_number_search.scan_report(state)
         if report["complete"]:
-          unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, report, "report")
+          if state.get("collect_all_numbers"):
+            cache = unity_number_search.completed_cache(state)
+            unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, cache, "cache")
+            if state["query"] and unity_number_search.cache_metadata(cache)["fresh"]:
+              report = unity_number_search.search_cache(cache, state["query"], state["mode"])
+              unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, report, "report")
+          else:
+            unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, report, "report")
         _append_audit_event(action="unity_number_reference_search", cucm_host=host, operator=str((_get_auth_session(request) or {}).get("username", "")), target=f"number={state['query']};matches={report['match_count']};failures={len(report['failures'])}", output_filename="", inline_mode=True)
       unity_number_search.save(UNITY_NUMBER_SEARCH_DIR, state)
     return _unity_search_result(state)

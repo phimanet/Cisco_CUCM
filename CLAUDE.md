@@ -19,7 +19,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [x] Centralize environment-specific values — AD LDAP config deployed via `/opt/cucm-web/.env` + systemd EnvironmentFile on both LAB and PROD.
 - [ ] Add lightweight health check and structured error responses for web routes.
 - [ ] Add minimal regression tests for toolkit functions that generate CSV outputs.
-- [ ] [P2][In Progress] Unity Connection Search implemented locally; validate read-only number-reference coverage, host selection, permissions, paging, scan recovery, and load in LAB before PROD rollout.
+- [ ] [P2][In Progress] Unity Connection Search implemented locally; validate read-only number-reference coverage, eight-hour cache freshness, host selection, permissions, paging, scan recovery, and load in LAB before PROD rollout.
 
 ## Code Improvement Backlog
 _Identified 2026-08-06 by full codebase efficiency audit. Do NOT implement without explicit approval — safe fallback tag `websave-2026-08-06` (commit `365a9a4`) is the reference point._
@@ -114,6 +114,13 @@ Priority keys:
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
+
+### 2026-10-08 (Unity Search Eight-Hour Configuration Cache)
+- Added `Load Cache` to Unity Connection Search. It forces a read-only configuration refresh without requiring a number. Search now uses the host-specific reusable cache locally, with no Unity reads while fresh; missing or expired cache automatically starts a load and completes the pending number search after successful loading. Expiry is eight hours from the beginning of the load, conservatively accounting for long scans. Automatic refresh is on Search, not an unattended eight-hour scheduler.
+- Cache builds retain sanitized number-bearing scalar fields, object identity/context and handler-reference edges, not raw provider payloads or credentials. Cache timestamps, expiry, searchable-field count and fresh/expired status are visible in the page and CSV. Exact/Contains matching, direct/indirect evidence, coverage gaps and cleanup caveats remain unchanged. Older number-only scans/reports are not treated as reusable configuration caches.
+- Latest cache, resumable load and latest lookup remain separate per-host atomic/fsync files in the existing external `unity_number_search` runtime directory. Only completed failure-free loads replace the cache; failed/partial/cancelled loads and write failures retain prior cache/report data. Expired cache is not silently used for a new search. Corrupt files and invalid/future timestamps are refused. Latest-only retention is not an archive; normal restarts/pulls preserve files, while deletion or older data/VM restores remain recovery limits.
+- Loading remains browser-driven with the existing Pause/Resume/Cancel controls and persisted resource/page cursors. Restored scans include current cache status; saved lookup age is recalculated from the cache actually used, not a newer cache. Fresh local searches need portal administrator authentication but do not require renewing Unity credentials; refresh/resume requires valid Unity credentials. Duplicate cache-load requests reuse the active load. No new `.env` settings required.
+- Local validation passed: 35 focused scanner/cache/isolated-route tests including zero-read searches for different numbers, the exact eight-hour boundary, automatic expiry refresh, forced load, restart/host isolation, auth, cache-write/corruption failure retention and bounded Windows-only transient-file-lock recovery. Full Unity script and all 27 Page 2 scripts parsed; load without a number, fresh searches without loader advances, expired refresh, pause/saved/resume/cancel, failed-refresh retention, 601-row filtering/CSV/escaping, navigation and desktop/390px mobile controls checked in the browser. Full ASGI/live Unity coverage, permissions and load testing remain pending in LAB; no PROD rollout instructed.
 
 ### 2026-10-08 (Unity Connection Number Reference Search)
 - Navigation follow-up: added a visible `Unity Tools` link in the Administrative Items header links and renamed the existing sidebar entry to `Unity Tools`; both open `/unity-connection`. The Unity search page and scan behavior are unchanged.

@@ -3,9 +3,10 @@ import json
 import os
 import re
 import tempfile
+import time
 import uuid
 from collections import deque
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote, unquote, urlsplit
 
 import requests
@@ -18,7 +19,8 @@ class UnitySearchError(RuntimeError):
 EXCLUDED = re.compile(r"password|passwd|credential|secret|token|pin(?:hash|digest|$)|certificate|authorizationcode|voicename|voicefile|streamfile|recording", re.I)
 NUMBER_FIELD = re.compile(r"extension|dtmfaccessid|phone|dial|callback|contactnumber|transfernumber|callingnumber|callednumber|forwardingnumber", re.I)
 UUID = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$", re.I)
-RETENTION = "Latest scan and latest completed lookup per Unity host only; not an archive. External runtime data survives normal restarts and code pulls, not data deletion or older data/VM restores."
+CACHE_TTL_SECONDS = 8 * 60 * 60
+RETENTION = "Latest configuration cache, latest scan and latest completed lookup per Unity host only; not an archive. Cache expires after eight hours from the beginning of its load. External runtime data survives normal restarts and code pulls, not data deletion or older data/VM restores."
 LIMITS = "Read-only CUPI configuration search, not deletion clearance. Recorded audio, messages, credentials, binary data, inaccessible/unadvertised resources, personal call-transfer rules, and external systems are not searched. Stored references do not prove an active call path; schedules, actions, disabled rules, and wildcard semantics require operator review."
 
 
@@ -182,6 +184,13 @@ def new_scan(host, query, mode="contains"):
             "records": 0, "retention": RETENTION, "limitations": LIMITS}
 
 
+def new_cache_scan(host, query="", mode="contains"):
+    state = new_scan(host, query or "000", mode)
+    state["query"] = normalize_query(query) if query else ""
+    state["collect_all_numbers"] = True
+    return state
+
+
 def _records(payload):
     if not isinstance(payload, dict):
         raise UnitySearchError("CUPI returned an unexpected JSON shape.")
@@ -241,7 +250,10 @@ def _ingest(state, record, task):
         state["objects"][identity] = owner
     item_resource = str(record.get("URI") or resource)
     fields, edges = record_evidence(record, owner, item_resource)
-    state["fields"].extend(field for field in fields if _matches_query(field, state))
+    if state.get("collect_all_numbers"):
+        state["fields"].extend(field for field in fields if any(len(re.sub(r"[^0-9]", "", token)) >= 3 for token in re.findall(r"[0-9]+(?:[ ().+-]*[0-9]+)*", field["value"])))
+    else:
+        state["fields"].extend(field for field in fields if _matches_query(field, state))
     state["edges"].extend(edges)
     if str(record.get("PersonalCallTransfer", "false")).lower() == "true":
         state["excluded_links"].append({"resource": item_resource, "reason": "Personal call-transfer rules enabled; not searched."})
@@ -353,7 +365,7 @@ def advance_scan(state, username, password, session=None):
 
 
 def scan_report(state):
-    rows = find_matches(state)
+    rows = find_matches(state) if state["query"] and not (state.get("collect_all_numbers") and state["status"] != "completed") else []
     failures = [item for item in state["coverage"] if item["status"] != "Checked"]
     excluded = list({(item["resource"], item["reason"]): item for item in state["excluded_links"]}.values())
     return {"schema_version": 1, "host": state["host"], "job_id": state["job_id"], "query": state["query"],
@@ -361,11 +373,52 @@ def scan_report(state):
             "rows": rows, "match_count": len(rows), "requests": state["requests"], "records": state["records"],
             "pending_resources": len(state["tasks"]), "coverage": state["coverage"], "failures": failures,
             "excluded_links": excluded, "complete": state["status"] == "completed" and not failures,
-            "retention": RETENTION, "limitations": LIMITS}
+            "retention": RETENTION, "limitations": LIMITS, "cache_build": bool(state.get("collect_all_numbers"))}
+
+
+def cache_metadata(cache, now=None):
+    now = now or datetime.now(timezone.utc)
+    try:
+        cached_at = datetime.fromisoformat(cache["cached_at"].replace("Z", "+00:00"))
+        if cached_at.tzinfo is None or now.tzinfo is None:
+            raise ValueError("Timezone required")
+        age = (now - cached_at).total_seconds()
+        if age < 0:
+            raise ValueError("Future timestamp")
+    except (KeyError, TypeError, ValueError, AttributeError):
+        raise UnitySearchError("Unity cache timestamp is invalid; cache was not overwritten.") from None
+    return {"available": True, "fresh": age < CACHE_TTL_SECONDS, "cached_at": cached_at.isoformat(),
+            "loaded_at": cache["loaded_at"], "expires_at": (cached_at + timedelta(seconds=CACHE_TTL_SECONDS)).isoformat(),
+            "age_seconds": int(age), "ttl_seconds": CACHE_TTL_SECONDS, "field_count": len(cache["fields"]) if "fields" in cache else cache["field_count"]}
+
+
+def completed_cache(state):
+    if not state.get("collect_all_numbers") or state["status"] != "completed" or state["tasks"] or any(item["status"] != "Checked" for item in state["coverage"]):
+        raise UnitySearchError("Cache load is incomplete; previous cache is retained.")
+    cache = {key: state[key] for key in ("schema_version", "host", "job_id", "status", "started_at", "updated_at",
+                                        "objects", "edges", "coverage", "excluded_links", "requests", "records")}
+    cache.update(cache_version=1, query="", mode="contains", collect_all_numbers=True,
+                 fields=list({(item["object_id"], item["resource"], item["field"], item["value"]): item for item in state["fields"]}.values()),
+                 tasks=[], cached_at=state["started_at"], loaded_at=state["updated_at"])
+    cache_metadata(cache)
+    return cache
+
+
+def search_cache(cache, query, mode="contains", now=None):
+    metadata = cache_metadata(cache, now)
+    if not metadata["fresh"]:
+        raise UnitySearchError("Unity cache is eight hours old or older; load new cache before searching.")
+    if mode not in {"exact", "contains"}:
+        raise ValueError("Choose Exact or Contains matching.")
+    state = dict(cache, query=normalize_query(query), mode=mode, job_id=uuid.uuid4().hex,
+                 updated_at=(now or datetime.now(timezone.utc)).isoformat())
+    report = scan_report(state)
+    report.update(cache=metadata, cache_build=False, source="cache")
+    return report
 
 
 def _path(root, host, kind):
-    if kind not in {"scan", "report"}:
+    if kind not in {"scan", "report", "cache"}:
         raise ValueError("Invalid saved lookup type.")
     return os.path.join(root, hashlib.sha256(normalize_host(host).encode()).hexdigest() + "_" + kind + ".json")
 
@@ -373,9 +426,13 @@ def _path(root, host, kind):
 def load(root, host, kind="scan"):
     with open(_path(root, host, kind), encoding="utf-8") as handle:
         value = json.load(handle)
-    lists = ("tasks", "fields", "edges", "coverage", "excluded_links", "scheduled") if kind == "scan" else ("rows", "coverage", "failures", "excluded_links")
+    lists = ("tasks", "fields", "edges", "coverage", "excluded_links", "scheduled") if kind == "scan" else ("fields", "edges", "coverage", "excluded_links") if kind == "cache" else ("rows", "coverage", "failures", "excluded_links")
     if not isinstance(value, dict) or value.get("schema_version") != 1 or value.get("host") != normalize_host(host) or any(not isinstance(value.get(key), list) for key in lists) or not value.get("job_id") or value.get("status") not in {"running", "paused", "cancelled", "failed", "completed"}:
         raise UnitySearchError("Saved Unity lookup is invalid; it was not overwritten.")
+    if kind == "cache":
+        if value.get("cache_version") != 1 or not isinstance(value.get("objects"), dict) or value["status"] != "completed" or value.get("tasks") != [] or not value.get("collect_all_numbers") or any(item.get("status") != "Checked" for item in value["coverage"]):
+            raise UnitySearchError("Unity configuration cache is invalid; it was not overwritten.")
+        cache_metadata(value)
     return value
 
 
@@ -392,7 +449,14 @@ def save(root, value, kind="scan"):
             json.dump(value, handle, ensure_ascii=True)
             handle.flush()
             os.fsync(handle.fileno())
-        os.replace(temp_path, path)
+        for attempt in range(3):
+            try:
+                os.replace(temp_path, path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == 2:
+                    raise
+                time.sleep(0.05 * (attempt + 1))
         temp_path = ""
         if os.name != "nt":
             directory = os.open(root, os.O_RDONLY)
