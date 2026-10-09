@@ -3,7 +3,6 @@ import importlib.util
 import json
 import os
 import re
-import shlex
 import tempfile
 import time
 from datetime import datetime, timezone
@@ -67,7 +66,43 @@ def _ssh_configuration(unity_host, environ=None):
     }
 
 
-def _execute_ssh_command(config, command, client_factory=None, reject_policy_factory=None):
+def _read_cli_prompt(channel):
+    output = bytearray()
+    deadline = time.monotonic() + SSH_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        if channel.recv_ready():
+            chunk = channel.recv(4096)
+            if not chunk:
+                break
+            output.extend(chunk)
+            if len(output) > MAX_OUTPUT_BYTES:
+                raise UnitySqlError("Unity CLI output exceeded the safe response limit; narrow the search.")
+            lines = bytes(output).decode("utf-8", errors="replace").replace("\r", "").split("\n")
+            last_line = next((line.strip() for line in reversed(lines) if line.strip()), "")
+            if re.fullmatch(r"[A-Za-z0-9._@-]+:", last_line):
+                return bytes(output).decode("utf-8", errors="replace")
+        elif getattr(channel, "closed", False):
+            break
+        else:
+            time.sleep(0.05)
+    raise UnitySqlError("Unity CLI prompt was not returned; the SSH command may be unavailable or incomplete.")
+
+
+def _strip_cli_prompt(output, command):
+    retained = []
+    for line in str(output or "").replace("\r", "").split("\n"):
+        stripped = line.strip()
+        if re.fullmatch(r"[A-Za-z0-9._@-]+:", stripped):
+            continue
+        if stripped == command:
+            continue
+        if ":" in stripped and stripped.split(":", 1)[1].strip() == command:
+            continue
+        retained.append(line)
+    return "\n".join(retained).strip()
+
+
+def _open_cli_session(config, client_factory=None, reject_policy_factory=None):
     if client_factory is None or reject_policy_factory is None:
         try:
             import paramiko
@@ -89,24 +124,27 @@ def _execute_ssh_command(config, command, client_factory=None, reject_policy_fac
             banner_timeout=4,
             auth_timeout=4,
         )
-        _, stdout, stderr = client.exec_command(shlex.quote(command), timeout=SSH_TIMEOUT_SECONDS, get_pty=False)
-        channel = stdout.channel
+        channel = client.invoke_shell(term="vt100", width=240, height=100)
         channel.settimeout(SSH_TIMEOUT_SECONDS)
-        output = stdout.read(MAX_OUTPUT_BYTES + 1)
-        if len(output) > MAX_OUTPUT_BYTES:
-            raise UnitySqlError("Unity CLI output exceeded the safe response limit; narrow the search.")
-        stderr.read(65536)
-        if channel.recv_exit_status() != 0:
-            raise UnitySqlError("Unity SSH/CLI request failed; no incomplete report was saved.")
-        return output.decode("utf-8", errors="replace") if isinstance(output, bytes) else str(output or "")
+        _read_cli_prompt(channel)
+        return client, channel
     except TimeoutError as exc:
+        client.close()
         raise UnitySqlError("Unity SSH lookup timed out; no incomplete report was saved.") from exc
     except UnitySqlError:
+        client.close()
         raise
     except Exception as exc:
-        raise UnitySqlError("Unity SSH authentication or connection failed; verify the LAB credentials and pinned host key.") from exc
-    finally:
         client.close()
+        raise UnitySqlError("Unity SSH authentication or connection failed; verify the LAB credentials and pinned host key.") from exc
+
+
+def _execute_ssh_command(channel, command):
+    try:
+        channel.sendall((command + "\n").encode("utf-8"))
+        return _strip_cli_prompt(_read_cli_prompt(channel), command)
+    except TimeoutError as exc:
+        raise UnitySqlError("Unity SSH lookup timed out; no incomplete report was saved.") from exc
 
 
 def lookup_report(number, mode="exact", unity_host="", environ=None, client_factory=None, reject_policy_factory=None):
@@ -115,10 +153,15 @@ def lookup_report(number, mode="exact", unity_host="", environ=None, client_fact
     if not unity_host or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9.-]{0,252}", str(unity_host).strip()):
         raise ValueError("A verified Unity host label is required.")
     rows = []
-    for label, command in commands:
-        output = _execute_ssh_command(config, command, client_factory, reject_policy_factory)
-        for row in parse_cli_rows(output):
-            rows.append(dict(row, query_type=label))
+    client, channel = _open_cli_session(config, client_factory, reject_policy_factory)
+    try:
+        for label, command in commands:
+            output = _execute_ssh_command(channel, command)
+            for row in parse_cli_rows(output):
+                rows.append(dict(row, query_type=label))
+    finally:
+        channel.close()
+        client.close()
 
     return {
         "schema_version": 1,

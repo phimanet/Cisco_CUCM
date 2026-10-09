@@ -68,19 +68,28 @@ class UnitySqlLookupTests(unittest.TestCase):
             policy = object()
 
             class FakeChannel:
+                def __init__(self):
+                    self.pending = [b"admin:\r\n"]
+                    self.commands = []
+                    self.closed = False
+
                 def settimeout(self, value):
                     self.timeout = value
 
-                def recv_exit_status(self):
-                    return 0
+                def recv_ready(self):
+                    return bool(self.pending)
 
-            class FakeStream:
-                def __init__(self, payload, channel=None):
-                    self.payload = payload
-                    self.channel = channel
+                def recv(self, size):
+                    return self.pending.pop(0)[:size]
 
-                def read(self, size):
-                    return self.payload[:size]
+                def sendall(self, payload):
+                    command = payload.decode("utf-8").strip()
+                    self.commands.append(command)
+                    echo = ("admin:" + command + "\r\n").encode("utf-8")
+                    self.pending.append(echo + outputs.pop(0) + b"\r\nadmin:")
+
+                def close(self):
+                    self.closed = True
 
             class FakeClient:
                 def __init__(self):
@@ -96,11 +105,9 @@ class UnitySqlLookupTests(unittest.TestCase):
                 def connect(self, **kwargs):
                     self.connection = kwargs
 
-                def exec_command(self, command, timeout, get_pty):
-                    self.command = command
-                    self.command_timeout = timeout
-                    self.get_pty = get_pty
-                    return None, FakeStream(outputs.pop(0), self.channel), FakeStream(b"")
+                def invoke_shell(self, **kwargs):
+                    self.shell_options = kwargs
+                    return self.channel
 
                 def close(self):
                     self.closed = True
@@ -119,7 +126,7 @@ class UnitySqlLookupTests(unittest.TestCase):
                         environ=environ,
                     )
 
-        self.assertEqual(len(clients), 4)
+        self.assertEqual(len(clients), 1)
         self.assertEqual(report["rows"][0]["matched_number"], "716194104147")
         self.assertEqual(report["rows"][0]["query_type"], "Mailbox caller input")
         self.assertNotIn("test-password-not-persisted", repr(report))
@@ -131,9 +138,8 @@ class UnitySqlLookupTests(unittest.TestCase):
             self.assertEqual(client.connection["password"], "test-password-not-persisted")
             self.assertFalse(client.connection["look_for_keys"])
             self.assertFalse(client.connection["allow_agent"])
-            self.assertTrue(client.command.startswith("'run cuc dbquery unitydirdb"))
-            self.assertEqual(client.command_timeout, sql.SSH_TIMEOUT_SECONDS)
-            self.assertFalse(client.get_pty)
+            self.assertEqual(client.shell_options, {"term": "vt100", "width": 240, "height": 100})
+            self.assertTrue(all(command.startswith("run cuc dbquery unitydirdb") for command in client.channel.commands))
             self.assertTrue(client.closed)
 
     def test_disabled_or_incomplete_configuration_fails_before_ssh(self):
