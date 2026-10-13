@@ -34,22 +34,43 @@ class UnityPersonExtractTests(unittest.TestCase):
         self.assertEqual(self.client.get.call_args_list[1].kwargs["params"]["pageNumber"], 1)
 
     def test_name_lookup_and_query_validation(self):
-        self.client.get.return_value = self.response({"@total": "1", "User": [self.user]})
+        list_user = {key: value for key, value in self.user.items() if key not in {"LdapType", "LdapCcmPkid"}}
+        self.client.get.side_effect = [
+            self.response({"@total": "1", "User": [list_user]}),
+            self.response(self.user),
+        ]
         with patch.object(extract.requests, "Session", return_value=self.client):
-            result = extract.find_unity_person("unity.example", "admin", "pass", "name", "Example User")
+            result = extract.find_unity_person("unity.example", "admin", "pass", "name", "User, Example")
         self.assertEqual(result["users"][0]["name"], "Example User")
         self.assertEqual(result["users"][0]["extension"], "8585236648")
         self.assertEqual(result["users"][0]["ldap_status"], "LDAP Integrated")
+        self.assertIn("(LastName+startswith+User)", self.client.get.call_args_list[0].args[0])
+        self.assertIn("/vmrest/users/user-one", self.client.get.call_args_list[1].args[0])
         with self.assertRaises(ValueError):
             extract.find_unity_person("unity.example", "admin", "pass", "name", "User) or (Alias is admin")
 
+    def test_name_lookup_accepts_lastname_without_firstname(self):
+        list_user = {key: value for key, value in self.user.items() if key not in {"LdapType", "LdapCcmPkid"}}
+        self.client.get.side_effect = [
+            self.response({"@total": "1", "User": [list_user]}),
+            self.response(self.user),
+        ]
+        with patch.object(extract.requests, "Session", return_value=self.client):
+            result = extract.find_unity_person("unity.example", "admin", "pass", "name", "User")
+
+        self.assertEqual(result["users"][0]["name"], "Example User")
+        self.assertEqual(result["users"][0]["ldap_status"], "LDAP Integrated")
+        self.assertIn("(LastName+startswith+User)", self.client.get.call_args_list[0].args[0])
+
     def test_person_identity_distinguishes_ldap_states(self):
         integrated = extract._person_identity(dict(self.user))
+        integrated_without_ldap_pkid = extract._person_identity(dict(self.user, LdapCcmPkid=""))
         not_integrated = extract._person_identity(dict(self.user, LdapType="0", LdapCcmPkid=""))
         unknown = extract._person_identity({key: value for key, value in self.user.items() if key not in {"LdapType", "LdapCcmPkid"}})
 
         self.assertEqual(integrated["extension"], "8585236648")
         self.assertEqual(integrated["ldap_status"], "LDAP Integrated")
+        self.assertEqual(integrated_without_ldap_pkid["ldap_status"], "LDAP Integrated")
         self.assertEqual(not_integrated["ldap_status"], "Not LDAP Integrated")
         self.assertEqual(unknown["ldap_status"], "Not returned")
         self.assertNotIn("LdapCcmPkid", integrated)

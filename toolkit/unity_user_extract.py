@@ -220,10 +220,9 @@ def _ldap_integration_status(record):
     integrated_flag = _first_value(record, ("IsLdapIntegrated", "isLdapIntegrated"))
     flag_text = _as_text(integrated_flag).lower()
     ldap_type = _as_text(_first_value(record, ("LdapType", "ldapType")))
-    ldap_pkid = _as_text(_first_value(record, ("LdapCcmPkid", "ldapCcmPkid")))
     if flag_text in {"true", "yes", "1", "enabled", "active"}:
         return "LDAP Integrated"
-    if ldap_type == "3" and ldap_pkid.lower() not in {"", "none", "null", "0"}:
+    if ldap_type == "3":
         return "LDAP Integrated"
     if flag_text in {"false", "no", "0", "disabled", "inactive"} or ldap_type == "0":
         return "Not LDAP Integrated"
@@ -267,11 +266,12 @@ def find_unity_person(host, username, password, search_by, value):
             raise ValueError("Enter a valid email address.")
         filters = [("EmailAddress", "is", value), ("SmtpAddress", "is", value)]
     elif search_by == "name":
-        if not re.fullmatch(r"[\w .'-]{2,100}", value):
-            raise ValueError("Enter a last name or First Last name, without query operators.")
-        parts = value.split()
-        first_name = parts[0] if len(parts) > 1 else ""
-        filters = [("LastName", "startswith", " ".join(parts[1:]) if first_name else value)]
+        if not re.fullmatch(r"[\w .'-]{2,100}(?:,\s*[\w .'-]{1,100})?", value):
+            raise ValueError("Enter a last name or Last, First name, without query operators.")
+        last_name, separator, first_name = value.partition(",")
+        last_name = last_name.strip()
+        first_name = first_name.strip() if separator else ""
+        filters = [("LastName", "startswith", last_name)]
     else:
         raise ValueError("Choose Name, Email, or Extension.")
     people = {}
@@ -318,6 +318,21 @@ def find_unity_person(host, username, password, search_by, value):
                     break
             else:
                 raise ValueError("User lookup page limit reached; narrow the search.")
+        for person in people.values():
+            if person["ldap_status"] != "Not returned" and not person["ldap_status"].startswith("Unknown"):
+                continue
+            requests_count += 1
+            try:
+                detail = _read_user_resource(client, host, username, password, "/vmrest/users/" + person["object_id"])
+                detail_records, _ = number_settings._records(detail)
+                if len(detail_records) != 1 or _person_identity(detail_records[0])["object_id"] != person["object_id"]:
+                    raise number_settings.UnitySearchError("Unity user detail did not match the selected identity.")
+                detail_person = _person_identity(detail_records[0])
+                person["ldap_type"] = detail_person["ldap_type"]
+                person["ldap_status"] = detail_person["ldap_status"]
+            except (number_settings.UnitySearchError, requests.RequestException, ValueError):
+                person["ldap_status"] = "Lookup Failed"
+                warnings.append("LDAP status could not be verified for " + person["name"] + ".")
     return {"host": host, "search_by": search_by, "query": value, "users": sorted(people.values(), key=lambda person: (person["name"].casefold(), person["alias"])),
             "requests": requests_count, "warnings": warnings, "checked_at": number_settings.timestamp()}
 
