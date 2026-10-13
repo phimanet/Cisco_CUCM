@@ -129,6 +129,7 @@ class UnityPersonRoutesTests(unittest.TestCase):
                       "JSONResponse": response, "HTMLResponse": response, "Form": lambda value: value,
                       "_get_auth_session": lambda request: self.session, "_is_admin_user": lambda user: user == "admin",
                       "LAB_CUCM_HOST": "lascucmpl01.ahs.int", "PROD_CUCM_HOST": "lascucmpp01.ahs.int",
+                      "LAB_UNITY_HOST": "unity.example", "PROD_UNITY_HOST": "prod-unity.example",
                       "_is_lab_runtime_host": lambda: True,
                       "_get_unity_host_for_cucm": lambda host: "unity.example" if host == "lascucmpl01.ahs.int" else "prod-unity.example",
                       "_resolve_unity_credentials": lambda *args: ("admin", "SECRET"),
@@ -137,7 +138,7 @@ class UnityPersonRoutesTests(unittest.TestCase):
         for node in self.tree.body:
             if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in {"MS_CALLING_PAGE_TEMPLATE", "UNITY_SEARCH_PAGE_BODY"} for target in node.targets):
                 exec(compile(ast.Module(body=[node], type_ignores=[]), "main.py", "exec"), self.scope)
-            if isinstance(node, ast.FunctionDef) and (node.name.startswith("unity_person_") or node.name == "_unity_person_result" or node.name in {"_unity_read_access", "_unity_search_access", "_unity_search_failure", "unity_connection_page"}):
+            if isinstance(node, ast.FunctionDef) and (node.name.startswith("unity_person_") or node.name == "_unity_person_result" or node.name in {"_is_lab_host", "_unity_read_access", "_unity_search_access", "_unity_search_failure", "unity_connection_page"}):
                 node.decorator_list = []
                 exec(compile(ast.Module(body=[node], type_ignores=[]), "main.py", "exec"), self.scope)
         self.request = SimpleNamespace(url=SimpleNamespace(path="/unity-connection/users/scan"))

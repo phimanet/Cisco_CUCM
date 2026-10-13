@@ -207,8 +207,8 @@ class UnitySqlLookupRouteTests(unittest.TestCase):
             "_is_admin_user": lambda username: username == "admin",
             "_is_lab_runtime_host": lambda: runtime_is_lab,
         }
-        constants = {"LAB_CUCM_HOST", "PROD_CUCM_HOST"}
-        functions = {"_is_lab_host", "_get_unity_host_for_cucm", "_unity_read_access", "_unity_sql_lookup_access"}
+        constants = {"LAB_CUCM_HOST", "PROD_CUCM_HOST", "LAB_UNITY_HOST", "PROD_UNITY_HOST"}
+        functions = {"_is_lab_host", "_unity_read_access", "_unity_sql_lookup_access"}
         for node in self.main_tree.body:
             if isinstance(node, ast.Assign) and any(
                 isinstance(target, ast.Name) and target.id in constants for target in node.targets
@@ -224,7 +224,7 @@ class UnitySqlLookupRouteTests(unittest.TestCase):
         production_access = self._load_access(production_session, runtime_is_lab=True)
         lab_access = self._load_access(lab_session, runtime_is_lab=False)
 
-        self.assertEqual(production_access(None)[0], "lascutyp01.ahs.int")
+        self.assertEqual(production_access(None)[0], "SANCUTYP01.ahs.int")
         self.assertEqual(lab_access(None)[0], "lascutypl01.ahs.int")
 
     def test_lookup_requires_admin_known_portal_and_supported_session_host(self):

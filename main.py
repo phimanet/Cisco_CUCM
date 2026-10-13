@@ -55816,7 +55816,7 @@ def _unity_read_access(request: Request):
     raise PermissionError("Unity read-only tools are available only from a recognized LAB or Production portal host.")
   if cucm_host.lower() not in {LAB_CUCM_HOST.lower(), PROD_CUCM_HOST.lower()}:
     raise PermissionError("Select a supported LAB or Production environment before using Unity read-only tools.")
-  unity_host = _get_unity_host_for_cucm(cucm_host)
+  unity_host = LAB_UNITY_HOST if _is_lab_host(cucm_host) else PROD_UNITY_HOST
   return unity_host, session
 
 
