@@ -628,7 +628,7 @@ class UnitySearchRouteTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.session = {"username": "admin", "cucm_host": "lab"}
+        self.session = {"username": "admin", "cucm_host": "lascucmpl01.ahs.int"}
         self.audit = []
         def response(content=None, status_code=200, headers=None, **kwargs):
             return SimpleNamespace(content=content, body=json.dumps(content).encode(), status_code=status_code, headers=headers)
@@ -637,13 +637,15 @@ class UnitySearchRouteTests(unittest.TestCase):
                       "UNITY_NUMBER_SEARCH_LOCK": threading.Lock(), "json": json, "escape": escape,
                       "JSONResponse": response, "HTMLResponse": response, "Request": object,
                       "Form": lambda value: value, "_get_auth_session": lambda request: self.session,
-                      "_is_admin_user": lambda user: user == "admin", "_get_unity_server_for_session": lambda request: "unity.example",
+                      "_is_admin_user": lambda user: user == "admin", "LAB_CUCM_HOST": "lascucmpl01.ahs.int",
+                      "PROD_CUCM_HOST": "lascucmpp01.ahs.int", "_is_lab_runtime_host": lambda: True,
+                      "_get_unity_host_for_cucm": lambda cucm_host: "unity.example" if cucm_host == "lascucmpl01.ahs.int" else "prod-unity.example",
                       "_resolve_unity_credentials": lambda *args: ("admin", "SECRET"),
                       "_get_environment_label": lambda host: ("LAB", "lab"), "_append_audit_event": lambda **kwargs: self.audit.append(kwargs)}
         for node in self.tree.body:
             if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in {"MS_CALLING_PAGE_TEMPLATE", "UNITY_SEARCH_PAGE_BODY"} for target in node.targets):
                 exec(compile(ast.Module(body=[node], type_ignores=[]), "main.py", "exec"), self.scope)
-            if isinstance(node, ast.FunctionDef) and (node.name.startswith("_unity_search_") or node.name.startswith("unity_search_") or node.name == "unity_connection_page"):
+            if isinstance(node, ast.FunctionDef) and (node.name.startswith("_unity_search_") or node.name.startswith("unity_search_") or node.name in {"_unity_read_access", "unity_connection_page"}):
                 node.decorator_list = []
                 exec(compile(ast.Module(body=[node], type_ignores=[]), "main.py", "exec"), self.scope)
         self.request = SimpleNamespace(url=SimpleNamespace(path="/unity-connection/search/scan"))
@@ -703,7 +705,7 @@ class UnitySearchRouteTests(unittest.TestCase):
 
     def test_full_page_has_host_escaping_and_navigation(self):
         response = self.call("unity_connection_page")
-        self.assertIn("Unity Connection User Extract", response.content)
+        self.assertIn("Unity User Search", response.content)
         self.assertIn('href="/page2"', response.content)
         self.assertIn("Unity host: unity.example", response.content)
         self.assertNotIn("SECRET", response.content)

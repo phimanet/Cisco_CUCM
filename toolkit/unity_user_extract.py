@@ -216,6 +216,22 @@ def extract_unity_users(unity_server, unity_user, unity_pass, max_users=MAX_USER
     return rows
 
 
+def _ldap_integration_status(record):
+    integrated_flag = _first_value(record, ("IsLdapIntegrated", "isLdapIntegrated"))
+    flag_text = _as_text(integrated_flag).lower()
+    ldap_type = _as_text(_first_value(record, ("LdapType", "ldapType")))
+    ldap_pkid = _as_text(_first_value(record, ("LdapCcmPkid", "ldapCcmPkid")))
+    if flag_text in {"true", "yes", "1", "enabled", "active"}:
+        return "LDAP Integrated"
+    if ldap_type == "3" and ldap_pkid.lower() not in {"", "none", "null", "0"}:
+        return "LDAP Integrated"
+    if flag_text in {"false", "no", "0", "disabled", "inactive"} or ldap_type == "0":
+        return "Not LDAP Integrated"
+    if ldap_type:
+        return f"Unknown (LdapType {ldap_type})"
+    return "Not returned"
+
+
 def _person_identity(record):
     identity = _as_text(_first_value(record, ("ObjectId", "ObjectID", "objectId")))
     if not identity or not re.fullmatch(r"[A-Za-z0-9_.-]{1,80}", identity):
@@ -223,7 +239,9 @@ def _person_identity(record):
     return {"object_id": identity, "name": _as_text(record.get("DisplayName")) or " ".join(_as_text(record.get(key)) for key in ("FirstName", "LastName")).strip() or _as_text(record.get("Alias")),
             "alias": _as_text(record.get("Alias")), "first_name": _as_text(record.get("FirstName")), "last_name": _as_text(record.get("LastName")),
             "email": _as_text(record.get("EmailAddress") or record.get("SmtpAddress")), "smtp_address": _as_text(record.get("SmtpAddress")),
-            "extension": _as_text(record.get("DtmfAccessId") or record.get("Extension"))}
+            "extension": _as_text(record.get("DtmfAccessId") or record.get("Extension")),
+            "ldap_type": _as_text(_first_value(record, ("LdapType", "ldapType"))),
+            "ldap_status": _ldap_integration_status(record)}
 
 
 def _read_user_resource(client, host, username, password, resource, params=None):

@@ -1,6 +1,8 @@
+import ast
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -190,6 +192,52 @@ class UnitySqlLookupTests(unittest.TestCase):
                 with self.assertRaisesRegex(sql.UnitySqlError, "previous report is retained"):
                     sql.save_report(root, replacement)
             self.assertEqual(sql.load_report(root, first["host"])["rows"], first["rows"])
+
+
+class UnitySqlLookupRouteTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        main_path = Path(__file__).resolve().parents[1] / "main.py"
+        cls.main_tree = ast.parse(main_path.read_text(encoding="utf-8-sig"))
+
+    def _load_access(self, session, runtime_is_lab):
+        scope = {
+            "Request": object,
+            "_get_auth_session": lambda request: session,
+            "_is_admin_user": lambda username: username == "admin",
+            "_is_lab_runtime_host": lambda: runtime_is_lab,
+        }
+        constants = {"LAB_CUCM_HOST", "PROD_CUCM_HOST"}
+        functions = {"_is_lab_host", "_get_unity_host_for_cucm", "_unity_read_access", "_unity_sql_lookup_access"}
+        for node in self.main_tree.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id in constants for target in node.targets
+            ):
+                exec(compile(ast.Module(body=[node], type_ignores=[]), "main.py", "exec"), scope)
+            elif isinstance(node, ast.FunctionDef) and node.name in functions:
+                exec(compile(ast.Module(body=[node], type_ignores=[]), "main.py", "exec"), scope)
+        return scope["_unity_sql_lookup_access"]
+
+    def test_portal_runtime_does_not_override_selected_unity_environment(self):
+        production_session = {"username": "admin", "cucm_host": "lascucmpp01.ahs.int"}
+        lab_session = {"username": "admin", "cucm_host": "lascucmpl01.ahs.int"}
+        production_access = self._load_access(production_session, runtime_is_lab=True)
+        lab_access = self._load_access(lab_session, runtime_is_lab=False)
+
+        self.assertEqual(production_access(None)[0], "lascutyp01.ahs.int")
+        self.assertEqual(lab_access(None)[0], "lascutypl01.ahs.int")
+
+    def test_lookup_requires_admin_known_portal_and_supported_session_host(self):
+        cases = (
+            ({"username": "operator", "cucm_host": "lascucmpp01.ahs.int"}, True),
+            ({"username": "admin", "cucm_host": "unknown.example"}, True),
+            ({"username": "admin", "cucm_host": "lascucmpp01.ahs.int"}, None),
+        )
+        for session, runtime_is_lab in cases:
+            with self.subTest(session=session, runtime_is_lab=runtime_is_lab):
+                access = self._load_access(session, runtime_is_lab)
+                with self.assertRaises(PermissionError):
+                    access(None)
 
 
 if __name__ == "__main__":

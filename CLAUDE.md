@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-10-08
+- Date: 2026-10-13
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -114,6 +114,12 @@ Priority keys:
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
+
+### 2026-10-13 (Unity SQL Lookup Production Session Routing)
+- Unity's read-only `Unity User Search` and `Unity Number Search` now target the Unity host selected by the authenticated CUCM session, not the portal runtime. LAB selects `lascutypl01.ahs.int`; Production selects `lascutyp01.ahs.int`, including from the other recognized portal host. Write workflows and the shared runtime resolver remain unchanged.
+- Operator confirmed `lascutyp01.ahs.int` (`10.241.18.17`) as the Production host for these read-only searches. The separate active `PROD_UNITY_HOST=SANCUTYP01.ahs.int` discrepancy remains unresolved for other runtime-routed workflows and was not changed globally.
+- `Unity User Search` finds a user by primary extension, name, or email and shows the primary extension plus LDAP status in candidate/profile results and CSV. `LdapType=3` with LDAP link or explicit integration flag is Integrated; `LdapType=0`/false is Not Integrated; missing or other states remain Not returned/Unknown. No Unity settings are changed. SQL audit events identify the selected CUCM environment and Unity target; saved reports remain latest-only per Unity host under external runtime data.
+- Local validation: 12 focused SQL/routing tests, 15 selected-user tests, 68 Unity search tests, and all 140 repository tests; Python compilation, whitespace checks, both full-page script parses, mocked SQL and person lookup/extract/CSV interactions, and 390px viewport checks passed. No diagnostics were reported in the touched toolkit/tests; `main.py` still has two unrelated undefined `PERFMON_*` names and existing embedded-JavaScript invalid-escape warnings. No live SSH lookup was run; verified host keys must be pinned for the selected Unity host. Credentials remain server-only; Production live validation is not claimed.
 
 ### 2026-10-08 (Unity Direct SQL Lookup Checkpoint, Paused)
 - Operator approved LAB-only read-only CLI/schema inspection, then requested a four-minute work window followed by save/pause. Cisco Release 15 documents `run cuc dbquery unitydirdb <SQL>`; CLI queries do not require enabling the remote Database Proxy used by CUDLI. No remote proxy, ports, credentials, services or production configuration were changed.

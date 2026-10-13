@@ -16,7 +16,8 @@ class UnityPersonExtractTests(unittest.TestCase):
     def setUp(self):
         self.user = {"ObjectId": "user-one", "Alias": "Example.User", "FirstName": "Example", "LastName": "User",
                      "DisplayName": "Example User", "EmailAddress": "example.user@example.com", "SmtpAddress": "example.user@example.com",
-                     "DtmfAccessId": "8585236648", "CallHandlerURI": "/vmrest/handlers/callhandlers/handler-one"}
+                     "DtmfAccessId": "8585236648", "CallHandlerURI": "/vmrest/handlers/callhandlers/handler-one",
+                     "LdapType": "3", "LdapCcmPkid": "ldap-object-one"}
         self.client = MagicMock()
         self.client.__enter__.return_value = self.client
 
@@ -37,8 +38,21 @@ class UnityPersonExtractTests(unittest.TestCase):
         with patch.object(extract.requests, "Session", return_value=self.client):
             result = extract.find_unity_person("unity.example", "admin", "pass", "name", "Example User")
         self.assertEqual(result["users"][0]["name"], "Example User")
+        self.assertEqual(result["users"][0]["extension"], "8585236648")
+        self.assertEqual(result["users"][0]["ldap_status"], "LDAP Integrated")
         with self.assertRaises(ValueError):
             extract.find_unity_person("unity.example", "admin", "pass", "name", "User) or (Alias is admin")
+
+    def test_person_identity_distinguishes_ldap_states(self):
+        integrated = extract._person_identity(dict(self.user))
+        not_integrated = extract._person_identity(dict(self.user, LdapType="0", LdapCcmPkid=""))
+        unknown = extract._person_identity({key: value for key, value in self.user.items() if key not in {"LdapType", "LdapCcmPkid"}})
+
+        self.assertEqual(integrated["extension"], "8585236648")
+        self.assertEqual(integrated["ldap_status"], "LDAP Integrated")
+        self.assertEqual(not_integrated["ldap_status"], "Not LDAP Integrated")
+        self.assertEqual(unknown["ldap_status"], "Not returned")
+        self.assertNotIn("LdapCcmPkid", integrated)
 
     def test_selected_user_extraction_does_not_inventory_all_users(self):
         self.client.get.return_value = self.response(self.user)
@@ -106,7 +120,7 @@ class UnityPersonRoutesTests(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
-        self.session = {"username": "admin", "cucm_host": "lab"}
+        self.session = {"username": "admin", "cucm_host": "lascucmpl01.ahs.int"}
         def response(content=None, status_code=200, headers=None, **kwargs):
             return SimpleNamespace(content=content, body=json.dumps(content).encode(), status_code=status_code, headers=headers)
         self.scope = {"unity_number_search": scanner, "unity_user_extract": extract,
@@ -114,12 +128,16 @@ class UnityPersonRoutesTests(unittest.TestCase):
                       "UNITY_REFERENCE_SEARCH_ENABLED": False, "json": json, "escape": escape, "Request": object,
                       "JSONResponse": response, "HTMLResponse": response, "Form": lambda value: value,
                       "_get_auth_session": lambda request: self.session, "_is_admin_user": lambda user: user == "admin",
-                      "_get_unity_server_for_session": lambda request: "unity.example", "_resolve_unity_credentials": lambda *args: ("admin", "SECRET"),
-                      "_get_environment_label": lambda host: ("LAB", "lab"), "_append_audit_event": lambda **kwargs: None}
+                      "LAB_CUCM_HOST": "lascucmpl01.ahs.int", "PROD_CUCM_HOST": "lascucmpp01.ahs.int",
+                      "_is_lab_runtime_host": lambda: True,
+                      "_get_unity_host_for_cucm": lambda host: "unity.example" if host == "lascucmpl01.ahs.int" else "prod-unity.example",
+                      "_resolve_unity_credentials": lambda *args: ("admin", "SECRET"),
+                      "_get_environment_label": lambda host: ("Production Voice Servers", "prod") if host == "lascucmpp01.ahs.int" else ("LAB", "lab"),
+                      "_append_audit_event": lambda **kwargs: None}
         for node in self.tree.body:
             if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id in {"MS_CALLING_PAGE_TEMPLATE", "UNITY_SEARCH_PAGE_BODY"} for target in node.targets):
                 exec(compile(ast.Module(body=[node], type_ignores=[]), "main.py", "exec"), self.scope)
-            if isinstance(node, ast.FunctionDef) and (node.name.startswith("unity_person_") or node.name == "_unity_person_result" or node.name in {"_unity_search_access", "_unity_search_failure", "unity_connection_page"}):
+            if isinstance(node, ast.FunctionDef) and (node.name.startswith("unity_person_") or node.name == "_unity_person_result" or node.name in {"_unity_read_access", "_unity_search_access", "_unity_search_failure", "unity_connection_page"}):
                 node.decorator_list = []
                 exec(compile(ast.Module(body=[node], type_ignores=[]), "main.py", "exec"), self.scope)
         self.request = SimpleNamespace(url=SimpleNamespace(path="/unity-connection/users/scan"))
@@ -149,11 +167,17 @@ class UnityPersonRoutesTests(unittest.TestCase):
 
     def test_page_replaces_number_reference_search(self):
         page = self.call("unity_connection_page").content
-        self.assertIn("Unity Connection User Extract", page)
+        self.assertIn("Unity User Search", page)
         self.assertIn("Find User", page)
         self.assertNotIn("Number Reference Search", page)
         self.assertNotIn("Load Cache", page)
         self.assertNotIn("SECRET", page)
+
+    def test_page_uses_selected_production_unity_host(self):
+        self.session["cucm_host"] = "lascucmpp01.ahs.int"
+        page = self.call("unity_connection_page").content
+        self.assertIn("prod-unity.example", page)
+        self.assertIn("Production Voice Servers", page)
 
     def test_saved_extract_and_stale_id_checks(self):
         state = self.fixture_state()
