@@ -115,6 +115,10 @@ Priority keys:
 
 ## Conversation Notes
 
+### 2026-10-13 (Project Functions Jabber CSF Inventory Email)
+- Existing Project Functions and Menu > Jabber CSF License Inventory now extracts CUCM `enduser.mailid` for every CSF device, whether the user is in the device owner field or the associated-user map. The report/searchable table and full CSV label the fields `Username` and `Email Address`; the inventory remains read-only.
+- Local validation: owner/associated-user SQL and CSV regression, all 141 repository tests, Python compilation, full Project Functions page script parsing, mocked extract/filter/download interactions, and menu click passed. No live CUCM inventory query was run; the page has existing top-bar horizontal overflow at 390px, while the inventory table remains within its own horizontal scroller.
+
 ### 2026-10-13 (Unity SQL Lookup Production Session Routing)
 - Unity's read-only `Unity User Search` and `Unity Number Search` now target the Unity host selected by the authenticated CUCM session, not the portal runtime. LAB selects `lascutypl01.ahs.int`; Production selects `lascutyp01.ahs.int`, including from the other recognized portal host. Write workflows and the shared runtime resolver remain unchanged.
 - Operator confirmed `lascutyp01.ahs.int` (`10.241.18.17`) as the Production host for these read-only searches. The separate active `PROD_UNITY_HOST=SANCUTYP01.ahs.int` discrepancy remains unresolved for other runtime-routed workflows and was not changed globally.

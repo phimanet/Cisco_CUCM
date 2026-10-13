@@ -17715,7 +17715,8 @@ GREENLIGHT_CSF_INVENTORY_MAX_PAGES = 100
 GREENLIGHT_CSF_INVENTORY_COLUMNS = [
   ("device_name", "Device Name"),
   ("device_description", "Device Description"),
-  ("userid", "User ID"),
+  ("userid", "Username"),
+  ("email", "Email Address"),
   ("user_source", "User Source"),
   ("first_name", "First Name"),
   ("last_name", "Last Name"),
@@ -17742,7 +17743,7 @@ def _greenlight_csf_sql_paged(cucm_host: str, cucm_user: str, cucm_pass: str, se
 def _greenlight_build_csf_inventory(cucm_host: str, cucm_user: str, cucm_pass: str) -> list[dict]:
   # tkmodel 503 = Cisco Unified Client Services Framework (Jabber CSF).
   user_cols = (
-    "u.userid AS userid, u.firstname AS first_name, u.lastname AS last_name, "
+    "u.userid AS userid, u.mailid AS email, u.firstname AS first_name, u.lastname AS last_name, "
     "u.title AS title, u.department AS department, u.manager AS manager_id, "
     "m.firstname AS manager_first, m.lastname AS manager_last"
   )
@@ -17789,6 +17790,7 @@ def _greenlight_build_csf_inventory(cucm_host: str, cucm_user: str, cucm_pass: s
       "device_name": device_name,
       "device_description": str(row.get("device_description", "") or "").strip(),
       "userid": str(user_row.get("userid", "") or "").strip(),
+      "email": str(user_row.get("email", "") or "").strip(),
       "user_source": source,
       "first_name": str(user_row.get("first_name", "") or "").strip(),
       "last_name": str(user_row.get("last_name", "") or "").strip(),
@@ -41900,7 +41902,7 @@ __GREENLIGHT_ADMIN_CARD__
 
           <section class="tool-panel" data-panel="csfinventory">
             <h3>Jabber CSF License Inventory (Cisco CUCM)</h3>
-            <p>Read-only. Extracts every Jabber CSF device from CUCM with its description and user ID, plus the end user's Title, Manager ID, and Department.</p>
+            <p>Read-only. Extracts every Jabber CSF device from CUCM with its username and email address, plus the end user's Title, Manager ID, and Department.</p>
             <form id="greenlight-csf-form" onsubmit="return false;">
               <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__" />
               <input type="hidden" name="cucm_user" value="__AUTH_USER__" />
@@ -41921,7 +41923,7 @@ __GREENLIGHT_ADMIN_CARD__
                 var allRows = [];
                 var MAX_RENDER = 1000;
                 var cols = [
-                  ["device_name", "Device Name"], ["device_description", "Description"], ["userid", "User ID"],
+                  ["device_name", "Device Name"], ["device_description", "Description"], ["userid", "Username"], ["email", "Email Address"],
                   ["user_source", "User Source"], ["first_name", "First"], ["last_name", "Last"], ["title", "Title"],
                   ["department", "Department"], ["manager_id", "Manager ID"], ["manager_name", "Manager Name"],
                   ["extension", "Extension"]
