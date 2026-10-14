@@ -46378,9 +46378,10 @@ def menu_admin_page(request: Request):
             var resultsEl = document.getElementById("page2-jabber-primary-results");
             if (!statusEl || !fetchBtn || !filterEl || !resultsEl) return;
             var columns = [
+              ["Fix", "fix"],
               ["Name", "name"], ["Username", "userid"], ["Email", "email"],
               ["Current Primary Extension", "primary_extension"], ["Jabber Devices", "jabber_devices"],
-              ["Jabber Lines", "jabber_lines"], ["Fix", "fix"]
+              ["Jabber Lines", "jabber_lines"]
             ];
             function cell(value) {
               var td = document.createElement("td");
@@ -46412,19 +46413,14 @@ def menu_admin_page(request: Request):
                 var th = document.createElement("th");
                 th.textContent = column[0];
                 th.style.cssText = "background:#005eb8;color:#fff;padding:7px 8px;text-align:left;white-space:nowrap;";
+                if (column[1] === "fix") th.style.cssText += "position:sticky;left:0;z-index:2;";
                 head.appendChild(th);
               });
               var body = table.createTBody();
               visible.forEach(function (row) {
                 var tr = body.insertRow();
-                tr.appendChild(cell(row.name));
-                tr.appendChild(cell(row.userid));
-                tr.appendChild(cell(row.email));
-                tr.appendChild(cell(row.primary_extension));
-                tr.appendChild(cell((row.jabber_devices || []).join(", ")));
-                tr.appendChild(cell(lineText(row)));
                 var action = tr.insertCell();
-                action.style.cssText = "border:1px solid #d9e4ef;padding:6px 8px;vertical-align:top;white-space:nowrap;";
+                action.style.cssText = "border:1px solid #d9e4ef;padding:6px 8px;vertical-align:top;white-space:nowrap;position:sticky;left:0;z-index:1;background:#fff;";
                 if (row.fix_allowed) {
                   var fixBtn = document.createElement("button");
                   fixBtn.type = "button";
@@ -46434,6 +46430,12 @@ def menu_admin_page(request: Request):
                 } else {
                   action.textContent = row.fix_reason || "Not safe to fix automatically.";
                 }
+                tr.appendChild(cell(row.name));
+                tr.appendChild(cell(row.userid));
+                tr.appendChild(cell(row.email));
+                tr.appendChild(cell(row.primary_extension));
+                tr.appendChild(cell((row.jabber_devices || []).join(", ")));
+                tr.appendChild(cell(lineText(row)));
               });
               resultsEl.appendChild(table);
             }
