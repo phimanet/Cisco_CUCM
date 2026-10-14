@@ -48,6 +48,7 @@ from toolkit.enduser import export_endusers_all_fields
 from toolkit.directory_number import export_directory_numbers
 from toolkit.add_directory_number import add_directory_numbers_from_csv
 from toolkit.build_user_csf_phone import build_user_csf_phone_from_template, lookup_user_jabber_status
+from toolkit import jabber_primary_extension
 from toolkit.decommission_user_csf_voicemail import decommission_user_csf_voicemail
 from toolkit.reset_unity_voicemail_pin import reset_unity_voicemail_pin
 from toolkit.update_ad_phone_only import update_ad_phone_fields_only, update_ad_phone_fields_by_email
@@ -46079,6 +46080,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="exportdn">Export Directory Numbers</button>
             <button type="button" class="portal-nav-btn" data-panel="delete-unassigned-dn">Delete Directory Number from CUCM</button>
             <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
+            <button type="button" class="portal-nav-btn" data-panel="jabber-primary-missing">Jabber Users Missing Primary Extension</button>
             <button type="button" class="portal-nav-btn" data-panel="route-plan-report">CUCM Route Plan Report</button>
             <button type="button" class="portal-nav-btn" data-panel="forwarding-masking-lookup">Cisco Forwarding/Masking Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="translookup">Translation Pattern Lookup</button>
@@ -46354,6 +46356,133 @@ def menu_admin_page(request: Request):
 
           <button type="submit">Export End Users</button>
         </form>
+      </section>
+
+      <section class="panel tool-panel" data-panel="jabber-primary-missing">
+        <h3>Jabber Users Missing Primary Extension</h3>
+        <p>Fetch End Users with an associated CSF, TCT, BOT, or TAB device and no CUCM Primary Extension mapping. Candidate Jabber lines are shown only from <strong>ENT_DEVICE_PT</strong>. Fix uses AXL updateUser and is enabled only when exactly one eligible extension is found.</p>
+        <form id="page2-jabber-primary-form" action="javascript:void(0)" method="post" onsubmit="if(window.fetchMissingJabberPrimary){return window.fetchMissingJabberPrimary(event);}document.getElementById('page2-jabber-primary-status').textContent='Fetch handler missing (JavaScript did not load).';return false;">
+          <div class="compact-inline-row">
+            <button type="button" id="page2-jabber-primary-fetch" onclick="if(window.fetchMissingJabberPrimary){return window.fetchMissingJabberPrimary(event);}document.getElementById('page2-jabber-primary-status').textContent='Fetch handler missing (JavaScript did not load).';return false;">Fetch Missing Users</button>
+            <input type="search" id="page2-jabber-primary-filter" placeholder="Filter username, name, email, device, extension" style="min-width:300px;">
+          </div>
+        </form>
+        <p id="page2-jabber-primary-status" style="color:#2c5c8a;min-height:18px;margin-top:12px;">Click Fetch Missing Users to search the selected CUCM environment.</p>
+        <div id="page2-jabber-primary-results" style="overflow-x:auto;"></div>
+        <script>
+          (function () {
+            var rows = [], busy = false;
+            var statusEl = document.getElementById("page2-jabber-primary-status");
+            var fetchBtn = document.getElementById("page2-jabber-primary-fetch");
+            var filterEl = document.getElementById("page2-jabber-primary-filter");
+            var resultsEl = document.getElementById("page2-jabber-primary-results");
+            if (!statusEl || !fetchBtn || !filterEl || !resultsEl) return;
+            var columns = [
+              ["Name", "name"], ["Username", "userid"], ["Email", "email"],
+              ["Current Primary Extension", "primary_extension"], ["Jabber Devices", "jabber_devices"],
+              ["Jabber Lines", "jabber_lines"], ["Fix", "fix"]
+            ];
+            function cell(value) {
+              var td = document.createElement("td");
+              td.style.cssText = "border:1px solid #d9e4ef;padding:6px 8px;vertical-align:top;white-space:nowrap;";
+              td.textContent = value == null ? "" : String(value);
+              return td;
+            }
+            function lineText(row) {
+              return (row.jabber_lines || []).map(function (line) {
+                return line.device_name + ": " + (line.extension || "(no line)") + " / " + (line.partition || "(no partition)");
+              }).join("; ");
+            }
+            function matchesFilter(row, term) {
+              var values = [row.name, row.userid, row.email, (row.jabber_devices || []).join(" "), lineText(row)];
+              return !term || values.join(" ").toLowerCase().indexOf(term) >= 0;
+            }
+            function render() {
+              resultsEl.replaceChildren();
+              var term = filterEl.value.trim().toLowerCase();
+              var visible = rows.filter(function (row) { return matchesFilter(row, term); });
+              if (!rows.length) return;
+              var info = document.createElement("p");
+              info.textContent = "Showing " + visible.length + " of " + rows.length + " user(s) with blank Primary Extension.";
+              resultsEl.appendChild(info);
+              var table = document.createElement("table");
+              table.style.cssText = "border-collapse:collapse;font-size:12px;width:100%;";
+              var head = table.createTHead().insertRow();
+              columns.forEach(function (column) {
+                var th = document.createElement("th");
+                th.textContent = column[0];
+                th.style.cssText = "background:#005eb8;color:#fff;padding:7px 8px;text-align:left;white-space:nowrap;";
+                head.appendChild(th);
+              });
+              var body = table.createTBody();
+              visible.forEach(function (row) {
+                var tr = body.insertRow();
+                tr.appendChild(cell(row.name));
+                tr.appendChild(cell(row.userid));
+                tr.appendChild(cell(row.email));
+                tr.appendChild(cell(row.primary_extension));
+                tr.appendChild(cell((row.jabber_devices || []).join(", ")));
+                tr.appendChild(cell(lineText(row)));
+                var action = tr.insertCell();
+                action.style.cssText = "border:1px solid #d9e4ef;padding:6px 8px;vertical-align:top;white-space:nowrap;";
+                if (row.fix_allowed) {
+                  var fixBtn = document.createElement("button");
+                  fixBtn.type = "button";
+                  fixBtn.textContent = "Fix Primary Extension (FEXT)";
+                  fixBtn.addEventListener("click", function () { fixPrimaryExtension(row, fixBtn); });
+                  action.appendChild(fixBtn);
+                } else {
+                  action.textContent = row.fix_reason || "Not safe to fix automatically.";
+                }
+              });
+              resultsEl.appendChild(table);
+            }
+            async function request(path, data) {
+              var response = await fetch(path, {method:"POST", body:data, credentials:"same-origin", headers:{"Accept":"application/json"}});
+              var payload = await response.json();
+              if (!response.ok || !payload.ok) throw new Error(payload.error || "Jabber Primary Extension request failed.");
+              return payload;
+            }
+            async function loadCandidates() {
+              var payload = await request("/admin/jabber-primary-extension/search", new FormData(document.getElementById("page2-jabber-primary-form")));
+              rows = payload.rows || [];
+              render();
+              return payload;
+            }
+            window.fetchMissingJabberPrimary = async function (event) {
+              if (event && event.preventDefault) event.preventDefault();
+              if (busy) return false;
+              busy = true; fetchBtn.disabled = true; statusEl.textContent = "Fetching CUCM End Users with Jabber devices and blank Primary Extension...";
+              try {
+                var payload = await loadCandidates();
+                statusEl.textContent = "Fetched " + rows.length + " matching End User(s) from " + payload.cucm_host + ". Search is read-only.";
+              } catch (error) {
+                statusEl.textContent = "Fetch failed: " + error.message;
+              } finally {
+                busy = false; fetchBtn.disabled = false;
+              }
+              return false;
+            };
+            async function fixPrimaryExtension(row, button) {
+              if (busy || !row.fix_allowed) return;
+              var extension = String(row.fix_extension || "").trim();
+              if (!window.confirm("Set the End User Primary Extension for " + row.userid + " to " + extension + " in ENT_DEVICE_PT?")) return;
+              busy = true; button.disabled = true; statusEl.textContent = "Rechecking " + row.userid + " before AXL update...";
+              try {
+                var data = new FormData(); data.append("userid", row.userid); data.append("extension", extension);
+                var payload = await request("/admin/jabber-primary-extension/fix", data);
+                await loadCandidates();
+                statusEl.textContent = "Primary Extension set and verified: " + payload.userid + " -> " + payload.extension + " in " + payload.partition + ". Refreshed list: " + rows.length + " missing user(s).";
+              } catch (error) {
+                statusEl.textContent = "Fix failed or could not be verified: " + error.message + ". Recheck the End User before retrying.";
+                button.disabled = false;
+              } finally {
+                busy = false; fetchBtn.disabled = false;
+              }
+            }
+            filterEl.addEventListener("input", render);
+          })();
+        </script>
       </section>
 
       <section class="panel tool-panel" data-panel="jabber-specific-ext">
@@ -68842,6 +68971,91 @@ def _axl_execute_sql_rows(cucm_host: str, cucm_user: str, cucm_pass: str, sql: s
       row_data[_xml_local_name(child.tag).lower()] = (child.text or "").strip()
     rows.append(row_data)
   return rows
+
+
+def _page2_jabber_primary_credentials(request: Request):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not session or not operator:
+    raise PermissionError("Authentication required.")
+  if not _is_admin_user(operator):
+    raise PermissionError("Administrator authentication required.")
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
+  return cucm_host, cucm_user, cucm_pass, operator
+
+
+@app.post("/admin/jabber-primary-extension/search")
+def page2_jabber_primary_extension_search_route(request: Request):
+  try:
+    cucm_host, cucm_user, cucm_pass, operator = _page2_jabber_primary_credentials(request)
+    rows = jabber_primary_extension.find_missing_primary_extension_users(
+      cucm_host, cucm_user, cucm_pass, _axl_execute_sql_rows,
+    )
+    _append_audit_event(
+      action="page2_jabber_primary_extension_search",
+      cucm_host=cucm_host,
+      operator=operator,
+      target=f"users={len(rows)};partition={jabber_primary_extension.PARTITION};status=complete",
+      output_filename="",
+      inline_mode=True,
+    )
+    return JSONResponse({"ok": True, "cucm_host": cucm_host, "count": len(rows), "rows": rows}, headers={"Cache-Control": "no-store"})
+  except PermissionError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
+  except Exception as exc:
+    logger.warning("Page 2 Jabber Primary Extension search failed: %s", exc)
+    return JSONResponse({"ok": False, "error": f"Jabber Primary Extension search failed: {exc}"}, status_code=502)
+
+
+@app.post("/admin/jabber-primary-extension/fix")
+def page2_jabber_primary_extension_fix_route(
+    request: Request,
+    userid: str = Form(""),
+    extension: str = Form(""),
+):
+  cucm_host = ""
+  operator = ""
+  clean_userid = str(userid or "").strip()
+  clean_extension = str(extension or "").strip()
+  try:
+    cucm_host, cucm_user, cucm_pass, operator = _page2_jabber_primary_credentials(request)
+    candidates = jabber_primary_extension.find_missing_primary_extension_users(
+      cucm_host, cucm_user, cucm_pass, _axl_execute_sql_rows, clean_userid,
+    )
+    if len(candidates) != 1:
+      raise ValueError("This user is no longer a unique missing-primary-extension candidate; fetch the list again.")
+    candidate = candidates[0]
+    if not candidate["fix_allowed"] or candidate["fix_extension"] != clean_extension:
+      raise ValueError(candidate["fix_reason"] or "The selected extension is no longer the unique ENT_DEVICE_PT candidate.")
+
+    result = jabber_primary_extension.fix_primary_extension(
+      cucm_host, cucm_user, cucm_pass, clean_userid, clean_extension,
+    )
+    _append_audit_event(
+      action="page2_jabber_primary_extension_fixed",
+      cucm_host=cucm_host,
+      operator=operator,
+      target=f"userid={clean_userid};extension={clean_extension};partition={result['partition']};verified={result['verified']};status=success",
+      output_filename="",
+      inline_mode=True,
+    )
+    return JSONResponse({"ok": True, **result}, headers={"Cache-Control": "no-store"})
+  except PermissionError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
+  except ValueError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+  except Exception as exc:
+    if operator and cucm_host:
+      _append_audit_event(
+        action="page2_jabber_primary_extension_fix_failed",
+        cucm_host=cucm_host,
+        operator=operator,
+        target=f"userid={clean_userid};extension={clean_extension};status=failed",
+        output_filename="",
+        inline_mode=True,
+      )
+    logger.warning("Page 2 Jabber Primary Extension fix failed: %s", exc)
+    return JSONResponse({"ok": False, "error": f"Primary Extension fix failed or could not be verified: {exc}"}, status_code=502)
 
 
 def _lookup_user_line_groups_for_hunt_mirror(cucm_host: str, cucm_user: str, cucm_pass: str, userid: str) -> list[dict]:

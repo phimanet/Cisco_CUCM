@@ -115,6 +115,11 @@ Priority keys:
 
 ## Conversation Notes
 
+### 2026-10-13 (Jabber Users Missing Primary Extension, LAB validation pending)
+- Added a Page 2 admin panel and authenticated routes to find CUCM End Users with CSF/TCT/BOT/TAB devices but no Primary Extension mapping. Candidate Jabber lines are read-only SQL results restricted to `ENT_DEVICE_PT`; automatic fix is offered only for exactly one distinct eligible extension.
+- Fix rechecks the user/candidate immediately before using AXL `updateUser` for `primaryExtension`, then verifies with `getUser`; it does not update devices, lines, or directory data. Search/fix outcomes are audited.
+- Local validation: 8 focused tests, all 150 repository tests, Python compilation, and full Page 2 parsing of all 28 scripts. Browser-mocked Fetch/Fix/refresh flow passed. No live CUCM write or LAB/Production validation has been performed; validate in LAB before operational use. Existing unrelated `PERFMON_*` diagnostics and embedded-JavaScript escape warnings remain.
+
 ### 2026-10-13 (Project Functions Jabber CSF Inventory Email)
 - Existing Project Functions and Menu > Jabber CSF License Inventory now extracts CUCM `enduser.mailid` for every CSF device, whether the user is in the device owner field or the associated-user map. The report/searchable table and full CSV label the fields `Username` and `Email Address`; the inventory remains read-only.
 - Local validation: owner/associated-user SQL and CSV regression, all 141 repository tests, Python compilation, full Project Functions page script parsing, mocked extract/filter/download interactions, and menu click passed. No live CUCM inventory query was run; the page has existing top-bar horizontal overflow at 390px, while the inventory table remains within its own horizontal scroller.
