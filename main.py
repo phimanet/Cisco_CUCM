@@ -46385,7 +46385,7 @@ def menu_admin_page(request: Request):
             ];
             function cell(value) {
               var td = document.createElement("td");
-              td.style.cssText = "border:1px solid #d9e4ef;padding:6px 8px;vertical-align:top;white-space:nowrap;";
+              td.style.cssText = "border:1px solid #d9e4ef;padding:4px 5px;vertical-align:top;white-space:normal;overflow-wrap:anywhere;";
               td.textContent = value == null ? "" : String(value);
               return td;
             }
@@ -46407,12 +46407,19 @@ def menu_admin_page(request: Request):
               info.textContent = "Showing " + visible.length + " of " + rows.length + " user(s) with blank Primary Extension.";
               resultsEl.appendChild(info);
               var table = document.createElement("table");
-              table.style.cssText = "border-collapse:collapse;font-size:12px;width:100%;";
+              table.style.cssText = "border-collapse:collapse;font-size:11px;table-layout:fixed;width:100%;";
+              var colgroup = document.createElement("colgroup");
+              ["48px", "12%", "12%", "19%", "16%", "12%", "21%"].forEach(function (width) {
+                var col = document.createElement("col");
+                col.style.width = width;
+                colgroup.appendChild(col);
+              });
+              table.appendChild(colgroup);
               var head = table.createTHead().insertRow();
               columns.forEach(function (column) {
                 var th = document.createElement("th");
                 th.textContent = column[0];
-                th.style.cssText = "background:#005eb8;color:#fff;padding:7px 8px;text-align:left;white-space:nowrap;";
+                th.style.cssText = "background:#005eb8;color:#fff;padding:5px;text-align:left;white-space:normal;overflow-wrap:anywhere;vertical-align:top;";
                 if (column[1] === "fix") th.style.cssText += "position:sticky;left:0;z-index:2;";
                 head.appendChild(th);
               });
@@ -46420,11 +46427,14 @@ def menu_admin_page(request: Request):
               visible.forEach(function (row) {
                 var tr = body.insertRow();
                 var action = tr.insertCell();
-                action.style.cssText = "border:1px solid #d9e4ef;padding:6px 8px;vertical-align:top;white-space:nowrap;position:sticky;left:0;z-index:1;background:#fff;";
+                action.style.cssText = "border:1px solid #d9e4ef;padding:3px 4px;vertical-align:top;white-space:normal;position:sticky;left:0;z-index:1;background:#fff;";
                 if (row.fix_allowed) {
                   var fixBtn = document.createElement("button");
                   fixBtn.type = "button";
-                  fixBtn.textContent = "Fix Primary Extension (FEXT)";
+                  fixBtn.textContent = "Fix";
+                  fixBtn.title = "Fix Primary Extension (FEXT)";
+                  fixBtn.setAttribute("aria-label", "Fix Primary Extension (FEXT)");
+                  fixBtn.style.cssText = "min-width:0;padding:4px 7px;font-size:11px;line-height:1.1;white-space:nowrap;";
                   fixBtn.addEventListener("click", function () { fixPrimaryExtension(row, fixBtn); });
                   action.appendChild(fixBtn);
                 } else {
