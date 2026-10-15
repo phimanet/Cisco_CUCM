@@ -58,6 +58,25 @@ class VoicemailCleanupTests(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 cleanup.load(root, state["host"], "other.example")
 
+    def test_lowercase_and_mixed_case_device_prefixes_match_by_extension(self):
+        devices = ["csf3142360155", "tCtOtherUser", "botDifferentName", "TabDevice"]
+
+        def case_sensitive_inventory(host, username, password, sql):
+            return [{"device_name": device, "extension": "3142360155", "partition": "ENT_DEVICE_PT"}
+                    for device in devices
+                    if f"UPPER(d.name) LIKE '{device[:3].upper()}%'" in sql or device[:3].isupper()]
+
+        executor = Mock(side_effect=case_sensitive_inventory)
+        state = cleanup.start("unity.example", "cucm.example", "operator", "secret", executor)
+        person = dict(self.person(extension="3142360155"), FirstName="Belinda", LastName="Newberry", Alias="belindan")
+        self.advance(state, [person, self.person("other", "314236015")], 2)
+        row = state["rows"][0]
+        self.assertEqual(row["jabber_match"], "Matching Jabber")
+        self.assertEqual(set(row["jabber_devices"].split("; ")), set(devices))
+        self.assertEqual(row["partitions"], "ENT_DEVICE_PT")
+        self.assertEqual(state["rows"][1]["jabber_match"], "No matching Jabber")
+        self.assertEqual(executor.call_count, 1)
+
     def test_repeated_users_and_incomplete_counts_refused_without_appending(self):
         state, _ = self.start()
         self.advance(state, [self.person()], 3)

@@ -45,7 +45,7 @@ def start(host, cucm_host, cucm_user, cucm_pass, sql_executor):
             "FROM device d INNER JOIN devicenumplanmap dm ON dm.fkdevice = d.pkid "
             "INNER JOIN numplan n ON n.pkid = dm.fknumplan "
             "LEFT OUTER JOIN routepartition r ON r.pkid = n.fkroutepartition "
-            "WHERE (d.name LIKE 'CSF%' OR d.name LIKE 'TCT%' OR d.name LIKE 'BOT%' OR d.name LIKE 'TAB%') "
+            "WHERE (UPPER(d.name) LIKE 'CSF%' OR UPPER(d.name) LIKE 'TCT%' OR UPPER(d.name) LIKE 'BOT%' OR UPPER(d.name) LIKE 'TAB%') "
             "ORDER BY d.pkid, n.pkid"
         )
         batch = sql_executor(cucm_host, cucm_user, cucm_pass, sql)
