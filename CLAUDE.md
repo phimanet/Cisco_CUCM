@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-10-13
+- Date: 2026-10-15
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -114,6 +114,11 @@ Priority keys:
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
+
+### 2026-10-15 (Voicemail Box Cleanup, LAB validation pending)
+- Added read-only `Voicemail Box Cleanup` in the Unity Tools sidebar. Paged Unity mailbox inventory reports First Name, Last Name, Email, Username and primary Extension, compared by exact stored extension to every CSF/TCT/BOT/TAB line in the selected CUCM across all partitions. Matching devices/partitions remain visible; unmatched mailboxes and missing extensions are distinct review outcomes, never deletion clearance. No delete or other provider mutation is available.
+- One paged CUCM Jabber inventory is indexed per scan, without per-mailbox AXL reads. Browser-driven Unity pages checkpoint outside Git under the configured runtime root in `voicemail_box_cleanup`, isolated per Unity/CUCM pair. Latest scan and latest completed report only, not an archive; saved progress requires explicit Resume with current credentials after reload/restart. Failed/incomplete refreshes retain the prior report; corrupt saved state is refused. Normal pulls/restarts preserve data, not runtime deletion or older VM/data restores.
+- Includes Pause/Resume/Cancel Scan, saved views, local search/outcome filters, 500-row preview and full formula-safe CSV with hosts, scan status and snapshot times. Administrator auth, stale IDs, count-only page-0 compatibility, repeated/incomplete pagination rejection and audit events are covered locally. Ten focused backend/isolated-route tests and all 160 repository tests pass; Python compilation and full-script browser parsing of all three Unity pages passed. Mocked scan/pause/reload/resume/completion, saved report, 601-row CSV Blob, beyond-preview filtering, escaping, navigation and 390px control fit passed. The integrated browser did not emit an actual download event; Blob contents/link activation were checked separately. Live Unity/CUCM coverage, schema, permissions, server-browser download and full ASGI validation remain pending in LAB. Existing unrelated `PERFMON_*` diagnostics and embedded-JavaScript escape warnings remain.
 
 ### 2026-10-13 (Jabber Users Missing Primary Extension, LAB validation pending)
 - Added a Page 2 admin panel and authenticated routes to find CUCM End Users with CSF/TCT/BOT/TAB devices but no Primary Extension mapping. Candidate Jabber lines are read-only SQL results restricted to `ENT_DEVICE_PT`; automatic fix is offered only for exactly one distinct eligible extension.

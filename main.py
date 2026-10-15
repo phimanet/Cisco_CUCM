@@ -84,6 +84,7 @@ from toolkit.ad_phone_fields import (
 )
 from toolkit.unity_user_extract import extract_unity_users
 from toolkit import unity_user_extract
+from toolkit import voicemail_box_cleanup
 from toolkit import ms_graph_calling
 from toolkit import twilio_recent_logs
 from toolkit import twilio_all_recent_logs
@@ -963,6 +964,8 @@ UNITY_NUMBER_SEARCH_LOCK = threading.Lock()
 UNITY_PERSON_NUMBER_EXTRACT_DIR = os.path.join(_genesys_queue_data_root, "unity_person_number_extract")
 UNITY_SQL_LOOKUP_DIR = os.path.join(_genesys_queue_data_root, "unity_sql_lookup")
 UNITY_SQL_LOOKUP_LOCK = threading.Lock()
+VOICEMAIL_CLEANUP_DIR = os.path.join(_genesys_queue_data_root, "voicemail_box_cleanup")
+VOICEMAIL_CLEANUP_LOCK = threading.Lock()
 UNITY_REFERENCE_SEARCH_ENABLED = False
 GENESYS_DID_NUMBERS_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_did_numbers_report.json")
 GENESYS_DID_NUMBERS_REPORT_LOCK = threading.Lock()
@@ -55873,7 +55876,7 @@ UNITY_SEARCH_PAGE_BODY = """<body>
 *{box-sizing:border-box}.topbar,.topbar-brand{flex-wrap:wrap}.portal-sidebar,.portal-main{border-radius:8px}.portal-nav a{display:block;text-decoration:none}.content>h2{font-size:22px;margin:16px 0 10px}.row input{min-width:0;width:300px;max-width:100%}.row select{padding:7px;border:1px solid var(--amn-border);border-radius:6px}.row button:disabled{opacity:.5;cursor:default}.unity-scroll{max-width:100%;overflow:auto;max-height:600px}#person-status,#person-identity,#person-summary{overflow-wrap:anywhere}td{overflow-wrap:anywhere;min-width:85px}details{margin-top:12px}#person-debug{background:#f1f6fa;color:#12304a;white-space:pre-wrap;overflow-wrap:anywhere}.portal-main{border-radius:0;box-shadow:none}@media(max-width:900px){.portal-sidebar{position:static}.portal-main{padding:12px}.topbar-brand strong{font-size:14px}.content{padding:0 8px}}
 </style>
 <header class="topbar"><div class="topbar-brand"><span class="brand-fallback">AMN Healthcare</span><strong>Voice Operations Portal</strong></div><div class="topbar-status"><span>Authenticated Operator: __AUTH_USER__</span><span>__ENV_TEXT__</span><span>Read-Only</span></div><a class="topbar-btn" href="/logout">Log Out</a></header>
-<main class="content"><h2 class="page-title">Unity User Search</h2><div class="portal-shell"><aside class="portal-sidebar"><h4>Unity Tools</h4><div class="portal-nav"><button type="button" class="portal-nav-btn active" id="person-nav">Unity User Search</button><a class="portal-nav-btn" href="/unity-connection/sql-lookup">Unity Number Search</a><a class="portal-nav-btn" href="/menu">Main Operations (Page 1)</a><a class="portal-nav-btn" href="/page2">Administrative Items (Page 2)</a><a class="portal-nav-btn" href="/page3">SMS Item Menu (Page 3)</a></div></aside>
+<main class="content"><h2 class="page-title">Unity User Search</h2><div class="portal-shell"><aside class="portal-sidebar"><h4>Unity Tools</h4><div class="portal-nav"><button type="button" class="portal-nav-btn active" id="person-nav">Unity User Search</button><a class="portal-nav-btn" href="/unity-connection/sql-lookup">Unity Number Search</a><a class="portal-nav-btn" href="/unity-connection/voicemail-box-cleanup">Voicemail Box Cleanup</a><a class="portal-nav-btn" href="/menu">Main Operations (Page 1)</a><a class="portal-nav-btn" href="/page2">Administrative Items (Page 2)</a><a class="portal-nav-btn" href="/page3">SMS Item Menu (Page 3)</a></div></aside>
 <section class="portal-main"><h3 style="margin-top:0;">Person Lookup</h3><p class="muted">Unity host: __UNITY_HOST__</p>
 <form id="person-form" onsubmit="if(window.findUnityUser){return window.findUnityUser(event);}document.getElementById('person-status').textContent='User lookup handler missing (JavaScript did not load).';return false;"><div class="row"><label for="person-search-by">Search By:</label><select id="person-search-by" name="search_by"><option value="extension">Primary Extension</option><option value="name">Name</option><option value="email">Email</option></select><label id="person-value-label" for="person-value">User:</label><input id="person-value" name="value" required autocomplete="off" placeholder="Primary extension"><label id="person-first-name-label" for="person-first-name" style="display:none;">First Name (optional):</label><input id="person-first-name" autocomplete="off" placeholder="First Name (optional)" style="display:none;"><button type="button" class="btn-action" id="person-find" onclick="if(window.findUnityUser){return window.findUnityUser(event);}document.getElementById('person-status').textContent='User lookup handler missing (JavaScript did not load).';return false;">Find User</button></div></form>
 <div id="person-candidates" class="unity-scroll"></div><div class="row"><button type="button" class="btn-action" id="person-pause" disabled>Pause</button><button type="button" class="btn-action" id="person-resume" disabled>Resume</button><button type="button" class="btn-action" id="person-cancel" disabled>Cancel Extract</button><button type="button" class="btn-action" id="person-scan">View Latest Extract</button><button type="button" class="btn-action" id="person-saved">View Last Completed Extract</button><button type="button" class="btn-action" id="person-csv" disabled>Download CSV</button></div>
@@ -55909,7 +55912,7 @@ UNITY_SQL_LOOKUP_PAGE_BODY = """<body>
 *{box-sizing:border-box}.topbar,.topbar-brand{flex-wrap:wrap}.portal-sidebar,.portal-main{border-radius:8px}.portal-nav a{display:block;text-decoration:none}.content>h2{font-size:22px;margin:16px 0 10px}.row input{min-width:0;width:300px;max-width:100%}.row select{padding:7px;border:1px solid var(--amn-border);border-radius:6px}.row button:disabled{opacity:.5;cursor:default}.unity-scroll{max-width:100%;overflow:auto;max-height:600px}#unity-sql-status,#unity-sql-summary,#unity-sql-config,#unity-sql-limits,#unity-sql-retention{overflow-wrap:anywhere}td{overflow-wrap:anywhere;min-width:100px}.portal-main{border-radius:0;box-shadow:none}@media(max-width:900px){.portal-sidebar{position:static}.portal-main{padding:12px}.topbar-brand strong{font-size:14px}.content{padding:0 8px}.row{align-items:stretch}.row input,.row select{max-width:100%}}
 </style>
 <header class="topbar"><div class="topbar-brand"><span class="brand-fallback">AMN Healthcare</span><strong>Voice Operations Portal</strong></div><div class="topbar-status"><span>Authenticated Operator: __AUTH_USER__</span><span>__ENV_TEXT__</span><span>Read-Only</span></div><a class="topbar-btn" href="/logout">Log Out</a></header>
-<main class="content"><h2 class="page-title">Unity Connection Direct SQL Lookup</h2><div class="portal-shell"><aside class="portal-sidebar"><h4>Unity Tools</h4><div class="portal-nav"><a class="portal-nav-btn" href="/unity-connection">Unity User Search</a><button type="button" class="portal-nav-btn active" id="unity-sql-nav">Unity Number Search</button><a class="portal-nav-btn" href="/menu">Main Operations (Page 1)</a><a class="portal-nav-btn" href="/page2">Administrative Items (Page 2)</a><a class="portal-nav-btn" href="/page3">SMS Item Menu (Page 3)</a></div></aside>
+<main class="content"><h2 class="page-title">Unity Connection Direct SQL Lookup</h2><div class="portal-shell"><aside class="portal-sidebar"><h4>Unity Tools</h4><div class="portal-nav"><a class="portal-nav-btn" href="/unity-connection">Unity User Search</a><button type="button" class="portal-nav-btn active" id="unity-sql-nav">Unity Number Search</button><a class="portal-nav-btn" href="/unity-connection/voicemail-box-cleanup">Voicemail Box Cleanup</a><a class="portal-nav-btn" href="/menu">Main Operations (Page 1)</a><a class="portal-nav-btn" href="/page2">Administrative Items (Page 2)</a><a class="portal-nav-btn" href="/page3">SMS Item Menu (Page 3)</a></div></aside>
 <section class="portal-main"><h3 style="margin-top:0;">Read-Only Number Lookup</h3><p class="muted">Selected Unity host: __UNITY_HOST__. The server runs four fixed SELECT queries; arbitrary SQL and Unity changes are not available.</p>
 <p id="unity-sql-config" class="muted" role="status">Checking SSH configuration...</p>
 <form id="unity-sql-form" onsubmit="if(window.runUnitySqlLookup){return window.runUnitySqlLookup(event);}document.getElementById('unity-sql-status').textContent='Lookup handler missing (JavaScript did not load).';return false;"><div class="row"><label for="unity-sql-number">Number:</label><input id="unity-sql-number" name="number" required autocomplete="off" inputmode="tel" placeholder="3-15 digits; stored prefixes are preserved"><label for="unity-sql-mode">Match:</label><select id="unity-sql-mode" name="mode"><option value="exact">Exact</option><option value="contains">Contains</option></select><button type="button" class="btn-action" id="unity-sql-search" onclick="if(window.runUnitySqlLookup){return window.runUnitySqlLookup(event);}document.getElementById('unity-sql-status').textContent='Lookup handler missing (JavaScript did not load).';return false;">Search Selected Unity</button></div></form>
@@ -55932,6 +55935,114 @@ UNITY_SQL_LOOKUP_PAGE_BODY = """<body>
   controls();request('status').then(function(payload){var config=payload.configuration||{},search=document.getElementById('unity-sql-search');search.dataset.configured=config.configured?'true':'';search.disabled=!config.configured;var missing=Array.isArray(config.missing)?config.missing:[];document.getElementById('unity-sql-config').textContent=config.configured?'SSH lookup is configured. Credentials stay server-side.':config.enabled?'Lookup is not ready; missing or inaccessible prerequisites: '+missing.join(', '):'Lookup is disabled until explicitly enabled on this portal service.';}).catch(function(error){document.getElementById('unity-sql-config').textContent='Configuration unavailable: '+error.message;});
 })();
 </script></body></html>"""
+
+
+VOICEMAIL_CLEANUP_PAGE_BODY = """<body>
+<style>
+*{box-sizing:border-box}.topbar,.topbar-brand{flex-wrap:wrap}.portal-nav a{display:block;text-decoration:none}.portal-main{min-width:0;border-radius:0;box-shadow:none}.content>h2{font-size:22px;margin:16px 0 10px}.row{flex-wrap:wrap;gap:8px}.row input{min-width:0;max-width:100%}.row select{padding:7px;max-width:100%}.row button:disabled{opacity:.5}.cleanup-scroll{overflow:auto;max-height:600px;max-width:100%}#cleanup-table{width:100%;font-size:13px}#cleanup-table td,#cleanup-table th{padding:6px 8px;overflow-wrap:anywhere;min-width:95px}#cleanup-status,#cleanup-summary,#cleanup-limits,#cleanup-retention{overflow-wrap:anywhere}@media(max-width:900px){.portal-sidebar{position:static}.portal-main{padding:12px}.content{padding:0 8px}.topbar-brand strong{font-size:14px}}
+</style>
+<header class="topbar"><div class="topbar-brand"><span class="brand-fallback">AMN Healthcare</span><strong>Voice Operations Portal</strong></div><div class="topbar-status"><span>Authenticated Operator: __AUTH_USER__</span><span>__ENV_TEXT__</span><span>Read-Only</span></div><a class="topbar-btn" href="/logout">Log Out</a></header>
+<main class="content"><h2 class="page-title">Voicemail Box Cleanup</h2><div class="portal-shell"><aside class="portal-sidebar"><h4>Unity Tools</h4><div class="portal-nav"><a class="portal-nav-btn" href="/unity-connection">Unity User Search</a><a class="portal-nav-btn" href="/unity-connection/sql-lookup">Unity Number Search</a><button type="button" class="portal-nav-btn active" id="cleanup-nav">Voicemail Box Cleanup</button><a class="portal-nav-btn" href="/menu">Main Operations (Page 1)</a><a class="portal-nav-btn" href="/page2">Administrative Items (Page 2)</a><a class="portal-nav-btn" href="/page3">SMS Item Menu (Page 3)</a></div></aside>
+<section class="portal-main"><h3 style="margin-top:0">Mailbox / Jabber Comparison</h3><p class="muted">Unity: __UNITY_HOST__ | CUCM: __CUCM_HOST__</p>
+<div class="row"><button type="button" class="btn-action" id="cleanup-start" onclick="if(window.runVoicemailCleanup){return window.runVoicemailCleanup(event,'start');}document.getElementById('cleanup-status').textContent='Cleanup handler missing (JavaScript did not load).';return false;">Scan Voicemail Boxes</button><button type="button" class="btn-action" id="cleanup-pause" disabled>Pause</button><button type="button" class="btn-action" id="cleanup-resume" disabled>Resume</button><button type="button" class="btn-action" id="cleanup-cancel" disabled>Cancel Scan</button><button type="button" class="btn-action" id="cleanup-scan">View Latest Scan</button><button type="button" class="btn-action" id="cleanup-saved">View Last Completed Report</button><button type="button" class="btn-action" id="cleanup-csv" disabled>Download Full CSV</button></div>
+<p id="cleanup-status" class="muted" role="status" aria-live="polite"></p><p id="cleanup-summary" class="muted"></p><div class="row"><label for="cleanup-filter">Search:</label><input id="cleanup-filter" type="search" placeholder="Name, username, email, extension"><label for="cleanup-outcome">Jabber Match:</label><select id="cleanup-outcome"><option value="">All mailboxes</option><option>No matching Jabber</option><option>Matching Jabber</option><option>No primary extension</option></select></div>
+<div class="cleanup-scroll"><table id="cleanup-table"><thead><tr><th>First Name</th><th>Last Name</th><th>Email</th><th>Username</th><th>Extension</th><th>Jabber Match</th><th>Jabber Devices</th><th>Partitions</th></tr></thead><tbody></tbody></table></div><p id="cleanup-limits" class="muted"></p><p id="cleanup-retention" class="muted"></p></section></div></main>
+<script>
+(function(){
+  var report=null,busy=false,auto=false,timer=null,kind='scan',status=document.getElementById('cleanup-status');
+  var keys=['first_name','last_name','email','username','extension','jabber_match','jabber_devices','partitions'];
+  function controls(){var active=report && ['running','paused'].indexOf(report.status)>=0;['start','scan','saved'].forEach(function(name){document.getElementById('cleanup-'+name).disabled=busy || (name==='start' && !!active);});document.getElementById('cleanup-pause').disabled=busy || !auto;document.getElementById('cleanup-resume').disabled=busy || !active || auto;document.getElementById('cleanup-cancel').disabled=busy || !active;document.getElementById('cleanup-csv').disabled=busy || !report;}
+  function render(){if(!report)return;var term=document.getElementById('cleanup-filter').value.toLowerCase(),outcome=document.getElementById('cleanup-outcome').value,rows=report.rows.filter(function(row){return (!outcome || row.jabber_match===outcome) && (!term || keys.some(function(key){return String(row[key] || '').toLowerCase().indexOf(term)>=0;}));}),body=document.querySelector('#cleanup-table tbody');body.replaceChildren();rows.slice(0,500).forEach(function(item){var row=body.insertRow();keys.forEach(function(key){row.insertCell().textContent=item[key] || '';});});var unmatched=report.rows.filter(function(row){return row.jabber_match==='No matching Jabber';}).length;document.getElementById('cleanup-summary').textContent=report.status+' | '+report.rows.length+' / '+(report.total==null?'unknown':report.total)+' mailboxes | '+unmatched+' without matching Jabber | '+rows.length+' filtered (first 500 displayed) | Jabber snapshot: '+report.jabber_checked_at+' | Unity updated: '+report.updated_at;document.getElementById('cleanup-limits').textContent=report.limitations;document.getElementById('cleanup-retention').textContent=report.retention;controls();}
+  function stop(){auto=false;clearTimeout(timer);}
+  async function request(path,options){var response=await fetch('/unity-connection/voicemail-box-cleanup/'+path,options || {credentials:'same-origin'}),payload=await response.json();if(!response.ok || !payload.ok)throw new Error(payload.error || 'Cleanup scan failed.');report=payload.report;render();return payload;}
+  function schedule(){if(auto && report && report.status==='running')timer=setTimeout(function(){run('advance');},500);}
+  async function run(action){if(busy)return;busy=true;controls();if(action!=='advance')stop();status.textContent=action==='start'?'Loading CUCM Jabber inventory...':action==='advance'?'Reading Unity mailbox page...':'Saving scan control...';var data=new FormData();data.append('action',action);if(action!=='start' && report)data.append('job_id',report.job_id);try{await request('run',{method:'POST',credentials:'same-origin',body:data});kind='scan';auto=['start','advance','resume'].indexOf(action)>=0 && report.status==='running';status.textContent=report.status==='completed'?'Report completed. No Unity or CUCM settings were changed.':auto?'Scan running; results are partial.':report.status==='cancelled'?'Scan cancelled; previous completed report retained.':'Progress saved; select Resume to continue.';}catch(error){stop();status.textContent='Scan stopped: '+error.message+' Saved progress and prior completed report are retained.';}finally{busy=false;controls();schedule();}}
+  window.runVoicemailCleanup=function(event,action){if(event)event.preventDefault();run(action);return false;};
+  ['pause','resume','cancel'].forEach(function(action){document.getElementById('cleanup-'+action).addEventListener('click',function(event){event.preventDefault();run(action);});});
+  async function saved(which,initial){if(busy)return;stop();busy=true;controls();try{await request('saved?kind='+which);kind=which;status.textContent=report.status==='running' || report.status==='paused'?'Saved progress restored; select Resume to continue.':'Saved '+report.status+' report loaded.';}catch(error){if(!initial)status.textContent=error.message;}finally{busy=false;controls();}}
+  document.getElementById('cleanup-scan').addEventListener('click',function(){saved('scan',false);});document.getElementById('cleanup-saved').addEventListener('click',function(){saved('report',false);});document.getElementById('cleanup-nav').addEventListener('click',function(){document.getElementById('cleanup-filter').focus();});document.getElementById('cleanup-filter').addEventListener('input',render);document.getElementById('cleanup-outcome').addEventListener('change',render);
+  document.getElementById('cleanup-csv').addEventListener('click',async function(){if(!report || busy)return;busy=true;controls();try{var response=await fetch('/unity-connection/voicemail-box-cleanup/csv?kind='+kind+'&job_id='+encodeURIComponent(report.job_id),{credentials:'same-origin'});if(!response.ok)throw new Error('Download unavailable; reload the saved report and retry.');var url=URL.createObjectURL(await response.blob()),link=document.createElement('a');link.href=url;link.download='voicemail_box_cleanup.csv';document.body.appendChild(link);link.click();link.remove();setTimeout(function(){URL.revokeObjectURL(url);},1000);}catch(error){status.textContent=error.message;}finally{busy=false;controls();}});
+  controls();saved('scan',true);
+})();
+</script></body></html>"""
+
+
+@app.get("/unity-connection/voicemail-box-cleanup", response_class=HTMLResponse)
+def voicemail_cleanup_page(request: Request):
+  try:
+    host, session = _unity_read_access(request)
+    env_text, _ = _get_environment_label(session["cucm_host"])
+    head = MS_CALLING_PAGE_TEMPLATE.split("<body>", 1)[0].replace("__PAGE_TITLE__", "Voicemail Box Cleanup")
+    head = head.replace('<meta charset="utf-8">', '<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">')
+    body = VOICEMAIL_CLEANUP_PAGE_BODY.replace("__AUTH_USER__", escape(str(session.get("username", "")))).replace("__ENV_TEXT__", escape(env_text)).replace("__UNITY_HOST__", escape(host)).replace("__CUCM_HOST__", escape(session["cucm_host"]))
+    return HTMLResponse(content=head + body, headers={"Cache-Control": "no-store"})
+  except Exception as exc:
+    return _unity_search_failure(exc)
+
+
+@app.get("/unity-connection/voicemail-box-cleanup/saved")
+@app.get("/unity-connection/voicemail-box-cleanup/csv")
+def voicemail_cleanup_saved(request: Request, kind: str = "scan", job_id: str = ""):
+  try:
+    host, session = _unity_read_access(request)
+    if kind not in {"scan", "report"}:
+      raise ValueError("Choose latest scan or completed report.")
+    with VOICEMAIL_CLEANUP_LOCK:
+      state = voicemail_box_cleanup.load(VOICEMAIL_CLEANUP_DIR, host, session["cucm_host"], kind)
+    if request.url.path.endswith("/csv"):
+      if state["job_id"] != job_id:
+        raise ValueError("Stale report ID; reload the saved report.")
+      return Response(content=voicemail_box_cleanup.csv_report(state), media_type="text/csv", headers={"Content-Disposition": 'attachment; filename="voicemail_box_cleanup.csv"', "Cache-Control": "no-store"})
+    return JSONResponse({"ok": True, "report": voicemail_box_cleanup.report(state)}, headers={"Cache-Control": "no-store"})
+  except Exception as exc:
+    return _unity_search_failure(exc)
+
+
+@app.post("/unity-connection/voicemail-box-cleanup/run")
+def voicemail_cleanup_run(request: Request, action: str = Form("start"), job_id: str = Form("")):
+  try:
+    host, session = _unity_read_access(request)
+    if action not in {"start", "advance", "pause", "resume", "cancel"}:
+      raise ValueError("Invalid cleanup scan action.")
+    cucm_host = session["cucm_host"]
+    with VOICEMAIL_CLEANUP_LOCK:
+      try:
+        state = voicemail_box_cleanup.load(VOICEMAIL_CLEANUP_DIR, host, cucm_host)
+      except FileNotFoundError:
+        state = None
+      if action == "start":
+        if state and state["status"] in {"running", "paused"}:
+          return JSONResponse({"ok": True, "report": voicemail_box_cleanup.report(state)}, headers={"Cache-Control": "no-store"})
+        _resolve_unity_credentials(request, "", "")
+        _, username, password = _resolve_cucm_credentials(request, "", "", "")
+        state = voicemail_box_cleanup.start(host, cucm_host, username, password, _axl_execute_sql_rows)
+      else:
+        if not state or state["job_id"] != job_id:
+          raise ValueError("Stale cleanup scan ID; view the latest scan.")
+        if state["status"] not in {"running", "paused"}:
+          raise ValueError("This cleanup scan has already finished.")
+        if action == "advance":
+          username, password = _resolve_unity_credentials(request, "", "")
+          try:
+            voicemail_box_cleanup.advance(state, username, password)
+            if state["status"] == "completed":
+              voicemail_box_cleanup.save(VOICEMAIL_CLEANUP_DIR, voicemail_box_cleanup.report(state), "report")
+          except Exception:
+            state = voicemail_box_cleanup.load(VOICEMAIL_CLEANUP_DIR, host, cucm_host)
+            state["status"] = "paused"
+            voicemail_box_cleanup.save(VOICEMAIL_CLEANUP_DIR, state)
+            raise
+        else:
+          if action == "resume":
+            _resolve_unity_credentials(request, "", "")
+          state["status"] = {"pause": "paused", "resume": "running", "cancel": "cancelled"}[action]
+      state["updated_at"] = unity_number_search.timestamp()
+      voicemail_box_cleanup.save(VOICEMAIL_CLEANUP_DIR, state)
+    if action != "advance" or state["status"] == "completed":
+      _append_audit_event(action="voicemail_box_cleanup", cucm_host=cucm_host, operator=str(session.get("username", "")), target=f"unity_host={host};action={action};status={state['status']};mailboxes={len(state['rows'])}", output_filename="", inline_mode=True)
+    return JSONResponse({"ok": True, "report": voicemail_box_cleanup.report(state)}, headers={"Cache-Control": "no-store"})
+  except Exception as exc:
+    return _unity_search_failure(exc)
 
 
 @app.get("/unity-connection", response_class=HTMLResponse)
