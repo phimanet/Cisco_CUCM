@@ -212,6 +212,54 @@ def search_line_groups(cucm_host, cucm_user, cucm_pass, search_text):
     return direct_names
 
 
+def find_empty_line_groups(cucm_host, cucm_user, cucm_pass, sql_executor):
+    groups = {}
+    seen_rows = set()
+    page_size = 1000
+    for page in range(100):
+        sql = (
+            f"SELECT SKIP {page * page_size} FIRST {page_size} "
+            "lg.pkid AS line_group_id, lg.name AS line_group_name, "
+            "COALESCE(hl.pkid, '') AS hunt_list_reference_id, "
+            "COALESCE(d.name, '') AS hunt_list_name "
+            "FROM linegroup lg "
+            "LEFT OUTER JOIN huntlist hl ON hl.fklinegroup = lg.pkid "
+            "LEFT OUTER JOIN device d ON d.pkid = hl.fkdevice "
+            "WHERE NOT EXISTS (SELECT 1 FROM linegroupnumplanmap members "
+            "WHERE members.fklinegroup = lg.pkid) "
+            "ORDER BY lg.pkid, hl.pkid"
+        )
+        batch = sql_executor(cucm_host, cucm_user, cucm_pass, sql)
+        if not isinstance(batch, list) or len(batch) > page_size:
+            raise RuntimeError("Invalid empty Line Group query response.")
+        for row in batch:
+            group_id = str(row.get("line_group_id", "") or "").strip()
+            name = str(row.get("line_group_name", "") or "").strip()
+            reference_id = str(row.get("hunt_list_reference_id", "") or "").strip()
+            hunt_list = str(row.get("hunt_list_name", "") or "").strip()
+            if not group_id or not name or (hunt_list and not reference_id):
+                raise RuntimeError("Incomplete empty Line Group query response.")
+            key = (group_id, reference_id)
+            if key in seen_rows:
+                raise RuntimeError("Repeated empty Line Group query rows; refresh the lookup.")
+            seen_rows.add(key)
+            group = groups.setdefault(group_id, {
+                "line_group_id": group_id,
+                "line_group_name": name,
+                "extension_count": 0,
+                "hunt_lists": [],
+                "hunt_list_reference_count": 0,
+            })
+            if group["line_group_name"] != name:
+                raise RuntimeError("Line Group changed during lookup; refresh the lookup.")
+            if reference_id:
+                group["hunt_list_reference_count"] += 1
+                group["hunt_lists"].append(hunt_list or "Name unavailable")
+        if len(batch) < page_size:
+            return sorted(groups.values(), key=lambda group: (group["line_group_name"].casefold(), group["line_group_id"]))
+    raise RuntimeError("Empty Line Group lookup exceeded the safe page limit; no complete result available.")
+
+
 def get_line_group_members(cucm_host, cucm_user, cucm_pass, line_group_name):
     """Return current members for a single Line Group as pattern/partition/order rows."""
     clean_group = (line_group_name or "").strip()

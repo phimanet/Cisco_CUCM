@@ -59,7 +59,7 @@ from toolkit.add_secondary_devices import (
   delete_secondary_mobile_devices,
 )
 from toolkit.called_name_change import run_called_name_change
-from toolkit.edit_line_group_members import edit_line_group_members, search_line_groups, get_line_group_members
+from toolkit.edit_line_group_members import edit_line_group_members, search_line_groups, get_line_group_members, find_empty_line_groups
 from toolkit.extract_rpo_phones import extract_rpo_phones
 from toolkit.person_lookup import search_persons_by_name, search_persons_with_telephone, search_all_persons, lookup_person_email_by_userid
 from toolkit.extension_lookup import lookup_extension_owner, check_user_devices
@@ -46095,6 +46095,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM (Main Ops)</button>
             <div style="margin:-4px 0 6px 0;">__DN_DELETE_INDICATOR2__</div>
             <button type="button" class="portal-nav-btn" data-panel="hunt-list-members">Hunt List Members (Search Line Groups)</button>
+            <button type="button" class="portal-nav-btn" data-panel="empty-line-groups">Cisco CUCM Empty Line Group</button>
             <button type="button" class="portal-nav-btn" data-panel="linegroup-admin">Update Hunt List Line Group</button>
             <button type="button" class="portal-nav-btn" data-panel="add-user-hunt-list">Add User to Hunt List</button>
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
@@ -47272,6 +47273,71 @@ def menu_admin_page(request: Request):
         
         <p id="admin-strikemask-reverse-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Enter an operation ID and click Reverse.</p>
         <p id="admin-strikemask-reverse-summary" style="color:#355978; min-height:18px;"></p>
+      </section>
+
+      <section class="panel tool-panel" data-panel="empty-line-groups">
+        <h3>Cisco CUCM Empty Line Group</h3>
+        <p style="color:#8a4b08;">No assigned extensions does not prove a Line Group is unused. Review Hunt List references and dependencies before manually deleting in CUCM.</p>
+        <div class="compact-inline-row" style="flex-wrap:wrap;">
+          <button type="button" id="admin-empty-lg-load" onclick="if(window.loadAdminEmptyLineGroups){window.loadAdminEmptyLineGroups(event);}else{document.getElementById('admin-empty-lg-status').textContent='JavaScript handler missing. Reload the page.';}">Find Empty Line Groups</button>
+          <label for="admin-empty-lg-filter">Line Group name:</label>
+          <input type="search" id="admin-empty-lg-filter" placeholder="Filter name" style="max-width:100%;box-sizing:border-box;">
+        </div>
+        <p id="admin-empty-lg-status" role="status" style="color:#2c5c8a;min-height:18px;"></p>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;">
+            <thead><tr><th scope="col">Line Group</th><th scope="col">Extensions</th><th scope="col">Hunt List References</th></tr></thead>
+            <tbody id="admin-empty-lg-results"></tbody>
+          </table>
+        </div>
+        <script>
+        (function(){
+          const button = document.getElementById('admin-empty-lg-load');
+          const filter = document.getElementById('admin-empty-lg-filter');
+          const status = document.getElementById('admin-empty-lg-status');
+          const body = document.getElementById('admin-empty-lg-results');
+          let rows = [];
+          let source = '';
+          function render(){
+            const query = filter.value.trim().toLowerCase();
+            const visible = rows.filter(function(row){return row.line_group_name.toLowerCase().includes(query);});
+            body.replaceChildren();
+            visible.forEach(function(row){
+              const tr = document.createElement('tr');
+              const references = row.hunt_list_reference_count ? row.hunt_lists.join(', ') : 'None found';
+              [row.line_group_name, '0', references].forEach(function(value){
+                const cell = document.createElement('td');
+                cell.textContent = value;
+                cell.style.padding = '6px 8px';
+                cell.style.borderBottom = '1px solid #c8dbee';
+                cell.style.overflowWrap = 'anywhere';
+                tr.appendChild(cell);
+              });
+              body.appendChild(tr);
+            });
+            if(source){status.textContent = source + ' | ' + visible.length + ' of ' + rows.length + ' empty Line Groups';}
+          }
+          window.loadAdminEmptyLineGroups = async function(event){
+            if(event){event.preventDefault();}
+            if(button.disabled){return;}
+            button.disabled = true;
+            rows = [];
+            source = '';
+            body.replaceChildren();
+            status.textContent = 'Checking Line Groups...';
+            try{
+              const response = await fetch('/admin/empty-line-groups/search', {method:'POST', credentials:'same-origin', cache:'no-store'});
+              const data = await response.json();
+              if(!response.ok || !data.ok){throw new Error(data.error || 'Lookup failed.');}
+              rows = data.rows;
+              source = data.cucm_host + ' | ' + new Date().toLocaleString();
+              render();
+            }catch(error){status.textContent = 'Lookup failed: ' + error.message;}
+            finally{button.disabled = false;}
+          };
+          filter.addEventListener('input', render);
+        })();
+        </script>
       </section>
 
       <section class="panel tool-panel" data-panel="hunt-list-members">
@@ -69105,6 +69171,31 @@ def _page2_jabber_primary_credentials(request: Request):
     raise PermissionError("Administrator authentication required.")
   cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
   return cucm_host, cucm_user, cucm_pass, operator
+
+
+@app.post("/admin/empty-line-groups/search")
+def page2_empty_line_groups_search_route(request: Request):
+  try:
+    session = _get_auth_session(request) or {}
+    operator = str(session.get("username", "") or "").strip()
+    if not operator or not _is_admin_user(operator):
+      raise PermissionError("Administrator authentication required.")
+    cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, "", "", "")
+    rows = find_empty_line_groups(cucm_host, cucm_user, cucm_pass, _axl_execute_sql_rows)
+    _append_audit_event(
+      action="page2_empty_line_groups_search",
+      cucm_host=cucm_host,
+      operator=operator,
+      target=f"empty_groups={len(rows)};status=complete;read_only=true",
+      output_filename="",
+      inline_mode=True,
+    )
+    return JSONResponse({"ok": True, "cucm_host": cucm_host, "count": len(rows), "rows": rows}, headers={"Cache-Control": "no-store"})
+  except PermissionError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
+  except Exception:
+    logger.exception("Page 2 empty Line Group lookup failed")
+    return JSONResponse({"ok": False, "error": "Empty Line Group lookup failed. No complete result is available; check the server log for details."}, status_code=502)
 
 
 @app.post("/admin/jabber-primary-extension/search")
