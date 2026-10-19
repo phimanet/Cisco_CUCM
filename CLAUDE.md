@@ -115,9 +115,9 @@ Priority keys:
 
 ## Conversation Notes
 
-### 2026-10-19 (Unity Number Search Alternate Extensions, LAB validated)
+### 2026-10-19 (Unity Number Search Alternate Extensions, LAB and PROD validated)
 - Fixed Unity Number Search mailbox Alternate Extension lookup to use `tbl_dtmfaccessid` joined to `vw_user` and `vw_mailbox`, filtering `idindex != 0` so primary extensions are excluded. The earlier `vw_restrictedalternateextensions` query targeted the wrong data.
-- Operator confirmed the corrected search works in LAB. Exact/Contains SQL query, mailbox join, parser, and authentication regressions pass (12 focused tests). Code commit `0c81280`; no Unity settings were changed.
+- Operator confirmed the corrected search works in LAB and PROD. Exact/Contains SQL query, mailbox join, parser, and authentication regressions pass (12 focused tests). Code commit `0c81280`; no Unity settings were changed.
 
 ### 2026-10-16 (Cisco CUCM Empty Line Group, LAB validation pending)
 - Added isolated Page 2 menu/panel `Cisco CUCM Empty Line Group`, listing only groups with no `linegroupnumplanmap` membership records. Paged read-only AXL SQL uses the authenticated administrator's selected CUCM session; no per-group AXL reads or deletion actions. Name filtering, zero extension counts and all Hunt List references remain visible. Empty does not prove unused or establish deletion clearance; operators must review dependencies before manual CUCM deletion.
