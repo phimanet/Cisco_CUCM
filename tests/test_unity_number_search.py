@@ -246,18 +246,6 @@ class UnityNumberSearchTests(unittest.TestCase):
         self.assertEqual({field["field"] for field in fields}, {"DtmfAccessId", "Extension", "PrependDigits", "Inputs[0].TransferNumber"})
         self.assertEqual(edges[0]["target"], "other")
 
-    def test_number_entry_focus_keeps_alternate_extension_number(self):
-        owner = {"id": "one", "name": "One", "type": "User"}
-        fields, _ = search.record_evidence(
-            {"AlternateExtensionNumber": "8585236648", "Description": "alternate 8585236648"},
-            owner,
-            "/vmrest/users/one/alternateextensions/two",
-            number_entry_only=True,
-        )
-        state = {"query": "8585236648", "mode": "exact", "fields": fields, "edges": [], "objects": {"one": owner}}
-        rows = search.find_matches(state)
-        self.assertEqual([row["field"] for row in rows], ["AlternateExtensionNumber"])
-
     def test_number_entry_focus_keeps_routing_and_restriction_values(self):
         owner = {"id": "one", "name": "One", "type": "Rule"}
         for resource in ("/vmrest/routingrules/one/conditions/two", "/vmrest/restrictiontables/one/patterns/two"):

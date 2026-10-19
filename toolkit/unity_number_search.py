@@ -28,7 +28,7 @@ class UnityCountOnlyPage(UnitySearchError):
 
 EXCLUDED = re.compile(r"password|passwd|credential|secret|token|pin(?:hash|digest|$)|certificate|authorizationcode|voicename|voicefile|streamfile|recording", re.I)
 NUMBER_FIELD = re.compile(r"extension|dtmfaccessid|phone|dial|callback|contactnumber|transfernumber|callingnumber|callednumber|forwardingnumber", re.I)
-NUMBER_ENTRY_FIELDS = {"dtmfaccessid", "extension", "extensions", "extensionnumber", "extensionnumbers", "alternateextension", "alternateextensionnumber",
+NUMBER_ENTRY_FIELDS = {"dtmfaccessid", "extension", "extensions", "extensionnumber", "extensionnumbers", "alternateextension",
                        "phonenumber", "phonenumbers", "telephone", "telephonenumber", "mobile", "mobilephone", "homephone", "workphone", "faxnumber",
                        "transfernumber", "transferaltcontactnumber", "alternatecontactnumber", "contactnumber", "callbacknumber", "outdialnumber",
                        "callednumber", "callingnumber", "forwardingnumber", "forwardednumber", "destinationnumber", "targetnumber", "pilotnumber",
