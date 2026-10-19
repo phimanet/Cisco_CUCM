@@ -24,9 +24,11 @@ class UnitySqlLookupTests(unittest.TestCase):
         self.assertTrue(all(query.startswith("select first 501") for _, query in queries))
         alternate_extension = queries[0][1]
         self.assertEqual(queries[0][0], "Mailbox alternate extension")
-        self.assertIn("vw_restrictedalternateextensions r", alternate_extension)
-        self.assertIn("r.extension='717607980490'", alternate_extension)
-        self.assertIn("s.objectid=r.subscriberobjectid", alternate_extension)
+        self.assertIn("tbl_dtmfaccessid d", alternate_extension)
+        self.assertIn("d.dtmfaccessid='717607980490'", alternate_extension)
+        self.assertIn("d.parent_globaluserobjectid=u.objectid", alternate_extension)
+        self.assertIn("m.userobjectid=u.objectid", alternate_extension)
+        self.assertIn("d.idindex not in (0)", alternate_extension)
         self.assertIn("s.objectid=a.subscriberobjectid", queries[1][1])
         self.assertIn("h.objectid=t.callhandlerobjectid", queries[2][1])
         self.assertIn("t.extension='717607980490'", queries[2][1])
@@ -39,7 +41,7 @@ class UnitySqlLookupTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             sql.lookup_queries("1234", "unknown")
         self.assertIn("like '%1234%'", sql.lookup_queries("1234", "contains")[1][1])
-        self.assertIn("r.extension like '%1234%'", sql.lookup_queries("1234", "contains")[0][1])
+        self.assertIn("d.dtmfaccessid like '%1234%'", sql.lookup_queries("1234", "contains")[0][1])
 
     def test_parser_preserves_owner_and_full_number(self):
         rows = sql.parse_cli_rows(table([["Phimane Tiaokhiao", "8583147405", "Extension", "717607980490", "Off Hours"]]))
@@ -70,7 +72,7 @@ class UnitySqlLookupTests(unittest.TestCase):
                 "UNITY_SQL_LOOKUP_SSH_PASSWORD": "test-password-not-persisted",
                 "UNITY_SQL_LOOKUP_KNOWN_HOSTS_FILE": known_hosts_file,
             }
-            outputs = [table([["Phimane Tiaokhiao", "8583147405", "Alternate Extension", "8585236648", "Mailbox"]]).encode()]
+            outputs = [table([["Phimane.Tiaokhiao", "8583147405", "Alternate Extension", "8585236648", "1"]]).encode()]
             outputs.extend([b"No records found"] * 4)
             clients = []
             policy = object()
