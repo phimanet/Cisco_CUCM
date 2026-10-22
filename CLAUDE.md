@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-10-19
+- Date: 2026-10-22
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -114,6 +114,12 @@ Priority keys:
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
+
+### 2026-10-22 (Combined SMS Number Extract, LAB validation pending)
+- Added isolated SMS-page menu/panel `Extract All SMS numbers`: read-only SMS-capable Twilio PN inventory across configured roots/accessible subaccounts plus all paginated Aerialink account-code records. Reports number, provider, environment, account, friendly name and connection; no descriptions are inferred from private notes. Existing lookups/inventory panels are unchanged. Twilio account names identify environments; Aerialink is labeled AMIEClassic with its returned account/connection retained.
+- Operator's LAB empty-search probe verified HTTP 200, 340 Aerialink records, four 100-record pages and `paging.next=/v5/code?page=2&pageSize=100`. New reader follows same-host approved code paths only, refuses redirects/repeated pages/inconsistent totals, and excludes credentials, email and raw provider payloads from output. Twilio reuses cached all-account discovery/number inventories without Messaging Service reads, preserves account boundaries and includes SMS-capable PN resources only. HN resources require separate Console export; Aerialink records include inactive entries and are not proof of current routing.
+- Live-only extract, not a saved report/history archive or background queue. Full filtered formula-safe CSV includes coverage/failure metadata; browser preview is capped at 500 rows. Partial providers/accounts stay visibly Partial; total provider failure preserves the prior result in the current tab. Reload/restart requires a fresh extract; downloaded CSV is the retained artifact.
+- Ten focused reader/isolated-route tests and all 180 repository tests pass, including 340 records/four reads, account isolation, auth, provider failures and unsafe pagination refusal. Full rendered SMS page: all four scripts parsed; mocked extraction, existing/new navigation, 601-row full CSV Blob, beyond-preview filtering, escaping, formula safety, failed-refresh retention and 390px control fit passed. Python compilation passed. Full ASGI, live complete extraction and actual browser download remain unverified; validate in LAB before PROD. Existing unrelated PERFMON diagnostics and embedded-JavaScript escape warnings remain.
 
 ### 2026-10-19 (Unity Number Search Alternate Extensions, LAB and PROD validated)
 - Fixed Unity Number Search mailbox Alternate Extension lookup to use `tbl_dtmfaccessid` joined to `vw_user` and `vw_mailbox`, filtering `idindex != 0` so primary extensions are excluded. The earlier `vw_restrictedalternateextensions` query targeted the wrong data.

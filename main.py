@@ -88,6 +88,7 @@ from toolkit import voicemail_box_cleanup
 from toolkit import ms_graph_calling
 from toolkit import twilio_recent_logs
 from toolkit import twilio_all_recent_logs
+from toolkit import sms_inventory
 from toolkit import webex_admin
 from toolkit import unity_number_search
 from toolkit import unity_sql_lookup
@@ -10527,6 +10528,7 @@ def _wants_json_response(request: Request) -> bool:
     "/strike-mask/in-use",
     "/lookup/sms-number-look",
     "/twilio/all-accounts/number-inventory",
+    "/sms/all-numbers/extract",
     "/twilio/amieweb/sms-host",
     "/twilio/amieweb/hosting-ready",
     "/ops/integrations/feasibility",
@@ -14469,6 +14471,41 @@ def _lookup_twilio_number_direct(phone_number: str, account: str = "default", al
   with TWILIO_DIRECT_LOOKUP_CACHE_LOCK:
     TWILIO_DIRECT_LOOKUP_CACHE[cache_key] = {"cached_at": time.time(), "result": None}
   return None
+
+
+@app.post("/sms/all-numbers/extract")
+def sms_all_numbers_extract_route(request: Request):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username") or "")
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Administrator sign-in is required."}, status_code=403)
+  rows, failures = [], []
+  successful_sources = 0
+  try:
+    inventory = _twilio_all_account_number_inventory(include_messaging_services=False)
+    rows.extend(sms_inventory.twilio_sms_rows(inventory))
+    for failure in inventory.get("failures", []):
+      failures.append("Twilio / " + str(failure.get("account_name") or "Account") + ": inventory unavailable.")
+    if inventory.get("accounts") and not inventory.get("failures") or rows:
+      successful_sources += 1
+  except Exception:
+    failures.append("Twilio inventory unavailable; check configuration, permissions and connectivity.")
+  try:
+    rows.extend(sms_inventory.aerialink_numbers(AERIALINK_V5_BASE_URL, AERIALINK_ACCOUNT_CODE_LOOKUP_PATH, AERIALINK_USERNAME, AERIALINK_PASSWORD))
+    successful_sources += 1
+  except ValueError as exc:
+    failures.append(str(exc))
+  except Exception:
+    failures.append("Aerialink inventory unavailable; check configuration, permissions and connectivity.")
+  if not successful_sources:
+    return JSONResponse({"ok": False, "error": "No SMS inventory source completed successfully.", "failures": failures}, status_code=502)
+  rows.sort(key=lambda row: (row["provider"], row["environment"].lower(), row["account"].lower(), row["phone_number"]))
+  _append_audit_event(action="sms_all_numbers_extract", cucm_host=str(session.get("cucm_host") or ""), operator=operator,
+                     target=f"numbers={len(rows)};failures={len(failures)}", output_filename="all_sms_numbers.csv", inline_mode=True)
+  return JSONResponse({"ok": True, "rows": rows, "count": len(rows), "failures": failures,
+                       "status": "Partial" if failures else "Complete within stated scope",
+                       "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
+                       "scope": "All configured accessible Twilio accounts/subaccounts: SMS-capable Incoming Phone Numbers (PN) only; all Aerialink account code records. Twilio Hosted Numbers (HN) are excluded and require Console export. Aerialink records are not filtered by active status; listing is not proof of current SMS routing."})
 
 
 @app.post("/twilio/all-accounts/number-inventory")
@@ -52303,6 +52340,7 @@ def page3_twilio_items(request: Request):
           <a class="portal-nav-btn" href="/twilio/amieweb/messaging-webhook-page" style="display:block; box-sizing:border-box; text-decoration:none;">AMIEWeb-Twilio - Messaging and Webhook</a>
           <button type="button" class="portal-nav-btn" data-panel="twilio-amieweb-recent-logs">AMIE-Web-Twilio-Recents Logs</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-all-account-inventory">Twilio All Accounts Number Inventory</button>
+          <button type="button" class="portal-nav-btn" data-panel="sms-all-numbers" onclick="document.querySelectorAll('.tool-panel').forEach(function(p){p.classList.toggle('active',p.getAttribute('data-panel')==='sms-all-numbers');});document.querySelectorAll('.portal-nav-btn[data-panel]').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-panel')==='sms-all-numbers');});">Extract All SMS numbers</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-all-account-recent-logs">Twilio All Acount Recent Logs</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">SalesForce-Twilio Number Lookup</button>
           <a class="portal-nav-btn" href="/twilio/salesforce/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">SalesForce-Twilio Number Lookup</a>
@@ -52567,6 +52605,71 @@ def page3_twilio_items(request: Request):
               [filterEl,outcomeEl,zoneEl,sortEl].forEach(function(element){element.addEventListener(element===filterEl?"input":"change",render);});
               downloadBtn.addEventListener("click",function(){if(!report)return;function cell(value){var text=String(value || "");if(/^[=+@-]/.test(text.trimStart()))text="'"+text;return '"'+text.replace(/"/g,'""')+'"';}var lines=[["Account","SMS Number","Friendly Name","Latest Outbound Log ("+(zoneEl.value==="UTC"?"UTC":"PST/PDT")+")","Account SID","Root Account","Snapshot At","Report Status","Account/Inventory Failures","Number Lookup Failures"].map(cell).join(",")];filteredRows.forEach(function(row){lines.push([row.account_name,row.phone_number,row.friendly_name,row.latest_outbound_at?displayTime(row.latest_outbound_at):row.status,row.account_sid,row.root_account_name,displayTime(report.updated_at),report.status,report.inventory_failures.length,report.failed].map(cell).join(","));});var url=URL.createObjectURL(new Blob([lines.join(String.fromCharCode(13,10))],{type:"text/csv;charset=utf-8"}));var link=document.createElement("a");link.href=url;link.download="twilio_all_account_recent_logs_"+report.job_id+".csv";document.body.appendChild(link);link.click();link.remove();URL.revokeObjectURL(url);});
               poll();
+            })();
+          </script>
+        </section>
+        <section class="tool-panel" data-panel="sms-all-numbers">
+          <div class="panel" style="min-width:0;">
+            <h3>Extract All SMS numbers</h3>
+            <div class="search-filter-row" style="flex-wrap:wrap;">
+              <button type="button" id="sms-all-extract" onclick="if(window.extractAllSMSNumbers){window.extractAllSMSNumbers(event);}else{document.getElementById('sms-all-status').textContent='Extraction handler missing (JavaScript did not load).';}return false;">Extract All SMS numbers</button>
+              <input id="sms-all-filter" aria-label="Filter SMS inventory" placeholder="Filter number, environment, account or friendly name" style="width:380px;min-width:0;max-width:100%;box-sizing:border-box;">
+              <button type="button" id="sms-all-download" disabled>Download CSV</button>
+            </div>
+            <p id="sms-all-status" role="status" style="color:#2c5c8a;overflow-wrap:anywhere;"></p>
+            <p id="sms-all-coverage" style="overflow-wrap:anywhere;"></p>
+            <div id="sms-all-results" style="overflow:auto;max-height:640px;"></div>
+            <small>Live extract only; no saved report or history archive. Download the CSV before leaving this page.</small>
+          </div>
+          <script>
+            (function () {
+              var button = document.getElementById("sms-all-extract");
+              var filter = document.getElementById("sms-all-filter");
+              var download = document.getElementById("sms-all-download");
+              var status = document.getElementById("sms-all-status");
+              var coverage = document.getElementById("sms-all-coverage");
+              var output = document.getElementById("sms-all-results");
+              var report = null;
+              var visible = [];
+              var columns = [["phone_number","SMS Number"],["provider","Provider"],["environment","Environment"],["account","Account"],["friendly_name","Friendly Name"],["description","Description"],["connection","Connection"]];
+              function esc(value) { return String(value == null ? "" : value).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+              function render() {
+                if (!report) return;
+                var query = filter.value.trim().toLowerCase();
+                visible = report.rows.filter(function (row) { return columns.map(function (column) { return row[column[0]] || ""; }).join(" ").toLowerCase().indexOf(query) !== -1; });
+                var html = '<table style="width:100%;min-width:850px;border-collapse:collapse;font-size:12px;"><thead><tr>';
+                columns.forEach(function (column) { html += '<th style="padding:6px;text-align:left;">' + esc(column[1]) + '</th>'; });
+                html += '</tr></thead><tbody>';
+                visible.slice(0,500).forEach(function (row) { html += '<tr>'; columns.forEach(function (column) { html += '<td style="padding:6px;vertical-align:top;border-bottom:1px solid #d9e4ec;">' + esc(row[column[0]] || "-") + '</td>'; }); html += '</tr>'; });
+                output.innerHTML = visible.length ? html + '</tbody></table>' : '<p>No matching SMS numbers.</p>';
+                status.textContent = report.status + " | " + report.count + " total | " + visible.length + " matching | Preview " + Math.min(500,visible.length) + " | " + report.fetched_at;
+                coverage.textContent = report.scope + (report.failures.length ? " | Failures: " + report.failures.join("; ") : "");
+                coverage.style.color = report.failures.length ? "#a32c2c" : "#425b6d";
+                download.disabled = false;
+              }
+              window.extractAllSMSNumbers = async function (event) {
+                if (event) event.preventDefault();
+                if (button.disabled) return;
+                button.disabled = true;
+                status.textContent = "Extracting Twilio accounts and all Aerialink pages...";
+                try {
+                  var response = await fetch("/sms/all-numbers/extract", {method:"POST",credentials:"same-origin"});
+                  var data = await response.json();
+                  if (!response.ok || !data.ok) throw new Error((data.error || "Extraction failed.") + (data.failures ? " " + data.failures.join("; ") : ""));
+                  report = data;
+                  render();
+                } catch (error) { status.textContent = "Extraction failed: " + error.message + (report ? " | Previous extract remains available in this tab." : ""); }
+                finally { button.disabled = false; }
+              };
+              filter.addEventListener("input",render);
+              download.addEventListener("click",function () {
+                if (!report) return;
+                function cell(value) { var text = String(value == null ? "" : value); if (/^[=+@-]/.test(text.trimStart())) text = "'" + text; return '"' + text.replace(/"/g,'""') + '"'; }
+                var lines = [columns.map(function (column) { return column[1]; }).concat(["Extract Status","Extracted At","Coverage","Failures"]).map(cell).join(",")];
+                visible.forEach(function (row) { lines.push(columns.map(function (column) { return row[column[0]]; }).concat([report.status,report.fetched_at,report.scope,report.failures.join("; ")]).map(cell).join(",")); });
+                var url = URL.createObjectURL(new Blob([String.fromCharCode(65279) + lines.join(String.fromCharCode(13,10))],{type:"text/csv;charset=utf-8"}));
+                var link = document.createElement("a"); link.href = url; link.download = "all_sms_numbers.csv"; document.body.appendChild(link); link.click(); link.remove(); window.setTimeout(function () { URL.revokeObjectURL(url); },1000);
+              });
             })();
           </script>
         </section>
