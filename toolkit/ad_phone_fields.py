@@ -39,7 +39,7 @@ def _format_phone_dashes(phone):
     if len(digits) == 11 and digits.startswith("1"):
         digits = digits[1:]
     if len(digits) == 10:
-        return f"+1({digits[:3]}){digits[3:]}"
+        return f"+1 ({digits[:3]}) {digits[3:]}"
     return str(phone or "").strip()
 
 
