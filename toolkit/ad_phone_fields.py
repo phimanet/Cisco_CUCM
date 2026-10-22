@@ -36,8 +36,10 @@ def _normalize_samaccountname(value):
 
 def _format_phone_dashes(phone):
     digits = "".join(ch for ch in str(phone or "") if ch.isdigit())
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
     if len(digits) == 10:
-        return f"{digits[:3]}-{digits[3:6]}-{digits[6:]}"
+        return f"+1-{digits[:3]}-{digits[3:6]}-{digits[6:]}"
     return str(phone or "").strip()
 
 
