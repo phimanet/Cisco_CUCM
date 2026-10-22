@@ -9,18 +9,19 @@ from toolkit import update_ad_phone_only as standalone
 
 class ADPhoneFormatTests(unittest.TestCase):
     def test_business_number_format_and_idempotence(self):
-        for value in ("8585236648", "858-523-6648", "(858) 523-6648", "18585236648", "+1-858-523-6648"):
-            with self.subTest(value=value):
-                self.assertEqual(fields._format_phone_dashes(value), "+1-858-523-6648")
+        for value in ("8585236648", "858-523-6648", "(858) 523-6648", "18585236648", "+1-858-523-6648", "+1(858)5236648"):
+            self.assertEqual(fields._format_phone_dashes(value), "+1(858)5236648", value)
+        self.assertEqual(fields._format_phone_dashes("6194104147"), "+1(619)4104147")
 
     def test_other_lengths_and_ipphone_format_are_unchanged(self):
         self.assertEqual(fields._format_phone_dashes("6648"), "6648")
         self.assertEqual(fields._format_phone_dashes(""), "")
         self.assertEqual(fields._format_phone_plain("858-523-6648"), "8585236648")
         self.assertEqual(fields._format_phone_plain("+1-858-523-6648"), "18585236648")
+        self.assertEqual(fields._format_phone_plain("+1(619)4104147"), "16194104147")
 
     def test_all_update_transports_use_country_code_only_for_telephone(self):
-        expected = {"telephoneNumber": "+1-858-523-6648", "ipPhone": "8585236648"}
+        expected = {"telephoneNumber": "+1(858)5236648", "ipPhone": "8585236648"}
         for transport in ("powershell", "ldap", "ldapmodify"):
             with self.subTest(transport=transport), \
                     patch.object(fields, "_lookup_ad_user", return_value=({"found": True, "distinguishedName": "CN=Test"}, "")), \
@@ -45,7 +46,7 @@ class ADPhoneFormatTests(unittest.TestCase):
                 data, filename = runner(identity, "8585236648")
                 rows = list(csv.reader(io.StringIO(data.decode("utf-8"))))
                 self.assertEqual(rows[-1][1], "Success")
-                self.assertIn("telephoneNumber=+1-858-523-6648", rows[-1][2])
+                self.assertIn("telephoneNumber=+1(858)5236648", rows[-1][2])
                 self.assertEqual(powershell.call_args.args[1]["ipPhone"], "8585236648")
 
     def test_blank_standalone_value_still_clears_both_fields(self):

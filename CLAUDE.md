@@ -116,7 +116,7 @@ Priority keys:
 ## Conversation Notes
 
 ### 2026-10-22 (AD Business Telephone Country-Code Format, LAB validation pending)
-- Shared AD phone updater now formats North American `telephoneNumber` as `+1-xxx-xxx-xxxx` for new Jabber creation on Pages 1/2 and standalone username/email AD phone updates. Ten-digit inputs and eleven-digit inputs beginning with `1` normalize to that telephone format; `ipPhone` retains its existing digits-only behavior. Clearing fields and other-length input behavior are unchanged. Other callers of the same AD updater inherit the telephone formatting; no existing AD records are automatically rewritten.
+- Operator revised the requested format from the earlier dashed country-code format to `+1(XXX)XXXXXXX`, for example `+1(619)4104147`. Shared AD phone updater uses this North American `telephoneNumber` format for new Jabber creation on Pages 1/2 and standalone username/email AD phone updates. Ten-digit inputs and eleven-digit inputs beginning with `1` normalize to this format, including already-formatted values; `ipPhone` retains its existing digits-only behavior. Clearing fields and other-length input behavior are unchanged. Other callers of the same AD updater inherit the telephone formatting; no existing AD records are automatically rewritten.
 - Five focused tests pass for formatting/idempotence, unchanged ipPhone, PowerShell/ldap3/ldapmodify payloads, standalone username/email CSV output and blank-input clearing. Touched Python files have no reported diagnostics. No live AD writes were performed; validate in LAB before PROD. No page templates or CUCM/Unity provisioning behavior changed.
 
 ### 2026-10-22 (Combined SMS Number Extract, LAB validation pending)
