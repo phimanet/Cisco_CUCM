@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-10-22
+- Date: 2026-10-26
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -19,6 +19,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [x] Centralize environment-specific values — AD LDAP config deployed via `/opt/cucm-web/.env` + systemd EnvironmentFile on both LAB and PROD.
 - [ ] Add lightweight health check and structured error responses for web routes.
 - [ ] Add minimal regression tests for toolkit functions that generate CSV outputs.
+- [ ] [P1][In Progress] Validate `DANGER - Bulk Delete Cisco Jabber Process` in LAB with approved cleanup identities before PROD use; confirm full separation outcomes and actual license release.
 - [ ] [P2][In Progress] Unity Connection User Extract replaces Number Reference Search; validate selected-user lookup by name/email/primary extension and returned number fields in LAB, starting with operator example Phimane Tiaokhiao / 8585236648. Standalone System Call Handler extraction is deferred until the user-mailbox fields are verified.
 
 ## Code Improvement Backlog
@@ -114,6 +115,12 @@ Priority keys:
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
+
+### 2026-10-26 (DANGER - Bulk Delete Cisco Jabber Process, LAB validation pending)
+- Added isolated Project Functions menu/panel with the operator's exact name. Accepts 1-5,000 email entries, deduplicates case-insensitively, uses paged exact-email CUCM SQL in batches of 100, refuses ambiguous/missing matches, revalidates identity before each mutation and continues after individual/batch lookup or separation failures. Administrator authentication and explicit `DELETE` confirmation are required.
+- Reuses the unchanged full Option 10 separation pipeline, including Unity, AD, Unified Messaging, eligible Teams/LS DID and translation-pattern cleanup, and the current permanent-DN deletion toggle. No CUCM End User/AD account deletion. Original device names survive association clearing for post-delete verification; remaining CSF/BOT/TCT/TAB or owner-only devices, failed verification and step failures/warnings are review outcomes. The shared deletion pipeline still targets associated CSF/BOT/TCT only; it is not expanded to TAB/owner-only deletion. `Jabber Deleted` and full-process reported status remain separate; this is not independent verification of every downstream system or license accounting.
+- Background processing is browser-independent in the existing single-process portal runtime. Each job/item/step result is atomically saved with fsync under external runtime `bulk_separation`; passwords and raw failure responses are not saved. Retains completed/cancelled jobs for 180 days; unfinished work is never ordinarily pruned. Restart requires explicit Resume with current administrator credentials; interrupted mutations become Needs Review and are never automatically replayed. Pause/cancel finish the current person first. Normal pulls/restarts preserve data, not runtime deletion or older VM/data restores; code rollback cannot recover deleted voicemail/configuration.
+- Twenty focused tests pass for batching, failure continuation, identity changes, authentication, persistence/reload, dead-worker/restart handling, pause/cancel, failed writes, corruption, retention and full 601-entry formula-safe CSV. Full rendered page: all five scripts parse; existing/new navigation, confirmation, mocked submit/pause/reload/resume/cancel, CSV link, escaped results and 390px control fit pass. Full ASGI, actual browser CSV download, live schema/permissions/deletions and license release remain unverified; no live writes or PROD rollout performed. Existing PERFMON diagnostics/embedded-JavaScript warnings are unchanged.
 
 ### 2026-10-22 (AD Business Telephone Country-Code Format, LAB validation pending)
 - Operator's latest required format is `+1 (XXX) XXXXXXX`, for example `+1 (619) 4104147`, with a space after `+1` and after the closing parenthesis, and no surrounding quotes. This supersedes the earlier dashed and unspaced formats. Shared AD phone updater uses this North American `telephoneNumber` format for new Jabber creation on Pages 1/2 and standalone username/email AD phone updates. Ten-digit inputs and eleven-digit inputs beginning with `1` normalize to this format, including already-formatted values; `ipPhone` retains its existing digits-only behavior. Clearing fields and other-length input behavior are unchanged. Other callers of the same AD updater inherit the telephone formatting; no existing AD records are automatically rewritten.

@@ -89,6 +89,7 @@ from toolkit import ms_graph_calling
 from toolkit import twilio_recent_logs
 from toolkit import twilio_all_recent_logs
 from toolkit import sms_inventory
+from toolkit import bulk_separation
 from toolkit import webex_admin
 from toolkit import unity_number_search
 from toolkit import unity_sql_lookup
@@ -220,6 +221,10 @@ def _app_startup_tasks():
   _startup_background_services()
 
 def _startup_background_services():
+  try:
+    BULK_SEPARATION_QUEUE.recover()
+  except Exception:
+    logger.error("Bulk separation recovery refused saved state; inspect runtime storage.")
   _greenlight_load_state()
   _unity_user_extract_load_state()
   _unity_user_extract_start_worker()
@@ -946,6 +951,7 @@ _genesys_queue_data_root = (os.getenv("GENESYS_AD_WEBRTC_QUEUE_DATA_DIR", "") or
 if not _genesys_queue_data_root:
   _genesys_queue_data_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data") if os.name == "nt" else "/opt/cucm-web-data"
 GENESYS_AD_WEBRTC_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue.json")
+BULK_SEPARATION_QUEUE = bulk_separation.BulkSeparationQueue(os.path.join(_genesys_queue_data_root, "bulk_separation"))
 GENESYS_AD_WEBRTC_QUEUE_HISTORY_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue_history.json")
 GENESYS_CALL_ROUTES_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_call_routes_report.json")
 GENESYS_CALL_ROUTES_REPORT_LOCK = threading.Lock()
@@ -41234,12 +41240,97 @@ __GREENLIGHT_ADMIN_CARD__
             <button type="button" class="portal-nav-btn" data-panel="translationlookup">Translation Pattern Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="csfinventory">Jabber CSF License Inventory</button>
             <button type="button" class="portal-nav-btn" data-panel="jabbercleanup">Jabber Cleanup</button>
+            <button type="button" class="portal-nav-btn" data-panel="bulkseparation" style="color:#a41424;">DANGER - Bulk Delete Cisco Jabber Process</button>
             <a class="portal-nav-link" href="/menu?panel=build">Open Build User (Page 1)</a>
             <a class="portal-nav-link" href="/menu?panel=offboard">Open Separate Employee (Page 1)</a>
           </div>
         </aside>
 
         <section class="portal-main">
+          <section class="tool-panel" data-panel="bulkseparation">
+            <h3 style="color:#a41424;">DANGER - Bulk Delete Cisco Jabber Process</h3>
+            <p><strong>Destructive full separation:</strong> removes associated CSF/BOT/TCT devices and Unity voicemail, clears AD phone fields and Unified Messaging membership, releases eligible translation patterns/LS DIDs and removes eligible Teams telephony. The current permanent-DN deletion setting also applies. CUCM End Users and AD accounts are not deleted.</p>
+            <p><strong>No automatic undo.</strong> Deleted voicemail and configuration require their own recovery procedures. Interrupted entries require manual review, not automatic retry. Remaining TAB or owner-only Jabber devices are reported for review.</p>
+            <p>Saved jobs and step results: 180 days after completion/cancellation; unfinished jobs are retained. Runtime-data deletion or older VM/data restores can remove history.</p>
+            <label for="bulk-separation-emails">Employee emails (1-5,000; newline, comma or semicolon separated)</label>
+            <textarea id="bulk-separation-emails" style="width:100%;min-height:110px;box-sizing:border-box;"></textarea>
+            <div class="search-filter-row" style="flex-wrap:wrap;">
+              <label for="bulk-separation-confirm">Type DELETE to authorize full separation</label>
+              <input id="bulk-separation-confirm" autocomplete="off" style="max-width:130px;" />
+              <button type="button" style="background:#a41424;color:white;" onclick="event.preventDefault();window.runBulkSeparation ? window.runBulkSeparation('submit') : document.getElementById('bulk-separation-status').textContent='JavaScript unavailable. Reload the page.';">Start Bulk Separation</button>
+              <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('pause');">Pause</button>
+              <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('resume');">Resume Pending</button>
+              <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('cancel');">Cancel Pending</button>
+            </div>
+            <div class="search-filter-row" style="flex-wrap:wrap;">
+              <select id="bulk-separation-history" aria-label="Saved bulk separation jobs" style="max-width:100%;min-width:0;"></select>
+              <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('load');">View Saved Job</button>
+              <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('history');">Refresh History</button>
+              <a id="bulk-separation-download" hidden>Download Full Results CSV</a>
+            </div>
+            <p id="bulk-separation-status" role="status">No bulk job loaded.</p>
+            <div style="overflow-x:auto;"><table style="width:100%;font-size:13px;"><thead><tr><th>Email</th><th>User ID</th><th>Status</th><th>Jabber Deleted</th><th>Full Process</th><th>Details</th></tr></thead><tbody id="bulk-separation-results"></tbody></table></div>
+            <script>
+            (function(){
+              const status = document.getElementById('bulk-separation-status');
+              const history = document.getElementById('bulk-separation-history');
+              let jobId = '', timer = null, busy = false;
+              async function readResponse(response) {
+                const data = await response.json();
+                if (!response.ok || !data.ok) throw new Error(data.error || 'Bulk request failed.');
+                return data;
+              }
+              function render(job) {
+                jobId = job.id;
+                status.textContent = job.host + ' | ' + job.status + ' | ' + job.finished + '/' + job.total + ' processed | Jabber removed: ' + job.deleted_count + ' | Review/failure: ' + job.review_count + '. Showing up to 500 entries; CSV contains all entries and step output. Pause/cancel take effect after the current person finishes.';
+                if (job.error) status.textContent += ' ' + job.error;
+                const body = document.getElementById('bulk-separation-results');
+                body.replaceChildren();
+                job.rows.forEach(function(row) {
+                  const tr = document.createElement('tr');
+                  ['email','userid','status','deleted','process','detail'].forEach(function(key) {
+                    const td = document.createElement('td'); td.textContent = row[key] || ''; td.style.overflowWrap = 'anywhere'; tr.appendChild(td);
+                  });
+                  body.appendChild(tr);
+                });
+                const download = document.getElementById('bulk-separation-download');
+                download.href = '/project-greenlight/bulk-separation/csv?job_id=' + encodeURIComponent(jobId); download.hidden = false;
+                clearTimeout(timer);
+                if (job.status === 'running' || job.status === 'queued') timer = setTimeout(function(){window.runBulkSeparation('poll');}, 3000);
+              }
+              async function loadHistory() {
+                const data = await readResponse(await fetch('/project-greenlight/bulk-separation', {cache:'no-store'}));
+                history.replaceChildren();
+                data.jobs.forEach(function(job) { const option = document.createElement('option'); option.value = job.id; option.textContent = job.created_at.slice(0,19) + ' | ' + job.status + ' | ' + job.total + ' emails'; history.appendChild(option); });
+                if (jobId) history.value = jobId;
+                if (!jobId && data.jobs.length) { history.selectedIndex = 0; await loadJob(history.value); }
+              }
+              async function loadJob(id) {
+                if (!id) throw new Error('Select a saved job first.');
+                const data = await readResponse(await fetch('/project-greenlight/bulk-separation?job_id=' + encodeURIComponent(id), {cache:'no-store'})); render(data.job);
+              }
+              window.runBulkSeparation = async function(action) {
+                if (busy) return;
+                busy = true;
+                try {
+                  if (action === 'history') await loadHistory();
+                  else if (action === 'load' || action === 'poll') await loadJob(action === 'load' ? history.value : jobId);
+                  else {
+                    const confirmation = document.getElementById('bulk-separation-confirm');
+                    if ((action === 'submit' || action === 'resume') && confirmation.value !== 'DELETE') throw new Error('Type DELETE to authorize full separation.');
+                    if (action !== 'submit' && !jobId) throw new Error('Load a saved job first.');
+                    if (action === 'submit' && !window.confirm('Run FULL separation for these employees on the selected CUCM environment? Voicemail deletion cannot be undone here.')) return;
+                    const form = new FormData(); form.set('action', action); form.set('job_id', jobId); form.set('confirmation', confirmation.value); form.set('emails_text', document.getElementById('bulk-separation-emails').value);
+                    const data = await readResponse(await fetch('/project-greenlight/bulk-separation', {method:'POST', body:form}));
+                    render(data.job); confirmation.value = ''; await loadHistory();
+                  }
+                } catch(error) { status.textContent = error.message; }
+                finally { busy = false; }
+              };
+              window.runBulkSeparation('history');
+            })();
+            </script>
+          </section>
           <section class="tool-panel active" data-panel="personlookup">
             <h3>Person Lookup</h3>
             <form id="greenlight-person-form" style="margin-bottom:12px;">
@@ -66466,6 +66557,151 @@ def decommission_user_csf_voicemail_route(
         })
 
     return _render_job_result("Offboard User - Delete all Jabber and Voicemail Box (Option 10)", data, filename)
+
+
+def _bulk_separation_resolve(host, username, password, emails):
+  identities = {email: [] for email in emails}
+  for start in range(0, len(emails), 100):
+    batch = emails[start:start + 100]
+    literals = ",".join("'" + _sql_escape_literal(email) + "'" for email in batch)
+    seen = set()
+    try:
+      for offset in range(0, 10000, 200):
+        rows = _axl_execute_sql_rows(host, username, password,
+          f"SELECT SKIP {offset} FIRST 200 userid, mailid FROM enduser WHERE LOWER(mailid) IN ({literals}) ORDER BY userid")
+        for row in rows:
+          email = str(row.get("mailid", "")).strip().lower()
+          userid = str(row.get("userid", "")).strip()
+          if email not in batch or not userid or (email, userid) in seen:
+            raise RuntimeError("Invalid or repeated CUCM email lookup results.")
+          seen.add((email, userid))
+          identities[email].append({"userid": userid})
+        if len(rows) < 200:
+          break
+      else:
+        raise RuntimeError("CUCM email lookup exceeded the safe pagination limit.")
+    except Exception:
+      for email in batch:
+        identities[email] = None
+  return identities
+
+
+def _bulk_separation_devices(host, username, password, userid, previous=None):
+  escaped = _sql_escape_literal(userid)
+  prior_clause = ""
+  if previous:
+    prior_clause = " OR d.name IN (" + ",".join("'" + _sql_escape_literal(name) + "'" for name in previous) + ")"
+  rows = _axl_execute_sql_rows(host, username, password,
+    "SELECT DISTINCT d.name FROM device d LEFT JOIN enduserdevicemap m ON m.fkdevice=d.pkid "
+    "LEFT JOIN enduser u ON u.pkid=m.fkenduser LEFT JOIN enduser owneruser ON owneruser.pkid=d.fkenduser "
+    f"WHERE (u.userid='{escaped}' OR owneruser.userid='{escaped}'{prior_clause}) "
+    "AND (UPPER(d.name) LIKE 'CSF%' OR UPPER(d.name) LIKE 'TCT%' OR UPPER(d.name) LIKE 'BOT%' OR UPPER(d.name) LIKE 'TAB%')")
+  if any(not row.get("name") for row in rows):
+    raise RuntimeError("CUCM device verification returned invalid rows.")
+  return [row["name"] for row in rows]
+
+
+def _bulk_separation_execute(host, username, password, operator, email, userid):
+  matches = _bulk_separation_resolve(host, username, password, [email])[email]
+  if matches != [{"userid": userid}]:
+    return {"status": "lookup_failed", "deleted": "Not attempted", "process": "Not started", "detail": "Email identity changed before execution; no changes made."}
+  previous = _bulk_separation_devices(host, username, password, userid)
+  data, _filename = _run_full_separation(host, username, password, userid, True)
+  output = _to_bytes(data).decode("utf-8-sig", errors="replace").replace(password, "[redacted]")
+  steps = list(csv.reader(io.StringIO(output)))
+  problems = [row[0] for row in steps if len(row) >= 2 and row[1].strip().lower() in {"failed", "error", "warning"}]
+  sanitized = io.StringIO()
+  writer = csv.writer(sanitized)
+  for row in steps:
+    if len(row) >= 2 and row[1].strip().lower() in {"failed", "error", "warning"}:
+      writer.writerow([row[0], row[1], "Requires manual review; raw provider failure response omitted."])
+    else:
+      writer.writerow(row)
+  output = sanitized.getvalue()
+  if not any(len(row) >= 2 and row[:2] == ["Lookup User", "Success"] for row in steps):
+    problems.append("Missing successful user lookup")
+  try:
+    remaining = _bulk_separation_devices(host, username, password, userid, previous)
+    deleted = "No" if remaining else ("Yes" if previous else "Already absent")
+    detail = "Remaining Jabber devices: " + ", ".join(remaining) if remaining else "No captured or currently associated/owned Jabber devices remain."
+  except Exception:
+    remaining = None
+    deleted = "Unknown"
+    detail = "Post-separation device verification failed; verify manually."
+  process = "Needs review" if problems else "Completed (reported)"
+  if problems:
+    detail += " Failed/warning steps: " + ", ".join(problems)
+  status = "deleted" if deleted == "Yes" and not problems else "already_absent" if deleted == "Already absent" and not problems else "needs_review"
+  _append_audit_event(action="bulk_separation_result", cucm_host=host, operator=operator, target=f"email={email};userid={userid};status={status};jabber_deleted={deleted}", account=userid, output_filename="", inline_mode=True)
+  return {"status": status, "deleted": deleted, "process": process, "detail": detail, "output": output}
+
+
+def _bulk_separation_public(job):
+  rows = job["rows"]
+  return {**{key: value for key, value in job.items() if key != "rows"},
+    "total": len(rows), "finished": sum(row["status"] not in {"pending", "running"} for row in rows),
+    "deleted_count": sum(row.get("deleted") == "Yes" for row in rows),
+    "review_count": sum(row["status"] in {"failed", "needs_review", "lookup_failed"} for row in rows),
+    "rows": [{key: value for key, value in row.items() if key != "output"} for row in rows[:500]]}
+
+
+@app.get("/project-greenlight/bulk-separation")
+def bulk_separation_get_route(request: Request, job_id: str = ""):
+  try:
+    session, _operator = _require_admin_session(request)
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  host = str(session.get("cucm_host", "")).strip()
+  try:
+    if job_id:
+      return JSONResponse({"ok": True, "job": _bulk_separation_public(BULK_SEPARATION_QUEUE.get(job_id, host))}, headers={"Cache-Control": "no-store"})
+    jobs = BULK_SEPARATION_QUEUE.history(host)
+    return JSONResponse({"ok": True, "retention_days": 180, "jobs": [{key: value for key, value in _bulk_separation_public(job).items() if key != "rows"} for job in jobs]}, headers={"Cache-Control": "no-store"})
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Saved job unavailable. Check selected CUCM environment and runtime storage."}, status_code=409)
+
+
+@app.post("/project-greenlight/bulk-separation")
+def bulk_separation_post_route(request: Request, action: str = Form(""), job_id: str = Form(""), emails_text: str = Form(""), confirmation: str = Form("")):
+  try:
+    session, operator = _require_admin_session(request)
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  try:
+    host = str(session.get("cucm_host", "")).strip()
+    if not host:
+      raise ValueError("Select a CUCM environment first.")
+    if action in {"submit", "resume"}:
+      if confirmation != "DELETE":
+        raise ValueError("Type DELETE to authorize the full separation process.")
+      host, username, password = _resolve_cucm_credentials(request, "", "", "")
+      job = BULK_SEPARATION_QUEUE.submit(host, operator, emails_text) if action == "submit" else BULK_SEPARATION_QUEUE.get(job_id, host)
+      _append_audit_event(action="bulk_separation_" + action, cucm_host=host, operator=operator, target=f"job={job['id']};entries={len(job['rows'])}", output_filename="", inline_mode=True)
+      BULK_SEPARATION_QUEUE.start(job["id"], host,
+        lambda emails: _bulk_separation_resolve(host, username, password, emails),
+        lambda email, userid: _bulk_separation_execute(host, username, password, operator, email, userid))
+      job = BULK_SEPARATION_QUEUE.get(job["id"], host)
+    else:
+      job = BULK_SEPARATION_QUEUE.control(job_id, host, action)
+      _append_audit_event(action="bulk_separation_" + action, cucm_host=host, operator=operator, target=f"job={job_id}", output_filename="", inline_mode=True)
+    return JSONResponse({"ok": True, "job": _bulk_separation_public(job)}, headers={"Cache-Control": "no-store"})
+  except ValueError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Bulk action failed. Check saved history and current login before resuming; no automatic retry."}, status_code=409)
+
+
+@app.get("/project-greenlight/bulk-separation/csv")
+def bulk_separation_csv_route(request: Request, job_id: str):
+  try:
+    session, _operator = _require_admin_session(request)
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  try:
+    job = BULK_SEPARATION_QUEUE.get(job_id, str(session.get("cucm_host", "")).strip())
+    return Response(content=bulk_separation.csv_bytes(job), media_type="text/csv", headers={"Cache-Control": "no-store", "Content-Disposition": f"attachment; filename=bulk_separation_{job['id']}.csv"})
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Saved job unavailable for this CUCM environment."}, status_code=409)
 
 
 def _run_full_separation(cucm_host: str, cucm_user: str, cucm_pass: str, clean_target_user: str, inline: bool = True) -> tuple[bytes, str]:
