@@ -41283,7 +41283,7 @@ __GREENLIGHT_ADMIN_CARD__
               <span id="bulk-separation-page" style="font-size:12px;"></span>
               <button type="button" id="bulk-separation-next" aria-label="Next review page">Next</button>
             </div>
-            <div style="overflow:auto;max-height:560px;"><table style="width:100%;min-width:1100px;font-size:13px;"><thead><tr><th>Separate</th><th>Employee</th><th>Extension / Partition</th><th>Devices / Registration</th><th>Status</th><th>Jabber Deleted</th><th>Full Process</th><th>Details</th></tr></thead><tbody id="bulk-separation-results"></tbody></table></div>
+            <div style="overflow:auto;max-height:560px;"><table style="width:100%;min-width:1230px;font-size:13px;"><thead><tr><th>Separate</th><th>Employee</th><th>Extension / Partition</th><th>Translation Pattern (Exact Extension)</th><th>Devices / Registration</th><th>Status</th><th>Jabber Deleted</th><th>Full Process</th><th>Details</th></tr></thead><tbody id="bulk-separation-results"></tbody></table></div>
             <script>
             (function(){
               const status = document.getElementById('bulk-separation-status');
@@ -41322,12 +41322,15 @@ __GREENLIGHT_ADMIN_CARD__
                   const box = document.createElement('input'); box.type = 'checkbox'; box.checked = !!row.selected; box.dataset.eligible = String(!!editable(row)); box.setAttribute('aria-label', 'Separate ' + row.email); box.style.cssText = 'width:16px;min-width:16px;height:16px;margin:0;';
                   box.addEventListener('change', function(){row.selected = box.checked; window.runBulkSeparation('select');});
                   selectCell.appendChild(box); tr.appendChild(selectCell);
-                  const employee = [row.name || 'Name unavailable', row.email, row.userid || ''].filter(Boolean).join(String.fromCharCode(10));
-                  const extensions = (row.extensions || []).map(function(line){return line.extension + ' / ' + (line.partition || '(no partition)');}).join(String.fromCharCode(10)) || 'Not returned';
-                  const devices = (row.devices || []).map(function(device){return device.device_name + ' | ' + (device.extension || '(no line)') + ' / ' + (device.partition || '(no partition)') + ' | ' + (device.registration || 'Unknown') + ' | ' + device.relationship;}).join(String.fromCharCode(10)) || (row.eligible ? 'No devices returned' : 'Lookup unavailable');
-                  [employee,extensions,devices,row.status,row.deleted,row.process,row.detail].forEach(function(value, index) {
+                  const pendingReview = viewJob.status === 'reviewing';
+                  const employee = [row.name || (pendingReview ? 'Resolving identity...' : 'Name unavailable'), row.email, row.userid || ''].filter(Boolean).join(String.fromCharCode(10));
+                  const extensions = (row.extensions || []).map(function(line){return line.extension + ' / ' + (line.partition || '(no partition)');}).join(String.fromCharCode(10)) || (pendingReview ? 'Pending review' : 'Not returned');
+                  const devices = (row.devices || []).map(function(device){return device.device_name + ' | ' + (device.extension || '(no line)') + ' / ' + (device.partition || '(no partition)') + ' | ' + (device.registration || 'Unknown') + ' | ' + device.relationship;}).join(String.fromCharCode(10)) || (pendingReview ? 'Pending review' : row.eligible ? 'No devices returned' : 'Lookup unavailable');
+                  const translation = row.translation_pattern || (pendingReview ? 'Pending review' : 'Not checked');
+                  [employee,extensions,translation,devices,row.status,row.deleted,row.process,row.detail].forEach(function(value, index) {
                     const td = document.createElement('td'); td.textContent = value || ''; td.style.cssText = 'overflow-wrap:anywhere;white-space:pre-line;vertical-align:top;padding:6px;'; tr.appendChild(td);
-                    if (index < 3) td.style.minWidth = [150,120,280][index] + 'px';
+                    if (index < 4) td.style.minWidth = [150,120,110,280][index] + 'px';
+                    if (index === 2) td.title = (row.translation_pattern_checks || []).map(function(check){return check.extension + ': ' + check.status;}).concat((row.translation_pattern_matches || []).map(function(match){return match.extension + ' / ' + (match.partition || '(no partition)');})).join(String.fromCharCode(10));
                   });
                   body.appendChild(tr);
                 });
@@ -41346,6 +41349,7 @@ __GREENLIGHT_ADMIN_CARD__
                 if (job.reviewed_at) status.textContent += ' | Review snapshot: ' + new Date(job.reviewed_at).toLocaleString();
                 if (job.rows.length < job.total) status.textContent += ' | Result preview: ' + job.rows.length + '/' + job.total + '; CSV contains all entries.';
                 if (job.error) status.textContent += ' | ' + job.error;
+                if (job.review_progress) status.textContent += ' | ' + job.review_progress;
                 drawRows();
                 const download = document.getElementById('bulk-separation-download');
                 download.href = '/project-greenlight/bulk-separation/csv?job_id=' + encodeURIComponent(jobId); download.hidden = false;
@@ -66628,27 +66632,50 @@ def decommission_user_csf_voicemail_route(
     return _render_job_result("Offboard User - Delete all Jabber and Voicemail Box (Option 10)", data, filename)
 
 
-def _bulk_separation_resolve(host, username, password, emails):
+def _bulk_separation_resolve(host, username, password, emails, progress=None):
   identities = {email: [] for email in emails}
   for start in range(0, len(emails), 100):
     batch = emails[start:start + 100]
-    literals = ",".join("'" + _sql_escape_literal(email) + "'" for email in batch)
-    seen = set()
     try:
+      if progress:
+        progress(f"Resolving LDAP email to username: {start + 1}-{start + len(batch)} of {len(emails)}")
+      lookup = lookup_ad_identities_by_email(batch, {"username": username, "password": password}, require_unique=True)
+      if not isinstance(lookup, dict) or not lookup.get("ok") or not isinstance(lookup.get("results"), list):
+        raise RuntimeError("LDAP identity lookup failed.")
+      by_email = {}
+      for record in lookup["results"]:
+        email = str(record.get("input_email", "")).strip().lower()
+        if email not in batch or email in by_email:
+          raise RuntimeError("Unexpected or duplicate LDAP identity result.")
+        by_email[email] = record
+      if set(by_email) != set(batch):
+        raise RuntimeError("LDAP identity lookup returned incomplete results.")
+      ldap_users = {}
+      for email, record in by_email.items():
+        sam = str(record.get("samAccountName", "")).strip()
+        if record.get("found") and not record.get("ambiguous") and sam:
+          ldap_users.setdefault(sam.lower(), []).append(email)
+      if not ldap_users:
+        continue
+      if progress:
+        progress(f"Verifying CUCM End Users by LDAP username: {start + 1}-{start + len(batch)} of {len(emails)}")
+      literals = ",".join("'" + _sql_escape_literal(userid) + "'" for userid in sorted(ldap_users))
+      seen = set()
       for offset in range(0, 10000, 200):
         rows = _axl_execute_sql_rows(host, username, password,
-          f"SELECT SKIP {offset} FIRST 200 userid, mailid FROM enduser WHERE LOWER(mailid) IN ({literals}) ORDER BY userid")
+          f"SELECT SKIP {offset} FIRST 200 userid FROM enduser WHERE LOWER(userid) IN ({literals}) ORDER BY userid")
         for row in rows:
-          email = str(row.get("mailid", "")).strip().lower()
           userid = str(row.get("userid", "")).strip()
-          if email not in batch or not userid or (email, userid) in seen:
-            raise RuntimeError("Invalid or repeated CUCM email lookup results.")
-          seen.add((email, userid))
-          identities[email].append({"userid": userid})
+          key = userid.lower()
+          if key not in ldap_users or not userid or userid in seen:
+            raise RuntimeError("Invalid or repeated CUCM username lookup results.")
+          seen.add(userid)
+          for email in ldap_users[key]:
+            identities[email].append({"userid": userid})
         if len(rows) < 200:
           break
       else:
-        raise RuntimeError("CUCM email lookup exceeded the safe pagination limit.")
+        raise RuntimeError("CUCM username lookup exceeded the safe pagination limit.")
     except Exception:
       for email in batch:
         identities[email] = None
@@ -66670,10 +66697,10 @@ def _bulk_separation_devices(host, username, password, userid, previous=None):
   return [row["name"] for row in rows]
 
 
-def _bulk_separation_preview(host, username, password, emails):
-  return bulk_separation.build_review(emails, _bulk_separation_resolve(host, username, password, emails),
+def _bulk_separation_preview(host, username, password, emails, progress=None):
+  return bulk_separation.build_review(emails, _bulk_separation_resolve(host, username, password, emails, progress),
     lambda sql: _axl_execute_sql_rows(host, username, password, sql),
-    lambda names: _lookup_jabber_registration_statuses(host, username, password, names, allow_phone_fallback=False))
+    lambda names: _lookup_jabber_registration_statuses(host, username, password, names, allow_phone_fallback=False), progress=progress)
 
 
 def _bulk_separation_execute(host, username, password, operator, email, userid, expected=None):
@@ -66754,7 +66781,8 @@ def bulk_separation_post_route(request: Request, action: str = Form(""), job_id:
     if action in {"submit", "review"}:
       host, username, password = _resolve_cucm_credentials(request, "", "", "")
       job = BULK_SEPARATION_QUEUE.submit(host, operator, emails_text) if action == "submit" else BULK_SEPARATION_QUEUE.get(job_id, host)
-      BULK_SEPARATION_QUEUE.review(job["id"], host, lambda emails: _bulk_separation_preview(host, username, password, emails))
+      BULK_SEPARATION_QUEUE.review(job["id"], host, lambda emails: _bulk_separation_preview(host, username, password, emails,
+        lambda stage, snapshots=None: BULK_SEPARATION_QUEUE.review_progress(job["id"], host, stage, snapshots)))
       job = BULK_SEPARATION_QUEUE.get(job["id"], host)
       _append_audit_event(action="bulk_separation_review", cucm_host=host, operator=operator, target=f"job={job['id']};entries={len(job['rows'])}", output_filename="", inline_mode=True)
     elif action == "select":

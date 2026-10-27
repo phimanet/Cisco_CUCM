@@ -2307,7 +2307,7 @@ def lookup_ad_identity_by_email(email, auth_context=None):
     return result
 
 
-def lookup_ad_identities_by_email(emails, auth_context=None):
+def lookup_ad_identities_by_email(emails, auth_context=None, *, require_unique=False):
     """Resolve exact AD email addresses in one LDAP query."""
     clean_emails = []
     seen = set()
@@ -2346,6 +2346,12 @@ def lookup_ad_identities_by_email(emails, auth_context=None):
             attrs = attrs or {}
             if lookup_error:
                 return {"ok": False, "error": lookup_error}
+            dns = attrs.get("dn", [])
+            if isinstance(dns, str):
+                dns = [dns]
+            if require_unique and len(dns) > 1:
+                results.append({"found": False, "ambiguous": True, "input_email": email, "samAccountName": ""})
+                continue
             sam = _first_attr_value(attrs, ["sAMAccountName", "samAccountName"])
             results.append({
                 "found": bool(sam), "input_email": email, "samAccountName": sam,
@@ -2367,10 +2373,14 @@ def lookup_ad_identities_by_email(emails, auth_context=None):
             search_scope=SUBTREE,
             attributes=attributes,
         )
+        if require_unique and int((conn.result or {}).get("result", -1)) != 0:
+            conn.unbind()
+            return {"ok": False, "error": "LDAP email query did not complete successfully; no identity can be authorized."}
     except Exception as exc:
         return {"ok": False, "error": f"AD email lookup failed: {exc}"}
 
     by_email = {}
+    ambiguous_aliases = set()
     for entry in conn.entries:
         def _val(attribute):
             return str(getattr(getattr(entry, attribute, None), "value", "") or "").strip()
@@ -2386,8 +2396,10 @@ def lookup_ad_identities_by_email(emails, auth_context=None):
             for value in (getattr(getattr(entry, "proxyAddresses", None), "values", []) or [])
             if str(value or "").lower().startswith("smtp:")
         )
-        for alias in aliases:
+        for alias in set(alias.lower() for alias in aliases if alias):
             if alias:
+                if alias.lower() in by_email:
+                    ambiguous_aliases.add(alias.lower())
                 by_email[alias.lower()] = identity
     try:
         conn.unbind()
@@ -2403,5 +2415,7 @@ def lookup_ad_identities_by_email(emails, auth_context=None):
         row.setdefault("firstName", "")
         row.setdefault("lastName", "")
         row.setdefault("mail", email)
+        if require_unique and email.lower() in ambiguous_aliases:
+            row.update(found=False, ambiguous=True, samAccountName="")
         results.append(row)
     return {"ok": True, "results": results, "source": "ldap"}

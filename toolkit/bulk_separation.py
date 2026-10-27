@@ -30,13 +30,14 @@ def parse_emails(text):
 def csv_bytes(job):
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Email", "User ID", "Status", "Jabber Deleted", "Full Process", "Details", "Step Output", "CUCM Host", "Job ID", "Name", "Selected for Separation", "Extensions / Partitions", "Devices / Registration", "Registration Checked At"])
+    writer.writerow(["Email", "User ID", "Status", "Jabber Deleted", "Full Process", "Details", "Step Output", "CUCM Host", "Job ID", "Name", "Selected for Separation", "Extensions / Partitions", "Devices / Registration", "Registration Checked At", "Extension Is Translation Pattern", "Translation Pattern Matches", "Translation Pattern Checked At"])
     for row in job["rows"]:
         values = [row.get(key, "") for key in ("email", "userid", "status", "deleted", "process", "detail", "output")]
         values.extend([job["host"], job["id"]])
         values.extend([row.get("name", ""), row.get("selected", ""),
             "; ".join(line["extension"] + "/" + line["partition"] for line in row.get("extensions", [])),
             "; ".join(line["device_name"] + " | " + line["extension"] + "/" + line["partition"] + " | " + line.get("registration", "Unknown") + " | " + line["relationship"] for line in row.get("devices", [])), row.get("registration_checked_at", "")])
+        values.extend([row.get("translation_pattern", "Not checked"), "; ".join(line["extension"] + "/" + line["partition"] for line in row.get("translation_pattern_matches", [])), row.get("translation_pattern_checked_at", "")])
         writer.writerow(["'" + str(value) if str(value).lstrip().startswith(("=", "+", "-", "@")) else value for value in values])
     return output.getvalue().encode("utf-8-sig")
 
@@ -44,7 +45,7 @@ def csv_bytes(job):
 def fresh_build_csv_bytes(job):
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Name", "Email", "User ID", "Previous Jabber Devices (Reference Only)", "Previous Extensions / Partitions (Reference Only)", "Job Outcome", "Jabber Deleted", "Full Process", "Selected for Separation", "Job ID", "CUCM Host", "Review Details Available", "Fresh Build Note"])
+    writer.writerow(["Name", "Email", "User ID", "Previous Jabber Devices (Reference Only)", "Previous Extensions / Partitions (Reference Only)", "Job Outcome", "Jabber Deleted", "Full Process", "Selected for Separation", "Job ID", "CUCM Host", "Review Details Available", "Fresh Build Note", "Extension Is Translation Pattern", "Translation Pattern Matches", "Translation Pattern Checked At"])
     for row in job["rows"]:
         devices = sorted({line["device_name"] for line in row.get("target_snapshot", []) if line["device_name"].upper().startswith(("CSF", "TCT", "BOT", "TAB"))})
         has_review = "target_snapshot" in row and "extensions" in row
@@ -53,6 +54,7 @@ def fresh_build_csv_bytes(job):
             row["status"], row.get("deleted", "Not recorded"), row.get("process", "Not recorded"), row.get("selected", "Not recorded"),
             job["id"], job["host"], "Yes" if has_review else "No - older job did not capture review details",
             "Fresh build using current approved templates and current identity/number-availability checks; not a configuration or voicemail restore. Confirm the outcome before rebuilding; kept/failed/unknown entries may still have resources."]
+        values.extend([row.get("translation_pattern", "Not checked"), "; ".join(line["extension"] + "/" + line["partition"] for line in row.get("translation_pattern_matches", [])), row.get("translation_pattern_checked_at", "")])
         writer.writerow(["'" + str(value) if str(value).lstrip().startswith(("=", "+", "-", "@")) else value for value in values])
     return output.getvalue().encode("utf-8-sig")
 
@@ -119,11 +121,13 @@ def target_inventory(userids, read_sql):
     return people
 
 
-def build_review(emails, identities, read_sql, registrations):
+def build_review(emails, identities, read_sql, registrations, progress=None):
     snapshots = {}
     people = {}
     for start in range(0, len(emails), 100):
         batch = emails[start:start + 100]
+        if progress:
+            progress(f"Reading CUCM End User extensions/devices: {start + 1}-{start + len(batch)} of {len(emails)}")
         valid = {email: identities.get(email) for email in batch if identities.get(email) and len(identities[email]) == 1}
         try:
             people.update(target_inventory(list(dict.fromkeys(matches[0]["userid"] for matches in valid.values())), read_sql))
@@ -135,11 +139,13 @@ def build_review(emails, identities, read_sql, registrations):
             for email in valid:
                 snapshots[email] = {"eligible": False, "detail": "CUCM user/device inventory failed; excluded from separation."}
         for email in batch:
-            snapshots.setdefault(email, {"eligible": False, "detail": "Email lookup failed or no unique exact CUCM match; excluded from separation."})
+            snapshots.setdefault(email, {"eligible": False, "detail": "LDAP email-to-username / CUCM End User lookup failed or did not return one verified identity; excluded from separation."})
     by_extension = {}
     numbers = sorted({line["extension"] for person in people.values() for line in person["extensions"]})
     for start in range(0, len(numbers), 100):
         batch = numbers[start:start + 100]
+        if progress:
+            progress(f"Finding devices sharing extension digits: {start + 1}-{start + len(batch)} of {len(numbers)}")
         try:
             body = (
                 "DISTINCT d.name AS device_name, n.dnorpattern AS extension, r.name AS partition "
@@ -165,7 +171,47 @@ def build_review(emails, identities, read_sql, registrations):
             for line in by_extension.get(extension["extension"], []):
                 devices.setdefault((line["device_name"], line["extension"], line["partition"]), dict(line))
         snapshot["devices"] = sorted(devices.values(), key=lambda line: (line["extension"], line["partition"], line["device_name"]))
+    translation_matches = {}
+    failed_translation_checks = set()
+    for start in range(0, len(numbers), 100):
+        batch = numbers[start:start + 100]
+        if progress:
+            progress(f"Checking exact-extension Translation Patterns: {start + 1}-{start + len(batch)} of {len(numbers)}")
+        try:
+            body = (
+                "DISTINCT n.dnorpattern AS extension, r.name AS partition FROM numplan n "
+                "LEFT JOIN routepartition r ON r.pkid=n.fkroutepartition "
+                f"WHERE n.tkpatternusage IN (3,15) AND n.dnorpattern IN ({_sql_values(batch)}) ORDER BY n.dnorpattern, r.name"
+            )
+            for record in _paged_rows(read_sql, body):
+                extension = str(record.get("extension") or "")
+                if extension not in batch:
+                    raise ValueError("Invalid translation pattern inventory response.")
+                translation_matches.setdefault(extension, []).append({"extension": extension, "partition": str(record.get("partition") or "")})
+        except Exception:
+            failed_translation_checks.update(batch)
+    translation_checked_at = now()
+    for snapshot in snapshots.values():
+        extensions = sorted({line["extension"] for line in snapshot.get("extensions", [])})
+        snapshot["translation_pattern_checks"] = [{"extension": extension, "status": "Lookup Failed" if extension in failed_translation_checks else "Yes" if translation_matches.get(extension) else "No"} for extension in extensions]
+        snapshot["translation_pattern_matches"] = [line for extension in extensions if extension not in failed_translation_checks for line in translation_matches.get(extension, [])]
+        answers = {check["status"] for check in snapshot["translation_pattern_checks"]}
+        snapshot["translation_pattern"] = "Yes" if "Yes" in answers else "Lookup Failed" if "Lookup Failed" in answers else "No" if answers else "Not checked"
+        snapshot["translation_pattern_checked_at"] = translation_checked_at
+    seen_users = {}
+    for email, snapshot in snapshots.items():
+        userid = str(snapshot.get("userid") or "").lower()
+        if userid and snapshot.get("eligible"):
+            if userid in seen_users:
+                snapshot.update(eligible=False, detail=f"Duplicate verified employee; already represented by {seen_users[userid]}. No duplicate separation will run.")
+            else:
+                seen_users[userid] = email
     names = sorted({line["device_name"] for snapshot in snapshots.values() for line in snapshot["devices"]})
+    if progress:
+        for snapshot in snapshots.values():
+            for line in snapshot["devices"]:
+                line["registration"] = "Checking RIS"
+        progress(f"Checking current RIS registration for {len(names)} devices; resolved identities/devices are shown below", snapshots)
     try:
         states = registrations(names) if names else {}
     except Exception:
@@ -234,7 +280,22 @@ class BulkSeparationQueue:
             job = self._read(self._path(job_id))
             if job["host"] != host:
                 raise ValueError("Job belongs to a different CUCM environment.")
+            if job["status"] == "reviewing" and (self.worker is None or not self.worker.is_alive()):
+                job.update(status="review_failed", error="Read-only review worker stopped. Refresh Review with current credentials; no separation was authorized.")
+                self._save(job)
             return copy.deepcopy(job)
+
+    def review_progress(self, job_id, host, stage, snapshots=None):
+        with self.lock:
+            job = self.get(job_id, host)
+            if job["status"] != "reviewing":
+                return
+            job["review_progress"] = stage
+            if snapshots:
+                for row in job["rows"]:
+                    if row["status"] == "pending" and row["email"] in snapshots:
+                        row.update(copy.deepcopy(snapshots[row["email"]]))
+            self._save(job)
 
     def recover(self):
         with self.lock:
@@ -278,7 +339,7 @@ class BulkSeparationQueue:
             for row in job["rows"]:
                 if row["status"] in {"pending", "lookup_failed"} and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", row["email"]):
                     row["status"] = "pending"
-            job.update(status="reviewing", review_required=True, review_started_at=now(), error="")
+            job.update(status="reviewing", review_required=True, review_started_at=now(), review_progress="Starting LDAP email-to-username lookup", error="")
             self._save(job)
             self.worker = threading.Thread(target=self._review, args=(job_id, host, preview), daemon=True)
             self.worker.start()
@@ -304,7 +365,7 @@ class BulkSeparationQueue:
                         row.update(status="lookup_failed", selected=False, detail=(snapshot or {}).get("detail", "Review lookup failed; no changes made."))
                     else:
                         row.update(selected=selected)
-                job.update(status="awaiting_review", reviewed_at=job["review_started_at"], selection_revision=uuid.uuid4().hex)
+                job.update(status="awaiting_review", reviewed_at=job["review_started_at"], review_progress="Review complete; verify employees and save exclusions before approval", selection_revision=uuid.uuid4().hex)
                 self._save(job)
         except Exception:
             with self.lock:

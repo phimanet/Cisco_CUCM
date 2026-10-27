@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from toolkit import bulk_separation
+from toolkit import ad_phone_fields
 from toolkit.bulk_separation import BulkSeparationQueue, csv_bytes, parse_emails
 
 
@@ -81,6 +82,40 @@ class BulkSeparationTests(unittest.TestCase):
             self.assertEqual(saved["status"], "review_failed")
             with self.assertRaises(ValueError):
                 queue.start(job["id"], "lab", Mock(), Mock())
+
+    def test_dead_read_only_review_worker_is_reported_instead_of_staying_reviewing(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            job = queue.submit("lab", "admin", "a@example.com")
+            job.update(status="reviewing", review_required=True)
+            queue._save(job)
+            self.assertEqual(queue.get(job["id"], "lab")["status"], "review_failed")
+            self.assertEqual(queue.get(job["id"], "lab")["rows"][0]["deleted"], "Not attempted")
+
+    def test_intermediate_review_progress_is_durable_and_not_approvable(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            job = queue.submit("lab", "admin", "a@example.com")
+            entered, release = threading.Event(), threading.Event()
+            snapshots = {"a@example.com": {"userid": "a", "name": "Resolved Employee", "eligible": True, "extensions": [{"extension": "1000", "partition": "PT"}], "devices": []}}
+            def preview(emails):
+                queue.review_progress(job["id"], "lab", "Checking current RIS registration", snapshots)
+                entered.set()
+                release.wait(5)
+                return snapshots
+            queue.review(job["id"], "lab", preview)
+            try:
+                self.assertTrue(entered.wait(5))
+                saved = queue.get(job["id"], "lab")
+                self.assertEqual(saved["status"], "reviewing")
+                self.assertEqual(saved["rows"][0]["name"], "Resolved Employee")
+                self.assertIn("RIS", queue._read(queue._path(job["id"]))["review_progress"])
+                with self.assertRaises(ValueError):
+                    queue.approve(job["id"], "lab", "", "admin")
+            finally:
+                release.set()
+                queue.worker.join(5)
+            self.assertEqual(queue.get(job["id"], "lab")["status"], "awaiting_review")
 
     def test_entries_and_failure_continuation(self):
         with tempfile.TemporaryDirectory() as root:
@@ -276,6 +311,7 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.scope = {"Request": object, "Form": lambda value: value, "csv": csv, "io": io, "json": json, "bulk_separation": bulk_separation,
             "_sql_escape_literal": lambda value: value.replace("'", "''"),
+            "lookup_ad_identities_by_email": Mock(side_effect=lambda emails, auth, **kwargs: {"ok": True, "results": [{"input_email": email, "found": True, "samAccountName": email.split("@")[0]} for email in emails]}),
             "_axl_execute_sql_rows": Mock(return_value=[]), "_to_bytes": lambda data: data,
             "_run_full_separation": Mock(return_value=(b"Step,Status,Details\nLookup User,Success,Found\nRemove Phone,Success,Removed\n", "result.csv")),
             "_append_audit_event": Mock(), "_require_admin_session": Mock(return_value=({"cucm_host": "lab"}, "admin")),
@@ -287,13 +323,26 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
     def test_batched_exact_email_lookup_and_ambiguity(self):
         emails = [f"user{index}@example.com" for index in range(150)]
         def execute(host, username, password, sql):
-            return [{"mailid": email.upper(), "userid": email.split("@")[0]} for email in emails if "'" + email + "'" in sql]
+            return [{"userid": email.split("@")[0]} for email in emails if "'" + email.split("@")[0] + "'" in sql]
         self.scope["_axl_execute_sql_rows"].side_effect = execute
         result = self.scope["_bulk_separation_resolve"]("lab", "admin", "secret", emails)
         self.assertEqual(len(result), 150)
         self.assertTrue(all(len(matches) == 1 for matches in result.values()))
         self.assertEqual(self.scope["_axl_execute_sql_rows"].call_count, 2)
-        self.assertIn("LOWER(mailid) IN", self.scope["_axl_execute_sql_rows"].call_args.args[3])
+        self.assertEqual(self.scope["lookup_ad_identities_by_email"].call_count, 2)
+        self.assertIn("LOWER(userid) IN", self.scope["_axl_execute_sql_rows"].call_args.args[3])
+
+    def test_ldap_username_finds_cucm_user_even_without_mailid(self):
+        email = "morgan.fedde@amnhealthcare.com"
+        self.scope["lookup_ad_identities_by_email"].side_effect = None
+        self.scope["lookup_ad_identities_by_email"].return_value = {"ok": True, "results": [{"input_email": email, "found": True, "samAccountName": "Morgan.Fedde"}]}
+        self.scope["_axl_execute_sql_rows"].return_value = [{"userid": "Morgan.Fedde"}]
+        result = self.scope["_bulk_separation_resolve"]("lab", "admin", "secret", [email])
+        self.assertEqual(result[email], [{"userid": "Morgan.Fedde"}])
+        sql = self.scope["_axl_execute_sql_rows"].call_args.args[3]
+        self.assertIn("LOWER(userid) IN ('morgan.fedde')", sql)
+        self.assertNotIn("mailid", sql)
+        self.scope["lookup_ad_identities_by_email"].assert_called_once_with([email], {"username": "admin", "password": "secret"}, require_unique=True)
 
     def test_device_verification_keeps_names_after_association_cleared(self):
         self.scope["_bulk_separation_devices"]("lab", "admin", "secret", "user", ["csfOld"])
@@ -303,12 +352,33 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
         self.assertIn("owneruser.userid='user'", sql)
         self.assertIn("LIKE 'TAB%'", sql)
 
-    def test_failed_email_batch_does_not_stop_later_batch(self):
-        emails = [f"user{index}@example.com" for index in range(150)]
-        self.scope["_axl_execute_sql_rows"].side_effect = [RuntimeError("provider failure"), [{"mailid": emails[-1], "userid": "last"}]]
+    def test_ldap_failure_continues_later_batches_and_never_guesses_username(self):
+        emails = [f"alias{index}@example.com" for index in range(150)]
+        self.scope["lookup_ad_identities_by_email"].side_effect = [{"ok": False, "error": "LDAP failed"}, {"ok": True, "results": [{"input_email": email, "found": email == emails[-1], "samAccountName": "Actual.Username" if email == emails[-1] else ""} for email in emails[100:]]}]
+        self.scope["_axl_execute_sql_rows"].return_value = [{"userid": "Actual.Username"}]
         result = self.scope["_bulk_separation_resolve"]("lab", "admin", "secret", emails)
         self.assertIsNone(result[emails[0]])
-        self.assertEqual(result[emails[-1]], [{"userid": "last"}])
+        self.assertEqual(result[emails[-1]], [{"userid": "Actual.Username"}])
+        self.scope["_axl_execute_sql_rows"].assert_called_once()
+        sql = self.scope["_axl_execute_sql_rows"].call_args.args[3]
+        self.assertIn("'actual.username'", sql)
+        self.assertNotIn("alias149", sql)
+
+    def test_missing_ambiguous_or_incomplete_ldap_results_cannot_authorize_cucm_lookup(self):
+        helper = self.scope["lookup_ad_identities_by_email"]
+        helper.side_effect = None
+        for records in ([{"input_email": "a@example.com", "found": False}], [{"input_email": "a@example.com", "found": True, "ambiguous": True, "samAccountName": "a"}], []):
+            helper.return_value = {"ok": True, "results": records}
+            result = self.scope["_bulk_separation_resolve"]("lab", "admin", "secret", ["a@example.com"])
+            self.assertFalse(result["a@example.com"])
+        self.scope["_axl_execute_sql_rows"].assert_not_called()
+
+    def test_failed_email_batch_does_not_stop_later_batch(self):
+        emails = [f"user{index}@example.com" for index in range(150)]
+        self.scope["_axl_execute_sql_rows"].side_effect = [RuntimeError("provider failure"), [{"userid": "user149"}]]
+        result = self.scope["_bulk_separation_resolve"]("lab", "admin", "secret", emails)
+        self.assertIsNone(result[emails[0]])
+        self.assertEqual(result[emails[-1]], [{"userid": "user149"}])
 
     def test_remaining_device_or_verification_failure_never_claims_deleted(self):
         self.scope["_bulk_separation_resolve"] = lambda *args: {"a@example.com": [{"userid": "a"}]}
@@ -387,7 +457,7 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
     def test_review_preview_uses_batch_registration_without_phone_fallback(self):
         self.scope["_bulk_separation_resolve"] = Mock(return_value={})
         self.scope["_lookup_jabber_registration_statuses"] = Mock(return_value={})
-        def build(emails, identities, read_sql, registrations):
+        def build(emails, identities, read_sql, registrations, **kwargs):
             registrations(["CSFa", "SEPa"])
             return {}
         with patch.object(bulk_separation, "build_review", side_effect=build):
@@ -457,12 +527,12 @@ class BulkReviewInventoryTests(unittest.TestCase):
             CREATE TABLE enduserdevicemap (fkenduser TEXT, fkdevice TEXT);
             CREATE TABLE device (pkid TEXT, name TEXT, fkenduser TEXT);
             CREATE TABLE devicenumplanmap (fkdevice TEXT, fknumplan TEXT);
-            CREATE TABLE numplan (pkid TEXT, dnorpattern TEXT, fkroutepartition TEXT);
+            CREATE TABLE numplan (pkid TEXT, dnorpattern TEXT, fkroutepartition TEXT, tkpatternusage INTEGER DEFAULT 2);
             CREATE TABLE routepartition (pkid TEXT, name TEXT);
             CREATE TABLE endusernumplanmap (fkenduser TEXT, fknumplan TEXT, tkdnusage INTEGER);
             INSERT INTO enduser VALUES ('ua','a','Alice','Example','Alice Example'), ('ub','b','Bob','Keep','Bob Keep');
             INSERT INTO routepartition VALUES ('rp1','ENT_DEVICE_PT'),('rp2','OTHER_PT');
-            INSERT INTO numplan VALUES ('n1','1000','rp1'),('n2','2000','rp1'),('n3','1000','rp2');
+            INSERT INTO numplan (pkid,dnorpattern,fkroutepartition) VALUES ('n1','1000','rp1'),('n2','2000','rp1'),('n3','1000','rp2');
             INSERT INTO device VALUES ('da','csfa','ua'),('dm','BOTa','ua'),('ds','SEPshared','ub'),('do','SEPotherpartition','ub'),('db','CSFb','ub');
             INSERT INTO enduserdevicemap VALUES ('ua','da'),('ua','dm'),('ub','db');
             INSERT INTO devicenumplanmap VALUES ('da','n1'),('dm','n1'),('ds','n1'),('do','n3'),('db','n2');
@@ -492,7 +562,7 @@ class BulkReviewInventoryTests(unittest.TestCase):
         self.assertEqual(states["SEPshared"], "Unknown")
         self.assertTrue(any(line["partition"] == "OTHER_PT" for line in row["devices"]))
         self.assertEqual({line["device_name"] for line in row["target_snapshot"]}, {"csfa", "BOTa"})
-        self.assertEqual(len(self.queries), 3)
+        self.assertEqual(len(self.queries), 4)
         self.registration.assert_called_once()
 
     def test_registration_failure_is_unknown_not_unregistered(self):
@@ -500,6 +570,57 @@ class BulkReviewInventoryTests(unittest.TestCase):
         row = self.review()
         self.assertTrue(row["eligible"])
         self.assertEqual({line["registration"] for line in row["devices"]}, {"Unknown"})
+
+    def test_exact_extension_translation_pattern_yes_and_no(self):
+        self.assertEqual(self.review()["translation_pattern"], "No")
+        self.db.execute("INSERT INTO numplan VALUES ('tp1','1000','rp2',3)")
+        row = self.review()
+        self.assertEqual(row["translation_pattern"], "Yes")
+        self.assertEqual(row["translation_pattern_matches"], [{"extension": "1000", "partition": "OTHER_PT"}])
+        self.assertEqual(row["extensions"], [{"extension": "1000", "partition": "ENT_DEVICE_PT"}])
+
+    def test_translation_pattern_check_does_not_match_prefix_or_dn(self):
+        self.db.execute("INSERT INTO numplan VALUES ('tp2','10001','rp2',15)")
+        self.assertEqual(self.review()["translation_pattern"], "No")
+        self.db.execute("INSERT INTO numplan VALUES ('tp3','1000','rp2',15)")
+        self.assertEqual(self.review()["translation_pattern"], "Yes")
+
+    def test_translation_pattern_failure_is_not_no(self):
+        def reader(sql):
+            if "tkpatternusage IN (3,15)" in sql:
+                raise RuntimeError("query denied")
+            return self.read_sql(sql)
+        row = self.review(reader)
+        self.assertEqual(row["translation_pattern"], "Lookup Failed")
+        self.assertTrue(row["eligible"])
+
+    def test_translation_pattern_evidence_is_in_both_saved_exports(self):
+        self.db.execute("INSERT INTO numplan VALUES ('tp1','1000','rp2',3)")
+        row = self.review()
+        job = {"id": "saved", "host": "lab", "rows": [{**row, "email": "a@example.com", "status": "pending"}]}
+        for exporter in (bulk_separation.csv_bytes, bulk_separation.fresh_build_csv_bytes):
+            record = next(csv.DictReader(io.StringIO(exporter(job).decode("utf-8-sig"))))
+            self.assertEqual(record["Extension Is Translation Pattern"], "Yes")
+            self.assertEqual(record["Translation Pattern Matches"], "1000/OTHER_PT")
+            self.assertTrue(record["Translation Pattern Checked At"])
+
+    def test_review_publishes_people_and_devices_before_registration_finishes(self):
+        progress = Mock()
+        def registrations(names):
+            stage, snapshots = progress.call_args.args
+            self.assertIn("Checking current RIS", stage)
+            self.assertEqual(snapshots["a@example.com"]["name"], "Alice Example")
+            self.assertTrue(snapshots["a@example.com"]["devices"])
+            self.assertEqual(snapshots["a@example.com"]["devices"][0]["registration"], "Checking RIS")
+            return {}
+        result = bulk_separation.build_review(["a@example.com"], {"a@example.com": [{"userid": "a"}]}, self.read_sql, registrations, progress=progress)
+        self.assertEqual(result["a@example.com"]["devices"][0]["registration"], "Unknown")
+
+    def test_two_email_aliases_for_same_employee_do_not_authorize_two_separations(self):
+        result = bulk_separation.build_review(["a@example.com", "alias@example.com"], {"a@example.com": [{"userid": "a"}], "alias@example.com": [{"userid": "a"}]}, self.read_sql, self.registration)
+        self.assertTrue(result["a@example.com"]["eligible"])
+        self.assertFalse(result["alias@example.com"]["eligible"])
+        self.assertIn("Duplicate verified employee", result["alias@example.com"]["detail"])
 
     def test_shared_extension_failure_blocks_selection_and_retains_identity(self):
         def reader(sql):
@@ -529,6 +650,45 @@ class BulkReviewInventoryTests(unittest.TestCase):
         rows = [{"device_name": str(index)} for index in range(1000)]
         with self.assertRaisesRegex(ValueError, "Repeated"):
             list(bulk_separation._paged_rows(lambda sql: rows, "device_name FROM device"))
+
+
+class BulkLdapIdentityTests(unittest.TestCase):
+    def entry(self, sam, mail, aliases=()):
+        return SimpleNamespace(sAMAccountName=SimpleNamespace(value=sam), mail=SimpleNamespace(value=mail),
+            userPrincipalName=SimpleNamespace(value=mail), givenName=SimpleNamespace(value="First"), sn=SimpleNamespace(value="Last"),
+            proxyAddresses=SimpleNamespace(values=list(aliases)))
+
+    def lookup(self, entries, emails, result_code=0, strict=True):
+        connection = Mock(entries=entries, result={"result": result_code})
+        config = {"server": "ldap.example.com", "port": 636, "use_ssl": True, "base_dn": "dc=example,dc=com"}
+        with patch.multiple(ad_phone_fields, LDAP3_AVAILABLE=True, Server=Mock(), Connection=Mock(return_value=connection), ALL="all", SUBTREE="subtree", create=True), patch.object(ad_phone_fields, "_resolve_ldap_config", return_value=(config, "")), patch.object(ad_phone_fields, "_resolve_ldap_bind_credentials", return_value=("admin", "SIMPLE", "")):
+            return ad_phone_fields.lookup_ad_identities_by_email(emails, {"username": "admin", "password": "secret"}, require_unique=strict)
+
+    def test_unique_alias_is_matched_once_and_duplicate_directory_identities_are_refused(self):
+        entries = [self.entry("Morgan.Fedde", "primary@example.com", ["SMTP:morgan.fedde@example.com"])]
+        result = self.lookup(entries, ["morgan.fedde@example.com", "primary@example.com"])
+        self.assertTrue(all(row["found"] for row in result["results"]))
+        entries.append(self.entry("Other.User", "other@example.com", ["smtp:morgan.fedde@example.com"]))
+        ambiguous = self.lookup(entries, ["morgan.fedde@example.com"])
+        self.assertFalse(ambiguous["results"][0]["found"])
+        self.assertTrue(ambiguous["results"][0]["ambiguous"])
+
+    def test_incomplete_ldap_search_is_not_a_successful_empty_lookup(self):
+        result = self.lookup([], ["a@example.com"], result_code=4)
+        self.assertFalse(result["ok"])
+
+    def test_existing_callers_keep_default_non_strict_behavior(self):
+        entries = [self.entry("First", "a@example.com"), self.entry("Second", "a@example.com")]
+        result = self.lookup(entries, ["a@example.com"], strict=False)
+        self.assertTrue(result["results"][0]["found"])
+        self.assertEqual(result["results"][0]["samAccountName"], "Second")
+
+    def test_ldapsearch_fallback_refuses_multiple_directory_matches(self):
+        config = {"server": "ldap.example.com", "port": 636, "use_ssl": True, "base_dn": "dc=example,dc=com"}
+        with patch.object(ad_phone_fields, "LDAP3_AVAILABLE", False), patch.object(ad_phone_fields, "_resolve_ldap_config", return_value=(config, "")), patch.object(ad_phone_fields, "_resolve_ldap_bind_credentials", return_value=("admin", "SIMPLE", "")), patch.object(ad_phone_fields, "_resolve_ldapsearch_bind_user", return_value="admin"), patch.object(ad_phone_fields, "_run_ldapsearch_query", return_value=({"dn": ["cn=First", "cn=Second"], "sAMAccountName": ["First", "Second"]}, "")):
+            result = ad_phone_fields.lookup_ad_identities_by_email(["a@example.com"], {"password": "secret"}, require_unique=True)
+        self.assertFalse(result["results"][0]["found"])
+        self.assertTrue(result["results"][0]["ambiguous"])
 
 
 if __name__ == "__main__":
