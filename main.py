@@ -14480,26 +14480,45 @@ def _lookup_twilio_number_direct(phone_number: str, account: str = "default", al
   return None
 
 
-def _extract_all_sms_numbers():
+def _extract_all_sms_numbers(force_refresh=True):
   fetched_at = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
   rows, failures = [], []
   successful_sources = 0
   try:
-    inventory = _twilio_all_account_number_inventory(include_messaging_services=False)
+    inventory = None
+    for attempt in range(2):
+      try:
+        inventory = _twilio_all_account_number_inventory(force_refresh=force_refresh or attempt > 0, include_messaging_services=False)
+      except Exception as exc:
+        if attempt == 0 and sms_inventory.failure_details(exc)[1]:
+          continue
+        if inventory is None:
+          raise
+        failures.append("Twilio retry: " + sms_inventory.failure_details(exc)[0])
+        break
+      if attempt == 0 and any(sms_inventory.failure_details(item.get("error"))[1] for item in inventory.get("failures", [])):
+        continue
+      break
     rows.extend(sms_inventory.twilio_sms_rows(inventory))
     for failure in inventory.get("failures", []):
-      failures.append("Twilio / " + str(failure.get("account_name") or "Account") + ": inventory unavailable.")
+      failures.append("Twilio / " + str(failure.get("account_name") or "Account") + ": " + sms_inventory.failure_details(failure.get("error"))[0])
     if inventory.get("accounts") and not inventory.get("failures") or rows:
       successful_sources += 1
-  except Exception:
-    failures.append("Twilio inventory unavailable; check configuration, permissions and connectivity.")
+  except Exception as exc:
+    failures.append("Twilio: " + sms_inventory.failure_details(exc)[0])
   try:
-    rows.extend(sms_inventory.aerialink_numbers(AERIALINK_V5_BASE_URL, AERIALINK_ACCOUNT_CODE_LOOKUP_PATH, AERIALINK_USERNAME, AERIALINK_PASSWORD))
+    for attempt in range(2):
+      try:
+        aerialink_rows = sms_inventory.aerialink_numbers(AERIALINK_V5_BASE_URL, AERIALINK_ACCOUNT_CODE_LOOKUP_PATH, AERIALINK_USERNAME, AERIALINK_PASSWORD)
+        break
+      except Exception as exc:
+        if attempt == 0 and sms_inventory.failure_details(exc)[1]:
+          continue
+        raise
+    rows.extend(aerialink_rows)
     successful_sources += 1
-  except ValueError as exc:
-    failures.append(str(exc))
-  except Exception:
-    failures.append("Aerialink inventory unavailable; check configuration, permissions and connectivity.")
+  except Exception as exc:
+    failures.append("Aerialink: " + sms_inventory.failure_details(exc)[0])
   if not successful_sources:
     return {"ok": False, "error": "No SMS inventory source completed successfully.", "failures": failures}
   rows.sort(key=lambda row: (row["provider"], row["environment"].lower(), row["account"].lower(), row["phone_number"]))
@@ -14517,8 +14536,8 @@ def _sms_inventory_scope_key():
   return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
 
 
-def _cached_all_sms_numbers(force_refresh=False):
-  return SMS_ALL_NUMBERS_CACHE.get(_sms_inventory_scope_key(), _extract_all_sms_numbers, force_refresh=force_refresh)
+def _cached_all_sms_numbers(force_refresh=False, progress=None):
+  return SMS_ALL_NUMBERS_CACHE.get(_sms_inventory_scope_key(), _extract_all_sms_numbers, force_refresh=force_refresh, progress=progress)
 
 
 @app.post("/sms/all-numbers/extract")
@@ -14529,6 +14548,8 @@ def sms_all_numbers_extract_route(request: Request):
     return JSONResponse({"ok": False, "error": "Administrator sign-in is required."}, status_code=403)
   try:
     report = _cached_all_sms_numbers(force_refresh=True)
+  except sms_inventory.InventoryRefreshError as exc:
+    return JSONResponse({"ok": False, "error": str(exc), "failures": exc.failures}, status_code=502)
   except Exception:
     return JSONResponse({"ok": False, "error": "SMS extract failed. Previous saved inventory was retained; check provider connectivity, permissions and runtime storage."}, status_code=502)
   _append_audit_event(action="sms_all_numbers_extract", cucm_host=str(session.get("cucm_host") or ""), operator=operator,
@@ -41302,6 +41323,7 @@ __GREENLIGHT_ADMIN_CARD__
             </div>
             <p style="font-size:12px;">Submission is read-only. Shared-extension devices are context, not additional deletion targets. Never means CUCM has no retained last-registration record, not automatic deletion clearance. Unknown registration does not mean Unregistered. SMS matches reviewed extension digits to the shared All SMS inventory, refreshed on demand after eight hours; Twilio Hosted Numbers are excluded and Aerialink listing is not proof of active routing. Each selected employee authorizes the full separation process.</p>
             <p id="bulk-separation-status" role="status">No bulk job loaded.</p>
+            <p id="bulk-separation-sms-diagnostics" role="status" hidden style="font-size:12px;color:#a41424;overflow-wrap:anywhere;"></p>
             <div class="search-filter-row" style="flex-wrap:wrap;">
               <input id="bulk-separation-filter" aria-label="Filter review results" placeholder="Name, email, extension, device, registration, SMS" style="max-width:100%;box-sizing:border-box;" />
               <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="bulk-separation-select-all" style="width:16px;min-width:16px;height:16px;margin:0;" /> Separate filtered employees</label>
@@ -41380,6 +41402,10 @@ __GREENLIGHT_ADMIN_CARD__
                 if (job.review_progress) status.textContent += ' | ' + job.review_progress;
                 const smsReport = job.rows.find(function(row){return row.sms_inventory_fetched_at;});
                 if (smsReport) status.textContent += ' | SMS snapshot: ' + new Date(smsReport.sms_inventory_fetched_at).toLocaleString() + ' | ' + smsReport.sms_inventory_status + (new Date(smsReport.sms_inventory_expires_at).getTime() <= Date.now() ? ' (expired snapshot; new review required for a current check)' : smsReport.sms_inventory_cache_hit ? ' (cached)' : ' (new extract)');
+                const smsFailures = Array.from(new Set(job.rows.flatMap(function(row){return row.sms_inventory_failures || [];})));
+                const diagnostics = document.getElementById('bulk-separation-sms-diagnostics');
+                diagnostics.hidden = smsFailures.length === 0;
+                diagnostics.textContent = smsFailures.length ? 'SMS inventory incomplete' + (smsReport && Number.isInteger(smsReport.sms_inventory_count) ? ' (' + smsReport.sms_inventory_count + ' numbers extracted)' : '') + ': ' + smsFailures.join(' | ') + ' Unmatched numbers remain Lookup Failed, not No. Refresh Review / Registration retries the read-only extract when no complete fresh cache is available.' : '';
                 drawRows();
                 const download = document.getElementById('bulk-separation-download');
                 download.href = '/project-greenlight/bulk-separation/csv?job_id=' + encodeURIComponent(jobId); download.hidden = false;
@@ -66688,11 +66714,17 @@ def _bulk_separation_preview(host, username, password, emails, progress=None):
   if progress:
     progress("Checking SMS using the shared All SMS extract (eight-hour cache)", snapshots)
   try:
-    report = _cached_all_sms_numbers()
-    _append_audit_event(action="bulk_separation_sms_check", cucm_host=host, operator=username,
-      target=f"cache_hit={report['cache_hit']};fetched_at={report['fetched_at']};numbers={report['count']};status={report['status']}", output_filename="", inline_mode=True)
+    report = _cached_all_sms_numbers(progress=progress) if progress else _cached_all_sms_numbers()
+  except sms_inventory.InventoryRefreshError as exc:
+    report = {"status": "Lookup Failed", "failures": exc.failures}
   except Exception:
     report = {"status": "Lookup Failed", "failures": ["SMS inventory unavailable. Prior successful cache was retained; no unmatched number is reported as No."]}
+  else:
+    try:
+      _append_audit_event(action="bulk_separation_sms_check", cucm_host=host, operator=username,
+        target=f"cache_hit={report['cache_hit']};fetched_at={report['fetched_at']};numbers={report['count']};status={report['status']}", output_filename="", inline_mode=True)
+    except Exception:
+      logger.warning("SMS inventory succeeded but its bulk-review audit event could not be written.")
   return sms_inventory.annotate_review(snapshots, report)
 
 

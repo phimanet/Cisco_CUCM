@@ -313,7 +313,7 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
         cls.code = compile(ast.Module(body=nodes, type_ignores=[]), "<bulk-integration>", "exec")
 
     def setUp(self):
-        self.scope = {"Request": object, "Form": lambda value: value, "csv": csv, "io": io, "json": json, "bulk_separation": bulk_separation, "sms_inventory": sms_inventory,
+        self.scope = {"Request": object, "Form": lambda value: value, "csv": csv, "io": io, "json": json, "bulk_separation": bulk_separation, "sms_inventory": sms_inventory, "logger": Mock(),
             "_cached_all_sms_numbers": Mock(return_value={"status": "Complete within stated scope", "rows": [], "failures": [], "cache_hit": True, "fetched_at": "2026-10-27T00:00:00+00:00", "count": 0}),
             "_sql_escape_literal": lambda value: value.replace("'", "''"),
             "lookup_ad_identities_by_email": Mock(side_effect=lambda emails, auth, **kwargs: {"ok": True, "results": [{"input_email": email, "found": True, "samAccountName": email.split("@")[0]} for email in emails]}),
@@ -492,6 +492,29 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
         self.assertEqual(result["a@example.com"]["sms"], "Lookup Failed")
         self.assertTrue(result["a@example.com"]["eligible"])
         self.assertNotIn("provider failure", str(result))
+
+    def test_sms_audit_failure_cannot_turn_complete_inventory_into_lookup_failure(self):
+        self.scope["_bulk_separation_resolve"] = Mock(return_value={})
+        self.scope["_append_audit_event"].side_effect = OSError("audit disk unavailable")
+        with patch.object(bulk_separation, "build_review", return_value={"a@example.com": {"eligible": True, "extensions": [{"extension": "2145551000", "partition": "PT"}]}}):
+            result = self.scope["_bulk_separation_preview"]("lab", "admin", "secret", ["a@example.com"])
+        self.assertEqual(result["a@example.com"]["sms"], "No")
+        self.scope["logger"].warning.assert_called_once()
+
+    def test_total_sms_extract_failure_keeps_sanitized_provider_reason(self):
+        self.scope["_bulk_separation_resolve"] = Mock(return_value={})
+        self.scope["_cached_all_sms_numbers"].side_effect = sms_inventory.InventoryRefreshError(["Twilio / Parent: HTTP 403: authentication or account permission failure.", "Aerialink: Provider credentials are missing or incomplete."])
+        with patch.object(bulk_separation, "build_review", return_value={"a@example.com": {"eligible": True, "extensions": [{"extension": "2145551000", "partition": "PT"}]}}):
+            result = self.scope["_bulk_separation_preview"]("lab", "admin", "secret", ["a@example.com"])
+        self.assertEqual(result["a@example.com"]["sms"], "Lookup Failed")
+        self.assertIn("Twilio / Parent: HTTP 403", result["a@example.com"]["sms_inventory_failures"][0])
+
+    def test_sms_failure_reason_is_preserved_in_both_csv_exports(self):
+        job = {"id": "saved", "host": "lab", "rows": [{"email": "a@example.com", "status": "pending", "sms": "Lookup Failed", "sms_inventory_status": "Partial", "sms_inventory_failures": ["Twilio / Parent: HTTP 403: authentication or account permission failure."]}]}
+        for exporter in (bulk_separation.csv_bytes, bulk_separation.fresh_build_csv_bytes):
+            row = next(csv.DictReader(io.StringIO(exporter(job).decode("utf-8-sig"))))
+            self.assertIn("Twilio / Parent: HTTP 403", row["SMS Inventory Failures"])
+            self.assertEqual(row["SMS"], "Lookup Failed")
 
     def test_all_routes_require_admin_and_confirmation_before_mutation(self):
         self.scope["BULK_SEPARATION_QUEUE"] = Mock()

@@ -30,7 +30,7 @@ def parse_emails(text):
 def csv_bytes(job):
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Email", "User ID", "Status", "Jabber Deleted", "Full Process", "Details", "Step Output", "CUCM Host", "Job ID", "Name", "Selected for Separation", "Extensions / Partitions", "Devices / Registration", "Registration Checked At", "Extension Is Translation Pattern", "Translation Pattern Matches", "Translation Pattern Checked At", "SMS", "SMS Matches", "SMS Inventory Fetched At", "SMS Inventory Expires At", "SMS Coverage", "SMS Scope"])
+    writer.writerow(["Email", "User ID", "Status", "Jabber Deleted", "Full Process", "Details", "Step Output", "CUCM Host", "Job ID", "Name", "Selected for Separation", "Extensions / Partitions", "Devices / Registration", "Registration Checked At", "Extension Is Translation Pattern", "Translation Pattern Matches", "Translation Pattern Checked At", "SMS", "SMS Matches", "SMS Inventory Fetched At", "SMS Inventory Expires At", "SMS Coverage", "SMS Scope", "SMS Inventory Failures"])
     for row in job["rows"]:
         values = [row.get(key, "") for key in ("email", "userid", "status", "deleted", "process", "detail", "output")]
         values.extend([job["host"], job["id"]])
@@ -38,7 +38,7 @@ def csv_bytes(job):
             "; ".join(line["extension"] + "/" + line["partition"] for line in row.get("extensions", [])),
             "; ".join(line["device_name"] + " | " + line["extension"] + "/" + line["partition"] + " | " + line.get("registration", "Unknown") + " | Last registered: " + line.get("last_registered", "Unknown") + " | " + line["relationship"] for line in row.get("devices", [])), row.get("registration_checked_at", "")])
         values.extend([row.get("translation_pattern", "Not checked"), "; ".join(line["extension"] + "/" + line["partition"] for line in row.get("translation_pattern_matches", [])), row.get("translation_pattern_checked_at", "")])
-        values.extend([row.get("sms", "Not checked"), "; ".join(match["provider"] + " | " + match["phone_number"] + " | " + match["environment"] + " / " + match["account"] for match in row.get("sms_matches", [])), row.get("sms_inventory_fetched_at") or "", row.get("sms_inventory_expires_at") or "", row.get("sms_inventory_status") or "", row.get("sms_inventory_scope") or ""])
+        values.extend([row.get("sms", "Not checked"), "; ".join(match["provider"] + " | " + match["phone_number"] + " | " + match["environment"] + " / " + match["account"] for match in row.get("sms_matches", [])), row.get("sms_inventory_fetched_at") or "", row.get("sms_inventory_expires_at") or "", row.get("sms_inventory_status") or "", row.get("sms_inventory_scope") or "", "; ".join(row.get("sms_inventory_failures") or [])])
         writer.writerow(["'" + str(value) if str(value).lstrip().startswith(("=", "+", "-", "@")) else value for value in values])
     return output.getvalue().encode("utf-8-sig")
 
@@ -46,7 +46,7 @@ def csv_bytes(job):
 def fresh_build_csv_bytes(job):
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Name", "Email", "User ID", "Previous Jabber Devices (Reference Only)", "Previous Extensions / Partitions (Reference Only)", "Job Outcome", "Jabber Deleted", "Full Process", "Selected for Separation", "Job ID", "CUCM Host", "Review Details Available", "Fresh Build Note", "Extension Is Translation Pattern", "Translation Pattern Matches", "Translation Pattern Checked At", "SMS", "SMS Matches", "SMS Inventory Fetched At", "SMS Inventory Expires At", "SMS Coverage", "SMS Scope"])
+    writer.writerow(["Name", "Email", "User ID", "Previous Jabber Devices (Reference Only)", "Previous Extensions / Partitions (Reference Only)", "Job Outcome", "Jabber Deleted", "Full Process", "Selected for Separation", "Job ID", "CUCM Host", "Review Details Available", "Fresh Build Note", "Extension Is Translation Pattern", "Translation Pattern Matches", "Translation Pattern Checked At", "SMS", "SMS Matches", "SMS Inventory Fetched At", "SMS Inventory Expires At", "SMS Coverage", "SMS Scope", "SMS Inventory Failures"])
     for row in job["rows"]:
         devices = sorted({line["device_name"] for line in row.get("target_snapshot", []) if line["device_name"].upper().startswith(("CSF", "TCT", "BOT", "TAB"))})
         has_review = "target_snapshot" in row and "extensions" in row
@@ -56,7 +56,7 @@ def fresh_build_csv_bytes(job):
             job["id"], job["host"], "Yes" if has_review else "No - older job did not capture review details",
             "Fresh build using current approved templates and current identity/number-availability checks; not a configuration or voicemail restore. Confirm the outcome before rebuilding; kept/failed/unknown entries may still have resources."]
         values.extend([row.get("translation_pattern", "Not checked"), "; ".join(line["extension"] + "/" + line["partition"] for line in row.get("translation_pattern_matches", [])), row.get("translation_pattern_checked_at", "")])
-        values.extend([row.get("sms", "Not checked"), "; ".join(match["provider"] + " | " + match["phone_number"] + " | " + match["environment"] + " / " + match["account"] for match in row.get("sms_matches", [])), row.get("sms_inventory_fetched_at") or "", row.get("sms_inventory_expires_at") or "", row.get("sms_inventory_status") or "", row.get("sms_inventory_scope") or ""])
+        values.extend([row.get("sms", "Not checked"), "; ".join(match["provider"] + " | " + match["phone_number"] + " | " + match["environment"] + " / " + match["account"] for match in row.get("sms_matches", [])), row.get("sms_inventory_fetched_at") or "", row.get("sms_inventory_expires_at") or "", row.get("sms_inventory_status") or "", row.get("sms_inventory_scope") or "", "; ".join(row.get("sms_inventory_failures") or [])])
         writer.writerow(["'" + str(value) if str(value).lstrip().startswith(("=", "+", "-", "@")) else value for value in values])
     return output.getvalue().encode("utf-8-sig")
 

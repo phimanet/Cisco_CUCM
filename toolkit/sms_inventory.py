@@ -17,6 +17,29 @@ _INVENTORY_FIELDS = ("provider", "environment", "account", "phone_number", "frie
 _CACHE_LOCK = threading.RLock()
 
 
+class InventoryRefreshError(ValueError):
+    def __init__(self, failures):
+        super().__init__("SMS inventory refresh failed; the prior saved inventory was retained.")
+        self.failures = list(failures or [str(self)])
+
+
+def failure_details(error):
+    text = str(error or "").lower()
+    status = re.search(r"\bhttp\s+(\d{3})\b", text)
+    if status:
+        code = int(status.group(1))
+        if code in {401, 403}:
+            return f"HTTP {code}: authentication or account permission failure.", False
+        return f"HTTP {code}: provider inventory request failed.", code == 429 or code >= 500
+    if "not configured" in text or "incomplete credentials" in text or "no complete" in text and "credentials" in text:
+        return "Provider credentials are missing or incomplete.", False
+    if any(value in text for value in ("timeout", "timed out", "request failed", "connectivity", "connection")):
+        return "Provider connection or timeout failure.", True
+    if any(value in text for value in ("pagination", "repeated", "incomplete", "inconsistent", "invalid", "different-account", "unexpected")):
+        return "Provider inventory validation or pagination failed.", False
+    return "Inventory unavailable; check provider configuration, permissions and connectivity.", False
+
+
 def normalized_number(value):
     raw = str(value or "").strip()
     if not raw or not re.fullmatch(r"\+?[0-9(). -]+", raw):
@@ -72,7 +95,7 @@ class InventoryCache:
             if os.path.exists(temporary):
                 os.unlink(temporary)
 
-    def get(self, scope_key, extract, *, force_refresh=False, at=None):
+    def get(self, scope_key, extract, *, force_refresh=False, at=None, progress=None):
         with _CACHE_LOCK:
             current = at or datetime.datetime.now(datetime.timezone.utc)
             cached = self._read()
@@ -88,8 +111,14 @@ class InventoryCache:
                 if age < 0:
                     raise ValueError("Saved SMS inventory is future-dated; it was not used or overwritten.")
                 if not force_refresh and cached["scope_key"] == scope_key and age < CACHE_TTL_SECONDS:
+                    if progress:
+                        progress("Reusing the complete All SMS inventory from the last eight hours; matching extension digits locally")
                     return {**copy.deepcopy(cached), "cache_hit": True}
+            if progress:
+                progress("No reusable eight-hour SMS cache; extracting a fresh All SMS inventory before matching extensions")
             result = extract()
+            if isinstance(result, dict) and not result.get("ok") and isinstance(result.get("failures"), list):
+                raise InventoryRefreshError(result["failures"])
             if not isinstance(result, dict) or not result.get("ok") or not isinstance(result.get("rows"), list):
                 raise ValueError("SMS inventory refresh failed; the prior saved inventory was retained.")
             rows = []
@@ -135,7 +164,7 @@ def annotate_review(snapshots, report):
         snapshot["sms"] = "Yes" if "Yes" in statuses else "Lookup Failed" if "Lookup Failed" in statuses else "No" if statuses == {"No"} else "Not checked"
         snapshot["sms_checks"] = checks
         snapshot["sms_matches"] = matches
-        for key in ("fetched_at", "expires_at", "status", "scope", "failures", "cache_hit"):
+        for key in ("fetched_at", "expires_at", "status", "scope", "failures", "cache_hit", "count"):
             snapshot["sms_inventory_" + key] = copy.deepcopy(report.get(key))
     return snapshots
 

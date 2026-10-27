@@ -9,8 +9,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from toolkit.sms_inventory import InventoryCache
-from toolkit.sms_inventory import annotate_review, normalized_number
+from toolkit.sms_inventory import InventoryCache, InventoryRefreshError
+from toolkit.sms_inventory import annotate_review, normalized_number, failure_details
 from toolkit.sms_inventory import aerialink_numbers, twilio_sms_rows
 
 
@@ -175,6 +175,18 @@ class SMSInventoryCacheTests(unittest.TestCase):
             extract.assert_called_once()
             self.assertEqual(sum(not value["cache_hit"] for value in calls), 1)
 
+    def test_missing_and_fresh_cache_report_distinct_extract_and_match_progress(self):
+        with tempfile.TemporaryDirectory() as root:
+            progress = Mock()
+            cache = InventoryCache(root)
+            cache.get("scope", lambda: self.report, at=self.started, progress=progress)
+            self.assertIn("extracting a fresh", progress.call_args.args[0])
+            progress.reset_mock()
+            extract = Mock()
+            cache.get("scope", extract, at=self.started, progress=progress)
+            self.assertIn("matching extension digits locally", progress.call_args.args[0])
+            extract.assert_not_called()
+
     def test_empty_success_is_cached_and_invalid_saved_rows_are_refused(self):
         with tempfile.TemporaryDirectory() as root:
             cache = InventoryCache(root)
@@ -208,7 +220,7 @@ class SMSExtractRouteTests(unittest.TestCase):
                       "_get_auth_session": lambda request: {"username": "admin"},
                       "_is_admin_user": lambda username: username == "admin",
                       "_twilio_all_account_number_inventory": self.twilio,
-                      "sms_inventory": SimpleNamespace(aerialink_numbers=self.aerialink, twilio_sms_rows=twilio_sms_rows),
+                      "sms_inventory": SimpleNamespace(aerialink_numbers=self.aerialink, twilio_sms_rows=twilio_sms_rows, failure_details=failure_details, InventoryRefreshError=InventoryRefreshError),
                       "AERIALINK_V5_BASE_URL": "https://example.test/v5", "AERIALINK_ACCOUNT_CODE_LOOKUP_PATH": "/codes",
                       "AERIALINK_USERNAME": "operator", "AERIALINK_PASSWORD": "secret",
                       "_append_audit_event": self.audit,
@@ -232,7 +244,7 @@ class SMSExtractRouteTests(unittest.TestCase):
             second = self.real_cached()
             self.assertTrue(first["cache_hit"])
             self.assertTrue(second["cache_hit"])
-            self.twilio.assert_called_once_with(include_messaging_services=False)
+            self.twilio.assert_called_once_with(force_refresh=True, include_messaging_services=False)
             self.aerialink.assert_called_once()
             self.assertNotIn("scope_key", response.payload)
             self.assertNotIn("provider-secret", InventoryCache(root).path.read_text())
@@ -250,10 +262,21 @@ class SMSExtractRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.payload["count"], 1)
         self.assertEqual(response.payload["failures"], [])
-        self.twilio.assert_called_once_with(include_messaging_services=False)
+        self.twilio.assert_called_once_with(force_refresh=True, include_messaging_services=False)
         self.scope["_cached_all_sms_numbers"].assert_called_once_with(force_refresh=True)
         self.audit.assert_called_once()
         self.assertNotIn("secret", str(response.payload))
+
+    def test_missing_cache_refreshes_provider_before_matching_then_reuses_inventory(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.scope["SMS_ALL_NUMBERS_CACHE"] = InventoryCache(root)
+            report = self.real_cached()
+            self.assertFalse(report["cache_hit"])
+            self.twilio.assert_called_once_with(force_refresh=True, include_messaging_services=False)
+            result = annotate_review({"person": {"extensions": [{"extension": "2140000000", "partition": "PT"}]}}, report)
+            self.assertEqual(result["person"]["sms"], "Yes")
+            self.assertTrue(self.real_cached()["cache_hit"])
+            self.assertEqual(self.twilio.call_count, 1)
 
     def test_authentication_blocks_both_provider_reads(self):
         self.scope["_get_auth_session"] = lambda request: {}
@@ -261,6 +284,29 @@ class SMSExtractRouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 403)
         self.twilio.assert_not_called()
         self.aerialink.assert_not_called()
+
+    def test_partial_transient_twilio_failure_is_retried_before_matching(self):
+        self.twilio.side_effect = [{"rows": [], "accounts": ["account"], "failures": [{"account_name": "Parent", "error": "Lookup failed HTTP 503"}]}, {"rows": [], "accounts": ["account"], "failures": []}]
+        report = self.scope["_extract_all_sms_numbers"]()
+        self.assertEqual(report["status"], "Complete within stated scope")
+        self.assertEqual(self.twilio.call_count, 2)
+        self.assertTrue(all(call.kwargs["force_refresh"] for call in self.twilio.call_args_list))
+        self.aerialink.assert_called_once()
+
+    def test_aerialink_timeout_retry_does_not_repeat_successful_twilio_inventory(self):
+        self.aerialink.side_effect = [ValueError("Aerialink inventory request failed; check connectivity"), [{"provider": "Aerialink", "environment": "AMIEClassic", "account": "Classic", "phone_number": "12140000000"}]]
+        report = self.scope["_extract_all_sms_numbers"]()
+        self.assertEqual(report["status"], "Complete within stated scope")
+        self.assertEqual(self.aerialink.call_count, 2)
+        self.twilio.assert_called_once()
+
+    def test_auth_failure_is_not_retried_or_exposed_as_no(self):
+        self.twilio.return_value = {"rows": [], "accounts": ["account"], "failures": [{"account_name": "Parent", "error": "Lookup failed HTTP 403 secret-token"}]}
+        report = self.scope["_extract_all_sms_numbers"]()
+        self.assertEqual(report["status"], "Partial")
+        self.assertIn("Twilio / Parent: HTTP 403", report["failures"][0])
+        self.assertNotIn("secret-token", str(report))
+        self.twilio.assert_called_once()
 
     def test_partial_provider_failure_is_visible_and_total_failure_is_not_empty_success(self):
         self.twilio.side_effect = RuntimeError("secret must not be exposed")
