@@ -224,7 +224,7 @@ class BulkSeparationTests(unittest.TestCase):
             self.assertEqual(rows[-1][0], "user600@example.com")
             self.assertIn("Clear AD Phone Fields", rows[-1][6])
 
-    def test_retention_never_prunes_active_jobs_or_other_recent_reports(self):
+    def test_history_retains_old_active_completed_and_cancelled_jobs_after_reload(self):
         with tempfile.TemporaryDirectory() as root:
             queue = BulkSeparationQueue(root)
             job = queue.submit("lab", "admin", "a@example.com")
@@ -235,7 +235,32 @@ class BulkSeparationTests(unittest.TestCase):
             job["status"] = "completed"
             with patch("toolkit.bulk_separation.now", return_value=old):
                 queue._save(job)
-            self.assertEqual(queue.history("lab"), [])
+            self.assertEqual(len(BulkSeparationQueue(root).history("lab")), 1)
+            job["status"] = "cancelled"
+            with patch("toolkit.bulk_separation.now", return_value=old):
+                queue._save(job)
+            self.assertEqual(len(BulkSeparationQueue(root).history("lab")), 1)
+            self.assertTrue(queue._path(job["id"]).exists())
+
+    def test_fresh_build_list_keeps_all_rows_and_shared_devices_are_not_build_targets(self):
+        job = {"id": "saved", "host": "lab", "rows": [{"email": f"user{index}@example.com", "status": "deleted", "deleted": "Yes", "name": "=Employee", "userid": "employee", "selected": True,
+            "target_snapshot": [{"device_name": "CSFa", "extension": "1000", "partition": "PT", "relationship": "associated"}, {"device_name": "CSFa", "extension": "1000", "partition": "PT", "relationship": "owner"}],
+            "extensions": [{"extension": "1000", "partition": "PT"}],
+            "devices": [{"device_name": "CSFshared", "extension": "1000", "partition": "PT", "relationship": "shared extension"}]} for index in range(601)]}
+        records = list(csv.DictReader(io.StringIO(bulk_separation.fresh_build_csv_bytes(job).decode("utf-8-sig"))))
+        self.assertEqual(len(records), 601)
+        self.assertEqual(records[-1]["Email"], "user600@example.com")
+        self.assertEqual(records[0]["Name"], "'=Employee")
+        self.assertEqual(records[0]["Previous Jabber Devices (Reference Only)"], "CSFa")
+        self.assertEqual(records[0]["Previous Extensions / Partitions (Reference Only)"], "1000/PT")
+        self.assertEqual(records[0]["Review Details Available"], "Yes")
+        self.assertIn("not a configuration or voicemail restore", records[0]["Fresh Build Note"])
+
+    def test_older_job_fresh_build_export_marks_missing_review_details(self):
+        job = {"id": "older", "host": "lab", "rows": [{"email": "old@example.com", "status": "failed"}]}
+        records = list(csv.DictReader(io.StringIO(bulk_separation.fresh_build_csv_bytes(job).decode("utf-8-sig"))))
+        self.assertEqual(records[0]["Review Details Available"], "No - older job did not capture review details")
+        self.assertEqual(records[0]["Previous Jabber Devices (Reference Only)"], "")
 
 
 class BulkSeparationIntegrationTests(unittest.TestCase):
@@ -388,6 +413,38 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
         self.assertNotIn("output", result["rows"][0])
         job["status"] = "awaiting_review"
         self.assertEqual(len(self.scope["_bulk_separation_public"](job)["rows"]), 601)
+
+    def test_saved_history_exposes_all_jobs_and_no_expiry_without_credentials(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            self.scope["BULK_SEPARATION_QUEUE"] = queue
+            first = queue.submit("lab", "admin", "a@example.com")
+            first["status"] = "completed"
+            old = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=400)).isoformat()
+            with patch("toolkit.bulk_separation.now", return_value=old):
+                queue._save(first)
+            second = queue.submit("lab", "admin", "b@example.com")
+            result = self.scope["bulk_separation_get_route"](object())
+            self.assertEqual(result.status_code, 200)
+            self.assertIsNone(result.content["retention_days"])
+            self.assertEqual({job["id"] for job in result.content["jobs"]}, {first["id"], second["id"]})
+            self.scope["_resolve_cucm_credentials"].assert_not_called()
+
+    def test_fresh_build_download_uses_saved_host_scoped_job_without_provider_reads(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            self.scope["BULK_SEPARATION_QUEUE"] = queue
+            job = queue.submit("lab", "admin", "a@example.com")
+            result = self.scope["bulk_separation_csv_route"](object(), job["id"], True)
+            self.assertIn("bulk_separation_fresh_build_", result.headers["Content-Disposition"])
+            self.assertIn("a@example.com", result.content.decode("utf-8-sig"))
+            self.assertIn("Fresh Build Note", result.content.decode("utf-8-sig"))
+            self.scope["_require_admin_session"].return_value = ({"cucm_host": "prod"}, "admin")
+            self.assertEqual(self.scope["bulk_separation_csv_route"](object(), job["id"], True).status_code, 409)
+            self.scope["_require_admin_session"].side_effect = RuntimeError("Not admin")
+            self.assertEqual(self.scope["bulk_separation_csv_route"](object(), job["id"], True).status_code, 403)
+            self.scope["_resolve_cucm_credentials"].assert_not_called()
+            self.scope["_axl_execute_sql_rows"].assert_not_called()
 
 
 class BulkReviewInventoryTests(unittest.TestCase):

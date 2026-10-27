@@ -41251,7 +41251,7 @@ __GREENLIGHT_ADMIN_CARD__
             <h3 style="color:#a41424;">DANGER - Bulk Delete Cisco Jabber Process</h3>
             <p><strong>Destructive full separation:</strong> removes associated CSF/BOT/TCT devices and Unity voicemail, clears AD phone fields and Unified Messaging membership, releases eligible translation patterns/LS DIDs and removes eligible Teams telephony. The current permanent-DN deletion setting also applies. CUCM End Users and AD accounts are not deleted.</p>
             <p><strong>No automatic undo.</strong> Deleted voicemail and configuration require their own recovery procedures. Interrupted entries require manual review, not automatic retry. Remaining TAB or owner-only Jabber devices are reported for review.</p>
-            <p>Saved jobs and step results: 180 days after completion/cancellation; unfinished jobs are retained. Runtime-data deletion or older VM/data restores can remove history.</p>
+            <p>All jobs, reviews and step results are retained without automatic expiry. Back up the external runtime data directory; deleting that data or restoring an older VM/data backup can remove history. Fresh-build lists are historical references, not configuration or voicemail restores.</p>
             <label for="bulk-separation-emails">Employee emails (1-5,000; newline, comma or semicolon separated)</label>
             <textarea id="bulk-separation-emails" style="width:100%;min-height:110px;box-sizing:border-box;"></textarea>
             <div class="search-filter-row" style="flex-wrap:wrap;">
@@ -41267,10 +41267,12 @@ __GREENLIGHT_ADMIN_CARD__
               <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('cancel');">Cancel Pending</button>
             </div>
             <div class="search-filter-row" style="flex-wrap:wrap;">
+              <label for="bulk-separation-history">Job History (all jobs)</label>
               <select id="bulk-separation-history" aria-label="Saved bulk separation jobs" style="max-width:100%;min-width:0;"></select>
               <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('load');">View Saved Job</button>
               <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('history');">Refresh History</button>
               <a id="bulk-separation-download" hidden>Download Full Results CSV</a>
+              <a id="bulk-separation-build-list" hidden>Download Fresh-Build List</a>
             </div>
             <p style="font-size:12px;">Submission is read-only. Shared-extension devices are context, not additional deletion targets. Unknown registration does not mean Unregistered. Each selected employee authorizes the full separation process.</p>
             <p id="bulk-separation-status" role="status">No bulk job loaded.</p>
@@ -41347,6 +41349,8 @@ __GREENLIGHT_ADMIN_CARD__
                 drawRows();
                 const download = document.getElementById('bulk-separation-download');
                 download.href = '/project-greenlight/bulk-separation/csv?job_id=' + encodeURIComponent(jobId); download.hidden = false;
+                const buildList = document.getElementById('bulk-separation-build-list');
+                buildList.href = download.href + '&fresh_build=true'; buildList.hidden = false;
                 clearTimeout(timer);
                 if (job.status === 'running' || job.status === 'reviewing') timer = setTimeout(function(){window.runBulkSeparation('poll');}, 3000);
               }
@@ -66732,7 +66736,7 @@ def bulk_separation_get_route(request: Request, job_id: str = ""):
     if job_id:
       return JSONResponse({"ok": True, "job": _bulk_separation_public(BULK_SEPARATION_QUEUE.get(job_id, host))}, headers={"Cache-Control": "no-store"})
     jobs = BULK_SEPARATION_QUEUE.history(host)
-    return JSONResponse({"ok": True, "retention_days": 180, "jobs": [{key: value for key, value in _bulk_separation_public(job).items() if key != "rows"} for job in jobs]}, headers={"Cache-Control": "no-store"})
+    return JSONResponse({"ok": True, "retention_days": bulk_separation.RETENTION_DAYS, "retention_policy": "All jobs retained without automatic expiry", "jobs": [{key: value for key, value in _bulk_separation_public(job).items() if key != "rows"} for job in jobs]}, headers={"Cache-Control": "no-store"})
   except Exception:
     return JSONResponse({"ok": False, "error": "Saved job unavailable. Check selected CUCM environment and runtime storage."}, status_code=409)
 
@@ -66780,13 +66784,15 @@ def bulk_separation_post_route(request: Request, action: str = Form(""), job_id:
 
 
 @app.get("/project-greenlight/bulk-separation/csv")
-def bulk_separation_csv_route(request: Request, job_id: str):
+def bulk_separation_csv_route(request: Request, job_id: str, fresh_build: bool = False):
   try:
     session, _operator = _require_admin_session(request)
   except Exception:
     return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
   try:
     job = BULK_SEPARATION_QUEUE.get(job_id, str(session.get("cucm_host", "")).strip())
+    if fresh_build:
+      return Response(content=bulk_separation.fresh_build_csv_bytes(job), media_type="text/csv", headers={"Cache-Control": "no-store", "Content-Disposition": f"attachment; filename=bulk_separation_fresh_build_{job['id']}.csv"})
     return Response(content=bulk_separation.csv_bytes(job), media_type="text/csv", headers={"Cache-Control": "no-store", "Content-Disposition": f"attachment; filename=bulk_separation_{job['id']}.csv"})
   except Exception:
     return JSONResponse({"ok": False, "error": "Saved job unavailable for this CUCM environment."}, status_code=409)

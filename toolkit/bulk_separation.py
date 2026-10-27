@@ -12,7 +12,7 @@ import time
 import uuid
 
 
-RETENTION_DAYS = 180
+RETENTION_DAYS = None
 TERMINAL = {"completed", "cancelled"}
 
 
@@ -37,6 +37,22 @@ def csv_bytes(job):
         values.extend([row.get("name", ""), row.get("selected", ""),
             "; ".join(line["extension"] + "/" + line["partition"] for line in row.get("extensions", [])),
             "; ".join(line["device_name"] + " | " + line["extension"] + "/" + line["partition"] + " | " + line.get("registration", "Unknown") + " | " + line["relationship"] for line in row.get("devices", [])), row.get("registration_checked_at", "")])
+        writer.writerow(["'" + str(value) if str(value).lstrip().startswith(("=", "+", "-", "@")) else value for value in values])
+    return output.getvalue().encode("utf-8-sig")
+
+
+def fresh_build_csv_bytes(job):
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Name", "Email", "User ID", "Previous Jabber Devices (Reference Only)", "Previous Extensions / Partitions (Reference Only)", "Job Outcome", "Jabber Deleted", "Full Process", "Selected for Separation", "Job ID", "CUCM Host", "Review Details Available", "Fresh Build Note"])
+    for row in job["rows"]:
+        devices = sorted({line["device_name"] for line in row.get("target_snapshot", []) if line["device_name"].upper().startswith(("CSF", "TCT", "BOT", "TAB"))})
+        has_review = "target_snapshot" in row and "extensions" in row
+        values = [row.get("name", ""), row["email"], row.get("userid", ""), "; ".join(devices),
+            "; ".join(line["extension"] + "/" + line["partition"] for line in row.get("extensions", [])),
+            row["status"], row.get("deleted", "Not recorded"), row.get("process", "Not recorded"), row.get("selected", "Not recorded"),
+            job["id"], job["host"], "Yes" if has_review else "No - older job did not capture review details",
+            "Fresh build using current approved templates and current identity/number-availability checks; not a configuration or voicemail restore. Confirm the outcome before rebuilding; kept/failed/unknown entries may still have resources."]
         writer.writerow(["'" + str(value) if str(value).lstrip().startswith(("=", "+", "-", "@")) else value for value in values])
     return output.getvalue().encode("utf-8-sig")
 
@@ -210,13 +226,7 @@ class BulkSeparationQueue:
     def history(self, host):
         with self.lock:
             jobs = [self._read(path) for path in self.root.glob("*.json")]
-            cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=RETENTION_DAYS)
-            retained = []
-            for job in jobs:
-                if job["status"] in TERMINAL and datetime.datetime.fromisoformat(job["updated_at"]) < cutoff:
-                    self._path(job["id"]).unlink()
-                elif job["host"] == host:
-                    retained.append(job)
+            retained = [job for job in jobs if job["host"] == host]
             return sorted(retained, key=lambda job: job["created_at"], reverse=True)
 
     def get(self, job_id, host):
