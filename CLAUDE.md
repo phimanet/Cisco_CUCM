@@ -3,7 +3,7 @@
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
 ## Last Updated
-- Date: 2026-10-26
+- Date: 2026-10-27
 - Updated by: GitHub Copilot
 
 ## Active Goals
@@ -19,7 +19,7 @@ This file is the single source of truth for ongoing goals, pending tasks, and ke
 - [x] Centralize environment-specific values — AD LDAP config deployed via `/opt/cucm-web/.env` + systemd EnvironmentFile on both LAB and PROD.
 - [ ] Add lightweight health check and structured error responses for web routes.
 - [ ] Add minimal regression tests for toolkit functions that generate CSV outputs.
-- [ ] [P1][In Progress] Validate `DANGER - Bulk Delete Cisco Jabber Process` in LAB with approved cleanup identities before PROD use; confirm full separation outcomes and actual license release.
+- [ ] [P1][In Progress] Validate the read-only visual review, saved employee deselection, shared-extension device inventory and current RIS registration in `DANGER - Bulk Delete Cisco Jabber Process` in LAB, then validate approved selected-only separation and actual license release before PROD use.
 - [ ] [P2][In Progress] Unity Connection User Extract replaces Number Reference Search; validate selected-user lookup by name/email/primary extension and returned number fields in LAB, starting with operator example Phimane Tiaokhiao / 8585236648. Standalone System Call Handler extraction is deferred until the user-mailbox fields are verified.
 
 ## Code Improvement Backlog
@@ -115,6 +115,12 @@ Priority keys:
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
+
+### 2026-10-27 (Bulk Jabber Separation Visual Review, LAB validation pending)
+- `Submit for Review` is now read-only. Exact-email matches resolve employee name, primary/device extensions with partitions, associated/owned devices, and all devices sharing those extension digits, including physical phones and other partitions. Shared devices are context only, not additional deletion targets. Inventory reads are paged/batched; registration uses the existing batched RIS helper without its per-device getPhone fallback. Missing/failed registration is Unknown, never assumed Unregistered.
+- Full saved reviews include all 1-5,000 entries, searchable and paged 50 per view; checkboxes select entire employees, not individual phones. Deselect to keep employees. Checkbox changes persist atomically with a revision check before approval; refresh preserves exclusions. `Separate Selected` requires DELETE confirmation and a fresh review (15-minute limit); unchecked employees are retained as Kept / Not attempted. Saved reviewed identities and device/line snapshots are revalidated before mutation. Legacy web Resume cannot bypass review. Existing full-separation scope and 180-day completed/cancelled history policy are unchanged.
+- Review runs independently of the browser and survives saved-state reload. Interrupted read-only review requires retry, not separation; approved interrupted mutations retain the prior Needs Review/no-replay rule. CSV includes names, selection, extensions, devices, registration and its snapshot timestamp. Approved employee count remains visible through processing. Windows-only bounded atomic-replace retries handle transient file locks; permanent failures still preserve prior state.
+- Local checks: 35 focused tests and 220 repository tests pass; SQL-backed fixtures cover shared physical/Jabber devices, primary-only lines, partitions, batch efficiency and Unknown registration. Full Project Functions page: all five scripts parse; mocked read-only submission, 601-person paging/filtering, persisted deselection/reload, confirmation/selected-only approval, escaping and existing navigation pass. Desktop/mobile controls and horizontally scrolling review table checked. Full ASGI/live schema/permissions/RIS, actual browser CSV download and actual deletion/license release remain unverified. No live writes or PROD rollout performed; existing PERFMON diagnostics/embedded-JavaScript warnings remain.
 
 ### 2026-10-26 (DANGER - Bulk Delete Cisco Jabber Process, LAB validation pending)
 - Added isolated Project Functions menu/panel with the operator's exact name. Accepts 1-5,000 email entries, deduplicates case-insensitively, uses paged exact-email CUCM SQL in batches of 100, refuses ambiguous/missing matches, revalidates identity before each mutation and continues after individual/batch lookup or separation failures. Administrator authentication and explicit `DELETE` confirmation are required.

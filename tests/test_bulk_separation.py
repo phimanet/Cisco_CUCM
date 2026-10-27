@@ -3,16 +3,85 @@ import ast
 import csv
 import datetime
 import io
+import json
 from pathlib import Path
+import re
+import sqlite3
 import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
+from toolkit import bulk_separation
 from toolkit.bulk_separation import BulkSeparationQueue, csv_bytes, parse_emails
 
 
 class BulkSeparationTests(unittest.TestCase):
+    def test_review_is_read_only_and_kept_employee_is_never_separated(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            job = queue.submit("lab", "admin", "a@example.com b@example.com")
+            execute = Mock(return_value={"status": "deleted"})
+            queue.review(job["id"], "lab", lambda emails: {email: {"userid": email, "name": "Employee", "eligible": True, "devices": []} for email in emails})
+            queue.worker.join(5)
+            saved = queue.get(job["id"], "lab")
+            self.assertEqual(saved["status"], "awaiting_review")
+            execute.assert_not_called()
+            with self.assertRaises(ValueError):
+                queue.start(job["id"], "lab", Mock(), execute)
+            selected = queue.select(job["id"], "lab", saved["selection_revision"], ["a@example.com"])
+            restored = BulkSeparationQueue(root)
+            self.assertFalse(restored.get(job["id"], "lab")["rows"][1]["selected"])
+            restored.approve(job["id"], "lab", selected["selection_revision"], "admin")
+            restored.start(job["id"], "lab", lambda emails: {email: [{"userid": email}] for email in emails}, execute)
+            restored.worker.join(5)
+            execute.assert_called_once_with("a@example.com", "a@example.com")
+            self.assertEqual(restored.get(job["id"], "lab")["rows"][1]["status"], "kept")
+
+    def test_review_refresh_preserves_deselection_and_requires_fresh_revision(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            job = queue.submit("lab", "admin", "a@example.com b@example.com")
+            preview = lambda emails: {email: {"userid": email, "eligible": True} for email in emails}
+            queue.review(job["id"], "lab", preview)
+            queue.worker.join(5)
+            saved = queue.get(job["id"], "lab")
+            selected = queue.select(job["id"], "lab", saved["selection_revision"], ["a@example.com"])
+            with self.assertRaises(ValueError):
+                queue.approve(job["id"], "lab", saved["selection_revision"], "admin")
+            queue.review(job["id"], "lab", preview)
+            queue.worker.join(5)
+            refreshed = queue.get(job["id"], "lab")
+            self.assertFalse(refreshed["rows"][1]["selected"])
+            with self.assertRaises(ValueError):
+                queue.select(job["id"], "lab", selected["selection_revision"], ["a@example.com", "b@example.com"])
+
+    def test_expired_review_and_invalid_selection_cannot_start(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            job = queue.submit("lab", "admin", "a@example.com")
+            queue.review(job["id"], "lab", lambda emails: {emails[0]: {"userid": "a", "eligible": True}})
+            queue.worker.join(5)
+            saved = queue.get(job["id"], "lab")
+            with self.assertRaises(ValueError):
+                queue.select(job["id"], "lab", saved["selection_revision"], ["other@example.com"])
+            saved["reviewed_at"] = (datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(minutes=16)).isoformat()
+            queue._save(saved)
+            with self.assertRaisesRegex(ValueError, "older than 15 minutes"):
+                queue.approve(job["id"], "lab", saved["selection_revision"], "admin")
+
+    def test_review_restart_never_starts_separation(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            job = queue.submit("lab", "admin", "a@example.com")
+            job.update(status="reviewing", review_required=True)
+            queue._save(job)
+            queue.recover()
+            saved = queue.get(job["id"], "lab")
+            self.assertEqual(saved["status"], "review_failed")
+            with self.assertRaises(ValueError):
+                queue.start(job["id"], "lab", Mock(), Mock())
+
     def test_entries_and_failure_continuation(self):
         with tempfile.TemporaryDirectory() as root:
             queue = BulkSeparationQueue(root)
@@ -173,14 +242,14 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         tree = ast.parse((Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8-sig"))
-        names = {"_bulk_separation_resolve", "_bulk_separation_devices", "_bulk_separation_execute", "_bulk_separation_public", "bulk_separation_get_route", "bulk_separation_post_route", "bulk_separation_csv_route"}
+        names = {"_bulk_separation_resolve", "_bulk_separation_devices", "_bulk_separation_preview", "_bulk_separation_execute", "_bulk_separation_public", "bulk_separation_get_route", "bulk_separation_post_route", "bulk_separation_csv_route"}
         nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
         for node in nodes:
             node.decorator_list = []
         cls.code = compile(ast.Module(body=nodes, type_ignores=[]), "<bulk-integration>", "exec")
 
     def setUp(self):
-        self.scope = {"Request": object, "Form": lambda value: value, "csv": csv, "io": io,
+        self.scope = {"Request": object, "Form": lambda value: value, "csv": csv, "io": io, "json": json, "bulk_separation": bulk_separation,
             "_sql_escape_literal": lambda value: value.replace("'", "''"),
             "_axl_execute_sql_rows": Mock(return_value=[]), "_to_bytes": lambda data: data,
             "_run_full_separation": Mock(return_value=(b"Step,Status,Details\nLookup User,Success,Found\nRemove Phone,Success,Removed\n", "result.csv")),
@@ -240,6 +309,66 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
         self.assertEqual(result["status"], "lookup_failed")
         self.scope["_run_full_separation"].assert_not_called()
 
+    def test_changed_reviewed_devices_block_all_mutations(self):
+        self.scope["_bulk_separation_resolve"] = lambda *args: {"a@example.com": [{"userid": "a"}]}
+        with patch.object(bulk_separation, "target_inventory", return_value={"a": {"target_snapshot": [{"device_name": "new"}], "extensions": []}}):
+            result = self.scope["_bulk_separation_execute"]("lab", "admin", "secret", "operator", "a@example.com", "a", {"target_snapshot": [], "extensions": []})
+        self.assertEqual(result["deleted"], "Not attempted")
+        self.assertEqual(result["status"], "needs_review")
+        self.scope["_run_full_separation"].assert_not_called()
+
+    def test_submit_route_only_starts_read_only_review(self):
+        queue = Mock()
+        queue.submit.return_value = {"id": "new", "rows": []}
+        queue.get.return_value = {"id": "new", "rows": [], "status": "reviewing"}
+        self.scope["BULK_SEPARATION_QUEUE"] = queue
+        result = self.scope["bulk_separation_post_route"](object(), "submit", "", "a@example.com", "")
+        self.assertEqual(result.status_code, 200)
+        queue.review.assert_called_once()
+        queue.start.assert_not_called()
+        self.scope["_run_full_separation"].assert_not_called()
+
+    def test_selected_route_approval_only_executes_saved_selection_and_snapshot(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            self.scope["BULK_SEPARATION_QUEUE"] = queue
+            job = queue.submit("lab", "admin", "a@example.com b@example.com")
+            queue.review(job["id"], "lab", lambda emails: {email: {"userid": email, "eligible": True, "target_snapshot": [], "extensions": []} for email in emails})
+            queue.worker.join(5)
+            saved = queue.get(job["id"], "lab")
+            selection = self.scope["bulk_separation_post_route"](object(), "select", job["id"], "", "", saved["selection_revision"], json.dumps(["a@example.com"]))
+            self.assertEqual(selection.status_code, 200)
+            self.scope["_bulk_separation_resolve"] = lambda *args: {email: [{"userid": email}] for email in args[-1]}
+            execute = Mock(return_value={"status": "deleted"})
+            self.scope["_bulk_separation_execute"] = execute
+            result = self.scope["bulk_separation_post_route"](object(), "approve", job["id"], "", "DELETE", selection.content["selection_revision"], "[]")
+            self.assertEqual(result.status_code, 200)
+            queue.worker.join(5)
+            execute.assert_called_once()
+            self.assertEqual(execute.call_args.args[4:6], ("a@example.com", "a@example.com"))
+            self.assertEqual(execute.call_args.args[6]["target_snapshot"], [])
+            self.assertEqual(queue.get(job["id"], "lab")["approved_count"], 1)
+            self.assertEqual(queue.get(job["id"], "lab")["rows"][1]["status"], "kept")
+
+    def test_legacy_resume_cannot_bypass_new_review_requirement(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            self.scope["BULK_SEPARATION_QUEUE"] = queue
+            job = queue.submit("lab", "admin", "a@example.com")
+            result = self.scope["bulk_separation_post_route"](object(), "resume", job["id"], "", "DELETE")
+            self.assertEqual(result.status_code, 409)
+            self.scope["_run_full_separation"].assert_not_called()
+
+    def test_review_preview_uses_batch_registration_without_phone_fallback(self):
+        self.scope["_bulk_separation_resolve"] = Mock(return_value={})
+        self.scope["_lookup_jabber_registration_statuses"] = Mock(return_value={})
+        def build(emails, identities, read_sql, registrations):
+            registrations(["CSFa", "SEPa"])
+            return {}
+        with patch.object(bulk_separation, "build_review", side_effect=build):
+            self.scope["_bulk_separation_preview"]("lab", "admin", "secret", ["a@example.com"])
+        self.scope["_lookup_jabber_registration_statuses"].assert_called_once_with("lab", "admin", "secret", ["CSFa", "SEPa"], allow_phone_fallback=False)
+
     def test_all_routes_require_admin_and_confirmation_before_mutation(self):
         self.scope["BULK_SEPARATION_QUEUE"] = Mock()
         self.scope["_require_admin_session"].side_effect = RuntimeError("Not admin")
@@ -247,7 +376,7 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
             self.assertEqual(self.scope[name](*args).status_code, 403)
         self.scope["BULK_SEPARATION_QUEUE"].submit.assert_not_called()
         self.scope["_require_admin_session"].side_effect = None
-        result = self.scope["bulk_separation_post_route"](object(), "submit", "", "a@example.com", "")
+        result = self.scope["bulk_separation_post_route"](object(), "approve", "job", "", "")
         self.assertEqual(result.status_code, 409)
         self.scope["BULK_SEPARATION_QUEUE"].submit.assert_not_called()
 
@@ -257,6 +386,92 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
         self.assertEqual(len(result["rows"]), 500)
         self.assertEqual(result["deleted_count"], 601)
         self.assertNotIn("output", result["rows"][0])
+        job["status"] = "awaiting_review"
+        self.assertEqual(len(self.scope["_bulk_separation_public"](job)["rows"]), 601)
+
+
+class BulkReviewInventoryTests(unittest.TestCase):
+    def setUp(self):
+        self.db = sqlite3.connect(":memory:")
+        self.db.row_factory = sqlite3.Row
+        self.addCleanup(self.db.close)
+        self.db.executescript("""
+            CREATE TABLE enduser (pkid TEXT, userid TEXT, firstname TEXT, lastname TEXT, displayname TEXT);
+            CREATE TABLE enduserdevicemap (fkenduser TEXT, fkdevice TEXT);
+            CREATE TABLE device (pkid TEXT, name TEXT, fkenduser TEXT);
+            CREATE TABLE devicenumplanmap (fkdevice TEXT, fknumplan TEXT);
+            CREATE TABLE numplan (pkid TEXT, dnorpattern TEXT, fkroutepartition TEXT);
+            CREATE TABLE routepartition (pkid TEXT, name TEXT);
+            CREATE TABLE endusernumplanmap (fkenduser TEXT, fknumplan TEXT, tkdnusage INTEGER);
+            INSERT INTO enduser VALUES ('ua','a','Alice','Example','Alice Example'), ('ub','b','Bob','Keep','Bob Keep');
+            INSERT INTO routepartition VALUES ('rp1','ENT_DEVICE_PT'),('rp2','OTHER_PT');
+            INSERT INTO numplan VALUES ('n1','1000','rp1'),('n2','2000','rp1'),('n3','1000','rp2');
+            INSERT INTO device VALUES ('da','csfa','ua'),('dm','BOTa','ua'),('ds','SEPshared','ub'),('do','SEPotherpartition','ub'),('db','CSFb','ub');
+            INSERT INTO enduserdevicemap VALUES ('ua','da'),('ua','dm'),('ub','db');
+            INSERT INTO devicenumplanmap VALUES ('da','n1'),('dm','n1'),('ds','n1'),('do','n3'),('db','n2');
+            INSERT INTO endusernumplanmap VALUES ('ua','n1',1),('ub','n2',1);
+        """)
+        self.queries = []
+        self.registration = Mock(return_value={"csfa": {"status": "Registered"}, "BOTa": {"status": "Unregistered"}})
+
+    def read_sql(self, sql):
+        self.queries.append(sql)
+        match = re.match(r"SELECT SKIP (\d+) FIRST (\d+) ", sql)
+        self.assertIsNotNone(match)
+        offset, limit = match.groups()
+        return [dict(row) for row in self.db.execute("SELECT " + sql[match.end():] + f" LIMIT {limit} OFFSET {offset}")]
+
+    def review(self, reader=None):
+        return bulk_separation.build_review(["a@example.com"], {"a@example.com": [{"userid": "a"}]}, reader or self.read_sql, self.registration)["a@example.com"]
+
+    def test_all_shared_extension_devices_names_partitions_and_live_registration(self):
+        row = self.review()
+        self.assertEqual(row["name"], "Alice Example")
+        self.assertTrue(row["eligible"])
+        self.assertEqual({line["device_name"] for line in row["devices"]}, {"csfa", "BOTa", "SEPshared", "SEPotherpartition"})
+        states = {line["device_name"]: line["registration"] for line in row["devices"]}
+        self.assertEqual(states["csfa"], "Registered")
+        self.assertEqual(states["BOTa"], "Unregistered")
+        self.assertEqual(states["SEPshared"], "Unknown")
+        self.assertTrue(any(line["partition"] == "OTHER_PT" for line in row["devices"]))
+        self.assertEqual({line["device_name"] for line in row["target_snapshot"]}, {"csfa", "BOTa"})
+        self.assertEqual(len(self.queries), 3)
+        self.registration.assert_called_once()
+
+    def test_registration_failure_is_unknown_not_unregistered(self):
+        self.registration.side_effect = RuntimeError("RIS unavailable")
+        row = self.review()
+        self.assertTrue(row["eligible"])
+        self.assertEqual({line["registration"] for line in row["devices"]}, {"Unknown"})
+
+    def test_shared_extension_failure_blocks_selection_and_retains_identity(self):
+        def reader(sql):
+            if "FROM numplan n INNER JOIN" in sql:
+                raise RuntimeError("denied")
+            return self.read_sql(sql)
+        row = self.review(reader)
+        self.assertFalse(row["eligible"])
+        self.assertEqual(row["name"], "Alice Example")
+        self.assertIn("lookup failed", row["detail"])
+
+    def test_more_than_100_users_are_batched_without_per_person_queries(self):
+        self.db.executemany("INSERT INTO enduser VALUES (?, ?, ?, ?, ?)", [(f"p{index}", f"user{index}", "First", "Last", "First Last") for index in range(150)])
+        inventory = bulk_separation.target_inventory([f"user{index}" for index in range(150)], self.read_sql)
+        self.assertEqual(len(inventory), 150)
+        self.assertEqual(len(self.queries), 4)
+
+    def test_primary_extension_without_associated_device_still_finds_shared_devices(self):
+        self.db.execute("DELETE FROM enduserdevicemap WHERE fkenduser='ua'")
+        self.db.execute("UPDATE device SET fkenduser=NULL WHERE fkenduser='ua'")
+        row = self.review()
+        self.assertEqual(row["target_snapshot"], [])
+        self.assertEqual(row["extensions"], [{"extension": "1000", "partition": "ENT_DEVICE_PT"}])
+        self.assertEqual(len(row["devices"]), 4)
+
+    def test_repeated_inventory_pages_fail_closed(self):
+        rows = [{"device_name": str(index)} for index in range(1000)]
+        with self.assertRaisesRegex(ValueError, "Repeated"):
+            list(bulk_separation._paged_rows(lambda sql: rows, "device_name FROM device"))
 
 
 if __name__ == "__main__":

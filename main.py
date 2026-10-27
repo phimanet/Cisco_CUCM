@@ -41255,11 +41255,15 @@ __GREENLIGHT_ADMIN_CARD__
             <label for="bulk-separation-emails">Employee emails (1-5,000; newline, comma or semicolon separated)</label>
             <textarea id="bulk-separation-emails" style="width:100%;min-height:110px;box-sizing:border-box;"></textarea>
             <div class="search-filter-row" style="flex-wrap:wrap;">
+              <button type="button" onclick="event.preventDefault();window.runBulkSeparation ? window.runBulkSeparation('submit') : document.getElementById('bulk-separation-status').textContent='JavaScript unavailable. Reload the page.';">Submit for Review</button>
+              <button type="button" id="bulk-separation-review" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('review');">Refresh Review / Registration</button>
+            </div>
+            <div class="search-filter-row" style="flex-wrap:wrap;">
               <label for="bulk-separation-confirm">Type DELETE to authorize full separation</label>
               <input id="bulk-separation-confirm" autocomplete="off" style="max-width:130px;" />
-              <button type="button" style="background:#a41424;color:white;" onclick="event.preventDefault();window.runBulkSeparation ? window.runBulkSeparation('submit') : document.getElementById('bulk-separation-status').textContent='JavaScript unavailable. Reload the page.';">Start Bulk Separation</button>
-              <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('pause');">Pause</button>
-              <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('resume');">Resume Pending</button>
+              <button type="button" id="bulk-separation-approve" disabled style="background:#a41424;color:white;" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('approve');">Separate Selected</button>
+              <button type="button" id="bulk-separation-pause" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('pause');">Pause</button>
+              <button type="button" id="bulk-separation-resume" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('resume');">Resume Pending</button>
               <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('cancel');">Cancel Pending</button>
             </div>
             <div class="search-filter-row" style="flex-wrap:wrap;">
@@ -41268,35 +41272,83 @@ __GREENLIGHT_ADMIN_CARD__
               <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('history');">Refresh History</button>
               <a id="bulk-separation-download" hidden>Download Full Results CSV</a>
             </div>
+            <p style="font-size:12px;">Submission is read-only. Shared-extension devices are context, not additional deletion targets. Unknown registration does not mean Unregistered. Each selected employee authorizes the full separation process.</p>
             <p id="bulk-separation-status" role="status">No bulk job loaded.</p>
-            <div style="overflow-x:auto;"><table style="width:100%;font-size:13px;"><thead><tr><th>Email</th><th>User ID</th><th>Status</th><th>Jabber Deleted</th><th>Full Process</th><th>Details</th></tr></thead><tbody id="bulk-separation-results"></tbody></table></div>
+            <div class="search-filter-row" style="flex-wrap:wrap;">
+              <input id="bulk-separation-filter" aria-label="Filter review results" placeholder="Name, email, extension, device, registration" style="max-width:100%;box-sizing:border-box;" />
+              <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="bulk-separation-select-all" style="width:16px;min-width:16px;height:16px;margin:0;" /> Separate filtered employees</label>
+              <button type="button" id="bulk-separation-prev" aria-label="Previous review page">Previous</button>
+              <span id="bulk-separation-page" style="font-size:12px;"></span>
+              <button type="button" id="bulk-separation-next" aria-label="Next review page">Next</button>
+            </div>
+            <div style="overflow:auto;max-height:560px;"><table style="width:100%;min-width:1100px;font-size:13px;"><thead><tr><th>Separate</th><th>Employee</th><th>Extension / Partition</th><th>Devices / Registration</th><th>Status</th><th>Jabber Deleted</th><th>Full Process</th><th>Details</th></tr></thead><tbody id="bulk-separation-results"></tbody></table></div>
             <script>
             (function(){
               const status = document.getElementById('bulk-separation-status');
               const history = document.getElementById('bulk-separation-history');
-              let jobId = '', timer = null, busy = false;
+              const filter = document.getElementById('bulk-separation-filter');
+              const selectAll = document.getElementById('bulk-separation-select-all');
+              let jobId = '', timer = null, busy = false, viewJob = null, pageIndex = 0, selectionError = false;
               async function readResponse(response) {
                 const data = await response.json();
                 if (!response.ok || !data.ok) throw new Error(data.error || 'Bulk request failed.');
                 return data;
               }
-              function render(job) {
-                jobId = job.id;
-                status.textContent = job.host + ' | ' + job.status + ' | ' + job.finished + '/' + job.total + ' processed | Jabber removed: ' + job.deleted_count + ' | Review/failure: ' + job.review_count + '. Showing up to 500 entries; CSV contains all entries and step output. Pause/cancel take effect after the current person finishes.';
-                if (job.error) status.textContent += ' ' + job.error;
+              function editable(row) { return viewJob && viewJob.status === 'awaiting_review' && row.status === 'pending' && row.eligible; }
+              function filteredRows() {
+                const text = filter.value.trim().toLowerCase();
+                return (viewJob ? viewJob.rows : []).filter(function(row){return !text || JSON.stringify(row).toLowerCase().includes(text);});
+              }
+              function controls() {
+                const reviewReady = viewJob && viewJob.status === 'awaiting_review';
+                document.getElementById('bulk-separation-approve').disabled = busy || selectionError || !reviewReady || !viewJob.rows.some(function(row){return editable(row) && row.selected;});
+                document.getElementById('bulk-separation-review').disabled = busy || !viewJob || !!viewJob.approved_at || ['reviewing','completed','cancelled','running'].includes(viewJob.status);
+                document.getElementById('bulk-separation-pause').disabled = busy || !viewJob || !viewJob.approved_at || viewJob.status !== 'running';
+                document.getElementById('bulk-separation-resume').disabled = busy || !viewJob || !viewJob.approved_at || !['queued','paused','credentials_required'].includes(viewJob.status);
+                selectAll.disabled = busy || !reviewReady;
+                document.querySelectorAll('#bulk-separation-results input[type="checkbox"]').forEach(function(box){box.disabled = busy || !reviewReady || box.dataset.eligible !== 'true';});
+              }
+              function drawRows() {
+                const rows = filteredRows();
+                const maxPage = Math.max(0, Math.ceil(rows.length / 50) - 1);
+                pageIndex = Math.min(pageIndex, maxPage);
                 const body = document.getElementById('bulk-separation-results');
                 body.replaceChildren();
-                job.rows.forEach(function(row) {
+                rows.slice(pageIndex * 50, (pageIndex + 1) * 50).forEach(function(row) {
                   const tr = document.createElement('tr');
-                  ['email','userid','status','deleted','process','detail'].forEach(function(key) {
-                    const td = document.createElement('td'); td.textContent = row[key] || ''; td.style.overflowWrap = 'anywhere'; tr.appendChild(td);
+                  const selectCell = document.createElement('td');
+                  const box = document.createElement('input'); box.type = 'checkbox'; box.checked = !!row.selected; box.dataset.eligible = String(!!editable(row)); box.setAttribute('aria-label', 'Separate ' + row.email); box.style.cssText = 'width:16px;min-width:16px;height:16px;margin:0;';
+                  box.addEventListener('change', function(){row.selected = box.checked; window.runBulkSeparation('select');});
+                  selectCell.appendChild(box); tr.appendChild(selectCell);
+                  const employee = [row.name || 'Name unavailable', row.email, row.userid || ''].filter(Boolean).join(String.fromCharCode(10));
+                  const extensions = (row.extensions || []).map(function(line){return line.extension + ' / ' + (line.partition || '(no partition)');}).join(String.fromCharCode(10)) || 'Not returned';
+                  const devices = (row.devices || []).map(function(device){return device.device_name + ' | ' + (device.extension || '(no line)') + ' / ' + (device.partition || '(no partition)') + ' | ' + (device.registration || 'Unknown') + ' | ' + device.relationship;}).join(String.fromCharCode(10)) || (row.eligible ? 'No devices returned' : 'Lookup unavailable');
+                  [employee,extensions,devices,row.status,row.deleted,row.process,row.detail].forEach(function(value, index) {
+                    const td = document.createElement('td'); td.textContent = value || ''; td.style.cssText = 'overflow-wrap:anywhere;white-space:pre-line;vertical-align:top;padding:6px;'; tr.appendChild(td);
+                    if (index < 3) td.style.minWidth = [150,120,280][index] + 'px';
                   });
                   body.appendChild(tr);
                 });
+                const eligible = rows.filter(editable), selected = eligible.filter(function(row){return row.selected;});
+                selectAll.checked = eligible.length > 0 && eligible.length === selected.length; selectAll.indeterminate = selected.length > 0 && selected.length < eligible.length;
+                document.getElementById('bulk-separation-page').textContent = rows.length ? (pageIndex * 50 + 1) + '-' + Math.min(rows.length, (pageIndex + 1) * 50) + ' of ' + rows.length : '0 entries';
+                document.getElementById('bulk-separation-prev').disabled = pageIndex === 0;
+                document.getElementById('bulk-separation-next').disabled = pageIndex >= maxPage;
+                controls();
+              }
+              function render(job) {
+                if (jobId !== job.id) pageIndex = 0;
+                jobId = job.id; viewJob = job;
+                const count = job.status === 'awaiting_review' ? job.rows.filter(function(row){return editable(row) && row.selected;}).length : (job.approved_count || 0);
+                status.textContent = job.host + ' | ' + job.status + ' | ' + count + ' selected | ' + job.finished + '/' + job.total + ' processed | Jabber removed: ' + job.deleted_count + ' | Review/failure: ' + job.review_count;
+                if (job.reviewed_at) status.textContent += ' | Review snapshot: ' + new Date(job.reviewed_at).toLocaleString();
+                if (job.rows.length < job.total) status.textContent += ' | Result preview: ' + job.rows.length + '/' + job.total + '; CSV contains all entries.';
+                if (job.error) status.textContent += ' | ' + job.error;
+                drawRows();
                 const download = document.getElementById('bulk-separation-download');
                 download.href = '/project-greenlight/bulk-separation/csv?job_id=' + encodeURIComponent(jobId); download.hidden = false;
                 clearTimeout(timer);
-                if (job.status === 'running' || job.status === 'queued') timer = setTimeout(function(){window.runBulkSeparation('poll');}, 3000);
+                if (job.status === 'running' || job.status === 'reviewing') timer = setTimeout(function(){window.runBulkSeparation('poll');}, 3000);
               }
               async function loadHistory() {
                 const data = await readResponse(await fetch('/project-greenlight/bulk-separation', {cache:'no-store'}));
@@ -41310,23 +41362,31 @@ __GREENLIGHT_ADMIN_CARD__
                 const data = await readResponse(await fetch('/project-greenlight/bulk-separation?job_id=' + encodeURIComponent(id), {cache:'no-store'})); render(data.job);
               }
               window.runBulkSeparation = async function(action) {
-                if (busy) return;
-                busy = true;
+                if (busy) { if (action === 'poll') timer = setTimeout(function(){window.runBulkSeparation('poll');}, 1000); return; }
+                busy = true; controls();
                 try {
                   if (action === 'history') await loadHistory();
-                  else if (action === 'load' || action === 'poll') await loadJob(action === 'load' ? history.value : jobId);
+                  else if (action === 'load' || action === 'poll') { await loadJob(action === 'load' ? history.value : jobId); selectionError = false; }
                   else {
                     const confirmation = document.getElementById('bulk-separation-confirm');
-                    if ((action === 'submit' || action === 'resume') && confirmation.value !== 'DELETE') throw new Error('Type DELETE to authorize full separation.');
+                    if ((action === 'approve' || action === 'resume') && confirmation.value !== 'DELETE') throw new Error('Type DELETE to authorize full separation.');
                     if (action !== 'submit' && !jobId) throw new Error('Load a saved job first.');
-                    if (action === 'submit' && !window.confirm('Run FULL separation for these employees on the selected CUCM environment? Voicemail deletion cannot be undone here.')) return;
+                    if (action === 'approve' && !window.confirm('Run FULL separation for the ' + viewJob.rows.filter(function(row){return editable(row) && row.selected;}).length + ' selected employees on ' + viewJob.host + '? Unchecked employees will be kept. Voicemail deletion cannot be undone here.')) return;
                     const form = new FormData(); form.set('action', action); form.set('job_id', jobId); form.set('confirmation', confirmation.value); form.set('emails_text', document.getElementById('bulk-separation-emails').value);
+                    form.set('selection_revision', viewJob ? viewJob.selection_revision || '' : '');
+                    if (action === 'select') form.set('selected_emails', JSON.stringify(viewJob.rows.filter(function(row){return editable(row) && row.selected;}).map(function(row){return row.email;})));
                     const data = await readResponse(await fetch('/project-greenlight/bulk-separation', {method:'POST', body:form}));
-                    render(data.job); confirmation.value = ''; await loadHistory();
+                    selectionError = false;
+                    if (action === 'select') { viewJob.selection_revision = data.selection_revision; render(viewJob); }
+                    else { render(data.job); confirmation.value = ''; await loadHistory(); }
                   }
-                } catch(error) { status.textContent = error.message; }
-                finally { busy = false; }
+                } catch(error) { if (action === 'select') selectionError = true; status.textContent = error.message + (selectionError ? ' Selection not saved. Reload the saved job before approval.' : ''); }
+                finally { busy = false; controls(); }
               };
+              filter.addEventListener('input', function(){pageIndex = 0; drawRows();});
+              selectAll.addEventListener('change', function(){filteredRows().filter(editable).forEach(function(row){row.selected = selectAll.checked;}); window.runBulkSeparation('select');});
+              document.getElementById('bulk-separation-prev').addEventListener('click', function(){pageIndex = Math.max(0, pageIndex - 1); drawRows();});
+              document.getElementById('bulk-separation-next').addEventListener('click', function(){pageIndex += 1; drawRows();});
               window.runBulkSeparation('history');
             })();
             </script>
@@ -63599,6 +63659,8 @@ def _lookup_jabber_registration_statuses(
   cucm_user: str,
   cucm_pass: str,
   device_names: list[str],
+  *,
+  allow_phone_fallback: bool = True,
 ) -> dict[str, dict]:
   clean_names = []
   seen = set()
@@ -63809,6 +63871,9 @@ def _lookup_jabber_registration_statuses(
   for name in clean_names:
     if name not in status_map:
       status_map[name] = {"status": "Unknown", "tkstatus": "", "status_name": ""}
+
+  if not allow_phone_fallback:
+    return status_map
 
   unresolved_names = [
     name for name in clean_names
@@ -66601,10 +66666,20 @@ def _bulk_separation_devices(host, username, password, userid, previous=None):
   return [row["name"] for row in rows]
 
 
-def _bulk_separation_execute(host, username, password, operator, email, userid):
+def _bulk_separation_preview(host, username, password, emails):
+  return bulk_separation.build_review(emails, _bulk_separation_resolve(host, username, password, emails),
+    lambda sql: _axl_execute_sql_rows(host, username, password, sql),
+    lambda names: _lookup_jabber_registration_statuses(host, username, password, names, allow_phone_fallback=False))
+
+
+def _bulk_separation_execute(host, username, password, operator, email, userid, expected=None):
   matches = _bulk_separation_resolve(host, username, password, [email])[email]
   if matches != [{"userid": userid}]:
     return {"status": "lookup_failed", "deleted": "Not attempted", "process": "Not started", "detail": "Email identity changed before execution; no changes made."}
+  if expected is not None:
+    current = bulk_separation.target_inventory([userid], lambda sql: _axl_execute_sql_rows(host, username, password, sql)).get(userid)
+    if not current or any(current.get(key) != expected.get(key) for key in ("target_snapshot", "extensions")):
+      return {"status": "needs_review", "deleted": "Not attempted", "process": "Not started", "detail": "Devices or extensions changed after visual review; no changes made."}
   previous = _bulk_separation_devices(host, username, password, userid)
   data, _filename = _run_full_separation(host, username, password, userid, True)
   output = _to_bytes(data).decode("utf-8-sig", errors="replace").replace(password, "[redacted]")
@@ -66642,7 +66717,8 @@ def _bulk_separation_public(job):
     "total": len(rows), "finished": sum(row["status"] not in {"pending", "running"} for row in rows),
     "deleted_count": sum(row.get("deleted") == "Yes" for row in rows),
     "review_count": sum(row["status"] in {"failed", "needs_review", "lookup_failed"} for row in rows),
-    "rows": [{key: value for key, value in row.items() if key != "output"} for row in rows[:500]]}
+    "selected_count": sum(row.get("selected", False) and row["status"] == "pending" for row in rows),
+    "rows": [{key: value for key, value in row.items() if key != "output"} for row in (rows if job.get("status") == "awaiting_review" else rows[:500])]}
 
 
 @app.get("/project-greenlight/bulk-separation")
@@ -66662,7 +66738,7 @@ def bulk_separation_get_route(request: Request, job_id: str = ""):
 
 
 @app.post("/project-greenlight/bulk-separation")
-def bulk_separation_post_route(request: Request, action: str = Form(""), job_id: str = Form(""), emails_text: str = Form(""), confirmation: str = Form("")):
+def bulk_separation_post_route(request: Request, action: str = Form(""), job_id: str = Form(""), emails_text: str = Form(""), confirmation: str = Form(""), selection_revision: str = Form(""), selected_emails: str = Form("[]")):
   try:
     session, operator = _require_admin_session(request)
   except Exception:
@@ -66671,15 +66747,27 @@ def bulk_separation_post_route(request: Request, action: str = Form(""), job_id:
     host = str(session.get("cucm_host", "")).strip()
     if not host:
       raise ValueError("Select a CUCM environment first.")
-    if action in {"submit", "resume"}:
+    if action in {"submit", "review"}:
+      host, username, password = _resolve_cucm_credentials(request, "", "", "")
+      job = BULK_SEPARATION_QUEUE.submit(host, operator, emails_text) if action == "submit" else BULK_SEPARATION_QUEUE.get(job_id, host)
+      BULK_SEPARATION_QUEUE.review(job["id"], host, lambda emails: _bulk_separation_preview(host, username, password, emails))
+      job = BULK_SEPARATION_QUEUE.get(job["id"], host)
+      _append_audit_event(action="bulk_separation_review", cucm_host=host, operator=operator, target=f"job={job['id']};entries={len(job['rows'])}", output_filename="", inline_mode=True)
+    elif action == "select":
+      job = BULK_SEPARATION_QUEUE.select(job_id, host, selection_revision, json.loads(selected_emails))
+      return JSONResponse({"ok": True, "selection_revision": job["selection_revision"]}, headers={"Cache-Control": "no-store"})
+    elif action in {"approve", "resume"}:
       if confirmation != "DELETE":
         raise ValueError("Type DELETE to authorize the full separation process.")
       host, username, password = _resolve_cucm_credentials(request, "", "", "")
-      job = BULK_SEPARATION_QUEUE.submit(host, operator, emails_text) if action == "submit" else BULK_SEPARATION_QUEUE.get(job_id, host)
+      job = BULK_SEPARATION_QUEUE.approve(job_id, host, selection_revision, operator) if action == "approve" else BULK_SEPARATION_QUEUE.get(job_id, host)
+      if not job.get("approved_at"):
+        raise ValueError("Prepare a visual review and approve selected employees before separation.")
+      expected = {row["email"]: row for row in job["rows"]}
       _append_audit_event(action="bulk_separation_" + action, cucm_host=host, operator=operator, target=f"job={job['id']};entries={len(job['rows'])}", output_filename="", inline_mode=True)
       BULK_SEPARATION_QUEUE.start(job["id"], host,
         lambda emails: _bulk_separation_resolve(host, username, password, emails),
-        lambda email, userid: _bulk_separation_execute(host, username, password, operator, email, userid))
+        lambda email, userid: _bulk_separation_execute(host, username, password, operator, email, userid, expected[email]))
       job = BULK_SEPARATION_QUEUE.get(job["id"], host)
     else:
       job = BULK_SEPARATION_QUEUE.control(job_id, host, action)
