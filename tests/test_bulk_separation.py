@@ -17,6 +17,7 @@ from unittest.mock import Mock, patch
 
 from toolkit import bulk_separation
 from toolkit import ad_phone_fields
+from toolkit import sms_inventory
 from toolkit.bulk_separation import BulkSeparationQueue, csv_bytes, parse_emails
 
 
@@ -312,7 +313,8 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
         cls.code = compile(ast.Module(body=nodes, type_ignores=[]), "<bulk-integration>", "exec")
 
     def setUp(self):
-        self.scope = {"Request": object, "Form": lambda value: value, "csv": csv, "io": io, "json": json, "bulk_separation": bulk_separation,
+        self.scope = {"Request": object, "Form": lambda value: value, "csv": csv, "io": io, "json": json, "bulk_separation": bulk_separation, "sms_inventory": sms_inventory,
+            "_cached_all_sms_numbers": Mock(return_value={"status": "Complete within stated scope", "rows": [], "failures": [], "cache_hit": True, "fetched_at": "2026-10-27T00:00:00+00:00", "count": 0}),
             "_sql_escape_literal": lambda value: value.replace("'", "''"),
             "lookup_ad_identities_by_email": Mock(side_effect=lambda emails, auth, **kwargs: {"ok": True, "results": [{"input_email": email, "found": True, "samAccountName": email.split("@")[0]} for email in emails]}),
             "_axl_execute_sql_rows": Mock(return_value=[]), "_to_bytes": lambda data: data,
@@ -466,6 +468,30 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
         with patch.object(bulk_separation, "build_review", side_effect=build):
             self.scope["_bulk_separation_preview"]("lab", "admin", "secret", ["a@example.com"])
         self.scope["_lookup_jabber_registration_statuses"].assert_called_once_with("lab", "admin", "secret", ["CSFa", "SEPa"], allow_phone_fallback=False)
+
+    def test_review_loads_one_shared_sms_report_and_saves_match_evidence(self):
+        self.scope["_bulk_separation_resolve"] = Mock(return_value={})
+        self.scope["_cached_all_sms_numbers"].return_value.update(rows=[{"provider": "Twilio", "phone_number": "+12145551000", "environment": "AMIEWeb", "account": "Parent"}], count=1)
+        snapshots = {f"user{index}@example.com": {"extensions": [{"extension": "2145551000", "partition": "PT"}]} for index in range(200)}
+        with patch.object(bulk_separation, "build_review", return_value=snapshots):
+            result = self.scope["_bulk_separation_preview"]("lab", "admin", "secret", list(snapshots))
+        self.scope["_cached_all_sms_numbers"].assert_called_once_with()
+        self.assertTrue(all(row["sms"] == "Yes" for row in result.values()))
+        self.assertTrue(all(row["sms_inventory_cache_hit"] for row in result.values()))
+        job = {"id": "saved", "host": "lab", "rows": [{**result["user0@example.com"], "email": "user0@example.com", "status": "pending"}]}
+        for exporter in (bulk_separation.csv_bytes, bulk_separation.fresh_build_csv_bytes):
+            record = next(csv.DictReader(io.StringIO(exporter(job).decode("utf-8-sig"))))
+            self.assertEqual(record["SMS"], "Yes")
+            self.assertIn("Twilio", record["SMS Matches"])
+
+    def test_sms_extract_failure_is_visible_and_does_not_authorize_false_no(self):
+        self.scope["_bulk_separation_resolve"] = Mock(return_value={})
+        self.scope["_cached_all_sms_numbers"].side_effect = RuntimeError("provider failure")
+        with patch.object(bulk_separation, "build_review", return_value={"a@example.com": {"eligible": True, "extensions": [{"extension": "2145551000", "partition": "PT"}]}}):
+            result = self.scope["_bulk_separation_preview"]("lab", "admin", "secret", ["a@example.com"])
+        self.assertEqual(result["a@example.com"]["sms"], "Lookup Failed")
+        self.assertTrue(result["a@example.com"]["eligible"])
+        self.assertNotIn("provider failure", str(result))
 
     def test_all_routes_require_admin_and_confirmation_before_mutation(self):
         self.scope["BULK_SEPARATION_QUEUE"] = Mock()

@@ -1,10 +1,16 @@
 import ast
 import datetime
+import hashlib
+import json
+import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
+from toolkit.sms_inventory import InventoryCache
+from toolkit.sms_inventory import annotate_review, normalized_number
 from toolkit.sms_inventory import aerialink_numbers, twilio_sms_rows
 
 
@@ -74,19 +80,131 @@ class SMSInventoryTests(unittest.TestCase):
         self.assertEqual(rows[0]["environment"], "Greenlight QA")
 
 
+class SMSInventoryCacheTests(unittest.TestCase):
+    def setUp(self):
+        self.started = datetime.datetime(2026, 10, 27, 12, 0, tzinfo=datetime.timezone.utc)
+        self.report = {"ok": True, "rows": [{"provider": "Twilio", "environment": "AMIEWeb", "account": "Parent", "phone_number": "+12145551000", "friendly_name": "Employee", "auth_token": "secret-must-not-be-saved"}], "failures": [], "fetched_at": self.started.isoformat(), "scope": "Twilio PN and Aerialink only"}
+
+    def test_restart_reuses_cache_and_exact_eight_hour_boundary_refreshes(self):
+        with tempfile.TemporaryDirectory() as root:
+            extract = Mock(return_value=self.report)
+            first = InventoryCache(root).get("account-scope", extract, at=self.started)
+            second = InventoryCache(root).get("account-scope", extract, at=self.started + datetime.timedelta(hours=7, minutes=59))
+            self.assertFalse(first["cache_hit"])
+            self.assertTrue(second["cache_hit"])
+            self.assertEqual(extract.call_count, 1)
+            self.assertNotIn("secret-must-not-be-saved", InventoryCache(root).path.read_text())
+            later = self.started + datetime.timedelta(hours=8)
+            extract.return_value = {**self.report, "fetched_at": later.isoformat()}
+            self.assertFalse(InventoryCache(root).get("account-scope", extract, at=later)["cache_hit"])
+            self.assertEqual(extract.call_count, 2)
+
+    def test_changed_accounts_cannot_reuse_previous_scope(self):
+        with tempfile.TemporaryDirectory() as root:
+            extract = Mock(return_value=self.report)
+            cache = InventoryCache(root)
+            cache.get("account-a", extract, at=self.started)
+            cache.get("account-b", extract, at=self.started)
+            self.assertEqual(extract.call_count, 2)
+
+    def test_failed_or_partial_refresh_preserves_previous_successful_cache(self):
+        with tempfile.TemporaryDirectory() as root:
+            cache = InventoryCache(root)
+            cache.get("scope", lambda: self.report, at=self.started)
+            original = cache.path.read_bytes()
+            later = self.started + datetime.timedelta(hours=9)
+            with self.assertRaises(ValueError):
+                cache.get("scope", lambda: {"ok": False}, at=later)
+            partial = cache.get("scope", lambda: {**self.report, "fetched_at": later.isoformat(), "failures": ["Aerialink unavailable"]}, at=later)
+            self.assertEqual(partial["status"], "Partial")
+            self.assertEqual(cache.path.read_bytes(), original)
+
+    def test_corrupt_future_and_failed_write_never_replace_previous_cache(self):
+        with tempfile.TemporaryDirectory() as root:
+            cache = InventoryCache(root)
+            cache.get("scope", lambda: self.report, at=self.started)
+            original = cache.path.read_bytes()
+            with patch("toolkit.sms_inventory.os.replace", side_effect=OSError("disk full")):
+                with self.assertRaises(OSError):
+                    cache.get("other-scope", lambda: self.report, at=self.started)
+            self.assertEqual(cache.path.read_bytes(), original)
+            with self.assertRaises(ValueError):
+                cache.get("scope", Mock(), at=self.started - datetime.timedelta(seconds=1))
+            cache.path.write_text("invalid JSON")
+            extract = Mock()
+            with self.assertRaises(ValueError):
+                cache.get("scope", extract, at=self.started)
+            extract.assert_not_called()
+
+    def test_number_matching_is_indexed_and_preserves_provider_account_boundaries(self):
+        report = {**self.report, "status": "Complete within stated scope", "rows": [self.report["rows"][0], {**self.report["rows"][0], "environment": "Salesforce", "account": "Salesforce Parent"}]}
+        snapshots = {str(index): {"extensions": [{"extension": "2145551000", "partition": "PT"}]} for index in range(200)}
+        snapshots["missing"] = {"extensions": [{"extension": "2145559999", "partition": "PT"}]}
+        result = annotate_review(snapshots, report)
+        self.assertTrue(all(result[str(index)]["sms"] == "Yes" for index in range(200)))
+        self.assertEqual(len(result["0"]["sms_matches"]), 2)
+        self.assertEqual(result["missing"]["sms"], "No")
+        self.assertEqual(normalized_number("+1 (214) 555-1000"), "2145551000")
+        self.assertEqual(normalized_number("1000X"), "")
+
+    def test_partial_or_failed_inventory_never_claims_unmatched_number_is_no(self):
+        snapshots = {"found": {"extensions": [{"extension": "2145551000", "partition": "PT"}]}, "missing": {"extensions": [{"extension": "2145559999", "partition": "PT"}]}}
+        result = annotate_review(snapshots, {**self.report, "status": "Partial", "failures": ["Provider failed"]})
+        self.assertEqual(result["found"]["sms"], "Yes")
+        self.assertEqual(result["missing"]["sms"], "Lookup Failed")
+        self.assertEqual(annotate_review({"empty": {"extensions": []}}, {})["empty"]["sms"], "Not checked")
+
+    def test_concurrent_reviews_share_one_extract(self):
+        with tempfile.TemporaryDirectory() as root:
+            calls, failures = [], []
+            barrier = threading.Barrier(4)
+            extract = Mock(return_value=self.report)
+            def read():
+                try:
+                    barrier.wait(5)
+                    calls.append(InventoryCache(root).get("scope", extract, at=self.started))
+                except Exception as exc:
+                    failures.append(exc)
+            threads = [threading.Thread(target=read) for index in range(4)]
+            for worker in threads:
+                worker.start()
+            for worker in threads:
+                worker.join(5)
+            self.assertEqual(failures, [])
+            self.assertEqual(len(calls), 4)
+            extract.assert_called_once()
+            self.assertEqual(sum(not value["cache_hit"] for value in calls), 1)
+
+    def test_empty_success_is_cached_and_invalid_saved_rows_are_refused(self):
+        with tempfile.TemporaryDirectory() as root:
+            cache = InventoryCache(root)
+            extract = Mock(return_value={**self.report, "rows": []})
+            cache.get("scope", extract, at=self.started)
+            cache.get("scope", extract, at=self.started)
+            extract.assert_called_once()
+            value = json.loads(cache.path.read_text())
+            value["rows"] = [{"provider": "Twilio", "phone_number": "invalid"}]
+            cache.path.write_text(json.dumps(value))
+            with self.assertRaises(ValueError):
+                cache.get("scope", extract, at=self.started)
+            extract.assert_called_once()
+
+
 class SMSExtractRouteTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tree = ast.parse((Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8-sig"))
-        node = next(node for node in cls.tree.body if isinstance(node, ast.FunctionDef) and node.name == "sms_all_numbers_extract_route")
-        node.decorator_list = []
-        cls.code = compile(ast.Module(body=[node], type_ignores=[]), "<sms-route>", "exec")
+        nodes = [node for node in cls.tree.body if isinstance(node, ast.FunctionDef) and node.name in {"sms_all_numbers_extract_route", "_extract_all_sms_numbers", "_sms_inventory_scope_key", "_cached_all_sms_numbers"}]
+        for node in nodes:
+            node.decorator_list = []
+        cls.code = compile(ast.Module(body=nodes, type_ignores=[]), "<sms-route>", "exec")
 
     def setUp(self):
         self.twilio = Mock(return_value={"rows": [], "accounts": ["account"], "failures": []})
         self.aerialink = Mock(return_value=[{"provider": "Aerialink", "environment": "AMIEClassic", "account": "Classic", "phone_number": "12140000000"}])
         self.audit = Mock()
-        self.scope = {"Request": object, "datetime": datetime,
+        self.scope = {"Request": object, "datetime": datetime, "hashlib": hashlib, "json": json,
+                  "_twilio_inventory_configured_roots": Mock(return_value=([{"sid": "root-account", "name": "Parent", "auth_token": "provider-secret"}], [])),
                       "_get_auth_session": lambda request: {"username": "admin"},
                       "_is_admin_user": lambda username: username == "admin",
                       "_twilio_all_account_number_inventory": self.twilio,
@@ -96,6 +214,36 @@ class SMSExtractRouteTests(unittest.TestCase):
                       "_append_audit_event": self.audit,
                       "JSONResponse": lambda payload, status_code=200: SimpleNamespace(payload=payload, status_code=status_code)}
         exec(self.code, self.scope)
+        self.real_cached = self.scope["_cached_all_sms_numbers"]
+        def cached(force_refresh=False):
+            result = self.scope["_extract_all_sms_numbers"]()
+            if not result["ok"]:
+                raise ValueError("Extract failed")
+            return result
+        self.scope["_cached_all_sms_numbers"] = Mock(side_effect=cached)
+
+    def test_existing_manual_extract_seeds_cache_used_by_later_reviews(self):
+        with tempfile.TemporaryDirectory() as root:
+            self.scope["SMS_ALL_NUMBERS_CACHE"] = InventoryCache(root)
+            self.scope["_cached_all_sms_numbers"] = self.real_cached
+            response = self.scope["sms_all_numbers_extract_route"](None)
+            self.assertEqual(response.status_code, 200)
+            first = self.real_cached()
+            second = self.real_cached()
+            self.assertTrue(first["cache_hit"])
+            self.assertTrue(second["cache_hit"])
+            self.twilio.assert_called_once_with(include_messaging_services=False)
+            self.aerialink.assert_called_once()
+            self.assertNotIn("scope_key", response.payload)
+            self.assertNotIn("provider-secret", InventoryCache(root).path.read_text())
+
+    def test_scope_fingerprint_changes_with_configured_accounts_and_credentials(self):
+        first = self.scope["_sms_inventory_scope_key"]()
+        self.scope["_twilio_inventory_configured_roots"].return_value = ([{"sid": "different-account", "name": "Other", "auth_token": "different-secret"}], [])
+        second = self.scope["_sms_inventory_scope_key"]()
+        self.assertNotEqual(first, second)
+        self.assertEqual(len(first), 64)
+        self.assertNotIn("provider-secret", first)
 
     def test_combined_route_and_no_messaging_service_reads(self):
         response = self.scope["sms_all_numbers_extract_route"](None)
@@ -103,6 +251,7 @@ class SMSExtractRouteTests(unittest.TestCase):
         self.assertEqual(response.payload["count"], 1)
         self.assertEqual(response.payload["failures"], [])
         self.twilio.assert_called_once_with(include_messaging_services=False)
+        self.scope["_cached_all_sms_numbers"].assert_called_once_with(force_refresh=True)
         self.audit.assert_called_once()
         self.assertNotIn("secret", str(response.payload))
 

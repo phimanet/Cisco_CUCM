@@ -952,6 +952,7 @@ if not _genesys_queue_data_root:
   _genesys_queue_data_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data") if os.name == "nt" else "/opt/cucm-web-data"
 GENESYS_AD_WEBRTC_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue.json")
 BULK_SEPARATION_QUEUE = bulk_separation.BulkSeparationQueue(os.path.join(_genesys_queue_data_root, "bulk_separation"))
+SMS_ALL_NUMBERS_CACHE = sms_inventory.InventoryCache(os.path.join(_genesys_queue_data_root, "sms_all_numbers_cache"))
 GENESYS_AD_WEBRTC_QUEUE_HISTORY_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue_history.json")
 GENESYS_CALL_ROUTES_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_call_routes_report.json")
 GENESYS_CALL_ROUTES_REPORT_LOCK = threading.Lock()
@@ -14479,12 +14480,8 @@ def _lookup_twilio_number_direct(phone_number: str, account: str = "default", al
   return None
 
 
-@app.post("/sms/all-numbers/extract")
-def sms_all_numbers_extract_route(request: Request):
-  session = _get_auth_session(request) or {}
-  operator = str(session.get("username") or "")
-  if not _is_admin_user(operator):
-    return JSONResponse({"ok": False, "error": "Administrator sign-in is required."}, status_code=403)
+def _extract_all_sms_numbers():
+  fetched_at = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
   rows, failures = [], []
   successful_sources = 0
   try:
@@ -14504,14 +14501,39 @@ def sms_all_numbers_extract_route(request: Request):
   except Exception:
     failures.append("Aerialink inventory unavailable; check configuration, permissions and connectivity.")
   if not successful_sources:
-    return JSONResponse({"ok": False, "error": "No SMS inventory source completed successfully.", "failures": failures}, status_code=502)
+    return {"ok": False, "error": "No SMS inventory source completed successfully.", "failures": failures}
   rows.sort(key=lambda row: (row["provider"], row["environment"].lower(), row["account"].lower(), row["phone_number"]))
-  _append_audit_event(action="sms_all_numbers_extract", cucm_host=str(session.get("cucm_host") or ""), operator=operator,
-                     target=f"numbers={len(rows)};failures={len(failures)}", output_filename="all_sms_numbers.csv", inline_mode=True)
-  return JSONResponse({"ok": True, "rows": rows, "count": len(rows), "failures": failures,
+  return {"ok": True, "rows": rows, "count": len(rows), "failures": failures,
                        "status": "Partial" if failures else "Complete within stated scope",
-                       "fetched_at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-                       "scope": "All configured accessible Twilio accounts/subaccounts: SMS-capable Incoming Phone Numbers (PN) only; all Aerialink account code records. Twilio Hosted Numbers (HN) are excluded and require Console export. Aerialink records are not filtered by active status; listing is not proof of current SMS routing."})
+                       "fetched_at": fetched_at,
+                       "scope": "All configured accessible Twilio accounts/subaccounts: SMS-capable Incoming Phone Numbers (PN) only; all Aerialink account code records. Twilio Hosted Numbers (HN) are excluded and require Console export. Aerialink records are not filtered by active status; listing is not proof of current SMS routing."}
+
+
+def _sms_inventory_scope_key():
+  roots, failures = _twilio_inventory_configured_roots()
+  config = {"twilio": [{"sid": root["sid"], "name": root["name"], "credential_hash": hashlib.sha256(root["auth_token"].encode()).hexdigest()} for root in roots],
+    "configuration_failures": failures, "aerialink_url": AERIALINK_V5_BASE_URL, "aerialink_path": AERIALINK_ACCOUNT_CODE_LOOKUP_PATH,
+    "aerialink_user": AERIALINK_USERNAME, "aerialink_credential_hash": hashlib.sha256(str(AERIALINK_PASSWORD or "").encode()).hexdigest()}
+  return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
+
+
+def _cached_all_sms_numbers(force_refresh=False):
+  return SMS_ALL_NUMBERS_CACHE.get(_sms_inventory_scope_key(), _extract_all_sms_numbers, force_refresh=force_refresh)
+
+
+@app.post("/sms/all-numbers/extract")
+def sms_all_numbers_extract_route(request: Request):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username") or "")
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Administrator sign-in is required."}, status_code=403)
+  try:
+    report = _cached_all_sms_numbers(force_refresh=True)
+  except Exception:
+    return JSONResponse({"ok": False, "error": "SMS extract failed. Previous saved inventory was retained; check provider connectivity, permissions and runtime storage."}, status_code=502)
+  _append_audit_event(action="sms_all_numbers_extract", cucm_host=str(session.get("cucm_host") or ""), operator=operator,
+                     target=f"numbers={report['count']};failures={len(report['failures'])}", output_filename="all_sms_numbers.csv", inline_mode=True)
+  return JSONResponse({"ok": True, **{key: value for key, value in report.items() if key not in {"scope_key", "version"}}})
 
 
 @app.post("/twilio/all-accounts/number-inventory")
@@ -41278,16 +41300,16 @@ __GREENLIGHT_ADMIN_CARD__
               <a id="bulk-separation-download" hidden>Download Full Results CSV</a>
               <a id="bulk-separation-build-list" hidden>Download Fresh-Build List</a>
             </div>
-            <p style="font-size:12px;">Submission is read-only. Shared-extension devices are context, not additional deletion targets. Never means CUCM has no retained last-registration record, not automatic deletion clearance. Unknown registration does not mean Unregistered. Each selected employee authorizes the full separation process.</p>
+            <p style="font-size:12px;">Submission is read-only. Shared-extension devices are context, not additional deletion targets. Never means CUCM has no retained last-registration record, not automatic deletion clearance. Unknown registration does not mean Unregistered. SMS matches reviewed extension digits to the shared All SMS inventory, refreshed on demand after eight hours; Twilio Hosted Numbers are excluded and Aerialink listing is not proof of active routing. Each selected employee authorizes the full separation process.</p>
             <p id="bulk-separation-status" role="status">No bulk job loaded.</p>
             <div class="search-filter-row" style="flex-wrap:wrap;">
-              <input id="bulk-separation-filter" aria-label="Filter review results" placeholder="Name, email, extension, device, registration" style="max-width:100%;box-sizing:border-box;" />
+              <input id="bulk-separation-filter" aria-label="Filter review results" placeholder="Name, email, extension, device, registration, SMS" style="max-width:100%;box-sizing:border-box;" />
               <label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" id="bulk-separation-select-all" style="width:16px;min-width:16px;height:16px;margin:0;" /> Separate filtered employees</label>
               <button type="button" id="bulk-separation-prev" aria-label="Previous review page">Previous</button>
               <span id="bulk-separation-page" style="font-size:12px;"></span>
               <button type="button" id="bulk-separation-next" aria-label="Next review page">Next</button>
             </div>
-            <div style="overflow:auto;max-height:560px;"><table style="width:100%;min-width:1230px;font-size:13px;"><thead><tr><th>Separate</th><th>Employee</th><th>Extension / Partition</th><th>Translation Pattern (Exact Extension)</th><th>Devices / Registration</th><th>Status</th><th>Jabber Deleted</th><th>Full Process</th><th>Details</th></tr></thead><tbody id="bulk-separation-results"></tbody></table></div>
+            <div style="overflow:auto;max-height:560px;"><table style="width:100%;min-width:1390px;font-size:13px;"><thead><tr><th>Separate</th><th>Employee</th><th>Extension / Partition</th><th>Translation Pattern (Exact Extension)</th><th>SMS (8h Inventory)</th><th>Devices / Registration</th><th>Status</th><th>Jabber Deleted</th><th>Full Process</th><th>Details</th></tr></thead><tbody id="bulk-separation-results"></tbody></table></div>
             <script>
             (function(){
               const status = document.getElementById('bulk-separation-status');
@@ -41331,10 +41353,12 @@ __GREENLIGHT_ADMIN_CARD__
                   const extensions = (row.extensions || []).map(function(line){return line.extension + ' / ' + (line.partition || '(no partition)');}).join(String.fromCharCode(10)) || (pendingReview ? 'Pending review' : 'Not returned');
                   const devices = (row.devices || []).map(function(device){return device.device_name + ' | ' + (device.extension || '(no line)') + ' / ' + (device.partition || '(no partition)') + ' | ' + (device.registration || 'Unknown') + (device.last_registered ? ' | Last registered: ' + device.last_registered : '') + ' | ' + device.relationship;}).join(String.fromCharCode(10)) || (pendingReview ? 'Pending review' : row.eligible ? 'No devices returned' : 'Lookup unavailable');
                   const translation = row.translation_pattern || (pendingReview ? 'Pending review' : 'Not checked');
-                  [employee,extensions,translation,devices,row.status,row.deleted,row.process,row.detail].forEach(function(value, index) {
+                  const sms = (row.sms || (pendingReview ? 'Pending review' : 'Not checked')) + (row.sms_matches && row.sms_matches.length ? String.fromCharCode(10) + row.sms_matches.map(function(match){return match.provider + ' | ' + match.environment + ' / ' + match.account;}).join(String.fromCharCode(10)) : '');
+                  [employee,extensions,translation,sms,devices,row.status,row.deleted,row.process,row.detail].forEach(function(value, index) {
                     const td = document.createElement('td'); td.textContent = value || ''; td.style.cssText = 'overflow-wrap:anywhere;white-space:pre-line;vertical-align:top;padding:6px;'; tr.appendChild(td);
-                    if (index < 4) td.style.minWidth = [150,120,110,280][index] + 'px';
+                    if (index < 5) td.style.minWidth = [150,120,110,140,280][index] + 'px';
                     if (index === 2) td.title = (row.translation_pattern_checks || []).map(function(check){return check.extension + ': ' + check.status;}).concat((row.translation_pattern_matches || []).map(function(match){return match.extension + ' / ' + (match.partition || '(no partition)');})).join(String.fromCharCode(10));
+                    if (index === 3) td.title = (row.sms_checks || []).map(function(check){return check.extension + ': ' + check.status;}).concat(row.sms_inventory_failures || []).join(String.fromCharCode(10));
                   });
                   body.appendChild(tr);
                 });
@@ -41354,6 +41378,8 @@ __GREENLIGHT_ADMIN_CARD__
                 if (job.rows.length < job.total) status.textContent += ' | Result preview: ' + job.rows.length + '/' + job.total + '; CSV contains all entries.';
                 if (job.error) status.textContent += ' | ' + job.error;
                 if (job.review_progress) status.textContent += ' | ' + job.review_progress;
+                const smsReport = job.rows.find(function(row){return row.sms_inventory_fetched_at;});
+                if (smsReport) status.textContent += ' | SMS snapshot: ' + new Date(smsReport.sms_inventory_fetched_at).toLocaleString() + ' | ' + smsReport.sms_inventory_status + (new Date(smsReport.sms_inventory_expires_at).getTime() <= Date.now() ? ' (expired snapshot; new review required for a current check)' : smsReport.sms_inventory_cache_hit ? ' (cached)' : ' (new extract)');
                 drawRows();
                 const download = document.getElementById('bulk-separation-download');
                 download.href = '/project-greenlight/bulk-separation/csv?job_id=' + encodeURIComponent(jobId); download.hidden = false;
@@ -66654,9 +66680,20 @@ def _bulk_separation_devices(host, username, password, userid, previous=None):
 
 
 def _bulk_separation_preview(host, username, password, emails, progress=None):
-  return bulk_separation.build_review(emails, _bulk_separation_resolve(host, username, password, emails, progress),
+  snapshots = bulk_separation.build_review(emails, _bulk_separation_resolve(host, username, password, emails, progress),
     lambda sql: _axl_execute_sql_rows(host, username, password, sql),
     lambda names: _lookup_jabber_registration_statuses(host, username, password, names, allow_phone_fallback=False), progress=progress)
+  if not any(snapshot.get("extensions") for snapshot in snapshots.values()):
+    return sms_inventory.annotate_review(snapshots, {})
+  if progress:
+    progress("Checking SMS using the shared All SMS extract (eight-hour cache)", snapshots)
+  try:
+    report = _cached_all_sms_numbers()
+    _append_audit_event(action="bulk_separation_sms_check", cucm_host=host, operator=username,
+      target=f"cache_hit={report['cache_hit']};fetched_at={report['fetched_at']};numbers={report['count']};status={report['status']}", output_filename="", inline_mode=True)
+  except Exception:
+    report = {"status": "Lookup Failed", "failures": ["SMS inventory unavailable. Prior successful cache was retained; no unmatched number is reported as No."]}
+  return sms_inventory.annotate_review(snapshots, report)
 
 
 def _bulk_separation_execute(host, username, password, operator, email, userid, expected=None):
