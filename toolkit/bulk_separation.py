@@ -36,7 +36,7 @@ def csv_bytes(job):
         values.extend([job["host"], job["id"]])
         values.extend([row.get("name", ""), row.get("selected", ""),
             "; ".join(line["extension"] + "/" + line["partition"] for line in row.get("extensions", [])),
-            "; ".join(line["device_name"] + " | " + line["extension"] + "/" + line["partition"] + " | " + line.get("registration", "Unknown") + " | " + line["relationship"] for line in row.get("devices", [])), row.get("registration_checked_at", "")])
+            "; ".join(line["device_name"] + " | " + line["extension"] + "/" + line["partition"] + " | " + line.get("registration", "Unknown") + " | Last registered: " + line.get("last_registered", "Unknown") + " | " + line["relationship"] for line in row.get("devices", [])), row.get("registration_checked_at", "")])
         values.extend([row.get("translation_pattern", "Not checked"), "; ".join(line["extension"] + "/" + line["partition"] for line in row.get("translation_pattern_matches", [])), row.get("translation_pattern_checked_at", "")])
         writer.writerow(["'" + str(value) if str(value).lstrip().startswith(("=", "+", "-", "@")) else value for value in values])
     return output.getvalue().encode("utf-8-sig")
@@ -220,7 +220,11 @@ def build_review(emails, identities, read_sql, registrations, progress=None):
     for snapshot in snapshots.values():
         snapshot["registration_checked_at"] = checked_at
         for line in snapshot["devices"]:
-            line["registration"] = str((states.get(line["device_name"]) or {}).get("status") or "Unknown")
+            registration = states.get(line["device_name"]) or {}
+            line["registration"] = str(registration.get("status") or "Unknown")
+            line["last_registered"] = str(registration.get("last_registered") or "Unknown")
+            line["registration_history_status"] = str(registration.get("history_status") or "Unknown")
+            line["registration_source"] = str(registration.get("source") or "unknown")
     return snapshots
 
 

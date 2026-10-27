@@ -35360,9 +35360,13 @@ __ADMIN_CARD__
               method: "POST",
               body: formData,
               credentials: "same-origin",
+              headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
             });
 
-            const payload = await response.json();
+            const rawResponse = await response.text();
+            let payload;
+            try { payload = JSON.parse(rawResponse); }
+            catch (_) { throw new Error(response.redirected ? 'Session expired. Please log in again.' : 'Person lookup returned a non-JSON response (HTTP ' + response.status + '). The gateway or CUCM lookup may have timed out. No separation was performed.'); }
 
             if (!response.ok || !payload.ok) {
               const msg = (payload.error && payload.error.message) || "Search failed.";
@@ -35422,7 +35426,7 @@ __ADMIN_CARD__
                 const pfx = (d.name || "").substring(0, 3).toUpperCase();
                 const shortType = pfx === "CSF" ? "Laptop" : pfx === "TCT" ? "iPhone" : pfx === "BOT" ? "Android" : pfx === "TAB" ? "Tablet" : exts;
                 const reg = (d.registration_status || "").trim();
-                const regBadge = reg ? " <span style='display:inline-block;margin-left:6px;padding:1px 6px;border-radius:10px;background:#eef2ff;color:#1e3a8a;font-size:11px;font-weight:700;'>" + reg + "</span>" : "";
+                const regBadge = reg ? " <span style='display:inline-block;margin-left:6px;padding:1px 6px;border-radius:10px;background:#eef2ff;color:#1e3a8a;font-size:11px;font-weight:700;'>" + reg + "</span>" + (d.last_registered ? " <span style='font-size:11px;'>Last registered: " + d.last_registered + "</span>" : "") : "";
                 return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>" + shortType + "</span>" + regBadge;
               }).join("<br>") || "\u2014";
 
@@ -41274,7 +41278,7 @@ __GREENLIGHT_ADMIN_CARD__
               <a id="bulk-separation-download" hidden>Download Full Results CSV</a>
               <a id="bulk-separation-build-list" hidden>Download Fresh-Build List</a>
             </div>
-            <p style="font-size:12px;">Submission is read-only. Shared-extension devices are context, not additional deletion targets. Unknown registration does not mean Unregistered. Each selected employee authorizes the full separation process.</p>
+            <p style="font-size:12px;">Submission is read-only. Shared-extension devices are context, not additional deletion targets. Never means CUCM has no retained last-registration record, not automatic deletion clearance. Unknown registration does not mean Unregistered. Each selected employee authorizes the full separation process.</p>
             <p id="bulk-separation-status" role="status">No bulk job loaded.</p>
             <div class="search-filter-row" style="flex-wrap:wrap;">
               <input id="bulk-separation-filter" aria-label="Filter review results" placeholder="Name, email, extension, device, registration" style="max-width:100%;box-sizing:border-box;" />
@@ -41325,7 +41329,7 @@ __GREENLIGHT_ADMIN_CARD__
                   const pendingReview = viewJob.status === 'reviewing';
                   const employee = [row.name || (pendingReview ? 'Resolving identity...' : 'Name unavailable'), row.email, row.userid || ''].filter(Boolean).join(String.fromCharCode(10));
                   const extensions = (row.extensions || []).map(function(line){return line.extension + ' / ' + (line.partition || '(no partition)');}).join(String.fromCharCode(10)) || (pendingReview ? 'Pending review' : 'Not returned');
-                  const devices = (row.devices || []).map(function(device){return device.device_name + ' | ' + (device.extension || '(no line)') + ' / ' + (device.partition || '(no partition)') + ' | ' + (device.registration || 'Unknown') + ' | ' + device.relationship;}).join(String.fromCharCode(10)) || (pendingReview ? 'Pending review' : row.eligible ? 'No devices returned' : 'Lookup unavailable');
+                  const devices = (row.devices || []).map(function(device){return device.device_name + ' | ' + (device.extension || '(no line)') + ' / ' + (device.partition || '(no partition)') + ' | ' + (device.registration || 'Unknown') + (device.last_registered ? ' | Last registered: ' + device.last_registered : '') + ' | ' + device.relationship;}).join(String.fromCharCode(10)) || (pendingReview ? 'Pending review' : row.eligible ? 'No devices returned' : 'Lookup unavailable');
                   const translation = row.translation_pattern || (pendingReview ? 'Pending review' : 'Not checked');
                   [employee,extensions,translation,devices,row.status,row.deleted,row.process,row.detail].forEach(function(value, index) {
                     const td = document.createElement('td'); td.textContent = value || ''; td.style.cssText = 'overflow-wrap:anywhere;white-space:pre-line;vertical-align:top;padding:6px;'; tr.appendChild(td);
@@ -48994,9 +48998,13 @@ def menu_admin_page(request: Request):
                 method: "POST",
                 body: formData,
                 credentials: "same-origin",
+                headers: { "Accept": "application/json", "X-Requested-With": "XMLHttpRequest" },
               });
 
-              const payload = await response.json();
+              const rawResponse = await response.text();
+              let payload;
+              try { payload = JSON.parse(rawResponse); }
+              catch (_) { throw new Error(response.redirected ? 'Session expired. Please log in again.' : 'Person lookup returned a non-JSON response (HTTP ' + response.status + '). The gateway or CUCM lookup may have timed out. No separation was performed.'); }
               if (!response.ok || !payload.ok) {
                 const msg = (payload.error && payload.error.message) || "Search failed.";
                 throw new Error(msg);
@@ -49046,7 +49054,7 @@ def menu_admin_page(request: Request):
                   const pfx = (d.name || "").substring(0, 3).toUpperCase();
                   const shortType = pfx === "CSF" ? "Laptop" : pfx === "TCT" ? "iPhone" : pfx === "BOT" ? "Android" : pfx === "TAB" ? "Tablet" : exts;
                   const reg = (d.registration_status || "").trim();
-                  const regBadge = reg ? " <span style='display:inline-block;margin-left:6px;padding:1px 6px;border-radius:10px;background:#eef2ff;color:#1e3a8a;font-size:11px;font-weight:700;'>" + reg + "</span>" : "";
+                  const regBadge = reg ? " <span style='display:inline-block;margin-left:6px;padding:1px 6px;border-radius:10px;background:#eef2ff;color:#1e3a8a;font-size:11px;font-weight:700;'>" + reg + "</span>" + (d.last_registered ? " <span style='font-size:11px;'>Last registered: " + d.last_registered + "</span>" : "") : "";
                   return "<strong>" + d.name + "</strong> <span style='color:#555;font-size:12px;'>" + shortType + "</span>" + regBadge;
                 }).join("<br>") || "\u2014";
 
@@ -63540,12 +63548,7 @@ def lookup_person_route(
             device_name = str(device.get("name", "") or "").strip()
             if not device_name or not device_name.upper().startswith(jabber_prefixes):
               continue
-            existing_status = _normalize_existing_reg(device.get("status", ""))
-            # Only use AXL cached value when definitively known; Unknown/Rejected still need live RIS check
-            if existing_status and existing_status.lower() in {"registered", "unregistered"}:
-              device["registration_status"] = existing_status
-              device["_reg_source"] = "axl_cached"
-              continue
+            device.pop("registration_status", None)
             if device_name in seen_jabber_names:
               continue
             seen_jabber_names.add(device_name)
@@ -63566,6 +63569,9 @@ def lookup_person_route(
               reg_info = reg_map.get(device_name, {"status": "Unknown"})
               reg_text = str(reg_info.get("status", "Unknown") or "Unknown").strip() or "Unknown"
               device["registration_status"] = reg_text
+              device["last_registered"] = reg_info.get("last_registered", "Unknown")
+              device["registration_history_status"] = reg_info.get("history_status", "Unknown")
+              device["registration_source"] = reg_info.get("source", "unknown")
             user_jabber_statuses.append(reg_text)
 
           if not user_jabber_statuses:
@@ -63575,6 +63581,9 @@ def lookup_person_route(
               1 for status_text in user_jabber_statuses if str(status_text).strip().lower().startswith("registered")
             )
             user["jabber_registration_summary"] = f"{registered_count}/{len(user_jabber_statuses)} Registered"
+            never_count = sum(status_text == "Never" for status_text in user_jabber_statuses)
+            if never_count:
+              user["jabber_registration_summary"] += f"; {never_count} Never"
 
       if include_sep_indicators:
         ls_rows = _list_ls_genesys_did_patterns(
@@ -63652,14 +63661,78 @@ def lookup_person_route(
           "results": results,
           "query": {"last_name": clean_last, "first_name": clean_first},
       })
-    except RuntimeError:
-      raise
-    except Exception as exc:
-      raise RuntimeError(f"Person lookup failed: {exc}") from exc
+    except RuntimeError as exc:
+      message = str(exc).lower()
+      if any(part in message for part in ("authentication required", "credentials expired", "log in again", "missing cucm credentials")):
+        return JSONResponse({"ok": False, "error": {"message": "Session credentials expired. Please log in again."}}, status_code=401)
+      if "last name is required" in message:
+        return JSONResponse({"ok": False, "error": {"message": "Last Name is required."}}, status_code=422)
+      return JSONResponse({"ok": False, "error": {"message": "Person lookup failed. Check CUCM connectivity and registration lookup permissions, then retry."}}, status_code=502)
+    except Exception:
+      return JSONResponse({"ok": False, "error": {"message": "Person lookup failed unexpectedly. Retry the request; no separation was performed."}}, status_code=502)
 
 
 def _axl_local_name(tag: str) -> str:
   return tag.split("}")[-1] if "}" in tag else tag
+
+
+def _lookup_device_registration_history(cucm_host, cucm_user, cucm_pass, device_names):
+  names = {str(name).strip().lower(): str(name).strip() for name in device_names if str(name).strip()}
+  history = {name: {"history_status": "Unknown", "last_registered": "Unknown", "last_registered_epoch": None} for name in names.values()}
+  keys = list(names)
+  for start in range(0, len(keys), 100):
+    batch = keys[start:start + 100]
+    grouped = {}
+    seen_pages = set()
+    try:
+      for offset in range(0, 100000, 1000):
+        rows = _axl_execute_sql_rows(cucm_host, cucm_user, cucm_pass,
+          f"SELECT SKIP {offset} FIRST 1000 d.name AS device_name, rd.datetimestamp AS history_timestamp, "
+          "rd.lastknownucm AS history_ucm, rd.fkdevice AS history_device_id FROM device d "
+          "LEFT OUTER JOIN registrationdynamic rd ON rd.fkdevice=d.pkid "
+          f"WHERE LOWER(d.name) IN ({','.join(chr(39) + _sql_escape_literal(name) + chr(39) for name in batch)}) "
+          "ORDER BY d.name, rd.datetimestamp")
+        if not isinstance(rows, list):
+          raise RuntimeError("Registration history returned invalid data.")
+        fingerprint = json.dumps(rows, sort_keys=True)
+        if rows and fingerprint in seen_pages:
+          raise RuntimeError("Registration history repeated a page.")
+        seen_pages.add(fingerprint)
+        for row in rows:
+          key = str(row.get("device_name") or "").lower()
+          if key not in batch or not {"history_timestamp", "history_ucm", "history_device_id"}.issubset(row):
+            raise RuntimeError("Registration history was incomplete.")
+          grouped.setdefault(key, []).append(row)
+        if len(rows) < 1000:
+          break
+      else:
+        raise RuntimeError("Registration history exceeded the page limit.")
+      for key, records in grouped.items():
+        timestamps = []
+        invalid = False
+        for row in records:
+          stamp = str(row.get("history_timestamp") or "").strip()
+          ucm = str(row.get("history_ucm") or "").strip()
+          if not ucm:
+            continue
+          try:
+            epoch = int(float(stamp))
+            if epoch > 10 ** 12:
+              epoch //= 1000
+            if epoch <= 0 or not row.get("history_device_id"):
+              raise ValueError("Invalid registration timestamp.")
+            timestamps.append(epoch)
+          except (ValueError, OverflowError):
+            invalid = True
+        name = names[key]
+        if timestamps:
+          epoch = max(timestamps)
+          history[name] = {"history_status": "Previously Registered", "last_registered": _greenlight_reg_display(epoch), "last_registered_epoch": epoch}
+        elif not invalid:
+          history[name] = {"history_status": "Never", "last_registered": "Never", "last_registered_epoch": None}
+    except Exception:
+      continue
+  return history
 
 
 def _lookup_jabber_registration_statuses(
@@ -63682,6 +63755,13 @@ def _lookup_jabber_registration_statuses(
   if not clean_names:
     return {}
 
+  history = _lookup_device_registration_history(cucm_host, cucm_user, cucm_pass, clean_names)
+  never_statuses = {name: {"status": "Never", "tkstatus": "", "status_name": "Never", "source": "cucm_registration_history", **record}
+    for name, record in history.items() if record["history_status"] == "Never"}
+  clean_names = [name for name in clean_names if name not in never_statuses]
+  if not clean_names:
+    return never_statuses
+
   names_by_lower = {name.lower(): name for name in clean_names}
 
   session = requests.Session()
@@ -63689,7 +63769,8 @@ def _lookup_jabber_registration_statuses(
   session.trust_env = False
   session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
 
-  status_map: dict[str, dict] = {}
+  status_map: dict[str, dict] = dict(never_statuses)
+  ris_deadline = time.monotonic() + 20.0
 
   def _status_label(tkstatus_value: str, status_name_value: str) -> str:
     status_name_clean = str(status_name_value or "").strip()
@@ -63709,7 +63790,10 @@ def _lookup_jabber_registration_statuses(
       return "Unknown"
 
   # Prefer RIS realtime status because AXL device.tkstatus may lag actual registration.
-  ris_hosts = _axl_list_process_nodes(cucm_host, cucm_user, cucm_pass) or [cucm_host]
+  try:
+    ris_hosts = _axl_list_process_nodes(cucm_host, cucm_user, cucm_pass) or [cucm_host]
+  except Exception:
+    ris_hosts = [cucm_host]
   ris_urls = [
     "https://{host}:8443/realtimeservice2/services/RISService70",
     "https://{host}:8443/realtimeservice/services/RISService70",
@@ -63745,19 +63829,21 @@ def _lookup_jabber_registration_statuses(
       f"<ris:item><ris:Item>{xml_escape(name)}</ris:Item></ris:item>" for name in chunk_names
     )
     soap_xml = _build_ris_soap(item_xml, max(50, len(chunk_names) + 20))
-    wildcard_soap_xml = _build_ris_soap("<ris:item><ris:Item>*</ris:Item></ris:item>", 2000)
     chunk_name_lowers = {name.lower() for name in chunk_names}
 
     for ris_host in ris_hosts:
       for ris_url_tmpl in ris_urls:
         ris_url = ris_url_tmpl.format(host=ris_host)
-        for active_soap_xml, use_wildcard in ((soap_xml, False), (wildcard_soap_xml, True)):
+        for active_soap_xml, use_wildcard in ((soap_xml, False),):
+          remaining = ris_deadline - time.monotonic()
+          if remaining <= 0:
+            return False
           try:
             response = session.post(
               ris_url,
               data=active_soap_xml.encode("utf-8"),
               headers={"Content-Type": "text/xml; charset=utf-8", "SOAPAction": "CUCM:DB ver=7.0 selectCmDevice"},
-              timeout=max(5, DASHBOARD_REQUEST_TIMEOUT_SECONDS),
+              timeout=(min(3.0, remaining / 2), min(5.0, remaining / 2)),
             )
           except Exception:
             continue
@@ -63769,6 +63855,11 @@ def _lookup_jabber_registration_statuses(
             root = ET.fromstring(response.text)
           except Exception:
             continue
+
+          if any(_axl_local_name(element.tag) == "Fault" for element in root.iter()):
+            continue
+          returned_nodes = any(_axl_local_name(element.tag) == "CmNodes" for element in root.iter())
+          node_errors = any(_axl_local_name(element.tag) == "ReturnCode" and str(element.text or "").strip().lower() not in {"", "ok", "noerror", "0"} for element in root.iter())
 
           found_any = False
           for node in root.iter():
@@ -63793,7 +63884,7 @@ def _lookup_jabber_registration_statuses(
               }
               found_any = True
 
-          if found_any:
+          if found_any or (returned_nodes and not node_errors):
             return True
 
     return False
@@ -63802,146 +63893,11 @@ def _lookup_jabber_registration_statuses(
   for start in range(0, len(clean_names), ris_chunk_size):
     _ris_query_chunk(clean_names[start:start + ris_chunk_size])
 
-  chunk_size = 120
-  pending_names = [name for name in clean_names if name not in status_map]
-  for start in range(0, len(pending_names), chunk_size):
-    chunk = pending_names[start:start + chunk_size]
-    if not chunk:
-      continue
-    names_sql = ",".join("'" + name.replace("'", "''") + "'" for name in chunk)
-    # tkstatus/typestatus removed — CUCM 15.x dropped that column; RIS is the authoritative source
-    sql = f"SELECT d.name AS device_name FROM device d WHERE d.name IN ({names_sql})"
-
-    soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
-<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
-  <soapenv:Header/>
-  <soapenv:Body>
-    <axl:executeSQLQuery>
-      <sql>{xml_escape(sql)}</sql>
-    </axl:executeSQLQuery>
-  </soapenv:Body>
-</soapenv:Envelope>"""
-
-    try:
-      xml_text = _axl_post_raw_text(session, cucm_host, soap, "executeSQLQuery")
-      root = ET.fromstring(xml_text)
-      for elem in root.iter():
-        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-        if tag != "row":
-          continue
-
-        device_name = ""
-        tkstatus = ""
-        status_name = ""
-        name_values: list[str] = []
-        column_values: list[str] = []
-        for child in list(elem):
-          child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-          text = (child.text or "").strip()
-          tag_norm = re.sub(r"[^a-z0-9]", "", str(child_tag or "").lower())
-          column_values.append(text)
-          if tag_norm == "name":
-            name_values.append(text)
-          elif tag_norm in {"devicename", "phonename"}:
-            device_name = text
-          elif tag_norm in {"tkstatus", "statusenum"}:
-            tkstatus = text
-          elif tag_norm in {"statusname", "status", "name1", "name2", "name3"}:
-            status_name = text
-
-        # Some CUCM executeSQLQuery responses emit duplicate <name> tags and/or name1.
-        # First name is device name; second name is status name when explicit aliases are not preserved.
-        if not device_name and name_values:
-          device_name = name_values[0]
-        if not status_name and len(name_values) > 1:
-          status_name = name_values[1]
-
-        # Last-resort positional mapping for unusual executeSQLQuery column tags.
-        if not device_name and column_values:
-          device_name = column_values[0]
-        if not tkstatus and len(column_values) > 1:
-          tkstatus = column_values[1]
-        if not status_name and len(column_values) > 2:
-          status_name = column_values[2]
-
-        if device_name:
-          canonical_name = names_by_lower.get(device_name.lower(), device_name)
-          status_map[canonical_name] = {
-            "status": _status_label(tkstatus, status_name),
-            "tkstatus": tkstatus,
-            "status_name": status_name,
-          }
-    except Exception:
-      for name in chunk:
-        if name not in status_map:
-          status_map[name] = {"status": "Unknown", "tkstatus": "", "status_name": ""}
-
   for name in clean_names:
     if name not in status_map:
-      status_map[name] = {"status": "Unknown", "tkstatus": "", "status_name": ""}
-
-  if not allow_phone_fallback:
-    return status_map
-
-  unresolved_names = [
-    name for name in clean_names
-    if str((status_map.get(name) or {}).get("status", "")).strip().lower() == "unknown"
-  ]
-
-  # Last-resort fallback: query getPhone per unresolved device.
-  # This is slower, so it is only used when RIS/SQL did not return a usable state.
-  for name in unresolved_names:
-    soap = f"""<?xml version=\"1.0\" encoding=\"utf-8\"?>
-<soapenv:Envelope xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\" xmlns:axl=\"http://www.cisco.com/AXL/API/15.0\">
-  <soapenv:Header/>
-  <soapenv:Body>
-    <axl:getPhone sequence=\"1\">
-      <name>{xml_escape(name)}</name>
-    </axl:getPhone>
-  </soapenv:Body>
-</soapenv:Envelope>"""
-    try:
-      xml_text = _axl_post_raw_text(session, cucm_host, soap, "getPhone")
-      root = ET.fromstring(xml_text)
-      status_text = ""
-      phone_node = None
-      for elem in root.iter():
-        tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-        if tag == "phone":
-          phone_node = elem
-          break
-      if phone_node is not None:
-        tkstatus_fallback = ""
-        for child in list(phone_node):
-          child_tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
-          if child_tag == "status":
-            status_text = (child.text or "").strip()
-            if status_text:
-              break
-          elif child_tag == "tkstatus" and not status_text:
-            tkstatus_fallback = (child.text or "").strip()
-        # Map numeric tkstatus when no text status element was returned by CUCM
-        if not status_text and tkstatus_fallback:
-          try:
-            tk = int(tkstatus_fallback)
-            status_text = "Registered" if tk == 1 else ("Unregistered" if tk == 2 else ("Rejected" if tk == 3 else ""))
-          except Exception:
-            pass
-      if not status_text:
-        for elem in root.iter():
-          tag = elem.tag.split("}")[-1] if "}" in elem.tag else elem.tag
-          if tag == "status":
-            status_text = (elem.text or "").strip()
-            if status_text:
-              break
-      if status_text:
-        status_map[name] = {
-          "status": _status_label("", status_text),
-          "tkstatus": tkstatus_fallback if tkstatus_fallback else "",
-          "status_name": status_text,
-        }
-    except Exception:
-      continue
+      status_map[name] = {"status": "Unknown", "tkstatus": "", "status_name": "", "source": "ris_not_returned"}
+    status_map[name].update(history.get(name, {}))
+    status_map[name].setdefault("source", "ris")
 
   return status_map
 

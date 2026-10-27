@@ -7,6 +7,9 @@ import json
 from pathlib import Path
 import re
 import sqlite3
+import xml.etree.ElementTree as ET
+import time
+from xml.sax.saxutils import escape as xml_escape
 import threading
 import unittest
 from types import SimpleNamespace
@@ -571,6 +574,22 @@ class BulkReviewInventoryTests(unittest.TestCase):
         self.assertTrue(row["eligible"])
         self.assertEqual({line["registration"] for line in row["devices"]}, {"Unknown"})
 
+    def test_never_registration_evidence_survives_saved_review_and_csv(self):
+        self.registration.return_value = {"csfa": {"status": "Never", "last_registered": "Never", "history_status": "Never", "source": "cucm_registration_history"}}
+        row = self.review()
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            job = queue.submit("lab", "admin", "a@example.com")
+            job["rows"][0].update(row)
+            queue._save(job)
+            restored = BulkSeparationQueue(root).get(job["id"], "lab")
+            device = next(line for line in restored["rows"][0]["devices"] if line["device_name"] == "csfa")
+            self.assertEqual(device["registration"], "Never")
+            self.assertEqual(device["last_registered"], "Never")
+            self.assertEqual(device["registration_source"], "cucm_registration_history")
+            output = next(csv.DictReader(io.StringIO(bulk_separation.csv_bytes(restored).decode("utf-8-sig"))))
+            self.assertIn("Last registered: Never", output["Devices / Registration"])
+
     def test_exact_extension_translation_pattern_yes_and_no(self):
         self.assertEqual(self.review()["translation_pattern"], "No")
         self.db.execute("INSERT INTO numplan VALUES ('tp1','1000','rp2',3)")
@@ -650,6 +669,140 @@ class BulkReviewInventoryTests(unittest.TestCase):
         rows = [{"device_name": str(index)} for index in range(1000)]
         with self.assertRaisesRegex(ValueError, "Repeated"):
             list(bulk_separation._paged_rows(lambda sql: rows, "device_name FROM device"))
+
+
+class RegistrationLookupTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        tree = ast.parse((Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8-sig"))
+        names = {"_lookup_device_registration_history", "_lookup_jabber_registration_statuses"}
+        nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
+        cls.code = compile(ast.Module(body=nodes, type_ignores=[]), "<registration-lookup>", "exec")
+
+    def setUp(self):
+        self.sql = Mock(return_value=[{"device_name": "CSF9453753192", "history_timestamp": "", "history_ucm": "", "history_device_id": ""}])
+        self.session = Mock()
+        self.scope = {"_axl_execute_sql_rows": self.sql, "_sql_escape_literal": lambda value: value.replace("'", "''"), "json": json,
+            "_greenlight_reg_display": lambda value: f"timestamp:{value}", "requests": SimpleNamespace(Session=Mock(return_value=self.session)),
+            "HTTPBasicAuth": lambda *args: None, "_axl_list_process_nodes": Mock(return_value=["cucm"]),
+            "ET": ET, "re": re, "DASHBOARD_REQUEST_TIMEOUT_SECONDS": 5,
+            "_axl_post_raw_text": Mock(side_effect=RuntimeError("No fallback permitted"))}
+        self.scope.update(time=time, xml_escape=xml_escape, _axl_local_name=lambda tag: tag.split("}")[-1],
+            _find_xml_child=lambda node, name: next((child for child in node if child.tag.split("}")[-1] == name), None),
+            _find_xml_child_text=lambda node, name: next((child.text or "" for child in node if child.tag.split("}")[-1] == name), ""))
+        exec(self.code, self.scope)
+
+    def test_morgan_never_returns_without_ris_or_getphone(self):
+        result = self.scope["_lookup_jabber_registration_statuses"]("cucm", "admin", "secret", ["CSF9453753192"])
+        self.assertEqual(result["CSF9453753192"]["status"], "Never")
+        self.assertEqual(result["CSF9453753192"]["last_registered"], "Never")
+        self.session.post.assert_not_called()
+        self.scope["_axl_list_process_nodes"].assert_not_called()
+        self.scope["_axl_post_raw_text"].assert_not_called()
+
+    def test_missing_failed_or_malformed_history_is_unknown_not_never(self):
+        for response in ([], [{"device_name": "CSF9453753192"}], RuntimeError("Permission denied")):
+            self.sql.side_effect = response if isinstance(response, Exception) else None
+            self.sql.return_value = response
+            result = self.scope["_lookup_device_registration_history"]("cucm", "admin", "secret", ["CSF9453753192"])
+            self.assertEqual(result["CSF9453753192"]["history_status"], "Unknown")
+
+    def test_latest_valid_registration_history_wins_over_blank_record(self):
+        self.sql.return_value = [{"device_name": "csf9453753192", "history_timestamp": "", "history_ucm": "", "history_device_id": ""},
+            {"device_name": "csf9453753192", "history_timestamp": "1700000000", "history_ucm": "node1", "history_device_id": "device1"},
+            {"device_name": "csf9453753192", "history_timestamp": "1750000000000", "history_ucm": "node2", "history_device_id": "device1"}]
+        result = self.scope["_lookup_device_registration_history"]("cucm", "admin", "secret", ["CSF9453753192"])
+        self.assertEqual(result["CSF9453753192"]["history_status"], "Previously Registered")
+        self.assertEqual(result["CSF9453753192"]["last_registered_epoch"], 1750000000)
+
+    def test_previously_registered_device_uses_live_ris_and_preserves_history(self):
+        self.sql.return_value = [{"device_name": "CSF9453753192", "history_timestamp": "1750000000", "history_ucm": "node", "history_device_id": "device"}]
+        self.session.post.return_value = SimpleNamespace(status_code=200, text="<result><CmNodes><item><ReturnCode>Ok</ReturnCode><CmDevices><item><Name>CSF9453753192</Name><Status>Registered</Status></item></CmDevices></item></CmNodes></result>")
+        result = self.scope["_lookup_jabber_registration_statuses"]("cucm", "admin", "secret", ["CSF9453753192"])
+        self.assertEqual(result["CSF9453753192"]["status"], "Registered")
+        self.assertEqual(result["CSF9453753192"]["last_registered_epoch"], 1750000000)
+        self.session.post.assert_called_once()
+        self.assertNotIn("<ris:Item>*", self.session.post.call_args.kwargs["data"].decode())
+
+    def test_successful_empty_ris_stops_retries_and_is_not_never(self):
+        self.sql.return_value = []
+        self.session.post.return_value = SimpleNamespace(status_code=200, text="<result><CmNodes/></result>")
+        result = self.scope["_lookup_jabber_registration_statuses"]("cucm", "admin", "secret", ["CSF9453753192"])
+        self.assertEqual(result["CSF9453753192"]["status"], "Unknown")
+        self.session.post.assert_called_once()
+        self.scope["_axl_post_raw_text"].assert_not_called()
+
+    def test_registration_history_batches_150_devices_and_never_uses_per_device_reads(self):
+        names = [f"CSF{index}" for index in range(150)]
+        def execute(host, username, password, sql):
+            return [{"device_name": name, "history_timestamp": "", "history_ucm": "", "history_device_id": ""} for name in names if "'" + name.lower() + "'" in sql]
+        self.sql.side_effect = execute
+        result = self.scope["_lookup_jabber_registration_statuses"]("cucm", "admin", "secret", names)
+        self.assertEqual(len(result), 150)
+        self.assertTrue(all(record["status"] == "Never" for record in result.values()))
+        self.assertEqual(self.sql.call_count, 2)
+        self.session.post.assert_not_called()
+
+    def test_ris_time_budget_exhaustion_does_not_trigger_fallbacks(self):
+        self.sql.return_value = []
+        self.scope["time"] = SimpleNamespace(monotonic=Mock(side_effect=[0, 25]))
+        result = self.scope["_lookup_jabber_registration_statuses"]("cucm", "admin", "secret", ["CSF9453753192"])
+        self.assertEqual(result["CSF9453753192"]["status"], "Unknown")
+        self.session.post.assert_not_called()
+        self.scope["_axl_post_raw_text"].assert_not_called()
+
+    def test_node_discovery_failure_still_checks_selected_host(self):
+        self.sql.return_value = []
+        self.scope["_axl_list_process_nodes"].side_effect = RuntimeError("Node inventory unavailable")
+        self.session.post.return_value = SimpleNamespace(status_code=200, text="<result><CmNodes/></result>")
+        result = self.scope["_lookup_jabber_registration_statuses"]("cucm", "admin", "secret", ["CSF9453753192"])
+        self.assertEqual(result["CSF9453753192"]["status"], "Unknown")
+        self.assertTrue(self.session.post.call_args.args[0].startswith("https://cucm:"))
+
+
+class PersonLiveRegistrationRouteTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        tree = ast.parse((Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8-sig"))
+        node = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "lookup_person_route")
+        node.decorator_list = []
+        cls.code = compile(ast.Module(body=[node], type_ignores=[]), "<person-live-route>", "exec")
+
+    def setUp(self):
+        self.registration = Mock(return_value={"CSF9453753192": {"status": "Never", "last_registered": "Never", "history_status": "Never", "source": "cucm_registration_history"}})
+        self.search = Mock(return_value=[{"userid": "Morgan.Fedde", "devices": [{"name": "CSF9453753192", "status": "Registered"}]}])
+        self.credentials = Mock(return_value=("selected-cucm", "admin", "secret"))
+        self.scope = {"Request": object, "Form": lambda value: value, "_resolve_cucm_credentials": self.credentials,
+            "_update_cached_credentials": Mock(), "search_persons_by_name": self.search,
+            "_lookup_jabber_registration_statuses": self.registration,
+            "JSONResponse": lambda content, status_code=200: SimpleNamespace(content=content, status_code=status_code)}
+        exec(self.code, self.scope)
+
+    def test_morgan_live_check_returns_json_never_even_when_cached_status_exists(self):
+        response = self.scope["lookup_person_route"](object(), last_name="Fedde", first_name="M", include_jabber_registration="on")
+        self.assertEqual(response.status_code, 200)
+        self.registration.assert_called_once_with("selected-cucm", "admin", "secret", ["CSF9453753192"])
+        person = response.content["results"][0]
+        self.assertEqual(person["devices"][0]["registration_status"], "Never")
+        self.assertEqual(person["devices"][0]["last_registered"], "Never")
+        self.assertIn("1 Never", person["jabber_registration_summary"])
+
+    def test_unchecked_live_registration_keeps_existing_fast_lookup(self):
+        response = self.scope["lookup_person_route"](object(), last_name="Fedde")
+        self.assertTrue(response.content["ok"])
+        self.registration.assert_not_called()
+
+    def test_expired_session_and_lookup_failure_return_json_not_html(self):
+        self.credentials.side_effect = RuntimeError("Session credentials expired. Please log in again.")
+        response = self.scope["lookup_person_route"](object(), last_name="Fedde", include_jabber_registration="on")
+        self.assertEqual(response.status_code, 401)
+        self.assertIn("log in again", response.content["error"]["message"])
+        self.credentials.side_effect = None
+        self.search.side_effect = RuntimeError("raw provider secret response")
+        response = self.scope["lookup_person_route"](object(), last_name="Fedde", include_jabber_registration="on")
+        self.assertEqual(response.status_code, 502)
+        self.assertFalse(response.content["ok"])
+        self.assertNotIn("secret", str(response.content))
 
 
 class BulkLdapIdentityTests(unittest.TestCase):
