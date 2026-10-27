@@ -345,7 +345,7 @@ class BulkSeparationQueue:
             for row in job["rows"]:
                 if row["status"] in {"pending", "lookup_failed"} and re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", row["email"]):
                     row["status"] = "pending"
-            job.update(status="reviewing", review_required=True, review_started_at=now(), review_progress="Starting LDAP email-to-username lookup", error="")
+            job.update(status="reviewing", review_required=True, review_started_at=now(), review_progress="Preparing the shared All SMS inventory before LDAP/CUCM lookups", error="")
             self._save(job)
             self.worker = threading.Thread(target=self._review, args=(job_id, host, preview), daemon=True)
             self.worker.start()

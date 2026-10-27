@@ -459,6 +459,25 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
             self.assertEqual(result.status_code, 409)
             self.scope["_run_full_separation"].assert_not_called()
 
+    def test_sms_inventory_is_obtained_before_any_employee_or_device_lookup(self):
+        order = []
+        cached = self.scope["_cached_all_sms_numbers"].return_value
+        self.scope["_cached_all_sms_numbers"].side_effect = lambda **kwargs: order.append("sms_inventory") or cached
+        self.scope["_bulk_separation_resolve"] = lambda *args: order.append("ldap_cucm_identity") or {"a@example.com": [{"userid": "a"}]}
+        def build(emails, identities, read_sql, registrations, **kwargs):
+            order.append("extensions_devices_registration")
+            return {"a@example.com": {"eligible": True, "extensions": [{"extension": "2145551000", "partition": "PT"}]}}
+        with patch.object(bulk_separation, "build_review", side_effect=build):
+            result = self.scope["_bulk_separation_preview"]("lab", "admin", "secret", ["a@example.com"], progress=Mock())
+        self.assertEqual(order, ["sms_inventory", "ldap_cucm_identity", "extensions_devices_registration"])
+        self.assertEqual(result["a@example.com"]["sms"], "No")
+        self.scope["_cached_all_sms_numbers"].assert_called_once()
+
+    def test_empty_employee_review_does_not_extract_sms(self):
+        self.assertEqual(self.scope["_bulk_separation_preview"]("lab", "admin", "secret", []), {})
+        self.scope["_cached_all_sms_numbers"].assert_not_called()
+        self.scope["lookup_ad_identities_by_email"].assert_not_called()
+
     def test_review_preview_uses_batch_registration_without_phone_fallback(self):
         self.scope["_bulk_separation_resolve"] = Mock(return_value={})
         self.scope["_lookup_jabber_registration_statuses"] = Mock(return_value={})

@@ -66706,13 +66706,10 @@ def _bulk_separation_devices(host, username, password, userid, previous=None):
 
 
 def _bulk_separation_preview(host, username, password, emails, progress=None):
-  snapshots = bulk_separation.build_review(emails, _bulk_separation_resolve(host, username, password, emails, progress),
-    lambda sql: _axl_execute_sql_rows(host, username, password, sql),
-    lambda names: _lookup_jabber_registration_statuses(host, username, password, names, allow_phone_fallback=False), progress=progress)
-  if not any(snapshot.get("extensions") for snapshot in snapshots.values()):
-    return sms_inventory.annotate_review(snapshots, {})
+  if not emails:
+    return {}
   if progress:
-    progress("Checking SMS using the shared All SMS extract (eight-hour cache)", snapshots)
+    progress("Step 1: validating the shared eight-hour All SMS inventory before LDAP/CUCM lookups")
   try:
     report = _cached_all_sms_numbers(progress=progress) if progress else _cached_all_sms_numbers()
   except sms_inventory.InventoryRefreshError as exc:
@@ -66725,6 +66722,13 @@ def _bulk_separation_preview(host, username, password, emails, progress=None):
         target=f"cache_hit={report['cache_hit']};fetched_at={report['fetched_at']};numbers={report['count']};status={report['status']}", output_filename="", inline_mode=True)
     except Exception:
       logger.warning("SMS inventory succeeded but its bulk-review audit event could not be written.")
+  if progress:
+    progress("Step 2: resolving employees and extensions using the SMS inventory already obtained" if not report.get("failures") else "SMS inventory is incomplete; continuing read-only employee review with explicit SMS failure reporting")
+  snapshots = bulk_separation.build_review(emails, _bulk_separation_resolve(host, username, password, emails, progress),
+    lambda sql: _axl_execute_sql_rows(host, username, password, sql),
+    lambda names: _lookup_jabber_registration_statuses(host, username, password, names, allow_phone_fallback=False), progress=progress)
+  if progress:
+    progress("Matching reviewed extension digits against the SMS inventory obtained before employee lookup", snapshots)
   return sms_inventory.annotate_review(snapshots, report)
 
 
