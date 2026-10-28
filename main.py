@@ -628,6 +628,8 @@ GENESYS_QUEUE_CLIENT_ID = (os.getenv("GENESYS_QUEUE_CLIENT_ID", "") or "").strip
 GENESYS_QUEUE_CLIENT_SECRET = (os.getenv("GENESYS_QUEUE_CLIENT_SECRET", "") or "").strip()
 GENESYS_USERS_PAGE_SIZE = int((os.getenv("GENESYS_USERS_PAGE_SIZE", "100") or "100").strip())
 GENESYS_PHONE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_PHONE_LOOKUP_MAX_PAGES", "50") or "50").strip())
+GENESYS_PERSISTENT_WEBRTC_PAGE_SIZE = 100
+GENESYS_PERSISTENT_WEBRTC_MAX_PAGES = 300
 GENESYS_QUEUE_LOOKUP_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_LOOKUP_MAX_PAGES", "200") or "200").strip())
 GENESYS_QUEUE_MEMBER_MAX_PAGES = int((os.getenv("GENESYS_QUEUE_MEMBER_MAX_PAGES", "100") or "100").strip())
 GENESYS_QUEUE_ID_PATTERN = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
@@ -3706,6 +3708,122 @@ def _genesys_list_phone_management_inventory(api_base: str, access_token: str) -
       break
 
   return {"entities": merged_entities}, ""
+
+
+def _genesys_list_webrtc_persistent_phones(region: str, access_token: str) -> dict:
+  clean_region, _, api_base = _genesys_region_to_urls(region)
+
+  def read_all_pages(path: str, query_params: dict, label: str) -> tuple[list[dict], str]:
+    entities_all = []
+    seen_ids = set()
+    page_size = GENESYS_PERSISTENT_WEBRTC_PAGE_SIZE
+    max_pages = GENESYS_PERSISTENT_WEBRTC_MAX_PAGES
+    for page_number in range(1, max_pages + 1):
+      params = dict(query_params)
+      params.update({"pageSize": page_size, "pageNumber": page_number})
+      ok, payload, error = _genesys_get_json(api_base, access_token, path, params)
+      if not ok:
+        return [], f"{label} inventory failed: {error}"
+      entities = payload.get("entities")
+      if not isinstance(entities, list):
+        return [], f"{label} inventory returned an unexpected response."
+      for entity in entities:
+        if not isinstance(entity, dict):
+          return [], f"{label} inventory returned an invalid record."
+        entity_id = str(entity.get("id", "") or "").strip()
+        if not entity_id or entity_id in seen_ids:
+          return [], f"{label} inventory returned a missing or repeated ID."
+        seen_ids.add(entity_id)
+      entities_all.extend(entities)
+
+      try:
+        page_count = int(payload.get("pageCount", 0) or 0)
+      except (TypeError, ValueError):
+        return [], f"{label} inventory returned invalid pagination metadata."
+      if page_count < 0:
+        return [], f"{label} inventory returned invalid pagination metadata."
+      if page_count and page_count > max_pages:
+        return [], f"{label} inventory exceeds the safe {max_pages}-page limit."
+      has_next = bool(payload.get("nextUri") or payload.get("next_uri"))
+      if page_count and page_number >= page_count:
+        return entities_all, ""
+      if not has_next and not page_count and len(entities) < page_size:
+        return entities_all, ""
+      if page_number == max_pages:
+        return [], f"{label} inventory is incomplete; the safe {max_pages}-page limit was reached."
+    return [], f"{label} inventory exceeded its safe page limit."
+
+  stations, station_error = read_all_pages(
+    "/api/v2/stations",
+    {"webRtcUserId": "*"},
+    "WebRTC station",
+  )
+  if station_error:
+    return {"ok": False, "error": station_error}
+  phones, phone_error = read_all_pages(
+    "/api/v2/telephony/providers/edges/phones",
+    {"webRtcUserId": "*", "expand": ["phoneBaseSettings"], "fields": ["webRtcUser"]},
+    "WebRTC phone",
+  )
+  if phone_error:
+    return {"ok": False, "error": phone_error}
+
+  phones_by_user = {}
+  for phone in phones:
+    web_rtc_user = phone.get("webRtcUser") if isinstance(phone.get("webRtcUser"), dict) else {}
+    user_id = str(web_rtc_user.get("id", "") or phone.get("webRtcUserId", "") or "").strip()
+    if user_id:
+      phones_by_user.setdefault(user_id, []).append(phone)
+
+  webrtc_station_count = 0
+  persistent_on_station_count = 0
+  persistent_off_count = 0
+  setting_unknown_count = 0
+  rows = []
+  for station in stations:
+    station_type = str(station.get("type", "") or "").strip().casefold()
+    user_id = str(station.get("webRtcUserId", "") or "").strip()
+    if station_type != "inin_webrtc_softphone" and not user_id:
+      continue
+    webrtc_station_count += 1
+    persistent_enabled = station.get("webRtcPersistentEnabled")
+    if persistent_enabled is not True:
+      if persistent_enabled is False:
+        persistent_off_count += 1
+      else:
+        setting_unknown_count += 1
+      continue
+
+    persistent_on_station_count += 1
+    matching_phones = phones_by_user.get(user_id, [])
+    if not matching_phones:
+      matching_phones = [{}]
+    for phone in matching_phones:
+      base_settings = phone.get("phoneBaseSettings") if isinstance(phone.get("phoneBaseSettings"), dict) else {}
+      rows.append({
+        "phone_id": str(phone.get("id", "") or "").strip(),
+        "phone_name": str(phone.get("name", "") or station.get("name", "") or "").strip(),
+        "user_id": user_id,
+        "station_id": str(station.get("id", "") or "").strip(),
+        "station_name": str(station.get("name", "") or "").strip(),
+        "phone_base_settings_name": str(base_settings.get("name", "") or "").strip(),
+        "phone_mapping_status": "Matched" if phone.get("id") else "Station found; Phone Management record not returned",
+        "persistent_connection": "On",
+      })
+
+  rows.sort(key=lambda row: (row["phone_name"].casefold(), row["user_id"].casefold(), row["station_id"]))
+  return {
+    "ok": True,
+    "region": clean_region,
+    "stations_scanned": len(stations),
+    "webrtc_stations": webrtc_station_count,
+    "persistent_on_stations": persistent_on_station_count,
+    "persistent_off_stations": persistent_off_count,
+    "setting_unknown_stations": setting_unknown_count,
+    "phones_scanned": len(phones),
+    "unmatched_enabled_stations": sum(1 for row in rows if not row["phone_id"]),
+    "rows": rows,
+  }
 
 
 def _genesys_lookup_phone_management_name(api_base: str, access_token: str, user_id: str, user_name: str, user_email: str) -> tuple[str, dict, dict, str]:
@@ -22005,6 +22123,7 @@ def genesys_admin_placeholder(request: Request):
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-missing-webrtc-panel" onclick="(function(){var id='genesys-missing-webrtc-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Users Missing WebRTC Phone</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-cleanup-panel" onclick="(function(){var id='genesys-user-cleanup-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys User Cleanup</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-webrtc-cleanup-panel" onclick="(function(){var id='genesys-webrtc-cleanup-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Genesys WebRTC Cleanup</button>
+          <button type="button" class="portal-nav-btn" data-panel-target="genesys-webrtc-persistent-panel" onclick="(function(){var id='genesys-webrtc-persistent-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">WebRTC Persistent Connection</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-bulk-email-panel" onclick="(function(){var id='genesys-bulk-email-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Bulk WebRTC build</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-user-queue-remove-panel" onclick="(function(){var id='genesys-user-queue-remove-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Lookup + Remove (User)</button>
           <button type="button" class="portal-nav-btn" data-panel-target="genesys-queue-panel" onclick="(function(){var id='genesys-queue-panel';document.querySelectorAll('.genesys-panel').forEach(function(p){p.style.display=(p.id===id?'block':'none');});document.querySelectorAll('.portal-nav-btn[data-panel-target]').forEach(function(b){b.classList.toggle('active', b.getAttribute('data-panel-target')===id);});})();">Queue Info</button>
@@ -22726,6 +22845,75 @@ def genesys_admin_placeholder(request: Request):
                 };
                 filterInput.addEventListener("input", renderRows);
                 var savedJobId=localStorage.getItem("genesysWebRTCCleanupDeleteJobId")||"";if(savedJobId){activeJobId=savedJobId;pollDeleteQueue(savedJobId);}
+              })();
+            </script>
+          </div>
+          <div id="genesys-webrtc-persistent-panel" class="panel genesys-panel" style="display:none; margin-top:0;">
+            <h3 style="margin-top:0;">WebRTC Phones with Persistent Connection On</h3>
+            <p style="color:#4e6a84;font-size:12px;">Shows WebRTC stations whose configured Maintain a persistent connection setting is On. This is saved configuration, not proof that a live persistent connection is currently active.</p>
+            <div class="search-filter-row">
+              <button type="button" id="genesys-webrtc-persistent-load" onclick="if(window.loadGenesysPersistentWebRTC){window.loadGenesysPersistentWebRTC();}else{document.getElementById('genesys-webrtc-persistent-status').textContent='Persistent connection lookup handler is missing.';}return false;" style="background:#385977;">Load Configured Phones</button>
+              <input id="genesys-webrtc-persistent-filter" aria-label="Filter persistent-connection WebRTC phones" placeholder="Filter by phone, user, station, or base settings" style="width:420px;">
+              <button type="button" id="genesys-webrtc-persistent-download" disabled>Download CSV</button>
+            </div>
+            <p id="genesys-webrtc-persistent-status" role="status" style="color:#2c5c8a;min-height:18px;">Ready. Load the Genesys WebRTC station inventory.</p>
+            <p id="genesys-webrtc-persistent-summary" style="color:#4e6a84;min-height:18px;"></p>
+            <div id="genesys-webrtc-persistent-results" style="overflow-x:auto;"></div>
+            <script>
+              (function () {
+                var button = document.getElementById("genesys-webrtc-persistent-load");
+                var filter = document.getElementById("genesys-webrtc-persistent-filter");
+                var download = document.getElementById("genesys-webrtc-persistent-download");
+                var status = document.getElementById("genesys-webrtc-persistent-status");
+                var summary = document.getElementById("genesys-webrtc-persistent-summary");
+                var output = document.getElementById("genesys-webrtc-persistent-results");
+                var report = null;
+                var visible = [];
+                var columns = [["phone_name","Phone Name"],["user_id","Genesys User ID"],["station_name","Station"],["phone_base_settings_name","Phone Base Settings"],["phone_mapping_status","Phone Mapping"],["persistent_connection","Maintain a persistent connection"]];
+                if (!button || !filter || !download || !status || !summary || !output) return;
+                function render() {
+                  if (!report) return;
+                  var query = filter.value.trim().toLowerCase();
+                  visible = report.rows.filter(function (row) { return columns.map(function (column) { return row[column[0]] || ""; }).join(" ").toLowerCase().indexOf(query) !== -1; });
+                  output.replaceChildren();
+                  var table = document.createElement("table");
+                  table.style.minWidth = "850px";
+                  var head = table.createTHead().insertRow();
+                  columns.forEach(function (column) { var th = document.createElement("th"); th.textContent = column[1]; head.appendChild(th); });
+                  var body = table.createTBody();
+                  visible.slice(0, 500).forEach(function (item) {
+                    var row = body.insertRow();
+                    columns.forEach(function (column) { row.insertCell().textContent = String(item[column[0]] || "-"); });
+                  });
+                  if (visible.length) output.appendChild(table);
+                  else output.textContent = "No configured-on WebRTC phones match the current filter.";
+                  summary.textContent = "Region " + report.region + " | " + report.persistent_on_stations + " configured-on station(s) | " + report.persistent_off_stations + " Off | " + report.setting_unknown_stations + " Unknown | " + report.phones_scanned + " Phone Management phones scanned | " + visible.length + " matching; first " + Math.min(500, visible.length) + " shown." + (report.unmatched_enabled_stations ? " " + report.unmatched_enabled_stations + " enabled station(s) had no matching Phone Management record." : "");
+                  download.disabled = false;
+                }
+                window.loadGenesysPersistentWebRTC = async function () {
+                  if (button.disabled) return;
+                  button.disabled = true;
+                  status.textContent = "Reading configured WebRTC station and phone inventories...";
+                  try {
+                    var response = await fetch("/genesys/webrtc-persistent-connection", {credentials:"same-origin",headers:{"Accept":"application/json"}});
+                    var data = await response.json();
+                    if (!response.ok || !data.ok) throw new Error(data.error || ("HTTP " + response.status));
+                    report = data;
+                    render();
+                    status.textContent = "Configuration inventory loaded at " + data.fetched_at + ". Persistent connection status is not a live-session check.";
+                  } catch (error) {
+                    status.textContent = "Persistent connection inventory failed: " + ((error && error.message) || "Unknown error.") + (report ? " Previous results remain in this tab." : "");
+                  } finally { button.disabled = false; }
+                };
+                filter.addEventListener("input", render);
+                download.addEventListener("click", function () {
+                  if (!report) return;
+                  function cell(value) { var text = String(value == null ? "" : value); if (/^[=+@-]/.test(text.trimStart())) text = "'" + text; return '"' + text.replace(/"/g, '""') + '"'; }
+                  var lines = [columns.map(function (column) { return column[1]; }).concat(["Region","Fetched At"]).map(cell).join(",")];
+                  visible.forEach(function (item) { lines.push(columns.map(function (column) { return item[column[0]]; }).concat([report.region, report.fetched_at]).map(cell).join(",")); });
+                  var url = URL.createObjectURL(new Blob([String.fromCharCode(65279) + lines.join(String.fromCharCode(13,10))], {type:"text/csv;charset=utf-8"}));
+                  var link = document.createElement("a"); link.href = url; link.download = "genesys_webrtc_persistent_connection.csv"; document.body.appendChild(link); link.click(); link.remove(); window.setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+                });
               })();
             </script>
           </div>
@@ -30119,6 +30307,37 @@ def genesys_users_missing_webrtc_route():
   if not result.get("ok"):
     return JSONResponse({"ok": False, "error": result.get("error", "Genesys missing WebRTC lookup failed.")}, status_code=400)
   return JSONResponse(result)
+
+
+@app.get("/genesys/webrtc-persistent-connection")
+def genesys_webrtc_persistent_connection_route(request: Request):
+  session = _get_auth_session(request) or {}
+  operator = str(session.get("username", "") or "").strip()
+  if not operator:
+    return JSONResponse({"ok": False, "error": "Sign in to the portal first."}, status_code=401)
+  clean_region = (GENESYS_CLOUD_REGION or "usw2").strip().lower() or "usw2"
+  token_result = _genesys_get_access_token(clean_region, GENESYS_CLIENT_ID, GENESYS_CLIENT_SECRET)
+  if not token_result.get("ok"):
+    return JSONResponse({"ok": False, "error": token_result.get("error", "Genesys token request failed.")}, status_code=400)
+  result = _genesys_list_webrtc_persistent_phones(
+    token_result.get("region", clean_region),
+    token_result.get("access_token", ""),
+  )
+  if not result.get("ok"):
+    return JSONResponse({"ok": False, "error": result.get("error", "Genesys persistent-connection inventory failed.")}, status_code=502)
+  result["fetched_at"] = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+  try:
+    _append_audit_event(
+      action="genesys_webrtc_persistent_connection_inventory",
+      cucm_host=str(session.get("cucm_host", "") or ""),
+      operator=operator,
+      target=f"region={result['region']};webrtc_stations={result['webrtc_stations']};persistent_on={result['persistent_on_stations']};phones={result['phones_scanned']};unmatched={result['unmatched_enabled_stations']}",
+      output_filename="",
+      inline_mode=True,
+    )
+  except Exception:
+    logger.warning("Genesys persistent-connection inventory loaded but its audit event could not be written.")
+  return JSONResponse(result, headers={"Cache-Control": "no-store"})
 
 
 @app.get("/genesys/webrtc-cleanup/candidates")
