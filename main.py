@@ -41314,8 +41314,8 @@ __GREENLIGHT_ADMIN_CARD__
               <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('cancel');">Cancel Pending</button>
             </div>
             <div class="search-filter-row" style="flex-wrap:wrap;">
-              <label for="bulk-separation-history">Job History (all jobs)</label>
-              <select id="bulk-separation-history" aria-label="Saved bulk separation jobs" style="max-width:100%;min-width:0;"></select>
+              <label for="bulk-separation-history">Submission Batches</label>
+              <select id="bulk-separation-history" aria-label="Saved bulk separation submission batches" style="max-width:100%;min-width:0;"></select>
               <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('load');">View Saved Job</button>
               <button type="button" onclick="event.preventDefault();window.runBulkSeparation && window.runBulkSeparation('history');">Refresh History</button>
               <a id="bulk-separation-download" hidden>Download Full Results CSV</a>
@@ -41395,7 +41395,8 @@ __GREENLIGHT_ADMIN_CARD__
                 if (jobId !== job.id) pageIndex = 0;
                 jobId = job.id; viewJob = job;
                 const count = job.status === 'awaiting_review' ? job.rows.filter(function(row){return editable(row) && row.selected;}).length : (job.approved_count || 0);
-                status.textContent = job.host + ' | ' + job.status + ' | ' + count + ' selected | ' + job.finished + '/' + job.total + ' processed | Jabber removed: ' + job.deleted_count + ' | Review/failure: ' + job.review_count;
+                const batchId = String(job.id || '').slice(0, 8).toUpperCase();
+                status.textContent = 'Batch ' + batchId + ' | ' + job.host + ' | ' + job.status + ' | ' + count + ' selected | ' + job.finished + '/' + job.total + ' processed | Jabber removed: ' + job.deleted_count + ' | Review/failure: ' + job.review_count;
                 if (job.reviewed_at) status.textContent += ' | Review snapshot: ' + new Date(job.reviewed_at).toLocaleString();
                 if (job.rows.length < job.total) status.textContent += ' | Result preview: ' + job.rows.length + '/' + job.total + '; CSV contains all entries.';
                 if (job.error) status.textContent += ' | ' + job.error;
@@ -41417,7 +41418,7 @@ __GREENLIGHT_ADMIN_CARD__
               async function loadHistory() {
                 const data = await readResponse(await fetch('/project-greenlight/bulk-separation', {cache:'no-store'}));
                 history.replaceChildren();
-                data.jobs.forEach(function(job) { const option = document.createElement('option'); option.value = job.id; option.textContent = job.created_at.slice(0,19) + ' | ' + job.status + ' | ' + job.total + ' emails'; history.appendChild(option); });
+                data.jobs.forEach(function(job) { const option = document.createElement('option'); option.value = job.id; option.textContent = 'Batch ' + String(job.id || '').slice(0,8).toUpperCase() + ' | ' + job.created_at.slice(0,19) + ' | ' + job.status + ' | ' + job.total + ' emails'; history.appendChild(option); });
                 if (jobId) history.value = jobId;
                 if (!jobId && data.jobs.length) { history.selectedIndex = 0; await loadJob(history.value); }
               }
