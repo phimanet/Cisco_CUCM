@@ -838,6 +838,12 @@ Priority keys:
 - Renamed Option 10 web text to "Offboard User - Delete all Jabber and Voicemail Box (Option 10)".
 - Added new web options 3/4/5 for secondary device workflows: TCT, BOT, and STRIKE MODE (TCT+BOT), including FastAPI routes and toolkit backend logic.
 
+### 2026-10-28 (SMS-only User and Bulk Translation Patterns)
+- Added the SMS-only pattern workflow with `SMS - First Last 10-digit number`, `ENT_DEVICE_PT`, `Route_Internal_CSS`, and called-party mask `2481009`; LDAP `telephoneNumber` and `ipPhone` use the selected 10-digit number.
+- Person lookup and full separation now recognize SMS-prefix patterns. Separation revalidates exact matches and rebuilds the number as an inactive DN; ambiguous or interrupted rows are not replayed.
+- Added Project Functions bulk builder for email/number pairs, batched availability precheck, explicit BUILD confirmation, per-row durable checkpoints, CSV results, and no-expiry history under external runtime data.
+- Local checks: 18 focused SMS tests pass; Python compilation and full Project-page script/nav check pass. No live LAB/CUCM/LDAP validation yet. The 292-test full suite reports 5 failures and 9 errors in existing Empty Line Group, Voicemail Cleanup, and Jabber registration-history paths.
+
 ## Working Agreement
 - Update this file at the end of each substantial change set.
 - Keep entries brief and action-oriented.

@@ -71,6 +71,8 @@ from toolkit.translation_pattern_lookup import (
 from toolkit.route_plan_report import lookup_route_plan
 from toolkit.cucm_number_usage import lookup_number_usage, create_deep_scan, advance_deep_scan
 from toolkit.create_teams_telephony_user import create_teams_telephony_user
+from toolkit import sms_only_user
+from toolkit import sms_only_bulk
 from toolkit.remove_teams_telephony_user import (
   lookup_teams_telephony_removal_candidate,
   remove_teams_telephony_user,
@@ -224,6 +226,10 @@ def _startup_background_services():
   try:
     BULK_SEPARATION_QUEUE.recover()
   except Exception:
+  try:
+    SMS_ONLY_BULK_QUEUE.recover()
+  except Exception:
+    logger.error("SMS-only bulk recovery refused saved state; inspect runtime storage.")
     logger.error("Bulk separation recovery refused saved state; inspect runtime storage.")
   _greenlight_load_state()
   _unity_user_extract_load_state()
@@ -953,6 +959,7 @@ _genesys_queue_data_root = (os.getenv("GENESYS_AD_WEBRTC_QUEUE_DATA_DIR", "") or
 if not _genesys_queue_data_root:
   _genesys_queue_data_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data") if os.name == "nt" else "/opt/cucm-web-data"
 GENESYS_AD_WEBRTC_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue.json")
+SMS_ONLY_BULK_QUEUE = sms_only_bulk.BulkSmsTranslationQueue(os.path.join(_genesys_queue_data_root, "sms_only_bulk"))
 BULK_SEPARATION_QUEUE = bulk_separation.BulkSeparationQueue(os.path.join(_genesys_queue_data_root, "bulk_separation"))
 SMS_ALL_NUMBERS_CACHE = sms_inventory.InventoryCache(os.path.join(_genesys_queue_data_root, "sms_all_numbers_cache"))
 GENESYS_AD_WEBRTC_QUEUE_HISTORY_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue_history.json")
@@ -35578,6 +35585,7 @@ __ADMIN_CARD__
     <div class="jabber-check-layout" style="display:block;">
       <form id="person-lookup-form" class="jabber-check-form">
         <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+        <input type="hidden" name="include_sms_only_status" value="1">
         <input type="hidden" name="cucm_user" value="__AUTH_USER__">
         <input type="hidden" name="cucm_pass" value="">
         <input type="hidden" name="include_teams_status" value="1">
@@ -35655,6 +35663,7 @@ __ADMIN_CARD__
             let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
             html += '<thead><tr style="background:#005eb8; color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">SMS Only</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Title</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
@@ -35676,6 +35685,11 @@ __ADMIN_CARD__
               const telephone = r.telephone || "\u2014";
               const uid = r.userid || "";
               const teams = r.teams_telephony || {};
+              const smsOnly = r.sms_only_telephony || {};
+              const smsOnlyState = smsOnly.status || "Not checked";
+              const smsOnlyExtensions = Array.isArray(smsOnly.extensions) ? smsOnly.extensions : [];
+              const smsOnlyText = smsOnlyState === "Yes" ? `Yes (${smsOnlyExtensions.join(", ")})` : smsOnlyState;
+              const smsOnlyColor = smsOnlyState === "Yes" ? "#0f6d35" : (smsOnlyState === "Unknown" ? "#7a1020" : "#6b7280");
               const teamsIsUser = !!teams.is_teams_user;
               const teamsState = teams.status || (teamsIsUser ? "Yes" : "Not Found");
               const teamsExt = teams.extension || "";
@@ -36598,6 +36612,120 @@ __ADMIN_CARD__
               lookupStatusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
             }
           });
+    <section class="tool-panel" data-panel="sms-only-user">
+      <h3>Create SMS Only User</h3>
+      <p>Find an existing CUCM user, choose an available inactive 10-digit number, create the SMS translation pattern, and update that same number in LDAP.</p>
+      <div style="margin:0 0 14px 0;padding:12px;border:1px solid #c8dbee;border-radius:8px;background:#f7fbff;overflow-x:auto;">
+        <strong style="display:block;margin-bottom:8px;color:#002f6c;">SMS Translation Pattern Fields</strong>
+        <table style="border-collapse:collapse;min-width:620px;"><tbody>
+          <tr><th style="text-align:left;padding:4px 10px 4px 0;">Description</th><td>SMS - FirstName LastName 10-digit extension</td></tr>
+          <tr><th style="text-align:left;padding:4px 10px 4px 0;">Calling Search Space</th><td>Route_Internal_CSS</td></tr>
+          <tr><th style="text-align:left;padding:4px 10px 4px 0;">Partition</th><td>ENT_DEVICE_PT</td></tr>
+          <tr><th style="text-align:left;padding:4px 10px 4px 0;">Called Party Transform Mask</th><td>2481009</td></tr>
+          <tr><th style="text-align:left;padding:4px 10px 4px 0;">LDAP telephoneNumber</th><td>Formatted from the selected 10-digit extension</td></tr>
+          <tr><th style="text-align:left;padding:4px 10px 4px 0;">LDAP ipPhone</th><td>The selected 10 digits</td></tr>
+        </tbody></table>
+      </div>
+      <div class="build-user-layout">
+        <form id="sms-only-form" class="target-user-form build-user-form" action="javascript:void(0)" method="post" onsubmit="return false;">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <strong style="display:block;margin-bottom:8px;color:#002f6c;">Find CUCM User</strong>
+          <div class="compact-inline-row"><span>Last Name:</span><input id="sms-only-last-name" required placeholder="Smith"></div><br>
+          <div class="compact-inline-row"><span>First Name (optional):</span><input id="sms-only-first-name" placeholder="Jane"></div><br>
+          <button id="sms-only-search" type="button" onclick="if(window.searchSmsOnlyUsers){window.searchSmsOnlyUsers();}else{document.getElementById('sms-only-lookup-status').textContent='SMS user lookup handler is missing.';}return false;">Search User</button>
+          <p id="sms-only-lookup-status" role="status" style="min-height:18px;color:#2c5c8a;">Search by name to check for an existing SMS pattern.</p>
+          <div id="sms-only-lookup-results" style="overflow-x:auto;"></div>
+          <label for="sms-only-target-user">Selected CUCM User ID</label>
+          <input id="sms-only-target-user" name="target_user" required autocomplete="off" placeholder="Select a user above">
+          <div class="action-row">
+            <button id="sms-only-create" type="button" onclick="if(window.createSmsOnlyUser){window.createSmsOnlyUser();}else{document.getElementById('sms-only-status').textContent='SMS creation handler is missing.';}return false;">Create SMS Only User</button>
+            <span class="env-action-pill __ENV_CLASS__">__ENV_TEXT__</span>
+          </div>
+        </form>
+        <section class="build-user-output" aria-live="polite">
+          <h4>SMS Only User Output</h4>
+          <p id="sms-only-status" class="build-user-status">Search for a user, then create the SMS translation pattern.</p>
+          <p><a id="sms-only-download" href="#" style="color:#7ec8ff;font-weight:bold;display:none;">Download CSV Output</a></p>
+          <textarea id="sms-only-preview" readonly></textarea>
+        </section>
+      </div>
+      <script>
+        (function () {
+          var form = document.getElementById("sms-only-form");
+          var searchButton = document.getElementById("sms-only-search");
+          var createButton = document.getElementById("sms-only-create");
+          var lookupStatus = document.getElementById("sms-only-lookup-status");
+          var lookupResults = document.getElementById("sms-only-lookup-results");
+          var outputStatus = document.getElementById("sms-only-status");
+          var output = document.getElementById("sms-only-preview");
+          var download = document.getElementById("sms-only-download");
+          var lastName = document.getElementById("sms-only-last-name");
+          var firstName = document.getElementById("sms-only-first-name");
+          var targetUser = document.getElementById("sms-only-target-user");
+          if (!form || !searchButton || !createButton || !lookupStatus || !lookupResults || !outputStatus || !output || !download || !lastName || !firstName || !targetUser) return;
+          window.searchSmsOnlyUsers = async function () {
+            if (!lastName.value.trim()) { lookupStatus.textContent = "Last Name is required."; lastName.focus(); return; }
+            searchButton.disabled = true;
+            lookupStatus.textContent = "Searching CUCM and checking SMS translation patterns...";
+            lookupResults.replaceChildren();
+            var data = new FormData(form);
+            data.delete("target_user");
+            data.append("last_name", lastName.value.trim());
+            data.append("first_name", firstName.value.trim());
+            data.append("include_sms_only_status", "1");
+            try {
+              var response = await fetch("/lookup/person", {method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});
+              var payload = await response.json();
+              if (!response.ok || !payload.ok) throw new Error((payload.error && payload.error.message) || payload.error || ("HTTP " + response.status));
+              var users = Array.isArray(payload.results) ? payload.results : [];
+              if (!users.length) { lookupStatus.textContent = "No users found."; return; }
+              var table = document.createElement("table");
+              table.style.minWidth = "620px";
+              var header = table.createTHead().insertRow();
+              ["Name", "User ID", "Email", "SMS Only", "Action"].forEach(function (label) { var cell = document.createElement("th"); cell.textContent = label; header.appendChild(cell); });
+              var body = table.createTBody();
+              users.forEach(function (user) {
+                var row = body.insertRow();
+                var sms = user.sms_only_telephony || {};
+                var extensions = Array.isArray(sms.extensions) ? sms.extensions : [];
+                [user.display_name || ((user.first_name || "") + " " + (user.last_name || "")).trim() || user.userid || "", user.userid || "", user.email || "", sms.status === "Yes" ? "Yes: " + extensions.join(", ") : (sms.status || "Unknown")].forEach(function (value) { row.insertCell().textContent = String(value || "-"); });
+                var action = row.insertCell();
+                var select = document.createElement("button");
+                select.type = "button";
+                select.textContent = sms.status === "Yes" ? "Already has SMS pattern" : (sms.status === "Unknown" ? "Lookup required" : "Select User");
+                select.disabled = sms.status !== "Not Found";
+                select.addEventListener("click", function () { targetUser.value = user.userid || ""; targetUser.focus(); outputStatus.textContent = "Selected " + (user.userid || "") + ". Create will recheck no SMS pattern is already assigned."; });
+                action.appendChild(select);
+              });
+              lookupResults.appendChild(table);
+              lookupStatus.textContent = "Found " + users.length + " user(s). Only users with a confirmed Not Found status can be selected.";
+            } catch (error) { lookupStatus.textContent = "User lookup failed: " + ((error && error.message) || "Unknown error."); }
+            finally { searchButton.disabled = false; }
+          };
+          window.createSmsOnlyUser = async function () {
+            if (!targetUser.value.trim()) { outputStatus.textContent = "Select a user first."; targetUser.focus(); return; }
+            createButton.disabled = true;
+            outputStatus.textContent = "Creating SMS translation pattern and updating LDAP...";
+            output.value = "";
+            download.style.display = "none";
+            try {
+              var response = await fetch("/build/sms-only-user?inline=1", {method:"POST",body:new FormData(form),credentials:"same-origin",headers:{"Accept":"application/json"}});
+              var payload = await response.json();
+              if (!response.ok) throw new Error(payload.detail || ("HTTP " + response.status));
+              output.value = payload.output_text || "";
+              outputStatus.textContent = "Completed: " + (payload.filename || "sms_only_user_output.csv");
+              if (payload.download_url) { download.href = payload.download_url; download.style.display = "inline"; }
+              targetUser.value = "";
+            } catch (error) { outputStatus.textContent = "Create SMS Only User failed."; output.value = (error && error.message) || "Unknown error."; }
+            finally { createButton.disabled = false; }
+          };
+          form.addEventListener("submit", function (event) { event.preventDefault(); window.createSmsOnlyUser(); });
+        })();
+      </script>
+    </section>
+
         }
 
       })();
@@ -37424,6 +37552,7 @@ __ADMIN_CARD__
 
     <div class="offboard-search-wrap" style="margin:0 0 16px 0;padding:14px;border:1px solid #c8dbee;border-radius:8px;background:#f7fbff;">
       <h4 style="margin:0 0 8px 0;color:#002f6c;">Look Up Employee by Name (optional)</h4>
+        <input type="hidden" name="include_sms_only_status" value="1">
       <p style="margin:0 0 10px 0;font-size:13px;color:#4e6a84;">Search to review the user's extension, email, and Jabber devices, then click <strong>Select for Separation</strong> to load them into the form below. Nothing is deleted until you run the Offboard action.</p>
       <form id="offboard-search-form" class="jabber-check-form">
         <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
@@ -41500,6 +41629,7 @@ __GREENLIGHT_ADMIN_CARD__
           <div class="portal-nav">
             <button type="button" class="portal-nav-btn active" data-panel="personlookup">Person Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="singleldapupdate">LDAP Phone Update by Email</button>
+            <button type="button" class="portal-nav-btn" data-panel="smsbulk">Build Bulk SMS User Translation Pattern</button>
             <button type="button" class="portal-nav-btn" data-panel="batchldapupdate">Batch LDAP Phone Update</button>
             <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="jabberstatus">Jabber Status Check</button>
@@ -41507,6 +41637,124 @@ __GREENLIGHT_ADMIN_CARD__
             <button type="button" class="portal-nav-btn" data-panel="csfinventory">Jabber CSF License Inventory</button>
             <button type="button" class="portal-nav-btn" data-panel="jabbercleanup">Jabber Cleanup</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkseparation" style="color:#a41424;">DANGER - Bulk Delete Cisco Jabber Process</button>
+          <section class="tool-panel" data-panel="smsbulk">
+            <h3>Build Bulk SMS User Translation Pattern</h3>
+            <p>Paste one exact CUCM email and one 10-digit number per row. The precheck confirms a unique CUCM user, an inactive unassigned DN in ENT_DEVICE_PT, no translation-pattern conflict, and no existing SMS pattern for that user.</p>
+            <p><strong>Pattern:</strong> Description `SMS - FirstName LastName 10-digit number`; Partition `ENT_DEVICE_PT`; Calling Search Space `Route_Internal_CSS`; Called Party Transform Mask `2481009`. LDAP `telephoneNumber` and `ipPhone` are updated from the same 10-digit number.</p>
+            <p><strong>Processing:</strong> Review availability, type BUILD, then start. Each row is checkpointed. Completed rows are not repeated. An interrupted in-flight row is marked Needs Review and requires manual verification. All job history is retained without automatic expiry in the external runtime data directory.</p>
+            <label for="sms-bulk-input">Email,10-digit number (CSV or tab-separated; optional header)</label>
+            <textarea id="sms-bulk-input" aria-label="Paste email and 10-digit number rows" placeholder="Email,Number&#10;alice.smith@amnhealthcare.com,9451234567&#10;bob.jones@amnhealthcare.com,9451234568" style="width:100%;min-height:150px;box-sizing:border-box;"></textarea>
+            <div class="search-filter-row" style="flex-wrap:wrap;">
+              <button type="button" id="sms-bulk-check" onclick="event.preventDefault();window.runSmsBulk && window.runSmsBulk('check');">Check Availability</button>
+              <label for="sms-bulk-confirm">Type BUILD to create available rows</label>
+              <input id="sms-bulk-confirm" autocomplete="off" style="max-width:130px;">
+              <button type="button" id="sms-bulk-build" onclick="event.preventDefault();window.runSmsBulk && window.runSmsBulk('build');">Build Available Rows</button>
+              <button type="button" id="sms-bulk-pause" onclick="event.preventDefault();window.runSmsBulk && window.runSmsBulk('pause');">Pause</button>
+              <button type="button" id="sms-bulk-cancel" onclick="event.preventDefault();window.runSmsBulk && window.runSmsBulk('cancel');">Cancel Pending</button>
+            </div>
+            <div class="search-filter-row" style="flex-wrap:wrap;">
+              <label for="sms-bulk-history">Saved jobs</label>
+              <select id="sms-bulk-history" aria-label="Saved SMS bulk jobs" style="max-width:100%;min-width:0;"></select>
+              <button type="button" id="sms-bulk-load" onclick="event.preventDefault();window.runSmsBulk && window.runSmsBulk('load');">View Saved Job</button>
+              <button type="button" id="sms-bulk-refresh-history" onclick="event.preventDefault();window.runSmsBulk && window.runSmsBulk('history');">Refresh History</button>
+              <a id="sms-bulk-download" hidden>Download Full Results CSV</a>
+            </div>
+            <p id="sms-bulk-status" role="status">No bulk SMS job loaded.</p>
+            <p id="sms-bulk-summary"></p>
+            <div class="search-filter-row" style="flex-wrap:wrap;">
+              <input id="sms-bulk-filter" aria-label="Filter SMS bulk results" placeholder="Filter email, number, name, or status" style="max-width:100%;box-sizing:border-box;">
+            </div>
+            <div style="overflow:auto;max-height:560px;"><table style="width:100%;min-width:1150px;font-size:13px;"><thead><tr><th>Email</th><th>10-Digit Number</th><th>CUCM User</th><th>Availability / Status</th><th>Description</th><th>Partition</th><th>CSS</th><th>Mask</th><th>Pattern</th><th>LDAP</th><th>Details</th></tr></thead><tbody id="sms-bulk-results"></tbody></table></div>
+            <script>
+            (function () {
+              var input = document.getElementById("sms-bulk-input");
+              var confirmation = document.getElementById("sms-bulk-confirm");
+              var history = document.getElementById("sms-bulk-history");
+              var status = document.getElementById("sms-bulk-status");
+              var summary = document.getElementById("sms-bulk-summary");
+              var output = document.getElementById("sms-bulk-results");
+              var filter = document.getElementById("sms-bulk-filter");
+              var download = document.getElementById("sms-bulk-download");
+              var job = null;
+              var busy = false;
+              var timer = null;
+              if (!input || !confirmation || !history || !status || !summary || !output || !filter || !download) return;
+              function render() {
+                output.replaceChildren();
+                if (!job) { summary.textContent = ""; download.hidden = true; return; }
+                var term = filter.value.trim().toLowerCase();
+                var rows = (job.rows || []).filter(function (row) { return !term || JSON.stringify(row).toLowerCase().indexOf(term) >= 0; });
+                rows.slice(0, 500).forEach(function (item) {
+                  var row = output.insertRow();
+                  [item.email, item.number, item.userid, item.status, item.description, item.route_partition, item.calling_search_space, item.called_party_transform_mask, item.pattern_status, item.ldap_status, item.detail].forEach(function (value) { row.insertCell().textContent = String(value || "-"); });
+                });
+                var counts = {};
+                (job.rows || []).forEach(function (row) { counts[row.status] = (counts[row.status] || 0) + 1; });
+                summary.textContent = "Job " + job.id + " | " + job.status + " | " + Number(job.total || (job.rows || []).length) + " rows | Available " + Number(counts.available || 0) + " | Built " + Number(counts.built || 0) + " | Needs review " + Number(counts.needs_review || 0) + " | Failed/blocked " + Number(job.failed_count || 0) + " | Showing " + Math.min(rows.length, 500) + " of " + rows.length + ".";
+                download.href = "/project-greenlight/sms-only-bulk/csv?job_id=" + encodeURIComponent(job.id);
+                download.hidden = false;
+              }
+              function setJob(next) { job = next || null; render(); }
+              async function readJob(jobId) {
+                var response = await fetch("/project-greenlight/sms-only-bulk?job_id=" + encodeURIComponent(jobId), {credentials:"same-origin",headers:{"Accept":"application/json"}});
+                var payload = await response.json();
+                if (!response.ok || !payload.ok) throw new Error(payload.error || ("HTTP " + response.status));
+                setJob(payload.job);
+                status.textContent = "Saved SMS bulk job loaded.";
+                schedulePoll();
+              }
+              async function refreshHistory() {
+                var response = await fetch("/project-greenlight/sms-only-bulk", {credentials:"same-origin",headers:{"Accept":"application/json"}});
+                var payload = await response.json();
+                if (!response.ok || !payload.ok) throw new Error(payload.error || ("HTTP " + response.status));
+                var previous = history.value;
+                history.replaceChildren();
+                (payload.jobs || []).forEach(function (item) {
+                  var option = document.createElement("option");
+                  option.value = item.id;
+                  option.textContent = new Date(item.created_at).toLocaleString() + " | " + item.status + " | " + Number(item.total || 0) + " rows";
+                  history.appendChild(option);
+                });
+                if (previous && (payload.jobs || []).some(function (item) { return item.id === previous; })) history.value = previous;
+                status.textContent = "Saved job history refreshed. Retention: no automatic expiry.";
+              }
+              function schedulePoll() {
+                window.clearTimeout(timer);
+                if (job && ["running", "queued", "checking"].indexOf(job.status) >= 0) timer = window.setTimeout(function () { readJob(job.id).catch(function (error) { status.textContent = "Job status unavailable: " + error.message; }); }, 1500);
+              }
+              window.runSmsBulk = async function (action) {
+                if (busy) return;
+                busy = true;
+                status.textContent = action === "check" ? "Saving rows and checking exact CUCM email/number availability..." : action === "build" ? "Rechecking availability, then building selected rows..." : action === "history" ? "Loading saved SMS jobs..." : "Processing SMS bulk action...";
+                try {
+                  if (action === "load") { await readJob(history.value); return; }
+                  if (action === "history") { await refreshHistory(); return; }
+                  var data = new FormData();
+                  data.append("action", action);
+                  if (job && job.id) data.append("job_id", job.id);
+                  if (action === "check" && (!job || !job.id || ["completed", "cancelled", "no_available_rows"].indexOf(job.status) >= 0)) {
+                    data.delete("job_id");
+                    data.append("raw_text", input.value);
+                    setJob(null);
+                  }
+                  if (action === "build" || action === "resume") data.append("confirmation", confirmation.value.trim());
+                  var response = await fetch("/project-greenlight/sms-only-bulk", {method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});
+                  var payload = await response.json();
+                  if (!response.ok || !payload.ok) throw new Error(payload.error || ("HTTP " + response.status));
+                  setJob(payload.job);
+                  if (action === "check") status.textContent = Number(payload.job.available_count || 0) + " row(s) passed precheck. Review every row; only rows marked available are eligible to build.";
+                  else if (action === "build" || action === "resume") status.textContent = "Build started. You may leave the page; completed rows are checkpointed.";
+                  else status.textContent = "SMS bulk job updated: " + payload.job.status + ".";
+                  await refreshHistory();
+                  schedulePoll();
+                } catch (error) { status.textContent = "SMS bulk action failed: " + ((error && error.message) || "Unknown error."); }
+                finally { busy = false; }
+              };
+              filter.addEventListener("input", render);
+              refreshHistory().catch(function (error) { status.textContent = "Saved SMS history unavailable: " + error.message; });
+            })();
+            </script>
+          </section>
             <a class="portal-nav-link" href="/menu?panel=build">Open Build User (Page 1)</a>
             <a class="portal-nav-link" href="/menu?panel=offboard">Open Separate Employee (Page 1)</a>
           </div>
@@ -46657,6 +46905,7 @@ def menu_admin_page(request: Request):
 
       <section class="panel tool-panel active" data-panel="personlookup">
         <h3>Employee Lookup by Name</h3>
+          <input type="hidden" name="include_sms_only_status" value="1">
         <p>Search by last name (optional first name), then use the result to prefill Strike Mode.</p>
         <form id="admin-person-lookup-form">
           <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
@@ -49213,6 +49462,7 @@ def menu_admin_page(request: Request):
                       const sp = await sr.json();
                       if (!sr.ok || !sp.ok) throw new Error((sp && sp.detail) || "Send failed.");
                       if (jabberNotifySendStatus) jabberNotifySendStatus.textContent = "Sent: " + (sp.detail || "Email sent successfully.");
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">SMS Only</th>';
                     } catch (err) {
                       if (jabberNotifySendStatus) jabberNotifySendStatus.textContent = "Failed: " + ((err && err.message) || "Unknown error.");
                       btn.disabled = false;
@@ -49234,6 +49484,11 @@ def menu_admin_page(request: Request):
               panel.classList.toggle("active", panel.dataset.panel === panelKey);
             });
             navButtons.forEach((btn) => {
+                const smsOnly = r.sms_only_telephony || {};
+                const smsOnlyState = smsOnly.status || "Not checked";
+                const smsOnlyExtensions = Array.isArray(smsOnly.extensions) ? smsOnly.extensions : [];
+                const smsOnlyText = smsOnlyState === "Yes" ? `Yes (${smsOnlyExtensions.join(", ")})` : smsOnlyState;
+                const smsOnlyColor = smsOnlyState === "Yes" ? "#0f6d35" : (smsOnlyState === "Unknown" ? "#7a1020" : "#6b7280");
               btn.classList.toggle("active", btn.dataset.panel === panelKey);
             });
           }
@@ -60942,6 +61197,63 @@ async def build_user_csf_phone(
     added_count = 1 if added_dn else 0
     audit_target = f"account={clean_target_user};dn_added={added_dn or 'none'};added_count={added_count}"
     _append_audit_event(
+@app.post("/build/sms-only-user")
+async def build_sms_only_user(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  target_user: str = Form(...),
+  inline: bool = Query(False),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+  clean_target_user = (target_user or "").strip()
+  existing_sms = sms_only_user.lookup_sms_only_user(
+    cucm_host, cucm_user, cucm_pass, clean_target_user, _axl_execute_sql_rows,
+  )
+  if existing_sms.get("name_matches"):
+    return JSONResponse({"detail": "This CUCM user already has an SMS-only translation pattern: " + ", ".join(row["pattern"] for row in existing_sms["name_matches"])}, status_code=409)
+  data, filename = sms_only_user.create_sms_only_user(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    target_user=clean_target_user,
+    ad_username=cucm_user,
+    ad_password=cucm_pass,
+  )
+  created_dn = ""
+  pattern_created = False
+  for row in csv.reader(io.StringIO(_to_bytes(data).decode("utf-8", errors="replace"))):
+    if len(row) < 3 or row[1].strip().lower() != "success":
+      continue
+    if row[0] == "Select Available DN":
+      match = re.search(r"\b(\d{10})\b", row[2])
+      created_dn = match.group(1) if match else ""
+    elif row[0] == "Add SMS Translation Pattern":
+      pattern_created = True
+  _append_audit_event(
+    action="build_sms_only_user",
+    cucm_host=cucm_host,
+    operator=cucm_user,
+    target=f"account={clean_target_user};sms_pattern={created_dn if pattern_created else 'none'};pattern_created={str(pattern_created).lower()}",
+    account=clean_target_user,
+    extension_added=created_dn if pattern_created else "",
+    extension_deleted="",
+    output_filename=filename,
+    inline_mode=inline,
+  )
+  if inline:
+    job_output = _prepare_job_output(data, filename)
+    return JSONResponse({
+      "job_id": job_output["job_id"],
+      "filename": job_output["filename"],
+      "output_text": job_output["output_text"],
+      "download_url": f"/download/job-output/{job_output['job_id']}",
+    })
+  return _render_job_result("Create SMS Only User", data, filename)
+
+
       action="build_user_csf_phone",
       cucm_host=cucm_host,
       operator=cucm_user,
@@ -63543,6 +63855,7 @@ async def bulk_lookup_extension_route(
     filename = f"bulk_extension_lookup_{timestamp}.csv"
     job_output = _prepare_job_output(output.getvalue().encode("utf-8"), filename)
 
+  include_sms_only_status: str = Form(""),
     _append_audit_event(
       action="bulk_lookup_extension",
       cucm_host=cucm_host,
@@ -63555,6 +63868,7 @@ async def bulk_lookup_extension_route(
     return JSONResponse({
       "ok": True,
       "summary": {
+      include_sms_only = str(include_sms_only_status or "").strip().lower() in {"1", "true", "yes", "on"}
         "input_rows": len(patterns),
         "matched_inputs": matched_inputs,
         "no_result_inputs": no_result_inputs,
@@ -63587,6 +63901,27 @@ def send_jabber_ready_email_route(
 
     notify_status, notify_details = _send_csf_jabber_ready_email_if_created(
         cucm_host=cucm_host,
+      if include_sms_only:
+        try:
+          sms_patterns = sms_only_user.list_sms_only_patterns(
+            cucm_host, cucm_user, cucm_pass, _axl_execute_sql_rows,
+          )
+        except Exception:
+          sms_patterns = None
+        for user in results:
+          if sms_patterns is None:
+            user["sms_only_telephony"] = {"is_sms_only_user": False, "status": "Unknown", "extensions": []}
+            continue
+          matches = sms_only_user.find_sms_only_patterns_for_user(
+            sms_patterns, user.get("first_name", ""), user.get("last_name", ""),
+          )
+          extensions = sorted({match["extension"] for match in matches})
+          user["sms_only_telephony"] = {
+            "is_sms_only_user": bool(matches),
+            "status": "Yes" if matches else "Not Found",
+            "extensions": extensions,
+            "patterns": [match["pattern"] for match in matches],
+          }
         cucm_user=cucm_user,
         cucm_pass=cucm_pass,
         target_user=clean_target,
@@ -66854,6 +67189,115 @@ def decommission_user_csf_voicemail_route(
             "job_id": job_output["job_id"],
             "filename": job_output["filename"],
             "output_text": job_output["output_text"],
+def _sms_bulk_public(job):
+  rows = job.get("rows", [])
+  return {
+    **{key: value for key, value in job.items() if key != "rows"},
+    "total": len(rows),
+    "available_count": sum(row.get("status") == "available" for row in rows),
+    "built_count": sum(row.get("status") == "built" for row in rows),
+    "needs_review_count": sum(row.get("status") == "needs_review" for row in rows),
+    "failed_count": sum(row.get("status") in {"failed", "invalid", "duplicate", "lookup_failed", "user_not_found", "ambiguous_email", "number_not_available", "already_assigned"} for row in rows),
+    "rows": [{key: value for key, value in row.items() if key not in {"password", "output"}} for row in rows],
+  }
+
+
+@app.get("/project-greenlight/sms-only-bulk")
+def sms_only_bulk_get_route(request: Request, job_id: str = ""):
+  try:
+    session, _operator = _require_admin_session(request)
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  host = str(session.get("cucm_host", "") or "").strip()
+  try:
+    if job_id:
+      return JSONResponse({"ok": True, "job": _sms_bulk_public(SMS_ONLY_BULK_QUEUE.get(job_id, host))}, headers={"Cache-Control": "no-store"})
+    jobs = SMS_ONLY_BULK_QUEUE.history(host)
+    return JSONResponse({
+      "ok": True,
+      "retention_policy": "All SMS bulk jobs are retained without automatic expiry under the external runtime data directory.",
+      "jobs": [{key: value for key, value in _sms_bulk_public(job).items() if key != "rows"} for job in jobs],
+    }, headers={"Cache-Control": "no-store"})
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Saved SMS bulk job unavailable for this CUCM environment."}, status_code=409)
+
+
+@app.post("/project-greenlight/sms-only-bulk")
+def sms_only_bulk_post_route(
+  request: Request,
+  action: str = Form(""),
+  job_id: str = Form(""),
+  raw_text: str = Form(""),
+  confirmation: str = Form(""),
+):
+  try:
+    session, operator = _require_admin_session(request)
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  try:
+    host = str(session.get("cucm_host", "") or "").strip()
+    if not host:
+      raise ValueError("Select a CUCM environment first.")
+    if action == "submit":
+      job = SMS_ONLY_BULK_QUEUE.submit(host, operator, raw_text)
+      _append_audit_event(action="sms_only_bulk_submitted", cucm_host=host, operator=operator, target=f"job={job['id']};rows={len(job['rows'])}", output_filename="", inline_mode=True)
+    elif action == "check":
+      host, username, password = _resolve_cucm_credentials(request, "", "", "")
+      if not job_id:
+        job = SMS_ONLY_BULK_QUEUE.submit(host, operator, raw_text)
+        job_id = job["id"]
+      job = SMS_ONLY_BULK_QUEUE.check(
+        job_id,
+        host,
+        lambda rows: sms_only_bulk.precheck_sms_bulk_rows(rows, host, username, password, _axl_execute_sql_rows),
+      )
+      _append_audit_event(action="sms_only_bulk_precheck", cucm_host=host, operator=operator, target=f"job={job['id']};available={sum(row.get('status') == 'available' for row in job['rows'])};rows={len(job['rows'])}", output_filename="", inline_mode=True)
+    elif action in {"build", "resume"}:
+      if confirmation != "BUILD":
+        raise ValueError("Type BUILD to confirm the available SMS number assignments.")
+      host, username, password = _resolve_cucm_credentials(request, "", "", "")
+      job = SMS_ONLY_BULK_QUEUE.check(
+        job_id,
+        host,
+        lambda rows: sms_only_bulk.precheck_sms_bulk_rows(rows, host, username, password, _axl_execute_sql_rows),
+      )
+      if job.get("status") != "awaiting_confirmation":
+        raise ValueError("The fresh availability check found no buildable rows. Review the saved results.")
+      job = SMS_ONLY_BULK_QUEUE.start(
+        job["id"], host, operator, confirmation,
+        lambda row: sms_only_bulk.build_sms_for_specific_number(host, username, password, row),
+      )
+      _append_audit_event(action="sms_only_bulk_build_started", cucm_host=host, operator=operator, target=f"job={job['id']};available={job.get('available_count', '')}", output_filename="", inline_mode=True)
+    elif action in {"pause", "cancel"}:
+      job = SMS_ONLY_BULK_QUEUE.control(job_id, host, action)
+      _append_audit_event(action="sms_only_bulk_" + action, cucm_host=host, operator=operator, target=f"job={job_id}", output_filename="", inline_mode=True)
+    else:
+      raise ValueError("Choose submit, check, build, pause, or cancel.")
+    return JSONResponse({"ok": True, "job": _sms_bulk_public(job)}, headers={"Cache-Control": "no-store"})
+  except ValueError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
+  except Exception:
+    logger.exception("SMS-only bulk action failed")
+    return JSONResponse({"ok": False, "error": "SMS bulk action failed; check saved job history before retrying."}, status_code=500)
+
+
+@app.get("/project-greenlight/sms-only-bulk/csv")
+def sms_only_bulk_csv_route(request: Request, job_id: str):
+  try:
+    session, _operator = _require_admin_session(request)
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  try:
+    job = SMS_ONLY_BULK_QUEUE.get(job_id, str(session.get("cucm_host", "") or "").strip())
+    return Response(
+      content=sms_only_bulk.sms_bulk_csv(job),
+      media_type="text/csv",
+      headers={"Cache-Control": "no-store", "Content-Disposition": f"attachment; filename=sms_only_bulk_{job['id']}.csv"},
+    )
+  except Exception:
+    return JSONResponse({"ok": False, "error": "Saved SMS bulk output unavailable."}, status_code=409)
+
+
             "download_url": f"/download/job-output/{job_output['job_id']}",
         })
 
@@ -66934,6 +67378,12 @@ def _bulk_separation_preview(host, username, password, emails, progress=None):
     report = _cached_all_sms_numbers(progress=progress) if progress else _cached_all_sms_numbers()
   except sms_inventory.InventoryRefreshError as exc:
     report = {"status": "Lookup Failed", "failures": exc.failures}
+    try:
+      sms_candidate = sms_only_user.lookup_sms_only_user(
+        cucm_host, cucm_user, cucm_pass, clean_target_user, _axl_execute_sql_rows,
+      )
+    except Exception as sms_lookup_exc:
+      sms_candidate = {"lookup_error": f"Pre-separation SMS lookup failed: {sms_lookup_exc}"}
   except Exception:
     report = {"status": "Lookup Failed", "failures": ["SMS inventory unavailable. Prior successful cache was retained; no unmatched number is reported as No."]}
   else:
@@ -67054,6 +67504,44 @@ def bulk_separation_post_route(request: Request, action: str = Form(""), job_id:
       job = BULK_SEPARATION_QUEUE.control(job_id, host, action)
       _append_audit_event(action="bulk_separation_" + action, cucm_host=host, operator=operator, target=f"job={job_id}", output_filename="", inline_mode=True)
     return JSONResponse({"ok": True, "job": _bulk_separation_public(job)}, headers={"Cache-Control": "no-store"})
+    sms_data, sms_filename = sms_only_user.remove_sms_only_user(
+      cucm_host=cucm_host,
+      cucm_user=cucm_user,
+      cucm_pass=cucm_pass,
+      target_user=clean_target_user,
+      read_sql=_axl_execute_sql_rows,
+      candidate=sms_candidate,
+    )
+    sms_rows = list(csv.reader(io.StringIO(_to_bytes(sms_data).decode("utf-8", errors="replace"))))
+    if len(sms_rows) > 1:
+      sms_body_output = io.StringIO()
+      csv.writer(sms_body_output).writerows(sms_rows[1:])
+      sms_body = sms_body_output.getvalue().strip()
+      if sms_body:
+        data = _to_bytes(data) + (sms_body + "\n").encode("utf-8")
+    sms_removed = []
+    sms_failed = False
+    for row in sms_rows[1:]:
+      if len(row) < 3:
+        continue
+      if row[0] == "Delete SMS Translation Pattern" and row[1] == "Success":
+        match = re.search(r"Deleted (\d{10})/", row[2])
+        if match:
+          sms_removed.append(match.group(1))
+      if row[1] in {"Failed", "Error"}:
+        sms_failed = True
+    _append_audit_event(
+      action="separation_sms_only_patterns",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=f"account={clean_target_user};patterns_removed={len(sms_removed)};status={'failed' if sms_failed else 'complete'};source_file={sms_filename}",
+      account=clean_target_user,
+      extension_added="",
+      extension_deleted=",".join(sms_removed),
+      output_filename=filename,
+      inline_mode=inline,
+    )
+
   except ValueError as exc:
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
   except Exception:
