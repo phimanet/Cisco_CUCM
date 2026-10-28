@@ -3755,14 +3755,14 @@ def _genesys_list_webrtc_persistent_phones(region: str, access_token: str) -> di
 
   stations, station_error = read_all_pages(
     "/api/v2/stations",
-    {"webRtcUserId": "*"},
+    {},
     "WebRTC station",
   )
   if station_error:
     return {"ok": False, "error": station_error}
   phones, phone_error = read_all_pages(
     "/api/v2/telephony/providers/edges/phones",
-    {"webRtcUserId": "*", "expand": ["phoneBaseSettings"], "fields": ["webRtcUser"]},
+    {"expand": ["phoneBaseSettings"], "fields": ["webRtcUser"]},
     "WebRTC phone",
   )
   if phone_error:

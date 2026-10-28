@@ -32,6 +32,8 @@ class PersistentWebRTCInventoryTests(unittest.TestCase):
 
         def get_json(api_base, access_token, path, params=None):
             self.calls.append((path, dict(params or {})))
+            if (params or {}).get("webRtcUserId") == "*":
+                return False, {}, "The ID * is not a UUID."
             source = self.stations if path == "/api/v2/stations" else self.phones
             page_size = int(params["pageSize"])
             page_number = int(params["pageNumber"])
@@ -63,7 +65,7 @@ class PersistentWebRTCInventoryTests(unittest.TestCase):
         self.assertEqual(result["rows"][1]["phone_mapping_status"], "Station found; Phone Management record not returned")
         self.assertEqual(sum(path == "/api/v2/stations" for path, _ in self.calls), 2)
         self.assertEqual(sum(path == "/api/v2/telephony/providers/edges/phones" for path, _ in self.calls), 1)
-        self.assertTrue(all(params.get("webRtcUserId") == "*" for _, params in self.calls))
+        self.assertTrue(all("webRtcUserId" not in params for _, params in self.calls))
 
     def test_inventory_failure_does_not_claim_empty_success(self):
         self.scope["_genesys_get_json"] = lambda *args, **kwargs: (False, {}, "Forbidden")
