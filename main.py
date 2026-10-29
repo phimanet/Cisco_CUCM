@@ -226,11 +226,11 @@ def _startup_background_services():
   try:
     BULK_SEPARATION_QUEUE.recover()
   except Exception:
+    logger.error("Bulk separation recovery refused saved state; inspect runtime storage.")
   try:
     SMS_ONLY_BULK_QUEUE.recover()
   except Exception:
     logger.error("SMS-only bulk recovery refused saved state; inspect runtime storage.")
-    logger.error("Bulk separation recovery refused saved state; inspect runtime storage.")
   _greenlight_load_state()
   _unity_user_extract_load_state()
   _unity_user_extract_start_worker()
@@ -959,8 +959,8 @@ _genesys_queue_data_root = (os.getenv("GENESYS_AD_WEBRTC_QUEUE_DATA_DIR", "") or
 if not _genesys_queue_data_root:
   _genesys_queue_data_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data") if os.name == "nt" else "/opt/cucm-web-data"
 GENESYS_AD_WEBRTC_QUEUE_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue.json")
-SMS_ONLY_BULK_QUEUE = sms_only_bulk.BulkSmsTranslationQueue(os.path.join(_genesys_queue_data_root, "sms_only_bulk"))
 BULK_SEPARATION_QUEUE = bulk_separation.BulkSeparationQueue(os.path.join(_genesys_queue_data_root, "bulk_separation"))
+SMS_ONLY_BULK_QUEUE = sms_only_bulk.BulkSmsTranslationQueue(os.path.join(_genesys_queue_data_root, "sms_only_bulk"))
 SMS_ALL_NUMBERS_CACHE = sms_inventory.InventoryCache(os.path.join(_genesys_queue_data_root, "sms_all_numbers_cache"))
 GENESYS_AD_WEBRTC_QUEUE_HISTORY_PATH = os.path.join(_genesys_queue_data_root, "genesys_ad_webrtc_queue_history.json")
 GENESYS_CALL_ROUTES_REPORT_PATH = os.path.join(_genesys_queue_data_root, "genesys_call_routes_report.json")
@@ -35585,10 +35585,10 @@ __ADMIN_CARD__
     <div class="jabber-check-layout" style="display:block;">
       <form id="person-lookup-form" class="jabber-check-form">
         <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
-        <input type="hidden" name="include_sms_only_status" value="1">
         <input type="hidden" name="cucm_user" value="__AUTH_USER__">
         <input type="hidden" name="cucm_pass" value="">
         <input type="hidden" name="include_teams_status" value="1">
+        <input type="hidden" name="include_sms_only_status" value="1">
 
         <div class="search-filter-row">
           <input name="last_name" placeholder="Last Name *" required>
@@ -35663,7 +35663,6 @@ __ADMIN_CARD__
             let html = '<table style="width:100%; border-collapse:collapse; font-size:13px;">';
             html += '<thead><tr style="background:#005eb8; color:#fff;">';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Name</th>';
-            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">SMS Only</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Title</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">User ID</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Extension</th>';
@@ -35671,6 +35670,7 @@ __ADMIN_CARD__
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
+            html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">SMS Only</th>';
             html += '<th style="padding:8px 10px; text-align:left;">Jabber Devices</th>';
             html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
             html += '</tr></thead><tbody>';
@@ -35685,11 +35685,6 @@ __ADMIN_CARD__
               const telephone = r.telephone || "\u2014";
               const uid = r.userid || "";
               const teams = r.teams_telephony || {};
-              const smsOnly = r.sms_only_telephony || {};
-              const smsOnlyState = smsOnly.status || "Not checked";
-              const smsOnlyExtensions = Array.isArray(smsOnly.extensions) ? smsOnly.extensions : [];
-              const smsOnlyText = smsOnlyState === "Yes" ? `Yes (${smsOnlyExtensions.join(", ")})` : smsOnlyState;
-              const smsOnlyColor = smsOnlyState === "Yes" ? "#0f6d35" : (smsOnlyState === "Unknown" ? "#7a1020" : "#6b7280");
               const teamsIsUser = !!teams.is_teams_user;
               const teamsState = teams.status || (teamsIsUser ? "Yes" : "Not Found");
               const teamsExt = teams.extension || "";
@@ -35697,6 +35692,11 @@ __ADMIN_CARD__
                 ? (teamsExt ? `Yes (${teamsExt})` : "Yes")
                 : (teamsState === "Unknown" ? "Unknown" : "Not Found");
               const teamsColor = teamsIsUser ? "#0f6d35" : (teamsState === "Unknown" ? "#7a1020" : "#6b7280");
+              const smsOnly = r.sms_only_telephony || {};
+              const smsOnlyState = smsOnly.status || "Not checked";
+              const smsOnlyExtensions = Array.isArray(smsOnly.extensions) ? smsOnly.extensions : [];
+              const smsOnlyText = smsOnlyState === "Yes" ? `Yes (${smsOnlyExtensions.join(", ")})` : smsOnlyState;
+              const smsOnlyColor = smsOnlyState === "Yes" ? "#0f6d35" : (smsOnlyState === "Unknown" ? "#7a1020" : "#6b7280");
               const devList = (r.devices || []).map(function (d) {
                 const exts = (d.extensions || []).join(", ") || "\u2014";
                 const pfx = (d.name || "").substring(0, 3).toUpperCase();
@@ -35726,6 +35726,7 @@ __ADMIN_CARD__
               html += '<td style="padding:7px 10px;">' + email + '</td>';
               html += '<td style="padding:7px 10px;">' + telephone + '</td>';
               html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
+              html += '<td style="padding:7px 10px; font-weight:700; color:' + smsOnlyColor + ';">' + smsOnlyText + '</td>';
               html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>';
               html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(4,max-content);gap:4px;align-items:start;">' + actionBtns + '</div></td>';
               html += '</tr>';
@@ -36612,6 +36613,12 @@ __ADMIN_CARD__
               lookupStatusEl.textContent = "Search failed: " + ((err && err.message) || "Unknown error.");
             }
           });
+        }
+
+      })();
+    </script>
+    </section>
+
     <section class="tool-panel" data-panel="sms-only-user">
       <h3>Create SMS Only User</h3>
       <p>Find an existing CUCM user, choose an available inactive 10-digit number, create the SMS translation pattern, and update that same number in LDAP.</p>
@@ -36724,12 +36731,6 @@ __ADMIN_CARD__
           form.addEventListener("submit", function (event) { event.preventDefault(); window.createSmsOnlyUser(); });
         })();
       </script>
-    </section>
-
-        }
-
-      })();
-    </script>
     </section>
 
     <section class="tool-panel" data-panel="teams-telephony-remove">
@@ -37552,13 +37553,13 @@ __ADMIN_CARD__
 
     <div class="offboard-search-wrap" style="margin:0 0 16px 0;padding:14px;border:1px solid #c8dbee;border-radius:8px;background:#f7fbff;">
       <h4 style="margin:0 0 8px 0;color:#002f6c;">Look Up Employee by Name (optional)</h4>
-        <input type="hidden" name="include_sms_only_status" value="1">
       <p style="margin:0 0 10px 0;font-size:13px;color:#4e6a84;">Search to review the user's extension, email, and Jabber devices, then click <strong>Select for Separation</strong> to load them into the form below. Nothing is deleted until you run the Offboard action.</p>
       <form id="offboard-search-form" class="jabber-check-form">
         <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
         <input type="hidden" name="cucm_user" value="__AUTH_USER__">
         <input type="hidden" name="cucm_pass" value="">
         <input type="hidden" name="include_teams_status" value="1">
+        <input type="hidden" name="include_sms_only_status" value="1">
         <input type="hidden" name="include_separation_indicators" value="1">
         <div class="search-filter-row">
           <input name="last_name" placeholder="Last Name *" required>
@@ -41629,14 +41630,20 @@ __GREENLIGHT_ADMIN_CARD__
           <div class="portal-nav">
             <button type="button" class="portal-nav-btn active" data-panel="personlookup">Person Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="singleldapupdate">LDAP Phone Update by Email</button>
-            <button type="button" class="portal-nav-btn" data-panel="smsbulk">Build Bulk SMS User Translation Pattern</button>
             <button type="button" class="portal-nav-btn" data-panel="batchldapupdate">Batch LDAP Phone Update</button>
             <button type="button" class="portal-nav-btn" data-panel="extensionlookup">Extension Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="jabberstatus">Jabber Status Check</button>
             <button type="button" class="portal-nav-btn" data-panel="translationlookup">Translation Pattern Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="csfinventory">Jabber CSF License Inventory</button>
             <button type="button" class="portal-nav-btn" data-panel="jabbercleanup">Jabber Cleanup</button>
+            <button type="button" class="portal-nav-btn" data-panel="smsbulk">Build Bulk SMS User Translation Pattern</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkseparation" style="color:#a41424;">DANGER - Bulk Delete Cisco Jabber Process</button>
+            <a class="portal-nav-link" href="/menu?panel=build">Open Build User (Page 1)</a>
+            <a class="portal-nav-link" href="/menu?panel=offboard">Open Separate Employee (Page 1)</a>
+          </div>
+        </aside>
+
+        <section class="portal-main">
           <section class="tool-panel" data-panel="smsbulk">
             <h3>Build Bulk SMS User Translation Pattern</h3>
             <p>Paste one exact CUCM email and one 10-digit number per row. The precheck confirms a unique CUCM user, an inactive unassigned DN in ENT_DEVICE_PT, no translation-pattern conflict, and no existing SMS pattern for that user.</p>
@@ -41645,7 +41652,7 @@ __GREENLIGHT_ADMIN_CARD__
             <label for="sms-bulk-input">Email,10-digit number (CSV or tab-separated; optional header)</label>
             <textarea id="sms-bulk-input" aria-label="Paste email and 10-digit number rows" placeholder="Email,Number&#10;alice.smith@amnhealthcare.com,9451234567&#10;bob.jones@amnhealthcare.com,9451234568" style="width:100%;min-height:150px;box-sizing:border-box;"></textarea>
             <div class="search-filter-row" style="flex-wrap:wrap;">
-              <button type="button" id="sms-bulk-check" onclick="event.preventDefault();window.runSmsBulk && window.runSmsBulk('check');">Check Availability</button>
+              <button type="button" id="sms-bulk-check" onclick="event.preventDefault();window.runSmsBulk ? window.runSmsBulk('check') : document.getElementById('sms-bulk-status').textContent='JavaScript unavailable. Reload the page.';">Check Availability</button>
               <label for="sms-bulk-confirm">Type BUILD to create available rows</label>
               <input id="sms-bulk-confirm" autocomplete="off" style="max-width:130px;">
               <button type="button" id="sms-bulk-build" onclick="event.preventDefault();window.runSmsBulk && window.runSmsBulk('build');">Build Available Rows</button>
@@ -41755,12 +41762,6 @@ __GREENLIGHT_ADMIN_CARD__
             })();
             </script>
           </section>
-            <a class="portal-nav-link" href="/menu?panel=build">Open Build User (Page 1)</a>
-            <a class="portal-nav-link" href="/menu?panel=offboard">Open Separate Employee (Page 1)</a>
-          </div>
-        </aside>
-
-        <section class="portal-main">
           <section class="tool-panel" data-panel="bulkseparation">
             <h3 style="color:#a41424;">DANGER - Bulk Delete Cisco Jabber Process</h3>
             <p><strong>Destructive full separation:</strong> removes associated CSF/BOT/TCT devices and Unity voicemail, clears AD phone fields and Unified Messaging membership, releases eligible translation patterns/LS DIDs and removes eligible Teams telephony. The current permanent-DN deletion setting also applies. CUCM End Users and AD accounts are not deleted.</p>
@@ -46811,6 +46812,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="block-inbound-callerid">Block Inbound Calls by Caller ID Number</button>
             <button type="button" class="portal-nav-btn" data-panel="strikemask-template">Add Translation for Strike Mask Use (CSV Template)</button>
             <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=teams-telephony'">Create Teams Telephony User (Main Ops)</button>
+            <button type="button" class="portal-nav-btn" onclick="window.location.href='/menu?panel=sms-only-user'">Create SMS Only User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=teams-telephony-remove'">Remove Teams Telephony User (Main Ops)</button>
             <button type="button" class="portal-nav-btn portal-nav-btn-danger" onclick="window.location.href='/menu?panel=offboard'">Separate Employeed-Delete Jabber/VM (Main Ops)</button>
             <div style="margin:-4px 0 6px 0;">__DN_DELETE_INDICATOR2__</div>
@@ -46905,13 +46907,13 @@ def menu_admin_page(request: Request):
 
       <section class="panel tool-panel active" data-panel="personlookup">
         <h3>Employee Lookup by Name</h3>
-          <input type="hidden" name="include_sms_only_status" value="1">
         <p>Search by last name (optional first name), then use the result to prefill Strike Mode.</p>
         <form id="admin-person-lookup-form">
           <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
           <input type="hidden" name="cucm_user" value="__AUTH_USER__">
           <input type="hidden" name="cucm_pass" value="">
           <input type="hidden" name="include_teams_status" value="1">
+          <input type="hidden" name="include_sms_only_status" value="1">
           <div class="search-filter-row">
             <input name="last_name" placeholder="Last Name *" required>
             <input name="first_name" placeholder="First Name (optional)">
@@ -49462,7 +49464,6 @@ def menu_admin_page(request: Request):
                       const sp = await sr.json();
                       if (!sr.ok || !sp.ok) throw new Error((sp && sp.detail) || "Send failed.");
                       if (jabberNotifySendStatus) jabberNotifySendStatus.textContent = "Sent: " + (sp.detail || "Email sent successfully.");
-              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">SMS Only</th>';
                     } catch (err) {
                       if (jabberNotifySendStatus) jabberNotifySendStatus.textContent = "Failed: " + ((err && err.message) || "Unknown error.");
                       btn.disabled = false;
@@ -49484,11 +49485,6 @@ def menu_admin_page(request: Request):
               panel.classList.toggle("active", panel.dataset.panel === panelKey);
             });
             navButtons.forEach((btn) => {
-                const smsOnly = r.sms_only_telephony || {};
-                const smsOnlyState = smsOnly.status || "Not checked";
-                const smsOnlyExtensions = Array.isArray(smsOnly.extensions) ? smsOnly.extensions : [];
-                const smsOnlyText = smsOnlyState === "Yes" ? `Yes (${smsOnlyExtensions.join(", ")})` : smsOnlyState;
-                const smsOnlyColor = smsOnlyState === "Yes" ? "#0f6d35" : (smsOnlyState === "Unknown" ? "#7a1020" : "#6b7280");
               btn.classList.toggle("active", btn.dataset.panel === panelKey);
             });
           }
@@ -49555,6 +49551,7 @@ def menu_admin_page(request: Request):
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Email</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Telephone</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Teams Telephony</th>';
+              html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">SMS Only</th>';
               html += '<th style="padding:8px 10px; text-align:left;">Jabber Devices</th>';
               html += '<th style="padding:8px 10px; text-align:left; white-space:nowrap;">Actions</th>';
               html += '</tr></thead><tbody>';
@@ -49576,6 +49573,11 @@ def menu_admin_page(request: Request):
                   ? (teamsExt ? `Yes (${teamsExt})` : "Yes")
                   : (teamsState === "Unknown" ? "Unknown" : "Not Found");
                 const teamsColor = teamsIsUser ? "#0f6d35" : (teamsState === "Unknown" ? "#7a1020" : "#6b7280");
+                const smsOnly = r.sms_only_telephony || {};
+                const smsOnlyState = smsOnly.status || "Not checked";
+                const smsOnlyExtensions = Array.isArray(smsOnly.extensions) ? smsOnly.extensions : [];
+                const smsOnlyText = smsOnlyState === "Yes" ? `Yes (${smsOnlyExtensions.join(", ")})` : smsOnlyState;
+                const smsOnlyColor = smsOnlyState === "Yes" ? "#0f6d35" : (smsOnlyState === "Unknown" ? "#7a1020" : "#6b7280");
                 const devList = (r.devices || []).map(function (d) {
                   const exts = (d.extensions || []).join(", ") || "\u2014";
                   const pfx = (d.name || "").substring(0, 3).toUpperCase();
@@ -49604,6 +49606,7 @@ def menu_admin_page(request: Request):
                 html += '<td style="padding:7px 10px;">' + email + '</td>';
                 html += '<td style="padding:7px 10px;">' + telephone + '</td>';
                 html += '<td style="padding:7px 10px; font-weight:700; color:' + teamsColor + ';">' + teamsText + '</td>';
+                html += '<td style="padding:7px 10px; font-weight:700; color:' + smsOnlyColor + ';">' + smsOnlyText + '</td>';
                 html += '<td style="padding:7px 10px; line-height:1.6;">' + devList + '</td>'
                 html += '<td style="padding:7px 10px;"><div style="display:grid;grid-template-columns:repeat(3,max-content);gap:4px;align-items:start;">' + actionBtn + '</div></td>';
                 html += '</tr>';
@@ -61197,63 +61200,6 @@ async def build_user_csf_phone(
     added_count = 1 if added_dn else 0
     audit_target = f"account={clean_target_user};dn_added={added_dn or 'none'};added_count={added_count}"
     _append_audit_event(
-@app.post("/build/sms-only-user")
-async def build_sms_only_user(
-  request: Request,
-  cucm_host: str = Form(""),
-  cucm_user: str = Form(""),
-  cucm_pass: str = Form(""),
-  target_user: str = Form(...),
-  inline: bool = Query(False),
-):
-  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
-  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
-  clean_target_user = (target_user or "").strip()
-  existing_sms = sms_only_user.lookup_sms_only_user(
-    cucm_host, cucm_user, cucm_pass, clean_target_user, _axl_execute_sql_rows,
-  )
-  if existing_sms.get("name_matches"):
-    return JSONResponse({"detail": "This CUCM user already has an SMS-only translation pattern: " + ", ".join(row["pattern"] for row in existing_sms["name_matches"])}, status_code=409)
-  data, filename = sms_only_user.create_sms_only_user(
-    cucm_host=cucm_host,
-    cucm_user=cucm_user,
-    cucm_pass=cucm_pass,
-    target_user=clean_target_user,
-    ad_username=cucm_user,
-    ad_password=cucm_pass,
-  )
-  created_dn = ""
-  pattern_created = False
-  for row in csv.reader(io.StringIO(_to_bytes(data).decode("utf-8", errors="replace"))):
-    if len(row) < 3 or row[1].strip().lower() != "success":
-      continue
-    if row[0] == "Select Available DN":
-      match = re.search(r"\b(\d{10})\b", row[2])
-      created_dn = match.group(1) if match else ""
-    elif row[0] == "Add SMS Translation Pattern":
-      pattern_created = True
-  _append_audit_event(
-    action="build_sms_only_user",
-    cucm_host=cucm_host,
-    operator=cucm_user,
-    target=f"account={clean_target_user};sms_pattern={created_dn if pattern_created else 'none'};pattern_created={str(pattern_created).lower()}",
-    account=clean_target_user,
-    extension_added=created_dn if pattern_created else "",
-    extension_deleted="",
-    output_filename=filename,
-    inline_mode=inline,
-  )
-  if inline:
-    job_output = _prepare_job_output(data, filename)
-    return JSONResponse({
-      "job_id": job_output["job_id"],
-      "filename": job_output["filename"],
-      "output_text": job_output["output_text"],
-      "download_url": f"/download/job-output/{job_output['job_id']}",
-    })
-  return _render_job_result("Create SMS Only User", data, filename)
-
-
       action="build_user_csf_phone",
       cucm_host=cucm_host,
       operator=cucm_user,
@@ -61446,6 +61392,63 @@ async def build_teams_telephony_user(
     })
 
   return _render_job_result("Create Teams Telephony User", data, filename)
+
+
+@app.post("/build/sms-only-user")
+async def build_sms_only_user(
+  request: Request,
+  cucm_host: str = Form(""),
+  cucm_user: str = Form(""),
+  cucm_pass: str = Form(""),
+  target_user: str = Form(...),
+  inline: bool = Query(False),
+):
+  cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
+  _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
+  clean_target_user = (target_user or "").strip()
+  existing_sms = sms_only_user.lookup_sms_only_user(
+    cucm_host, cucm_user, cucm_pass, clean_target_user, _axl_execute_sql_rows,
+  )
+  if existing_sms.get("name_matches"):
+    return JSONResponse({"detail": "This CUCM user already has an SMS-only translation pattern: " + ", ".join(row["pattern"] for row in existing_sms["name_matches"])}, status_code=409)
+  data, filename = sms_only_user.create_sms_only_user(
+    cucm_host=cucm_host,
+    cucm_user=cucm_user,
+    cucm_pass=cucm_pass,
+    target_user=clean_target_user,
+    ad_username=cucm_user,
+    ad_password=cucm_pass,
+  )
+  created_dn = ""
+  pattern_created = False
+  for row in csv.reader(io.StringIO(_to_bytes(data).decode("utf-8", errors="replace"))):
+    if len(row) < 3 or row[1].strip().lower() != "success":
+      continue
+    if row[0] == "Select Available DN":
+      match = re.search(r"\b(\d{10})\b", row[2])
+      created_dn = match.group(1) if match else ""
+    elif row[0] == "Add SMS Translation Pattern":
+      pattern_created = True
+  _append_audit_event(
+    action="build_sms_only_user",
+    cucm_host=cucm_host,
+    operator=cucm_user,
+    target=f"account={clean_target_user};sms_pattern={created_dn if pattern_created else 'none'};pattern_created={str(pattern_created).lower()}",
+    account=clean_target_user,
+    extension_added=created_dn if pattern_created else "",
+    extension_deleted="",
+    output_filename=filename,
+    inline_mode=inline,
+  )
+  if inline:
+    job_output = _prepare_job_output(data, filename)
+    return JSONResponse({
+      "job_id": job_output["job_id"],
+      "filename": job_output["filename"],
+      "output_text": job_output["output_text"],
+      "download_url": f"/download/job-output/{job_output['job_id']}",
+    })
+  return _render_job_result("Create SMS Only User", data, filename)
 
 
 @app.post("/teams-telephony/remove/lookup")
@@ -63855,7 +63858,6 @@ async def bulk_lookup_extension_route(
     filename = f"bulk_extension_lookup_{timestamp}.csv"
     job_output = _prepare_job_output(output.getvalue().encode("utf-8"), filename)
 
-  include_sms_only_status: str = Form(""),
     _append_audit_event(
       action="bulk_lookup_extension",
       cucm_host=cucm_host,
@@ -63868,7 +63870,6 @@ async def bulk_lookup_extension_route(
     return JSONResponse({
       "ok": True,
       "summary": {
-      include_sms_only = str(include_sms_only_status or "").strip().lower() in {"1", "true", "yes", "on"}
         "input_rows": len(patterns),
         "matched_inputs": matched_inputs,
         "no_result_inputs": no_result_inputs,
@@ -63901,27 +63902,6 @@ def send_jabber_ready_email_route(
 
     notify_status, notify_details = _send_csf_jabber_ready_email_if_created(
         cucm_host=cucm_host,
-      if include_sms_only:
-        try:
-          sms_patterns = sms_only_user.list_sms_only_patterns(
-            cucm_host, cucm_user, cucm_pass, _axl_execute_sql_rows,
-          )
-        except Exception:
-          sms_patterns = None
-        for user in results:
-          if sms_patterns is None:
-            user["sms_only_telephony"] = {"is_sms_only_user": False, "status": "Unknown", "extensions": []}
-            continue
-          matches = sms_only_user.find_sms_only_patterns_for_user(
-            sms_patterns, user.get("first_name", ""), user.get("last_name", ""),
-          )
-          extensions = sorted({match["extension"] for match in matches})
-          user["sms_only_telephony"] = {
-            "is_sms_only_user": bool(matches),
-            "status": "Yes" if matches else "Not Found",
-            "extensions": extensions,
-            "patterns": [match["pattern"] for match in matches],
-          }
         cucm_user=cucm_user,
         cucm_pass=cucm_pass,
         target_user=clean_target,
@@ -64072,6 +64052,7 @@ def lookup_person_route(
   last_name: str = Form(""),
     first_name: str = Form(""),
   include_teams_status: str = Form(""),
+    include_sms_only_status: str = Form(""),
   include_jabber_registration: str = Form(""),
   include_separation_indicators: str = Form(""),
   include_twilio_lookup: str = Form(""),
@@ -64084,6 +64065,7 @@ def lookup_person_route(
       clean_last = (last_name or "").strip()
       clean_first = (first_name or "").strip()
       include_teams = str(include_teams_status or "").strip().lower() in {"1", "true", "yes", "on"}
+      include_sms_only = str(include_sms_only_status or "").strip().lower() in {"1", "true", "yes", "on"}
       include_reg = str(include_jabber_registration or "").strip().lower() in {"1", "true", "yes", "on"}
       include_sep_indicators = str(include_separation_indicators or "").strip().lower() in {"1", "true", "yes", "on"}
       include_twilio = str(include_twilio_lookup or "").strip().lower() in {"1", "true", "yes", "on"}
@@ -64116,6 +64098,27 @@ def lookup_person_route(
               "is_teams_user": False,
               "status": "Unknown",
             }
+      if include_sms_only:
+        try:
+          sms_patterns = sms_only_user.list_sms_only_patterns(
+            cucm_host, cucm_user, cucm_pass, _axl_execute_sql_rows,
+          )
+        except Exception:
+          sms_patterns = None
+        for user in results:
+          if sms_patterns is None:
+            user["sms_only_telephony"] = {"is_sms_only_user": False, "status": "Unknown", "extensions": []}
+            continue
+          matches = sms_only_user.find_sms_only_patterns_for_user(
+            sms_patterns, user.get("first_name", ""), user.get("last_name", ""),
+          )
+          extensions = sorted({match["extension"] for match in matches})
+          user["sms_only_telephony"] = {
+            "is_sms_only_user": bool(matches),
+            "status": "Yes" if matches else "Not Found",
+            "extensions": extensions,
+            "patterns": [match["pattern"] for match in matches],
+          }
       if include_twilio:
         for user in results:
           telephone = (user.get("telephone") or "").strip()
@@ -67189,6 +67192,153 @@ def decommission_user_csf_voicemail_route(
             "job_id": job_output["job_id"],
             "filename": job_output["filename"],
             "output_text": job_output["output_text"],
+            "download_url": f"/download/job-output/{job_output['job_id']}",
+        })
+
+    return _render_job_result("Offboard User - Delete all Jabber and Voicemail Box (Option 10)", data, filename)
+
+
+def _bulk_separation_resolve(host, username, password, emails, progress=None):
+  identities = {email: [] for email in emails}
+  for start in range(0, len(emails), 100):
+    batch = emails[start:start + 100]
+    try:
+      if progress:
+        progress(f"Resolving LDAP email to username: {start + 1}-{start + len(batch)} of {len(emails)}")
+      lookup = lookup_ad_identities_by_email(batch, {"username": username, "password": password}, require_unique=True)
+      if not isinstance(lookup, dict) or not lookup.get("ok") or not isinstance(lookup.get("results"), list):
+        raise RuntimeError("LDAP identity lookup failed.")
+      by_email = {}
+      for record in lookup["results"]:
+        email = str(record.get("input_email", "")).strip().lower()
+        if email not in batch or email in by_email:
+          raise RuntimeError("Unexpected or duplicate LDAP identity result.")
+        by_email[email] = record
+      if set(by_email) != set(batch):
+        raise RuntimeError("LDAP identity lookup returned incomplete results.")
+      ldap_users = {}
+      for email, record in by_email.items():
+        sam = str(record.get("samAccountName", "")).strip()
+        if record.get("found") and not record.get("ambiguous") and sam:
+          ldap_users.setdefault(sam.lower(), []).append(email)
+      if not ldap_users:
+        continue
+      if progress:
+        progress(f"Verifying CUCM End Users by LDAP username: {start + 1}-{start + len(batch)} of {len(emails)}")
+      literals = ",".join("'" + _sql_escape_literal(userid) + "'" for userid in sorted(ldap_users))
+      seen = set()
+      for offset in range(0, 10000, 200):
+        rows = _axl_execute_sql_rows(host, username, password,
+          f"SELECT SKIP {offset} FIRST 200 userid FROM enduser WHERE LOWER(userid) IN ({literals}) ORDER BY userid")
+        for row in rows:
+          userid = str(row.get("userid", "")).strip()
+          key = userid.lower()
+          if key not in ldap_users or not userid or userid in seen:
+            raise RuntimeError("Invalid or repeated CUCM username lookup results.")
+          seen.add(userid)
+          for email in ldap_users[key]:
+            identities[email].append({"userid": userid})
+        if len(rows) < 200:
+          break
+      else:
+        raise RuntimeError("CUCM username lookup exceeded the safe pagination limit.")
+    except Exception:
+      for email in batch:
+        identities[email] = None
+  return identities
+
+
+def _bulk_separation_devices(host, username, password, userid, previous=None):
+  escaped = _sql_escape_literal(userid)
+  prior_clause = ""
+  if previous:
+    prior_clause = " OR d.name IN (" + ",".join("'" + _sql_escape_literal(name) + "'" for name in previous) + ")"
+  rows = _axl_execute_sql_rows(host, username, password,
+    "SELECT DISTINCT d.name FROM device d LEFT JOIN enduserdevicemap m ON m.fkdevice=d.pkid "
+    "LEFT JOIN enduser u ON u.pkid=m.fkenduser LEFT JOIN enduser owneruser ON owneruser.pkid=d.fkenduser "
+    f"WHERE (u.userid='{escaped}' OR owneruser.userid='{escaped}'{prior_clause}) "
+    "AND (UPPER(d.name) LIKE 'CSF%' OR UPPER(d.name) LIKE 'TCT%' OR UPPER(d.name) LIKE 'BOT%' OR UPPER(d.name) LIKE 'TAB%')")
+  if any(not row.get("name") for row in rows):
+    raise RuntimeError("CUCM device verification returned invalid rows.")
+  return [row["name"] for row in rows]
+
+
+def _bulk_separation_preview(host, username, password, emails, progress=None):
+  if not emails:
+    return {}
+  if progress:
+    progress("Step 1: validating the shared eight-hour All SMS inventory before LDAP/CUCM lookups")
+  try:
+    report = _cached_all_sms_numbers(progress=progress) if progress else _cached_all_sms_numbers()
+  except sms_inventory.InventoryRefreshError as exc:
+    report = {"status": "Lookup Failed", "failures": exc.failures}
+  except Exception:
+    report = {"status": "Lookup Failed", "failures": ["SMS inventory unavailable. Prior successful cache was retained; no unmatched number is reported as No."]}
+  else:
+    try:
+      _append_audit_event(action="bulk_separation_sms_check", cucm_host=host, operator=username,
+        target=f"cache_hit={report['cache_hit']};fetched_at={report['fetched_at']};numbers={report['count']};status={report['status']}", output_filename="", inline_mode=True)
+    except Exception:
+      logger.warning("SMS inventory succeeded but its bulk-review audit event could not be written.")
+  if progress:
+    progress("Step 2: resolving employees and extensions using the SMS inventory already obtained" if not report.get("failures") else "SMS inventory is incomplete; continuing read-only employee review with explicit SMS failure reporting")
+  snapshots = bulk_separation.build_review(emails, _bulk_separation_resolve(host, username, password, emails, progress),
+    lambda sql: _axl_execute_sql_rows(host, username, password, sql),
+    lambda names: _lookup_jabber_registration_statuses(host, username, password, names, allow_phone_fallback=False), progress=progress)
+  if progress:
+    progress("Matching reviewed extension digits against the SMS inventory obtained before employee lookup", snapshots)
+  return sms_inventory.annotate_review(snapshots, report)
+
+
+def _bulk_separation_execute(host, username, password, operator, email, userid, expected=None):
+  matches = _bulk_separation_resolve(host, username, password, [email])[email]
+  if matches != [{"userid": userid}]:
+    return {"status": "lookup_failed", "deleted": "Not attempted", "process": "Not started", "detail": "Email identity changed before execution; no changes made."}
+  if expected is not None:
+    current = bulk_separation.target_inventory([userid], lambda sql: _axl_execute_sql_rows(host, username, password, sql)).get(userid)
+    if not current or any(current.get(key) != expected.get(key) for key in ("target_snapshot", "extensions")):
+      return {"status": "needs_review", "deleted": "Not attempted", "process": "Not started", "detail": "Devices or extensions changed after visual review; no changes made."}
+  previous = _bulk_separation_devices(host, username, password, userid)
+  data, _filename = _run_full_separation(host, username, password, userid, True)
+  output = _to_bytes(data).decode("utf-8-sig", errors="replace").replace(password, "[redacted]")
+  steps = list(csv.reader(io.StringIO(output)))
+  problems = [row[0] for row in steps if len(row) >= 2 and row[1].strip().lower() in {"failed", "error", "warning"}]
+  sanitized = io.StringIO()
+  writer = csv.writer(sanitized)
+  for row in steps:
+    if len(row) >= 2 and row[1].strip().lower() in {"failed", "error", "warning"}:
+      writer.writerow([row[0], row[1], "Requires manual review; raw provider failure response omitted."])
+    else:
+      writer.writerow(row)
+  output = sanitized.getvalue()
+  if not any(len(row) >= 2 and row[:2] == ["Lookup User", "Success"] for row in steps):
+    problems.append("Missing successful user lookup")
+  try:
+    remaining = _bulk_separation_devices(host, username, password, userid, previous)
+    deleted = "No" if remaining else ("Yes" if previous else "Already absent")
+    detail = "Remaining Jabber devices: " + ", ".join(remaining) if remaining else "No captured or currently associated/owned Jabber devices remain."
+  except Exception:
+    remaining = None
+    deleted = "Unknown"
+    detail = "Post-separation device verification failed; verify manually."
+  process = "Needs review" if problems else "Completed (reported)"
+  if problems:
+    detail += " Failed/warning steps: " + ", ".join(problems)
+  status = "deleted" if deleted == "Yes" and not problems else "already_absent" if deleted == "Already absent" and not problems else "needs_review"
+  _append_audit_event(action="bulk_separation_result", cucm_host=host, operator=operator, target=f"email={email};userid={userid};status={status};jabber_deleted={deleted}", account=userid, output_filename="", inline_mode=True)
+  return {"status": status, "deleted": deleted, "process": process, "detail": detail, "output": output}
+
+
+def _bulk_separation_public(job):
+  rows = job["rows"]
+  return {**{key: value for key, value in job.items() if key != "rows"},
+    "total": len(rows), "finished": sum(row["status"] not in {"pending", "running"} for row in rows),
+    "deleted_count": sum(row.get("deleted") == "Yes" for row in rows),
+    "review_count": sum(row["status"] in {"failed", "needs_review", "lookup_failed"} for row in rows),
+    "selected_count": sum(row.get("selected", False) and row["status"] == "pending" for row in rows),
+    "rows": [{key: value for key, value in row.items() if key != "output"} for row in (rows if job.get("status") == "awaiting_review" else rows[:500])]}
+
+
 def _sms_bulk_public(job):
   rows = job.get("rows", [])
   return {
@@ -67298,159 +67448,6 @@ def sms_only_bulk_csv_route(request: Request, job_id: str):
     return JSONResponse({"ok": False, "error": "Saved SMS bulk output unavailable."}, status_code=409)
 
 
-            "download_url": f"/download/job-output/{job_output['job_id']}",
-        })
-
-    return _render_job_result("Offboard User - Delete all Jabber and Voicemail Box (Option 10)", data, filename)
-
-
-def _bulk_separation_resolve(host, username, password, emails, progress=None):
-  identities = {email: [] for email in emails}
-  for start in range(0, len(emails), 100):
-    batch = emails[start:start + 100]
-    try:
-      if progress:
-        progress(f"Resolving LDAP email to username: {start + 1}-{start + len(batch)} of {len(emails)}")
-      lookup = lookup_ad_identities_by_email(batch, {"username": username, "password": password}, require_unique=True)
-      if not isinstance(lookup, dict) or not lookup.get("ok") or not isinstance(lookup.get("results"), list):
-        raise RuntimeError("LDAP identity lookup failed.")
-      by_email = {}
-      for record in lookup["results"]:
-        email = str(record.get("input_email", "")).strip().lower()
-        if email not in batch or email in by_email:
-          raise RuntimeError("Unexpected or duplicate LDAP identity result.")
-        by_email[email] = record
-      if set(by_email) != set(batch):
-        raise RuntimeError("LDAP identity lookup returned incomplete results.")
-      ldap_users = {}
-      for email, record in by_email.items():
-        sam = str(record.get("samAccountName", "")).strip()
-        if record.get("found") and not record.get("ambiguous") and sam:
-          ldap_users.setdefault(sam.lower(), []).append(email)
-      if not ldap_users:
-        continue
-      if progress:
-        progress(f"Verifying CUCM End Users by LDAP username: {start + 1}-{start + len(batch)} of {len(emails)}")
-      literals = ",".join("'" + _sql_escape_literal(userid) + "'" for userid in sorted(ldap_users))
-      seen = set()
-      for offset in range(0, 10000, 200):
-        rows = _axl_execute_sql_rows(host, username, password,
-          f"SELECT SKIP {offset} FIRST 200 userid FROM enduser WHERE LOWER(userid) IN ({literals}) ORDER BY userid")
-        for row in rows:
-          userid = str(row.get("userid", "")).strip()
-          key = userid.lower()
-          if key not in ldap_users or not userid or userid in seen:
-            raise RuntimeError("Invalid or repeated CUCM username lookup results.")
-          seen.add(userid)
-          for email in ldap_users[key]:
-            identities[email].append({"userid": userid})
-        if len(rows) < 200:
-          break
-      else:
-        raise RuntimeError("CUCM username lookup exceeded the safe pagination limit.")
-    except Exception:
-      for email in batch:
-        identities[email] = None
-  return identities
-
-
-def _bulk_separation_devices(host, username, password, userid, previous=None):
-  escaped = _sql_escape_literal(userid)
-  prior_clause = ""
-  if previous:
-    prior_clause = " OR d.name IN (" + ",".join("'" + _sql_escape_literal(name) + "'" for name in previous) + ")"
-  rows = _axl_execute_sql_rows(host, username, password,
-    "SELECT DISTINCT d.name FROM device d LEFT JOIN enduserdevicemap m ON m.fkdevice=d.pkid "
-    "LEFT JOIN enduser u ON u.pkid=m.fkenduser LEFT JOIN enduser owneruser ON owneruser.pkid=d.fkenduser "
-    f"WHERE (u.userid='{escaped}' OR owneruser.userid='{escaped}'{prior_clause}) "
-    "AND (UPPER(d.name) LIKE 'CSF%' OR UPPER(d.name) LIKE 'TCT%' OR UPPER(d.name) LIKE 'BOT%' OR UPPER(d.name) LIKE 'TAB%')")
-  if any(not row.get("name") for row in rows):
-    raise RuntimeError("CUCM device verification returned invalid rows.")
-  return [row["name"] for row in rows]
-
-
-def _bulk_separation_preview(host, username, password, emails, progress=None):
-  if not emails:
-    return {}
-  if progress:
-    progress("Step 1: validating the shared eight-hour All SMS inventory before LDAP/CUCM lookups")
-  try:
-    report = _cached_all_sms_numbers(progress=progress) if progress else _cached_all_sms_numbers()
-  except sms_inventory.InventoryRefreshError as exc:
-    report = {"status": "Lookup Failed", "failures": exc.failures}
-    try:
-      sms_candidate = sms_only_user.lookup_sms_only_user(
-        cucm_host, cucm_user, cucm_pass, clean_target_user, _axl_execute_sql_rows,
-      )
-    except Exception as sms_lookup_exc:
-      sms_candidate = {"lookup_error": f"Pre-separation SMS lookup failed: {sms_lookup_exc}"}
-  except Exception:
-    report = {"status": "Lookup Failed", "failures": ["SMS inventory unavailable. Prior successful cache was retained; no unmatched number is reported as No."]}
-  else:
-    try:
-      _append_audit_event(action="bulk_separation_sms_check", cucm_host=host, operator=username,
-        target=f"cache_hit={report['cache_hit']};fetched_at={report['fetched_at']};numbers={report['count']};status={report['status']}", output_filename="", inline_mode=True)
-    except Exception:
-      logger.warning("SMS inventory succeeded but its bulk-review audit event could not be written.")
-  if progress:
-    progress("Step 2: resolving employees and extensions using the SMS inventory already obtained" if not report.get("failures") else "SMS inventory is incomplete; continuing read-only employee review with explicit SMS failure reporting")
-  snapshots = bulk_separation.build_review(emails, _bulk_separation_resolve(host, username, password, emails, progress),
-    lambda sql: _axl_execute_sql_rows(host, username, password, sql),
-    lambda names: _lookup_jabber_registration_statuses(host, username, password, names, allow_phone_fallback=False), progress=progress)
-  if progress:
-    progress("Matching reviewed extension digits against the SMS inventory obtained before employee lookup", snapshots)
-  return sms_inventory.annotate_review(snapshots, report)
-
-
-def _bulk_separation_execute(host, username, password, operator, email, userid, expected=None):
-  matches = _bulk_separation_resolve(host, username, password, [email])[email]
-  if matches != [{"userid": userid}]:
-    return {"status": "lookup_failed", "deleted": "Not attempted", "process": "Not started", "detail": "Email identity changed before execution; no changes made."}
-  if expected is not None:
-    current = bulk_separation.target_inventory([userid], lambda sql: _axl_execute_sql_rows(host, username, password, sql)).get(userid)
-    if not current or any(current.get(key) != expected.get(key) for key in ("target_snapshot", "extensions")):
-      return {"status": "needs_review", "deleted": "Not attempted", "process": "Not started", "detail": "Devices or extensions changed after visual review; no changes made."}
-  previous = _bulk_separation_devices(host, username, password, userid)
-  data, _filename = _run_full_separation(host, username, password, userid, True)
-  output = _to_bytes(data).decode("utf-8-sig", errors="replace").replace(password, "[redacted]")
-  steps = list(csv.reader(io.StringIO(output)))
-  problems = [row[0] for row in steps if len(row) >= 2 and row[1].strip().lower() in {"failed", "error", "warning"}]
-  sanitized = io.StringIO()
-  writer = csv.writer(sanitized)
-  for row in steps:
-    if len(row) >= 2 and row[1].strip().lower() in {"failed", "error", "warning"}:
-      writer.writerow([row[0], row[1], "Requires manual review; raw provider failure response omitted."])
-    else:
-      writer.writerow(row)
-  output = sanitized.getvalue()
-  if not any(len(row) >= 2 and row[:2] == ["Lookup User", "Success"] for row in steps):
-    problems.append("Missing successful user lookup")
-  try:
-    remaining = _bulk_separation_devices(host, username, password, userid, previous)
-    deleted = "No" if remaining else ("Yes" if previous else "Already absent")
-    detail = "Remaining Jabber devices: " + ", ".join(remaining) if remaining else "No captured or currently associated/owned Jabber devices remain."
-  except Exception:
-    remaining = None
-    deleted = "Unknown"
-    detail = "Post-separation device verification failed; verify manually."
-  process = "Needs review" if problems else "Completed (reported)"
-  if problems:
-    detail += " Failed/warning steps: " + ", ".join(problems)
-  status = "deleted" if deleted == "Yes" and not problems else "already_absent" if deleted == "Already absent" and not problems else "needs_review"
-  _append_audit_event(action="bulk_separation_result", cucm_host=host, operator=operator, target=f"email={email};userid={userid};status={status};jabber_deleted={deleted}", account=userid, output_filename="", inline_mode=True)
-  return {"status": status, "deleted": deleted, "process": process, "detail": detail, "output": output}
-
-
-def _bulk_separation_public(job):
-  rows = job["rows"]
-  return {**{key: value for key, value in job.items() if key != "rows"},
-    "total": len(rows), "finished": sum(row["status"] not in {"pending", "running"} for row in rows),
-    "deleted_count": sum(row.get("deleted") == "Yes" for row in rows),
-    "review_count": sum(row["status"] in {"failed", "needs_review", "lookup_failed"} for row in rows),
-    "selected_count": sum(row.get("selected", False) and row["status"] == "pending" for row in rows),
-    "rows": [{key: value for key, value in row.items() if key != "output"} for row in (rows if job.get("status") == "awaiting_review" else rows[:500])]}
-
-
 @app.get("/project-greenlight/bulk-separation")
 def bulk_separation_get_route(request: Request, job_id: str = ""):
   try:
@@ -67504,44 +67501,6 @@ def bulk_separation_post_route(request: Request, action: str = Form(""), job_id:
       job = BULK_SEPARATION_QUEUE.control(job_id, host, action)
       _append_audit_event(action="bulk_separation_" + action, cucm_host=host, operator=operator, target=f"job={job_id}", output_filename="", inline_mode=True)
     return JSONResponse({"ok": True, "job": _bulk_separation_public(job)}, headers={"Cache-Control": "no-store"})
-    sms_data, sms_filename = sms_only_user.remove_sms_only_user(
-      cucm_host=cucm_host,
-      cucm_user=cucm_user,
-      cucm_pass=cucm_pass,
-      target_user=clean_target_user,
-      read_sql=_axl_execute_sql_rows,
-      candidate=sms_candidate,
-    )
-    sms_rows = list(csv.reader(io.StringIO(_to_bytes(sms_data).decode("utf-8", errors="replace"))))
-    if len(sms_rows) > 1:
-      sms_body_output = io.StringIO()
-      csv.writer(sms_body_output).writerows(sms_rows[1:])
-      sms_body = sms_body_output.getvalue().strip()
-      if sms_body:
-        data = _to_bytes(data) + (sms_body + "\n").encode("utf-8")
-    sms_removed = []
-    sms_failed = False
-    for row in sms_rows[1:]:
-      if len(row) < 3:
-        continue
-      if row[0] == "Delete SMS Translation Pattern" and row[1] == "Success":
-        match = re.search(r"Deleted (\d{10})/", row[2])
-        if match:
-          sms_removed.append(match.group(1))
-      if row[1] in {"Failed", "Error"}:
-        sms_failed = True
-    _append_audit_event(
-      action="separation_sms_only_patterns",
-      cucm_host=cucm_host,
-      operator=cucm_user,
-      target=f"account={clean_target_user};patterns_removed={len(sms_removed)};status={'failed' if sms_failed else 'complete'};source_file={sms_filename}",
-      account=clean_target_user,
-      extension_added="",
-      extension_deleted=",".join(sms_removed),
-      output_filename=filename,
-      inline_mode=inline,
-    )
-
   except ValueError as exc:
     return JSONResponse({"ok": False, "error": str(exc)}, status_code=409)
   except Exception:
@@ -67569,6 +67528,12 @@ def _run_full_separation(cucm_host: str, cucm_user: str, cucm_pass: str, clean_t
       _, clean_display_name = _lookup_user_contact(cucm_host, cucm_user, cucm_pass, clean_target_user)
     except Exception:
       clean_display_name = clean_target_user
+    try:
+      sms_candidate = sms_only_user.lookup_sms_only_user(
+        cucm_host, cucm_user, cucm_pass, clean_target_user, _axl_execute_sql_rows,
+      )
+    except Exception as sms_lookup_exc:
+      sms_candidate = {"lookup_error": f"Pre-separation SMS lookup failed: {sms_lookup_exc}"}
     data, filename = decommission_user_csf_voicemail(
         cucm_host=cucm_host,
         cucm_user=cucm_user,
@@ -67688,6 +67653,44 @@ def _run_full_separation(cucm_host: str, cucm_user: str, cucm_pass: str, clean_t
         output_filename=filename,
         inline_mode=inline,
       )
+
+    sms_data, sms_filename = sms_only_user.remove_sms_only_user(
+      cucm_host=cucm_host,
+      cucm_user=cucm_user,
+      cucm_pass=cucm_pass,
+      target_user=clean_target_user,
+      read_sql=_axl_execute_sql_rows,
+      candidate=sms_candidate,
+    )
+    sms_rows = list(csv.reader(io.StringIO(_to_bytes(sms_data).decode("utf-8", errors="replace"))))
+    if len(sms_rows) > 1:
+      sms_body_output = io.StringIO()
+      csv.writer(sms_body_output).writerows(sms_rows[1:])
+      sms_body = sms_body_output.getvalue().strip()
+      if sms_body:
+        data = _to_bytes(data) + (sms_body + "\n").encode("utf-8")
+    sms_removed = []
+    sms_failed = False
+    for row in sms_rows[1:]:
+      if len(row) < 3:
+        continue
+      if row[0] == "Delete SMS Translation Pattern" and row[1] == "Success":
+        match = re.search(r"Deleted (\d{10})/", row[2])
+        if match:
+          sms_removed.append(match.group(1))
+      if row[1] in {"Failed", "Error"}:
+        sms_failed = True
+    _append_audit_event(
+      action="separation_sms_only_patterns",
+      cucm_host=cucm_host,
+      operator=cucm_user,
+      target=f"account={clean_target_user};patterns_removed={len(sms_removed)};status={'failed' if sms_failed else 'complete'};source_file={sms_filename}",
+      account=clean_target_user,
+      extension_added="",
+      extension_deleted=",".join(sms_removed),
+      output_filename=filename,
+      inline_mode=inline,
+    )
 
     # Mandatory separation step: remove the separated user from the Unified Messaging
     # security group. If they are not a member, this is a no-op success.
