@@ -2,6 +2,12 @@
 
 This file is the single source of truth for ongoing goals, pending tasks, and key decisions across our conversations.
 
+## Permanent Communication Rule
+- Keep replies and progress updates brief and plain. No walls of text or repeated explanations unless explicitly requested.
+- Give exactly one user action at a time, then wait for the result before giving the next action. Do not send multi-step instructions upfront.
+- When a command is needed, provide one copyable command block and its rollback block, labeled with the environment. Do not add deployment commands when no deployment is needed.
+- Continue authorized implementation independently; ask only for information or approval actually needed to proceed.
+
 ## Last Updated
 - Date: 2026-10-27
 - Updated by: GitHub Copilot
@@ -119,6 +125,9 @@ Priority keys:
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
 ## Conversation Notes
+
+### 2026-11-03 (Local error repairs before bulk safeguards)
+- Defined missing PerfMon configuration constants and repaired the local registration-history, Person Lookup JSON/live-status, empty Line Group and voicemail-cleanup API paths. All 295 local tests pass; Python compilation and editor diagnostics pass. No live LAB/PROD validation or bulk-deletion safeguard rollout is claimed.
 
 ### 2026-10-27 (SMS Inventory First, Sandbox Authentication Failure Identified)
 - Operator screenshot identifies the actual partial-extract blocker: Twilio / AMN AI Agent Sandbox returned HTTP 401 while 1,549 numbers were extracted from available sources. This is a provider authentication/account-access failure, not proof the cache was never created or that an extension is not SMS. Reordering cannot repair provider authentication; no account was excluded and no credential/configuration changes were made.

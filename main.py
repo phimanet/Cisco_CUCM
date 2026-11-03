@@ -206,6 +206,16 @@ DASHBOARD_REQUEST_TIMEOUT_SECONDS = int((os.getenv("DASHBOARD_REQUEST_TIMEOUT_SE
 PERFMON_MAX_HOSTS = int((os.getenv("PERFMON_MAX_HOSTS", "50") or "50").strip())
 PERFMON_TRUNK_CACHE_TTL_SECONDS = int((os.getenv("PERFMON_TRUNK_CACHE_TTL_SECONDS", "60") or "60").strip())
 PERFMON_CALLMANAGER_CACHE_TTL_SECONDS = int((os.getenv("PERFMON_CALLMANAGER_CACHE_TTL_SECONDS", "60") or "60").strip())
+PERFMON_CALL_COUNTER_OBJECTS = [
+  object_name.strip()
+  for object_name in (os.getenv("PERFMON_CALL_COUNTER_OBJECTS", "Cisco CallManager") or "").split(",")
+  if object_name.strip()
+]
+PERFMON_MRA_SIGNALING_HOSTS = {
+  host.strip().lower()
+  for host in (os.getenv("PERFMON_MRA_SIGNALING_HOSTS", "") or "").split(",")
+  if host.strip()
+}
 PERFMON_INCLUDED_HOSTS = [
   (host or "").strip().lower()
   for host in (os.getenv("PERFMON_INCLUDED_HOSTS", "") or "").split(",")
@@ -64133,24 +64143,6 @@ def lookup_person_route(
         jabber_device_names: list[str] = []
         seen_jabber_names: set[str] = set()
 
-        def _normalize_existing_reg(status_text: str) -> str:
-          raw = str(status_text or "").strip()
-          if not raw:
-            return ""
-          lowered = raw.lower()
-          if lowered.isdigit():
-            try:
-              return "Registered" if int(lowered) == 1 else "Unregistered"
-            except Exception:
-              return ""
-          if "unregistered" in lowered:
-            return "Unregistered"
-          if "register" in lowered:
-            return "Registered"
-          if lowered in {"rejected", "unknown"}:
-            return lowered.title()
-          return ""
-
         for user in results:
           for device in (user.get("devices") or []):
             if not isinstance(device, dict):
@@ -64158,7 +64150,6 @@ def lookup_person_route(
             device_name = str(device.get("name", "") or "").strip()
             if not device_name or not device_name.upper().startswith(jabber_prefixes):
               continue
-            device.pop("registration_status", None)
             if device_name in seen_jabber_names:
               continue
             seen_jabber_names.add(device_name)
@@ -64174,14 +64165,12 @@ def lookup_person_route(
             device_name = str(device.get("name", "") or "").strip()
             if not device_name or not device_name.upper().startswith(jabber_prefixes):
               continue
-            reg_text = str(device.get("registration_status", "") or "").strip()
-            if not reg_text:
-              reg_info = reg_map.get(device_name, {"status": "Unknown"})
-              reg_text = str(reg_info.get("status", "Unknown") or "Unknown").strip() or "Unknown"
-              device["registration_status"] = reg_text
-              device["last_registered"] = reg_info.get("last_registered", "Unknown")
-              device["registration_history_status"] = reg_info.get("history_status", "Unknown")
-              device["registration_source"] = reg_info.get("source", "unknown")
+            reg_info = reg_map.get(device_name, {"status": "Unknown"})
+            reg_text = str(reg_info.get("status", "Unknown") or "Unknown").strip() or "Unknown"
+            device["registration_status"] = reg_text
+            device["last_registered"] = reg_info.get("last_registered", "Unknown")
+            device["registration_history_status"] = reg_info.get("history_status", "Unknown")
+            device["registration_source"] = reg_info.get("source", "unknown")
             user_jabber_statuses.append(reg_text)
 
           if not user_jabber_statuses:
