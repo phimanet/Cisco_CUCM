@@ -1,6 +1,7 @@
 import csv
 import datetime
 import io
+import time
 import urllib3
 import requests
 import xml.etree.ElementTree as ET
@@ -308,6 +309,10 @@ def _get_line_state(session, cucm_ip, pattern, route_partition):
     }
 
 
+def _line_is_released(state):
+    return bool(state.get("found")) and str(state.get("active", "")).strip().lower() in {"false", "f", "0"} and state.get("associatedDevices") == []
+
+
 def _get_unity_user_by_alias(session, unity_server, alias):
     query = f"(Alias is {alias})"
     url = _make_unity_url(unity_server, "/vmrest/users")
@@ -316,25 +321,35 @@ def _get_unity_user_by_alias(session, unity_server, alias):
     if response.status_code != 200:
         raise RuntimeError(f"Unity user lookup failed: {_parse_unity_error_text(response)}")
 
-    if not response.text:
-        return None
-
     try:
         data = response.json()
-    except ValueError:
-        return None
+    except ValueError as exc:
+        raise RuntimeError("Unity user lookup returned invalid JSON; absence is not verified.") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError("Unity user lookup returned an invalid collection.")
 
     users = data.get("User")
+    if users is None and str(data.get("@total", "")) == "0":
+        return None
     if isinstance(users, dict):
         users = [users]
     if not isinstance(users, list):
-        return None
+        raise RuntimeError("Unity user lookup omitted its user collection; absence is not verified.")
+    if "@total" in data:
+        try:
+            if int(data["@total"]) != len(users):
+                raise ValueError("Incomplete collection")
+        except (ValueError, TypeError) as exc:
+            raise RuntimeError("Unity user lookup returned an incomplete count.") from exc
 
+    matches = []
     for user in users:
-        if str(user.get("Alias", "")).lower() == alias.lower():
-            return user
-
-    return None
+        if not isinstance(user, dict) or str(user.get("Alias", "")).lower() != alias.lower() or not user.get("ObjectId"):
+            raise RuntimeError("Unity user lookup returned an unexpected identity.")
+        matches.append(user)
+    if len(matches) > 1:
+        raise RuntimeError("Unity mailbox identity is ambiguous.")
+    return matches[0] if matches else None
 
 
 def _delete_unity_user_by_object_id(session, unity_server, object_id):
@@ -342,6 +357,15 @@ def _delete_unity_user_by_object_id(session, unity_server, object_id):
     response = session.delete(url, headers=_unity_headers(), timeout=120, verify=False)
     if not 200 <= response.status_code < 300:
         raise RuntimeError(f"Unity mailbox delete failed: {_parse_unity_error_text(response)}")
+    for attempt in range(3):
+        response = session.get(url, headers=_unity_headers(), timeout=30, verify=False, allow_redirects=False)
+        if response.status_code == 404:
+            return
+        if response.status_code != 200:
+            raise RuntimeError("Unity mailbox deletion read-back failed; verify manually.")
+        if attempt < 2:
+            time.sleep(0.5)
+    raise RuntimeError("Unity mailbox still exists after deletion; verify manually.")
 
 
 def _pick_phone_to_remove(user_details, phone_candidates):
@@ -703,7 +727,7 @@ def decommission_user_csf_voicemail(
                         f"associatedDevices={len(line_state['associatedDevices'])}; "
                         f"description={line_state['description']}"
                     )
-                    log_writer.writerow(["Verify Line", "Success", summary])
+                    log_writer.writerow(["Verify Line", "Success" if _line_is_released(line_state) else "Failed", summary])
                 else:
                     log_writer.writerow([
                         "Verify Line",

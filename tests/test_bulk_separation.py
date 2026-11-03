@@ -18,6 +18,7 @@ from unittest.mock import Mock, patch
 from toolkit import bulk_separation
 from toolkit import ad_phone_fields
 from toolkit import sms_inventory
+from toolkit import decommission_user_csf_voicemail as separation_backend
 from toolkit.bulk_separation import BulkSeparationQueue, csv_bytes, parse_emails
 
 
@@ -121,7 +122,7 @@ class BulkSeparationTests(unittest.TestCase):
                 queue.worker.join(5)
             self.assertEqual(queue.get(job["id"], "lab")["status"], "awaiting_review")
 
-    def test_entries_and_failure_continuation(self):
+    def test_failure_pauses_and_explicit_resume_never_replays_failed_user(self):
         with tempfile.TemporaryDirectory() as root:
             queue = BulkSeparationQueue(root)
             job = queue.submit("lab", "admin", "a@example.com; missing@example.com bad b@example.com A@example.com")
@@ -136,9 +137,18 @@ class BulkSeparationTests(unittest.TestCase):
             queue.start(job["id"], "lab", lambda emails: {"a@example.com": [{"userid": "a"}], "b@example.com": [{"userid": "b"}]}, execute)
             queue.worker.join(5)
             saved = BulkSeparationQueue(root).get(job["id"], "lab")
+            self.assertEqual(calls, ["a"])
+            self.assertEqual(saved["status"], "paused")
+            self.assertEqual(saved["rows"][-1]["status"], "pending")
+            queue.start(job["id"], "lab", lambda emails: {"b@example.com": [{"userid": "b"}]}, execute)
+            queue.worker.join(5)
+            self.assertEqual(queue.get(job["id"], "lab")["status"], "paused")
+            queue.start(job["id"], "lab", lambda emails: {"b@example.com": [{"userid": "b"}]}, execute)
+            queue.worker.join(5)
+            saved = BulkSeparationQueue(root).get(job["id"], "lab")
             self.assertEqual(calls, ["a", "b"])
             self.assertEqual([row["status"] for row in saved["rows"]], ["failed", "lookup_failed", "lookup_failed", "deleted"])
-            self.assertEqual(saved["status"], "completed")
+            self.assertEqual(saved["status"], "completed_with_issues")
             self.assertNotIn("secret", str(saved))
 
     def test_restart_never_replays_inflight_or_completed(self):
@@ -302,18 +312,215 @@ class BulkSeparationTests(unittest.TestCase):
         self.assertEqual(records[0]["Previous Jabber Devices (Reference Only)"], "")
 
 
+class BulkVerificationTests(unittest.TestCase):
+    def test_line_readability_alone_is_not_success(self):
+        self.assertTrue(separation_backend._line_is_released({"found": True, "active": "false", "associatedDevices": []}))
+        for state in ({"found": True, "active": "true", "associatedDevices": []},
+                      {"found": True, "active": "false", "associatedDevices": ["SEP1"]},
+                      {"found": True, "active": "", "associatedDevices": []}, {}):
+            self.assertFalse(separation_backend._line_is_released(state))
+
+    def test_unity_malformed_or_count_only_lookup_cannot_claim_absent(self):
+        session = Mock()
+        for payload in ({}, {"@total": "1"}, {"@total": "1", "User": []}, {"User": [{"Alias": "other", "ObjectId": "id"}]}):
+            session.get.return_value = SimpleNamespace(status_code=200, json=lambda: payload)
+            with self.assertRaises(RuntimeError):
+                separation_backend._get_unity_user_by_alias(session, "unity", "a")
+        session.get.return_value = SimpleNamespace(status_code=200, json=lambda: {"@total": "0"})
+        self.assertIsNone(separation_backend._get_unity_user_by_alias(session, "unity", "a"))
+
+    def test_unity_async_delete_is_verified_without_repeating_delete(self):
+        session = Mock()
+        session.delete.return_value.status_code = 202
+        session.get.side_effect = [SimpleNamespace(status_code=200), SimpleNamespace(status_code=404)]
+        with patch.object(separation_backend.time, "sleep"):
+            separation_backend._delete_unity_user_by_object_id(session, "unity", "id")
+        session.delete.assert_called_once()
+        self.assertEqual(session.get.call_count, 2)
+        session.get.return_value = SimpleNamespace(status_code=200)
+        session.get.side_effect = None
+        with patch.object(separation_backend.time, "sleep"), self.assertRaises(RuntimeError):
+            separation_backend._delete_unity_user_by_object_id(session, "unity", "id")
+
+    def test_guarded_batches_of_5_10_15_require_proof_and_final_audit(self):
+        for count in (5, 10, 15):
+            with self.subTest(count=count), tempfile.TemporaryDirectory() as root:
+                queue = BulkSeparationQueue(root)
+                job = queue.submit("lab", "admin", " ".join(f"u{index}@example.com" for index in range(count)))
+                calls = []
+                def execute(email, userid):
+                    calls.append(email)
+                    return {"status": "deleted", "verification": {"status": "Verified", "checked_at": "now", "issues": []}}
+                audit = Mock(side_effect=lambda rows: {row["email"]: {"status": "Verified", "checked_at": "later", "issues": []} for row in rows})
+                queue.start(job["id"], "lab", lambda emails: {email: [{"userid": email}] for email in emails}, execute, audit=audit)
+                queue.worker.join(5)
+                saved = BulkSeparationQueue(root).get(job["id"], "lab")
+                self.assertEqual(saved["status"], "completed")
+                self.assertEqual(len(calls), count)
+                self.assertEqual(saved["final_audit"]["count"], count)
+                self.assertTrue(all(row["final_verification"]["status"] == "Verified" for row in saved["rows"]))
+
+    def test_guarded_queue_rejects_success_without_verification(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            job = queue.submit("lab", "admin", "a@example.com b@example.com")
+            execute = Mock(return_value={"status": "deleted"})
+            audit = Mock()
+            queue.start(job["id"], "lab", lambda emails: {email: [{"userid": email}] for email in emails}, execute, audit=audit)
+            queue.worker.join(5)
+            saved = queue.get(job["id"], "lab")
+            self.assertEqual(saved["status"], "paused")
+            self.assertEqual(saved["rows"][1]["status"], "pending")
+            execute.assert_called_once()
+            audit.assert_not_called()
+
+    def test_failed_final_audit_resumes_read_only_without_repeating_mutations(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            job = queue.submit("lab", "admin", "a@example.com")
+            execute = Mock(return_value={"status": "deleted", "verification": {"status": "Verified"}})
+            resolve = lambda emails: {email: [{"userid": email}] for email in emails}
+            queue.start(job["id"], "lab", resolve, execute, audit=Mock(side_effect=RuntimeError("denied")))
+            queue.worker.join(5)
+            self.assertEqual(queue.get(job["id"], "lab")["status"], "paused")
+            restored = BulkSeparationQueue(root)
+            restored.recover()
+            with self.assertRaises(ValueError):
+                restored.start(job["id"], "lab", resolve, execute)
+            restored.start(job["id"], "lab", resolve, execute, audit=lambda rows: {row["email"]: {"status": "Verified"} for row in rows})
+            restored.worker.join(5)
+            self.assertEqual(restored.get(job["id"], "lab")["status"], "completed")
+            execute.assert_called_once()
+
+    def test_final_audit_mismatch_is_not_a_completed_success(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            job = queue.submit("lab", "admin", "a@example.com")
+            queue.start(job["id"], "lab", lambda emails: {emails[0]: [{"userid": "a"}]},
+                lambda *args: {"status": "deleted", "verification": {"status": "Verified"}},
+                audit=lambda rows: {"a@example.com": {"status": "Incomplete", "issues": ["Device remains"]}})
+            queue.worker.join(5)
+            saved = queue.get(job["id"], "lab")
+            self.assertEqual(saved["status"], "completed_with_issues")
+            self.assertEqual(saved["rows"][0]["status"], "needs_review")
+
+    def test_restart_during_final_audit_retains_proof_without_replaying_deletion(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            job = queue.submit("lab", "admin", "a@example.com")
+            job.update(status="running", verification_required=True, verification_phase="Final read-only CUCM audit")
+            job["rows"][0].update(status="deleted", userid="a", verification={"status": "Verified", "checked_at": "before restart", "issues": []})
+            queue._save(job)
+            restored = BulkSeparationQueue(root)
+            restored.recover()
+            self.assertEqual(restored.get(job["id"], "lab")["status"], "credentials_required")
+            execute = Mock()
+            restored.start(job["id"], "lab", lambda emails: {}, execute, audit=lambda rows: {"a@example.com": {"status": "Verified", "checked_at": "after restart", "issues": []}})
+            restored.worker.join(5)
+            saved = restored.get(job["id"], "lab")
+            self.assertEqual(saved["status"], "completed")
+            self.assertEqual(saved["rows"][0]["verification"]["checked_at"], "before restart")
+            execute.assert_not_called()
+
+    def test_final_audit_details_survive_csv_and_reload(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            job = queue.submit("lab", "admin", "a@example.com")
+            job["rows"][0].update(verification={"status": "Verified", "checked_at": "first", "issues": []}, final_verification={"status": "Incomplete", "checked_at": "final", "issues": ["DN still active"]})
+            queue._save(job)
+            loaded = BulkSeparationQueue(root).get(job["id"], "lab")
+            record = next(csv.DictReader(io.StringIO(csv_bytes(loaded).decode("utf-8-sig"))))
+            self.assertEqual(record["CUCM Verification"], "Verified")
+            self.assertEqual(record["Final Audit"], "Incomplete")
+            self.assertEqual(record["Final Audit Issues"], "DN still active")
+
+    def test_700_guarded_users_pause_on_100th_failure_and_keep_the_rest_pending(self):
+        with tempfile.TemporaryDirectory() as root:
+            queue = BulkSeparationQueue(root)
+            job = queue.submit("lab", "admin", " ".join(f"u{index}@example.com" for index in range(700)))
+            calls = []
+            def execute(email, userid):
+                calls.append(email)
+                return {"status": "needs_review" if len(calls) == 100 else "deleted", "verification": {"status": "Incomplete" if len(calls) == 100 else "Verified"}}
+            audit = Mock()
+            queue.start(job["id"], "lab", lambda emails: {email: [{"userid": email}] for email in emails}, execute, audit=audit)
+            queue.worker.join(30)
+            saved = BulkSeparationQueue(root).get(job["id"], "lab")
+            self.assertEqual(saved["status"], "paused")
+            self.assertEqual(len(calls), 100)
+            self.assertEqual(sum(row["status"] == "pending" for row in saved["rows"]), 600)
+            audit.assert_not_called()
+
+    def row(self):
+        return {"email": "a@example.com", "userid": "a", "target_snapshot": [{"device_name": "csfOld"}], "extensions": [{"extension": "1000", "partition": "PT"}]}
+
+    def reader(self, sql):
+        if "FROM enduser u" in sql:
+            return [{"userid": "a", "primary_extension": ""}]
+        if "FROM numplan n" in sql:
+            return [{"extension": "1000", "partition": "PT", "active": "f", "device_name": ""}]
+        return []
+
+    def test_inactive_unassigned_dn_and_absent_original_device_are_verified(self):
+        report = bulk_separation.verify_cucm([self.row()], self.reader)["a@example.com"]
+        self.assertEqual(report["status"], "Verified")
+
+    def test_orphan_device_is_detected_by_original_name_without_user_association(self):
+        def reader(sql):
+            return [{"device_name": "CSFOLD"}] if "FROM device d" in sql else self.reader(sql)
+        report = bulk_separation.verify_cucm([self.row()], reader)["a@example.com"]
+        self.assertEqual(report["status"], "Incomplete")
+        self.assertIn("CSFOLD", str(report["issues"]))
+
+    def test_active_shared_missing_or_wrong_partition_dn_cannot_pass(self):
+        for records in ([{"extension": "1000", "partition": "PT", "active": "t", "device_name": ""}],
+                        [{"extension": "1000", "partition": "PT", "active": "f", "device_name": "SEP1"}], [],
+                        [{"extension": "1000", "partition": "Other", "active": "f", "device_name": ""}]):
+            with self.subTest(records=records):
+                report = bulk_separation.verify_cucm([self.row()], lambda sql: records if "FROM numplan n" in sql else self.reader(sql))
+                self.assertEqual(report["a@example.com"]["status"], "Incomplete")
+
+    def test_permanent_delete_requires_absence_not_an_inactive_line(self):
+        row = dict(self.row(), permanent_dn_delete=True)
+        self.assertEqual(bulk_separation.verify_cucm([row], self.reader)[row["email"]]["status"], "Incomplete")
+        self.assertEqual(bulk_separation.verify_cucm([row], lambda sql: [] if "FROM numplan n" in sql else self.reader(sql))[row["email"]]["status"], "Verified")
+
+    def test_unknown_reads_or_missing_user_are_not_successful_absence(self):
+        for reader in (lambda sql: [], lambda sql: [{}], Mock(side_effect=RuntimeError("denied"))):
+            with self.assertRaises((ValueError, RuntimeError)):
+                bulk_separation.verify_cucm([self.row()], reader)
+
+    def test_primary_extension_remaining_blocks_verification(self):
+        report = bulk_separation.verify_cucm([self.row()], lambda sql: [{"userid": "a", "primary_extension": "1000"}] if "FROM enduser u" in sql else self.reader(sql))
+        self.assertEqual(report["a@example.com"]["status"], "Incomplete")
+
+    def test_final_audit_batches_700_users_without_per_user_queries(self):
+        rows = [dict(self.row(), email=f"u{index}@example.com", userid=f"u{index}", target_snapshot=[{"device_name": f"CSF{index}"}], extensions=[{"extension": str(index), "partition": "PT"}]) for index in range(700)]
+        queries = []
+        def reader(sql):
+            queries.append(sql)
+            if "FROM enduser u" in sql:
+                return [{"userid": row["userid"], "primary_extension": ""} for row in rows if "'" + row["userid"] + "'" in sql]
+            if "FROM numplan n" in sql:
+                return [{"extension": row["extensions"][0]["extension"], "partition": "PT", "active": "f", "device_name": ""} for row in rows if "'" + row["extensions"][0]["extension"] + "'" in sql]
+            return []
+        self.assertTrue(all(report["status"] == "Verified" for report in bulk_separation.verify_cucm(rows, reader).values()))
+        self.assertEqual(len(queries), 21)
+
+
 class BulkSeparationIntegrationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         tree = ast.parse((Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8-sig"))
-        names = {"_bulk_separation_resolve", "_bulk_separation_devices", "_bulk_separation_preview", "_bulk_separation_execute", "_bulk_separation_public", "bulk_separation_get_route", "bulk_separation_post_route", "bulk_separation_csv_route"}
+        names = {"_bulk_separation_resolve", "_bulk_separation_devices", "_bulk_separation_preview", "_bulk_separation_audit", "_bulk_separation_execute", "_bulk_separation_public", "bulk_separation_get_route", "bulk_separation_post_route", "bulk_separation_csv_route"}
         nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
         for node in nodes:
             node.decorator_list = []
         cls.code = compile(ast.Module(body=nodes, type_ignores=[]), "<bulk-integration>", "exec")
 
     def setUp(self):
-        self.scope = {"Request": object, "Form": lambda value: value, "csv": csv, "io": io, "json": json, "bulk_separation": bulk_separation, "sms_inventory": sms_inventory, "logger": Mock(),
+        self.scope = {"Request": object, "Form": lambda value: value, "csv": csv, "io": io, "json": json, "bulk_separation": bulk_separation, "sms_inventory": sms_inventory, "logger": Mock(), "time": SimpleNamespace(sleep=Mock()),
+            "_get_sep_dn_delete_settings": Mock(return_value={"enabled": False}),
             "_cached_all_sms_numbers": Mock(return_value={"status": "Complete within stated scope", "rows": [], "failures": [], "cache_hit": True, "fetched_at": "2026-10-27T00:00:00+00:00", "count": 0}),
             "_sql_escape_literal": lambda value: value.replace("'", "''"),
             "lookup_ad_identities_by_email": Mock(side_effect=lambda emails, auth, **kwargs: {"ok": True, "results": [{"input_email": email, "found": True, "samAccountName": email.split("@")[0]} for email in emails]}),
@@ -324,6 +531,39 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
             "JSONResponse": lambda content, status_code=200, headers=None: SimpleNamespace(content=content, status_code=status_code, headers=headers),
             "Response": lambda **kwargs: SimpleNamespace(**kwargs)}
         exec(self.code, self.scope)
+        self.real_audit = self.scope["_bulk_separation_audit"]
+        self.scope["_bulk_separation_audit"] = Mock(side_effect=lambda host, username, password, rows: {row["email"]: {"status": "Verified", "checked_at": "now", "issues": [], "permanent_dn_delete": False} for row in rows})
+
+    def execute_reviewed(self):
+        snapshot = {"target_snapshot": [], "extensions": []}
+        with patch.object(bulk_separation, "target_inventory", return_value={"a": snapshot}):
+            return self.scope["_bulk_separation_execute"]("lab", "admin", "secret", "operator", "a@example.com", "a", snapshot)
+
+    def test_missing_approved_snapshot_blocks_mutations(self):
+        result = self.scope["_bulk_separation_execute"]("lab", "admin", "secret", "operator", "a@example.com", "a")
+        self.assertEqual(result["deleted"], "Not attempted")
+        self.scope["_run_full_separation"].assert_not_called()
+
+    def test_only_read_back_is_retried_and_success_requires_required_steps(self):
+        self.scope["_bulk_separation_resolve"] = lambda *args: {"a@example.com": [{"userid": "a"}]}
+        self.scope["_bulk_separation_devices"] = Mock(side_effect=[["CSFa"], []])
+        self.scope["_run_full_separation"].return_value = (b"Step,Status,Details\nLookup User,Success,Found\nUpdate User,Success,Cleared\nClear AD Phone Fields,Success,Cleared\nRemove Unified Messaging Security Group,Success,Removed\nDelete Unity Mailbox,Skipped,Absent\n", "x.csv")
+        self.scope["_bulk_separation_audit"] = self.real_audit
+        reports = {"a@example.com": {"status": "Verified", "checked_at": "now", "issues": [], "permanent_dn_delete": False}}
+        with patch.object(bulk_separation, "verify_cucm", side_effect=[RuntimeError("transient"), reports]) as verify:
+            result = self.execute_reviewed()
+        self.assertEqual(result["status"], "deleted")
+        self.assertEqual(verify.call_count, 2)
+        self.scope["_run_full_separation"].assert_called_once()
+
+    def test_false_successful_step_output_does_not_override_remaining_dn(self):
+        self.scope["_bulk_separation_resolve"] = lambda *args: {"a@example.com": [{"userid": "a"}]}
+        self.scope["_bulk_separation_devices"] = Mock(side_effect=[["CSFa"], []])
+        self.scope["_bulk_separation_audit"].side_effect = None
+        self.scope["_bulk_separation_audit"].return_value = {"a@example.com": {"status": "Incomplete", "issues": ["DN is still active"]}}
+        result = self.execute_reviewed()
+        self.assertEqual(result["status"], "needs_review")
+        self.assertIn("DN is still active", result["detail"])
 
     def test_batched_exact_email_lookup_and_ambiguity(self):
         emails = [f"user{index}@example.com" for index in range(150)]
@@ -389,7 +629,7 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
         self.scope["_bulk_separation_resolve"] = lambda *args: {"a@example.com": [{"userid": "a"}]}
         for verification, expected in [(["CSFa"], "No"), (RuntimeError("provider failure"), "Unknown")]:
             self.scope["_bulk_separation_devices"] = Mock(side_effect=[["CSFa"], verification])
-            result = self.scope["_bulk_separation_execute"]("lab", "admin", "secret", "operator", "a@example.com", "a")
+            result = self.execute_reviewed()
             self.assertEqual(result["deleted"], expected)
             self.assertEqual(result["status"], "needs_review")
 
@@ -397,7 +637,7 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
         self.scope["_bulk_separation_resolve"] = lambda *args: {"a@example.com": [{"userid": "a"}]}
         self.scope["_bulk_separation_devices"] = Mock(side_effect=[["CSFa"], []])
         self.scope["_run_full_separation"].return_value = (b"Step,Status,Details\nLookup User,Success,Found\nClear AD Phone Fields,Failed,RawProviderBody\n", "x.csv")
-        result = self.scope["_bulk_separation_execute"]("lab", "admin", "secret", "operator", "a@example.com", "a")
+        result = self.execute_reviewed()
         self.assertEqual(result["deleted"], "Yes")
         self.assertEqual(result["status"], "needs_review")
         self.assertIn("Clear AD Phone Fields", result["detail"])
@@ -405,7 +645,7 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
 
     def test_changed_identity_blocks_all_mutations(self):
         self.scope["_bulk_separation_resolve"] = lambda *args: {"a@example.com": [{"userid": "other"}]}
-        result = self.scope["_bulk_separation_execute"]("lab", "admin", "secret", "operator", "a@example.com", "a")
+        result = self.execute_reviewed()
         self.assertEqual(result["status"], "lookup_failed")
         self.scope["_run_full_separation"].assert_not_called()
 
@@ -439,7 +679,7 @@ class BulkSeparationIntegrationTests(unittest.TestCase):
             selection = self.scope["bulk_separation_post_route"](object(), "select", job["id"], "", "", saved["selection_revision"], json.dumps(["a@example.com"]))
             self.assertEqual(selection.status_code, 200)
             self.scope["_bulk_separation_resolve"] = lambda *args: {email: [{"userid": email}] for email in args[-1]}
-            execute = Mock(return_value={"status": "deleted"})
+            execute = Mock(return_value={"status": "deleted", "verification": {"status": "Verified"}})
             self.scope["_bulk_separation_execute"] = execute
             result = self.scope["bulk_separation_post_route"](object(), "approve", job["id"], "", "DELETE", selection.content["selection_revision"], "[]")
             self.assertEqual(result.status_code, 200)

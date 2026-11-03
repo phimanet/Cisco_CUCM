@@ -41775,7 +41775,7 @@ __GREENLIGHT_ADMIN_CARD__
           <section class="tool-panel" data-panel="bulkseparation">
             <h3 style="color:#a41424;">DANGER - Bulk Delete Cisco Jabber Process</h3>
             <p><strong>Destructive full separation:</strong> removes associated CSF/BOT/TCT devices and Unity voicemail, clears AD phone fields and Unified Messaging membership, releases eligible translation patterns/LS DIDs and removes eligible Teams telephony. The current permanent-DN deletion setting also applies. CUCM End Users and AD accounts are not deleted.</p>
-            <p><strong>No automatic undo.</strong> Deleted voicemail and configuration require their own recovery procedures. Interrupted entries require manual review, not automatic retry. Remaining TAB or owner-only Jabber devices are reported for review.</p>
+            <p><strong>No automatic undo.</strong> Deleted voicemail and configuration require their own recovery procedures. Failed checks pause the batch. Interrupted entries and remaining TAB or owner-only Jabber devices require review, not automatic retry. CUCM verification is separate from reported AD and other downstream outcomes; license accounting is not a deletion check.</p>
             <p>All jobs, reviews and step results are retained without automatic expiry. Back up the external runtime data directory; deleting that data or restoring an older VM/data backup can remove history. Fresh-build lists are historical references, not configuration or voicemail restores.</p>
             <label for="bulk-separation-emails">Employee emails (1-5,000; newline, comma or semicolon separated)</label>
             <textarea id="bulk-separation-emails" style="width:100%;min-height:110px;box-sizing:border-box;"></textarea>
@@ -41854,7 +41854,8 @@ __GREENLIGHT_ADMIN_CARD__
                   const devices = (row.devices || []).map(function(device){return device.device_name + ' | ' + (device.extension || '(no line)') + ' / ' + (device.partition || '(no partition)') + ' | ' + (device.registration || 'Unknown') + (device.last_registered ? ' | Last registered: ' + device.last_registered : '') + ' | ' + device.relationship;}).join(String.fromCharCode(10)) || (pendingReview ? 'Pending review' : row.eligible ? 'No devices returned' : 'Lookup unavailable');
                   const translation = row.translation_pattern || (pendingReview ? 'Pending review' : 'Not checked');
                   const sms = (row.sms || (pendingReview ? 'Pending review' : 'Not checked')) + (row.sms_matches && row.sms_matches.length ? String.fromCharCode(10) + row.sms_matches.map(function(match){return match.provider + ' | ' + match.environment + ' / ' + match.account;}).join(String.fromCharCode(10)) : '');
-                  [employee,extensions,translation,sms,devices,row.status,row.deleted,row.process,row.detail].forEach(function(value, index) {
+                  const verification = [row.detail || '', row.verification ? 'CUCM: ' + row.verification.status + ' | ' + row.verification.checked_at : '', row.final_verification ? 'Final audit: ' + row.final_verification.status + ' | ' + (row.final_verification.checked_at || '') : ''].filter(Boolean).join(String.fromCharCode(10));
+                  [employee,extensions,translation,sms,devices,row.status,row.deleted,row.process,verification].forEach(function(value, index) {
                     const td = document.createElement('td'); td.textContent = value || ''; td.style.cssText = 'overflow-wrap:anywhere;white-space:pre-line;vertical-align:top;padding:6px;'; tr.appendChild(td);
                     if (index < 5) td.style.minWidth = [150,120,110,140,280][index] + 'px';
                     if (index === 2) td.title = (row.translation_pattern_checks || []).map(function(check){return check.extension + ': ' + check.status;}).concat((row.translation_pattern_matches || []).map(function(match){return match.extension + ' / ' + (match.partition || '(no partition)');})).join(String.fromCharCode(10));
@@ -41874,7 +41875,11 @@ __GREENLIGHT_ADMIN_CARD__
                 jobId = job.id; viewJob = job;
                 const count = job.status === 'awaiting_review' ? job.rows.filter(function(row){return editable(row) && row.selected;}).length : (job.approved_count || 0);
                 const batchId = String(job.id || '').slice(0, 8).toUpperCase();
-                status.textContent = 'Batch ' + batchId + ' | ' + job.host + ' | ' + job.status + ' | ' + count + ' selected | ' + job.finished + '/' + job.total + ' processed | Jabber removed: ' + job.deleted_count + ' | Review/failure: ' + job.review_count;
+                const outcome = job.status === 'completed_with_issues' ? 'Finished with unresolved issues' : job.status === 'completed' ? (job.verification_required && job.final_audit && job.final_audit.status === 'Verified' ? 'CUCM verified complete; downstream outcomes reported' : 'Finished (legacy; not independently verified)') : job.status;
+                status.textContent = 'Batch ' + batchId + ' | ' + job.host + ' | ' + outcome + ' | ' + count + ' selected | ' + job.finished + '/' + job.total + ' processed | Jabber removed: ' + job.deleted_count + ' | CUCM verified: ' + (job.verified_count || 0) + ' | Review/failure: ' + job.review_count;
+                status.style.color = job.review_count || job.status === 'completed_with_issues' ? '#a41424' : '';
+                if (job.final_audit) status.textContent += ' | Final audit: ' + job.final_audit.status + ' (' + (job.final_verified_count || 0) + ' verified)';
+                if (job.verification_phase) status.textContent += ' | ' + job.verification_phase;
                 if (job.reviewed_at) status.textContent += ' | Review snapshot: ' + new Date(job.reviewed_at).toLocaleString();
                 if (job.rows.length < job.total) status.textContent += ' | Result preview: ' + job.rows.length + '/' + job.total + '; CSV contains all entries.';
                 if (job.error) status.textContent += ' | ' + job.error;
@@ -41915,6 +41920,7 @@ __GREENLIGHT_ADMIN_CARD__
                     if ((action === 'approve' || action === 'resume') && confirmation.value !== 'DELETE') throw new Error('Type DELETE to authorize full separation.');
                     if (action !== 'submit' && !jobId) throw new Error('Load a saved job first.');
                     if (action === 'approve' && !window.confirm('Run FULL separation for the ' + viewJob.rows.filter(function(row){return editable(row) && row.selected;}).length + ' selected employees on ' + viewJob.host + '? Unchecked employees will be kept. Voicemail deletion cannot be undone here.')) return;
+                    if (action === 'resume' && viewJob.review_count && !window.confirm('Resume pending users only? Flagged entries stay unresolved and will NOT be automatically separated again.')) return;
                     const form = new FormData(); form.set('action', action); form.set('job_id', jobId); form.set('confirmation', confirmation.value); form.set('emails_text', document.getElementById('bulk-separation-emails').value);
                     form.set('selection_revision', viewJob ? viewJob.selection_revision || '' : '');
                     if (action === 'select') form.set('selected_emails', JSON.stringify(viewJob.rows.filter(function(row){return editable(row) && row.selected;}).map(function(row){return row.email;})));
@@ -67279,7 +67285,23 @@ def _bulk_separation_preview(host, username, password, emails, progress=None):
   return sms_inventory.annotate_review(snapshots, report)
 
 
+def _bulk_separation_audit(host, username, password, rows):
+  targets = [{**row, "permanent_dn_delete": (row.get("verification") or {}).get("permanent_dn_delete", row.get("permanent_dn_delete", False))} for row in rows]
+  for attempt in range(3):
+    try:
+      reports = bulk_separation.verify_cucm(targets, lambda sql: _axl_execute_sql_rows(host, username, password, sql))
+    except Exception:
+      if attempt == 2:
+        raise RuntimeError("Independent CUCM verification failed; no automatic mutation retry.") from None
+    else:
+      if all(report["status"] == "Verified" for report in reports.values()) or attempt == 2:
+        return reports
+    time.sleep(0.5)
+
+
 def _bulk_separation_execute(host, username, password, operator, email, userid, expected=None):
+  if expected is None:
+    return {"status": "needs_review", "deleted": "Not attempted", "process": "Not started", "detail": "An approved device and DN snapshot is required; no changes made."}
   matches = _bulk_separation_resolve(host, username, password, [email])[email]
   if matches != [{"userid": userid}]:
     return {"status": "lookup_failed", "deleted": "Not attempted", "process": "Not started", "detail": "Email identity changed before execution; no changes made."}
@@ -67288,6 +67310,7 @@ def _bulk_separation_execute(host, username, password, operator, email, userid, 
     if not current or any(current.get(key) != expected.get(key) for key in ("target_snapshot", "extensions")):
       return {"status": "needs_review", "deleted": "Not attempted", "process": "Not started", "detail": "Devices or extensions changed after visual review; no changes made."}
   previous = _bulk_separation_devices(host, username, password, userid)
+  target = {**expected, "email": email, "userid": userid, "permanent_dn_delete": bool(_get_sep_dn_delete_settings().get("enabled"))}
   data, _filename = _run_full_separation(host, username, password, userid, True)
   output = _to_bytes(data).decode("utf-8-sig", errors="replace").replace(password, "[redacted]")
   steps = list(csv.reader(io.StringIO(output)))
@@ -67302,6 +67325,11 @@ def _bulk_separation_execute(host, username, password, operator, email, userid, 
   output = sanitized.getvalue()
   if not any(len(row) >= 2 and row[:2] == ["Lookup User", "Success"] for row in steps):
     problems.append("Missing successful user lookup")
+  for required_step in ("Update User", "Clear AD Phone Fields", "Remove Unified Messaging Security Group"):
+    if not any(len(row) >= 2 and row[:2] == [required_step, "Success"] for row in steps):
+      problems.append("Missing successful " + required_step)
+  if not any(len(row) >= 2 and row[0] == "Delete Unity Mailbox" and row[1] in {"Success", "Skipped"} for row in steps):
+    problems.append("Missing Unity mailbox outcome")
   try:
     remaining = _bulk_separation_devices(host, username, password, userid, previous)
     deleted = "No" if remaining else ("Yes" if previous else "Already absent")
@@ -67310,19 +67338,28 @@ def _bulk_separation_execute(host, username, password, operator, email, userid, 
     remaining = None
     deleted = "Unknown"
     detail = "Post-separation device verification failed; verify manually."
-  process = "Needs review" if problems else "Completed (reported)"
+  try:
+    verification = _bulk_separation_audit(host, username, password, [target])[email]
+  except Exception:
+    verification = {"status": "Verification Failed", "checked_at": bulk_separation.now(), "issues": ["Independent CUCM read-back failed."], "permanent_dn_delete": target["permanent_dn_delete"]}
+  if verification["status"] != "Verified":
+    problems.append("Independent CUCM verification")
+    detail += " " + "; ".join(verification.get("issues", []))
+  process = "Needs review" if problems or deleted not in {"Yes", "Already absent"} else "Reported complete; CUCM verified"
   if problems:
     detail += " Failed/warning steps: " + ", ".join(problems)
   status = "deleted" if deleted == "Yes" and not problems else "already_absent" if deleted == "Already absent" and not problems else "needs_review"
   _append_audit_event(action="bulk_separation_result", cucm_host=host, operator=operator, target=f"email={email};userid={userid};status={status};jabber_deleted={deleted}", account=userid, output_filename="", inline_mode=True)
-  return {"status": status, "deleted": deleted, "process": process, "detail": detail, "output": output}
+  return {"status": status, "deleted": deleted, "process": process, "detail": detail, "output": output, "verification": verification}
 
 
 def _bulk_separation_public(job):
   rows = job["rows"]
   return {**{key: value for key, value in job.items() if key != "rows"},
     "total": len(rows), "finished": sum(row["status"] not in {"pending", "running"} for row in rows),
-    "deleted_count": sum(row.get("deleted") == "Yes" for row in rows),
+    "deleted_count": sum(row.get("deleted") == "Yes" and row["status"] == "deleted" for row in rows),
+    "verified_count": sum((row.get("verification") or {}).get("status") == "Verified" and row["status"] in {"deleted", "already_absent"} for row in rows),
+    "final_verified_count": sum((row.get("final_verification") or {}).get("status") == "Verified" for row in rows),
     "review_count": sum(row["status"] in {"failed", "needs_review", "lookup_failed"} for row in rows),
     "selected_count": sum(row.get("selected", False) and row["status"] == "pending" for row in rows),
     "rows": [{key: value for key, value in row.items() if key != "output"} for row in (rows if job.get("status") == "awaiting_review" else rows[:500])]}
@@ -67484,7 +67521,8 @@ def bulk_separation_post_route(request: Request, action: str = Form(""), job_id:
       _append_audit_event(action="bulk_separation_" + action, cucm_host=host, operator=operator, target=f"job={job['id']};entries={len(job['rows'])}", output_filename="", inline_mode=True)
       BULK_SEPARATION_QUEUE.start(job["id"], host,
         lambda emails: _bulk_separation_resolve(host, username, password, emails),
-        lambda email, userid: _bulk_separation_execute(host, username, password, operator, email, userid, expected[email]))
+        lambda email, userid: _bulk_separation_execute(host, username, password, operator, email, userid, expected[email]),
+        audit=lambda rows: _bulk_separation_audit(host, username, password, rows))
       job = BULK_SEPARATION_QUEUE.get(job["id"], host)
     else:
       job = BULK_SEPARATION_QUEUE.control(job_id, host, action)

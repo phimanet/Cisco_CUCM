@@ -13,7 +13,7 @@ import uuid
 
 
 RETENTION_DAYS = None
-TERMINAL = {"completed", "cancelled"}
+TERMINAL = {"completed", "completed_with_issues", "cancelled"}
 
 
 def now():
@@ -30,7 +30,7 @@ def parse_emails(text):
 def csv_bytes(job):
     output = io.StringIO()
     writer = csv.writer(output)
-    writer.writerow(["Email", "User ID", "Status", "Jabber Deleted", "Full Process", "Details", "Step Output", "CUCM Host", "Job ID", "Name", "Selected for Separation", "Extensions / Partitions", "Devices / Registration", "Registration Checked At", "Extension Is Translation Pattern", "Translation Pattern Matches", "Translation Pattern Checked At", "SMS", "SMS Matches", "SMS Inventory Fetched At", "SMS Inventory Expires At", "SMS Coverage", "SMS Scope", "SMS Inventory Failures"])
+    writer.writerow(["Email", "User ID", "Status", "Jabber Deleted", "Full Process", "Details", "Step Output", "CUCM Host", "Job ID", "Name", "Selected for Separation", "Extensions / Partitions", "Devices / Registration", "Registration Checked At", "Extension Is Translation Pattern", "Translation Pattern Matches", "Translation Pattern Checked At", "SMS", "SMS Matches", "SMS Inventory Fetched At", "SMS Inventory Expires At", "SMS Coverage", "SMS Scope", "SMS Inventory Failures", "CUCM Verification", "Verified At", "Verification Issues", "Final Audit", "Final Audit At", "Final Audit Issues"])
     for row in job["rows"]:
         values = [row.get(key, "") for key in ("email", "userid", "status", "deleted", "process", "detail", "output")]
         values.extend([job["host"], job["id"]])
@@ -39,6 +39,9 @@ def csv_bytes(job):
             "; ".join(line["device_name"] + " | " + line["extension"] + "/" + line["partition"] + " | " + line.get("registration", "Unknown") + " | Last registered: " + line.get("last_registered", "Unknown") + " | " + line["relationship"] for line in row.get("devices", [])), row.get("registration_checked_at", "")])
         values.extend([row.get("translation_pattern", "Not checked"), "; ".join(line["extension"] + "/" + line["partition"] for line in row.get("translation_pattern_matches", [])), row.get("translation_pattern_checked_at", "")])
         values.extend([row.get("sms", "Not checked"), "; ".join(match["provider"] + " | " + match["phone_number"] + " | " + match["environment"] + " / " + match["account"] for match in row.get("sms_matches", [])), row.get("sms_inventory_fetched_at") or "", row.get("sms_inventory_expires_at") or "", row.get("sms_inventory_status") or "", row.get("sms_inventory_scope") or "", "; ".join(row.get("sms_inventory_failures") or [])])
+        for key in ("verification", "final_verification"):
+            report = row.get(key) or {}
+            values.extend([report.get("status", "Not verified"), report.get("checked_at", ""), "; ".join(report.get("issues", []))])
         writer.writerow(["'" + str(value) if str(value).lstrip().startswith(("=", "+", "-", "@")) else value for value in values])
     return output.getvalue().encode("utf-8-sig")
 
@@ -228,6 +231,88 @@ def build_review(emails, identities, read_sql, registrations, progress=None):
             line["registration_history_status"] = str(registration.get("history_status") or "Unknown")
             line["registration_source"] = str(registration.get("source") or "unknown")
     return snapshots
+
+
+def verify_cucm(rows, read_sql):
+    reports = {}
+    devices = {}
+    lines = {}
+    users = {}
+    for row in rows:
+        if not row.get("email") or not row.get("userid") or not isinstance(row.get("target_snapshot"), list) or not isinstance(row.get("extensions"), list):
+            raise ValueError("Missing approved verification snapshot.")
+        reports[row["email"]] = {"status": "Verified", "checked_at": now(), "issues": [], "permanent_dn_delete": bool(row.get("permanent_dn_delete")), "scope": "CUCM Jabber devices, primary extension and reviewed DNs; downstream steps remain separately reported"}
+        users.setdefault(row["userid"].lower(), []).append(row["email"])
+        for item in row["target_snapshot"]:
+            name = item["device_name"]
+            if name.upper().startswith(("CSF", "TCT", "BOT", "TAB")):
+                devices.setdefault(name.lower(), set()).add(row["email"])
+        for item in row["extensions"]:
+            lines.setdefault((item["extension"], item["partition"]), set()).add(row["email"])
+    keys = list(users)
+    for start in range(0, len(keys), 100):
+        batch = keys[start:start + 100]
+        found = set()
+        body = (
+            "u.userid, n.dnorpattern AS primary_extension FROM enduser u "
+            "LEFT JOIN endusernumplanmap m ON m.fkenduser=u.pkid AND m.tkdnusage=1 "
+            "LEFT JOIN numplan n ON n.pkid=m.fknumplan "
+            f"WHERE LOWER(u.userid) IN ({_sql_values(batch)}) ORDER BY u.userid, n.dnorpattern"
+        )
+        for record in _paged_rows(read_sql, body):
+            key = str(record.get("userid") or "").lower()
+            if key not in batch or "primary_extension" not in record:
+                raise ValueError("Incomplete primary-extension verification response.")
+            found.add(key)
+            if record["primary_extension"]:
+                for email in users[key]:
+                    reports[email]["issues"].append("End User primary extension is still set.")
+        if found != set(batch):
+            raise ValueError("CUCM End User verification did not return every approved identity.")
+    keys = list(devices)
+    for start in range(0, len(keys), 100):
+        batch = keys[start:start + 100]
+        for record in _paged_rows(read_sql, f"d.name AS device_name FROM device d WHERE LOWER(d.name) IN ({_sql_values(batch)}) ORDER BY d.name"):
+            key = str(record.get("device_name") or "").lower()
+            if key not in batch:
+                raise ValueError("Invalid device verification response.")
+            for email in devices[key]:
+                reports[email]["issues"].append("Jabber device remains: " + record["device_name"])
+    found_lines = {}
+    numbers = sorted({key[0] for key in lines})
+    for start in range(0, len(numbers), 100):
+        batch = numbers[start:start + 100]
+        body = (
+            "n.dnorpattern AS extension, r.name AS partition, n.iscallable AS active, d.name AS device_name "
+            "FROM numplan n LEFT JOIN routepartition r ON r.pkid=n.fkroutepartition "
+            "LEFT JOIN devicenumplanmap m ON m.fknumplan=n.pkid LEFT JOIN device d ON d.pkid=m.fkdevice "
+            f"WHERE n.tkpatternusage=2 AND n.dnorpattern IN ({_sql_values(batch)}) ORDER BY n.dnorpattern, r.name, d.name"
+        )
+        for record in _paged_rows(read_sql, body):
+            if not {"extension", "partition", "active", "device_name"}.issubset(record) or record["extension"] not in batch:
+                raise ValueError("Incomplete DN verification response.")
+            active = str(record["active"]).strip().lower()
+            if active not in {"t", "true", "1", "f", "false", "0"}:
+                raise ValueError("Unknown DN active state.")
+            key = (record["extension"], str(record["partition"] or ""))
+            found_lines.setdefault(key, []).append(record)
+    for key, emails in lines.items():
+        records = found_lines.get(key, [])
+        for email in emails:
+            report = reports[email]
+            label = key[0] + "/" + key[1]
+            if report["permanent_dn_delete"]:
+                if records:
+                    report["issues"].append("DN still exists; permanent deletion required: " + label)
+            elif not records:
+                report["issues"].append("Expected inactive DN is missing: " + label)
+            elif any(str(record["active"]).lower() not in {"f", "false", "0"} or record["device_name"] for record in records):
+                report["issues"].append("DN is active or still assigned to a device: " + label)
+    for report in reports.values():
+        report["issues"] = sorted(set(report["issues"]))
+        if report["issues"]:
+            report["status"] = "Incomplete"
+    return reports
 
 
 class BulkSeparationQueue:
@@ -430,7 +515,7 @@ class BulkSeparationQueue:
             self._save(job)
             return job
 
-    def start(self, job_id, host, resolve, execute):
+    def start(self, job_id, host, resolve, execute, audit=None):
         with self.lock:
             if self.worker and self.worker.is_alive():
                 raise ValueError("A bulk worker is still processing. Wait for the current person to finish.")
@@ -439,16 +524,20 @@ class BulkSeparationQueue:
                 raise ValueError("Job is already finished.")
             if job.get("review_required") and not job.get("approved_at"):
                 raise ValueError("Review and approve selected employees before separation.")
+            if job.get("verification_required") and audit is None:
+                raise ValueError("This job requires independent verification and final audit.")
+            if audit is not None:
+                job["verification_required"] = True
             for row in job["rows"]:
                 if row["status"] == "running":
                     row.update(status="needs_review", deleted="Unknown", process="Interrupted", detail="Previous worker stopped during separation. Verify manually; this entry will not be replayed.")
             job["status"] = "running"
             job["error"] = ""
             self._save(job)
-            self.worker = threading.Thread(target=self._run, args=(job_id, host, resolve, execute), daemon=True)
+            self.worker = threading.Thread(target=self._run, args=(job_id, host, resolve, execute, audit), daemon=True)
             self.worker.start()
 
-    def _run(self, job_id, host, resolve, execute):
+    def _run(self, job_id, host, resolve, execute, audit=None):
         try:
             job = self.get(job_id, host)
             identities = resolve([row["email"] for row in job["rows"] if row["status"] == "pending"])
@@ -462,17 +551,20 @@ class BulkSeparationQueue:
                         continue
                     matches = identities.get(row["email"], [])
                     if matches is None:
-                        row.update(status="lookup_failed", detail="CUCM email lookup failed for this batch; no changes made. Later entries continue.")
+                        row.update(status="lookup_failed", detail="CUCM email lookup failed; no changes made.")
+                        job.update(status="paused", error="Identity lookup failed. Batch paused; review this entry before explicitly resuming pending users.")
                         self._save(job)
-                        continue
+                        return
                     if len(matches) != 1 or not matches[0].get("userid"):
                         row.update(status="lookup_failed", detail="No unique exact CUCM email match; no changes made.")
+                        job.update(status="paused", error="Identity could not be verified. Batch paused; no later users were changed.")
                         self._save(job)
-                        continue
+                        return
                     if job.get("review_required") and (not row.get("selected") or row.get("userid") != matches[0]["userid"]):
                         row.update(status="needs_review", deleted="Not attempted", detail="Reviewed identity changed or entry is no longer selected; no changes made.")
+                        job.update(status="paused", error="Reviewed identity changed. Batch paused; no later users were changed.")
                         self._save(job)
-                        continue
+                        return
                     row.update(userid=matches[0]["userid"], status="running")
                     self._save(job)
                     email, userid = row["email"], row["userid"]
@@ -482,12 +574,52 @@ class BulkSeparationQueue:
                     result = {"status": "failed", "deleted": "Unknown", "process": "Failed", "detail": "Separation raised an exception. Verify systems manually; no automatic retry."}
                 with self.lock:
                     job = self.get(job_id, host)
+                    if job.get("verification_required") and result.get("status") in {"deleted", "already_absent"} and (result.get("verification") or {}).get("status") != "Verified":
+                        result.update(status="needs_review", process="Verification failed", detail="Missing independent CUCM verification; batch cannot continue.")
                     job["rows"][index].update(result)
+                    if result.get("status") not in {"deleted", "already_absent"} and job["status"] == "running":
+                        job.update(status="paused", error="Separation or verification failed. Batch paused; completed entries will not be replayed. Review the saved results before explicitly resuming pending users.")
+                    self._save(job)
+                    if job["status"] != "running":
+                        return
+            if audit is not None:
+                with self.lock:
+                    job = self.get(job_id, host)
+                    if job["status"] != "running":
+                        return
+                    job["verification_phase"] = "Final read-only CUCM audit"
+                    self._save(job)
+                    candidates = [copy.deepcopy(row) for row in job["rows"] if row["status"] in {"deleted", "already_absent"}]
+                try:
+                    reports = audit(candidates)
+                    if not isinstance(reports, dict) or set(reports) != {row["email"] for row in candidates}:
+                        raise ValueError("Incomplete final audit response.")
+                except Exception:
+                    with self.lock:
+                        job = self.get(job_id, host)
+                        job["final_audit"] = {"status": "Verification Failed", "checked_at": now(), "count": len(candidates)}
+                        if job["status"] == "running":
+                            job.update(status="paused", error="Final audit could not be completed. Resume repeats read-only verification only; completed mutations are not replayed.")
+                        self._save(job)
+                    return
+                with self.lock:
+                    job = self.get(job_id, host)
+                    for row in job["rows"]:
+                        if row["email"] not in reports:
+                            continue
+                        report = reports[row["email"]]
+                        if not isinstance(report, dict) or report.get("status") not in {"Verified", "Incomplete"}:
+                            raise ValueError("Invalid final verification result.")
+                        row["final_verification"] = report
+                        if report["status"] != "Verified":
+                            row.update(status="needs_review", process="Final audit incomplete", detail="Final audit found remaining CUCM configuration: " + "; ".join(report.get("issues", [])))
+                    job["final_audit"] = {"status": ("Verified" if all(report["status"] == "Verified" for report in reports.values()) else "Incomplete") if candidates else "Not applicable", "checked_at": now(), "count": len(candidates)}
+                    job.pop("verification_phase", None)
                     self._save(job)
             with self.lock:
                 job = self.get(job_id, host)
                 if job["status"] == "running":
-                    job["status"] = "completed"
+                    job["status"] = "completed_with_issues" if any(row["status"] in {"failed", "needs_review", "lookup_failed"} for row in job["rows"]) else "completed"
                     self._save(job)
         except Exception:
             with self.lock:
