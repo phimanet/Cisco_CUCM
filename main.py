@@ -14198,7 +14198,7 @@ def _twilio_registry_lookup_accounts(account: str = "default") -> list[tuple[str
     sid = (sid or "").strip()
     token = (token or "").strip()
     name = (name or sid or "").strip()
-    if not sid or not token or sid in seen:
+    if not sid or not token or sid in seen or _twilio_account_is_excluded(name) or sid in _twilio_excluded_account_sids():
       return
     seen.add(sid)
     candidates.append((sid, token, name))
@@ -14234,6 +14234,8 @@ def _list_twilio_incoming_phone_numbers(
   force_refresh: bool = False,
   auth_account_sid: str = "",
 ) -> dict:
+  if lookup_sid in _twilio_excluded_account_sids():
+    return {"ok": False, "status": "Account excluded by portal policy", "numbers": []}
   if not lookup_sid or not lookup_token:
     return {"ok": False, "status": "Twilio account not configured", "numbers": []}
 
@@ -14292,11 +14294,35 @@ def _list_twilio_incoming_phone_numbers(
     return {"ok": False, "status": f"Lookup error: {exc}", "numbers": []}
 
 
+def _twilio_account_is_excluded(name: str) -> bool:
+  return re.sub(r"[^a-z0-9]", "", str(name or "").lower()) in {"amnaiagentsandbox", "amnsandbox"}
+
+
+def _twilio_excluded_account_sids() -> set[str]:
+  excluded = {str(sid).strip() for name, sid in (
+    (TWILIO_PARENT_ACCOUNT_NAME, TWILIO_ACCOUNT_SID),
+    (TWILIO_SUBACCOUNT_NAME, TWILIO_SUBACCOUNT_SID),
+    (TWILIO_SALESFORCE_SUBACCOUNT_NAME, TWILIO_SALESFORCE_SUBACCOUNT_SID),
+  ) if sid and _twilio_account_is_excluded(name)}
+  for variable, sid in os.environ.items():
+    match = re.fullmatch(r"TWILIO_INVENTORY_([A-Z0-9_]+)_SID", variable)
+    if match and (_twilio_account_is_excluded(match.group(1)) or _twilio_account_is_excluded(os.environ.get("TWILIO_INVENTORY_" + match.group(1) + "_NAME", ""))):
+      excluded.add(str(sid).strip())
+  with TWILIO_ACCOUNT_LIST_CACHE_LOCK:
+    for cached in TWILIO_ACCOUNT_LIST_CACHE.values():
+      for account in cached.get("accounts", []) or []:
+        if _twilio_account_is_excluded(account.get("friendly_name", "")):
+          excluded.add(str(account.get("sid", "") or "").strip())
+  return excluded - {""}
+
+
 def _twilio_inventory_configured_roots() -> tuple[list[dict], list[dict]]:
   roots_by_sid = {}
   errors = []
 
   def add_root(key: str, name: str, sid: str, auth_token: str, source: str):
+    if _twilio_account_is_excluded(name) or _twilio_account_is_excluded(key):
+      return
     clean_sid = str(sid or "").strip()
     clean_token = str(auth_token or "").strip()
     if not clean_sid and not clean_token:
@@ -14350,6 +14376,8 @@ def _list_twilio_accounts(root: dict, force_refresh: bool = False) -> dict:
   root_sid = str(root.get("sid", "") or "").strip()
   root_token = str(root.get("auth_token", "") or "").strip()
   root_name = str(root.get("name", "") or root_sid).strip()
+  if _twilio_account_is_excluded(root_name) or _twilio_account_is_excluded(root.get("key", "")):
+    return {"ok": True, "status": "Account excluded by portal policy", "accounts": []}
   if not root_sid or not root_token:
     return {"ok": False, "status": "Twilio root SID/token is not configured", "accounts": []}
 
@@ -14358,7 +14386,7 @@ def _list_twilio_accounts(root: dict, force_refresh: bool = False) -> dict:
     cache_entry = TWILIO_ACCOUNT_LIST_CACHE.get(root_sid, {})
     cached_at = float(cache_entry.get("cached_at", 0) or 0)
     if (not force_refresh) and cached_at and now - cached_at < TWILIO_ACCOUNT_LIST_CACHE_TTL_SECONDS:
-      return {"ok": True, "status": "OK", "accounts": list(cache_entry.get("accounts", []) or [])}
+      return {"ok": True, "status": "OK", "accounts": [account for account in cache_entry.get("accounts", []) or [] if not _twilio_account_is_excluded(account.get("friendly_name", ""))]}
 
   accounts_by_sid = {
     root_sid: {
@@ -14384,6 +14412,8 @@ def _list_twilio_accounts(root: dict, force_refresh: bool = False) -> dict:
         return {"ok": False, "status": f"Twilio account list failed HTTP {response.status_code}", "accounts": []}
       payload = response.json() if response.text else {}
       for account in payload.get("accounts", []) or []:
+        if _twilio_account_is_excluded(account.get("friendly_name", "")):
+          continue
         sid = str(account.get("sid", "") or "").strip()
         if not sid:
           continue
@@ -14525,7 +14555,9 @@ def _lookup_twilio_number_direct(phone_number: str, account: str = "default", al
   with TWILIO_DIRECT_LOOKUP_CACHE_LOCK:
     cached_result = TWILIO_DIRECT_LOOKUP_CACHE.get(cache_key)
     if isinstance(cached_result, dict) and now - float(cached_result.get("cached_at", 0) or 0) < TWILIO_DIRECT_LOOKUP_CACHE_TTL_SECONDS:
-      return cached_result.get("result")
+      result = cached_result.get("result")
+      if not isinstance(result, dict) or not _twilio_account_is_excluded(result.get("lookup_account_name", "")) and result.get("lookup_account_sid") not in _twilio_excluded_account_sids():
+        return result
 
   roots, _ = _twilio_inventory_configured_roots()
   if not roots:
@@ -14660,12 +14692,13 @@ def _extract_all_sms_numbers(force_refresh=True):
   return {"ok": True, "rows": rows, "count": len(rows), "failures": failures,
                        "status": "Partial" if failures else "Complete within stated scope",
                        "fetched_at": fetched_at,
-                       "scope": "All configured accessible Twilio accounts/subaccounts: SMS-capable Incoming Phone Numbers (PN) only; all Aerialink account code records. Twilio Hosted Numbers (HN) are excluded and require Console export. Aerialink records are not filtered by active status; listing is not proof of current SMS routing."}
+                       "scope": "All configured accessible Twilio accounts/subaccounts except AMN AI Agent Sandbox (AMN Sandbox): SMS-capable Incoming Phone Numbers (PN) only; all Aerialink account code records. Twilio Hosted Numbers (HN) are excluded and require Console export. Aerialink records are not filtered by active status; listing is not proof of current SMS routing."}
 
 
 def _sms_inventory_scope_key():
   roots, failures = _twilio_inventory_configured_roots()
   config = {"twilio": [{"sid": root["sid"], "name": root["name"], "credential_hash": hashlib.sha256(root["auth_token"].encode()).hexdigest()} for root in roots],
+    "excluded_twilio_accounts": ["AMN AI Agent Sandbox", "AMN Sandbox"],
     "configuration_failures": failures, "aerialink_url": AERIALINK_V5_BASE_URL, "aerialink_path": AERIALINK_ACCOUNT_CODE_LOOKUP_PATH,
     "aerialink_user": AERIALINK_USERNAME, "aerialink_credential_hash": hashlib.sha256(str(AERIALINK_PASSWORD or "").encode()).hexdigest()}
   return hashlib.sha256(json.dumps(config, sort_keys=True).encode()).hexdigest()
@@ -14728,6 +14761,8 @@ def twilio_all_accounts_number_inventory_route(request: Request, force_refresh: 
 
 def _list_twilio_messaging_services(lookup_sid: str, lookup_token: str, force_refresh: bool = False) -> dict:
   """List Messaging Services and map each assigned phone SID to its service."""
+  if lookup_sid in _twilio_excluded_account_sids():
+    return {"ok": False, "status": "Account excluded by portal policy", "services": [], "assignments": {}}
   if not lookup_sid or not lookup_token:
     return {"ok": False, "status": "Twilio account not configured", "services": [], "assignments": {}}
   try:
@@ -15290,8 +15325,11 @@ def _lookup_twilio_number_by_phone(phone_number: str, account: str = "default", 
     candidates.add(phone_number_digits[1:])
     candidates.add(f"+{phone_number_digits[1:]}")
 
+  excluded_sids = _twilio_excluded_account_sids()
   with TWILIO_INCOMING_PHONE_NUMBER_CACHE_LOCK:
     for cache_sid, cache_entry in list(TWILIO_INCOMING_PHONE_NUMBER_CACHE.items()):
+      if cache_sid in excluded_sids:
+        continue
       if not isinstance(cache_entry, dict):
         continue
       for number_item in list(cache_entry.get("numbers", []) or []):
@@ -65818,6 +65856,9 @@ def _twilio_all_recent_logs_cycle() -> None:
       inventory = _twilio_all_account_number_inventory(include_messaging_services=False)
       twilio_all_recent_logs.initialize_inventory(state, inventory)
     else:
+      excluded_sids = _twilio_excluded_account_sids()
+      if any(_twilio_account_is_excluded(row.get("account_name", "")) or row.get("account_sid") in excluded_sids for row in state.get("rows", []) if row.get("status") == "Pending"):
+        raise ValueError("An excluded account remains in this older job; queue a new report.")
       twilio_all_recent_logs.advance_job(state, roots)
   except Exception:
     state["status"] = "failed"

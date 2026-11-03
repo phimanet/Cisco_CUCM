@@ -126,6 +126,10 @@ Priority keys:
 
 ## Conversation Notes
 
+### 2026-11-03 (AMN AI Agent Sandbox Lookup Exclusion)
+- Excluded only Twilio `AMN AI Agent Sandbox` / `AMN Sandbox` from configured roots, live/cached discovery, direct number lookups, cached matches and Messaging Service lookups. Shared SMS cache scope changes force a fresh permitted-account extract; older queued sandbox reads stop without replacing the prior report. Other accounts, credentials, existing saved reviews/history and the paused separation batch remain unchanged.
+- Local validation: 9 exclusion regressions, all 34 SMS tests and all 324 repository tests pass; editor diagnostics are clear. No live Twilio requests or account changes performed. Historical saved sandbox warnings remain historical evidence, not new lookup attempts.
+
 ### 2026-11-03 (Bulk Separation Verification Gates, LAB validation pending)
 - Bulk separation pauses on the first failed/uncertain identity, separation or verification result. Explicit Resume handles pending users only; completed and flagged mutations are not replayed. Each success requires the approved snapshot, critical step outcomes and independent CUCM device/primary-extension/DN checks, with bounded read-only retries. Active/shared DNs and remaining captured devices block success; permanent-DN deletion requires absence. Unity deletion now requires a read-back; malformed mailbox lookup is not absence. Shared Option 10 line verification now requires inactive/unassigned state.
 - A final batched CUCM audit checks all successful entries before completion; audit failures retain progress and can resume read-only after restart. Persisted per-user/final evidence and full CSV distinguish CUCM verification from reported AD/other downstream outcomes and license accounting. Unresolved batches and legacy unverified jobs have explicit labels. Existing external storage and no-expiry history remain unchanged.

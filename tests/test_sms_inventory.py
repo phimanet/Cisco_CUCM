@@ -1,9 +1,13 @@
 import ast
+import copy
 import datetime
 import hashlib
 import json
+import os
+import re
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +26,97 @@ def page(number=1, total=340, pages=4, following=None):
             "paging": {"totalRecords": total, "totalPages": pages, "page": number,
                        "pageSize": 100, "pageCount": size,
                        "next": following if following is not None else (f"/v5/code?page={number + 1}&pageSize=100" if number < pages else None)}}
+
+
+class TwilioExcludedAccountTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        tree = ast.parse((Path(__file__).resolve().parents[1] / "main.py").read_text(encoding="utf-8-sig"))
+        names = {"_twilio_account_is_excluded", "_twilio_excluded_account_sids", "_twilio_inventory_configured_roots", "_list_twilio_accounts", "_list_twilio_incoming_phone_numbers", "_list_twilio_messaging_services", "_lookup_twilio_number_direct", "_twilio_all_recent_logs_cycle"}
+        nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
+        cls.code = compile(ast.Module(body=nodes, type_ignores=[]), "<twilio-exclusion>", "exec")
+
+    def setUp(self):
+        self.get = Mock()
+        self.scope = {"os": os, "re": re, "time": time, "requests": SimpleNamespace(get=self.get),
+            "TWILIO_PARENT_ACCOUNT_NAME": "AMN Healthcare", "TWILIO_ACCOUNT_SID": "parent-sid", "TWILIO_AUTH_TOKEN": "test-parent-token",
+            "TWILIO_SUBACCOUNT_NAME": "AMNOne-Notification-PROD", "TWILIO_SUBACCOUNT_SID": "", "TWILIO_SUBACCOUNT_AUTH_TOKEN": "",
+            "TWILIO_SALESFORCE_SUBACCOUNT_NAME": "Enterprise Org Prod", "TWILIO_SALESFORCE_SUBACCOUNT_SID": "", "TWILIO_SALESFORCE_AUTH_TOKEN": "",
+            "TWILIO_ACCOUNT_LIST_CACHE": {}, "TWILIO_ACCOUNT_LIST_CACHE_LOCK": threading.Lock(), "TWILIO_ACCOUNT_LIST_CACHE_TTL_SECONDS": 300}
+        exec(self.code, self.scope)
+        self.root = {"sid": "parent-sid", "auth_token": "test-parent-token", "name": "AMN Healthcare"}
+
+    def test_only_named_amn_sandbox_is_excluded(self):
+        for name in ("AMN AI Agent Sandbox", " amn-ai-agent-sandbox ", "AMN Sandbox", "AMN_AI_AGENT_SANDBOX"):
+            self.assertTrue(self.scope["_twilio_account_is_excluded"](name))
+        for name in ("AMN Healthcare", "AMNOne-Notification-PROD", "Enterprise Org Prod", "AMN Greenlight QA", "Other Sandbox"):
+            self.assertFalse(self.scope["_twilio_account_is_excluded"](name))
+
+    def test_registry_skips_excluded_root_before_incomplete_credential_errors(self):
+        with patch.dict(os.environ, {"TWILIO_INVENTORY_AI_NAME": "AMN AI Agent Sandbox", "TWILIO_INVENTORY_AI_SID": "sandbox-sid"}, clear=True):
+            roots, errors = self.scope["_twilio_inventory_configured_roots"]()
+        self.assertEqual([root["sid"] for root in roots], ["parent-sid"])
+        self.assertEqual(errors, [])
+        self.get.assert_not_called()
+
+    def test_discovery_omits_sandbox_and_preserves_other_subaccounts(self):
+        self.get.return_value = SimpleNamespace(status_code=200, text="json", json=lambda: {"accounts": [
+            {"sid": "sandbox-sid", "friendly_name": "AMN AI Agent Sandbox"},
+            {"sid": "greenlight-sid", "friendly_name": "AMN Greenlight QA"}], "next_page_uri": None})
+        result = self.scope["_list_twilio_accounts"](self.root)
+        self.assertEqual({account["sid"] for account in result["accounts"]}, {"parent-sid", "greenlight-sid"})
+
+    def test_existing_discovery_cache_is_filtered_without_refresh(self):
+        self.scope["TWILIO_ACCOUNT_LIST_CACHE"]["parent-sid"] = {"cached_at": time.time(), "accounts": [
+            {"sid": "sandbox-sid", "friendly_name": "AMN AI Agent Sandbox"}, {"sid": "greenlight-sid", "friendly_name": "AMN Greenlight QA"}]}
+        result = self.scope["_list_twilio_accounts"](self.root)
+        self.assertEqual([account["sid"] for account in result["accounts"]], ["greenlight-sid"])
+        self.get.assert_not_called()
+
+    def test_direct_excluded_root_never_makes_an_api_request(self):
+        result = self.scope["_list_twilio_accounts"]({**self.root, "name": "AMN AI Agent Sandbox"})
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["accounts"], [])
+        self.get.assert_not_called()
+
+    def test_inventory_and_messaging_service_guards_block_configured_sandbox_sid(self):
+        with patch.dict(os.environ, {"TWILIO_INVENTORY_AI_NAME": "AMN AI Agent Sandbox", "TWILIO_INVENTORY_AI_SID": "sandbox-sid"}, clear=True):
+            self.assertFalse(self.scope["_list_twilio_incoming_phone_numbers"]("sandbox-sid", "test-token")["ok"])
+            self.assertFalse(self.scope["_list_twilio_messaging_services"]("sandbox-sid", "test-token")["ok"])
+        self.get.assert_not_called()
+
+    def test_cached_child_sandbox_sid_is_blocked_without_hardcoded_sid(self):
+        self.scope["TWILIO_ACCOUNT_LIST_CACHE"]["parent-sid"] = {"cached_at": time.time(), "accounts": [{"sid": "child-sandbox", "friendly_name": "AMN AI Agent Sandbox"}]}
+        self.assertIn("child-sandbox", self.scope["_twilio_excluded_account_sids"]())
+        self.assertFalse(self.scope["_list_twilio_incoming_phone_numbers"]("child-sandbox", "test-token")["ok"])
+        self.get.assert_not_called()
+
+    def test_direct_number_cache_ignores_sandbox_but_keeps_allowed_result(self):
+        key = ("default", "+12145551000", True)
+        self.scope.update(_normalize_phone_to_e164=lambda number: number,
+            TWILIO_DIRECT_LOOKUP_CACHE={key: {"cached_at": time.time(), "result": {"lookup_account_name": "AMN AI Agent Sandbox", "lookup_account_sid": "sandbox-sid"}}},
+            TWILIO_DIRECT_LOOKUP_CACHE_LOCK=threading.Lock(), TWILIO_DIRECT_LOOKUP_CACHE_TTL_SECONDS=300)
+        self.scope["_twilio_inventory_configured_roots"] = Mock(return_value=([], []))
+        self.assertIsNone(self.scope["_lookup_twilio_number_direct"]("+12145551000", all_accounts=True))
+        allowed = {"lookup_account_name": "AMNOne-Notification-PROD", "lookup_account_sid": "allowed-sid"}
+        self.scope["TWILIO_DIRECT_LOOKUP_CACHE"][key]["result"] = allowed
+        self.assertEqual(self.scope["_lookup_twilio_number_direct"]("+12145551000", all_accounts=True), allowed)
+        self.get.assert_not_called()
+
+    def test_old_queued_sandbox_read_is_stopped_without_overwriting_saved_report(self):
+        state = {"job_id": "old-job", "status": "running", "root_sids": ["parent-sid"], "inventory_ready": True,
+            "rows": [{"account_sid": "child-sandbox", "account_name": "AMN AI Agent Sandbox", "status": "Pending"}]}
+        advance, save = Mock(), Mock()
+        self.scope.update(datetime=datetime, TWILIO_ALL_RECENT_LOGS_JOB_LOCK=threading.Lock(), TWILIO_ALL_RECENT_LOGS_DATA_DIR="unused-test-folder",
+            twilio_all_recent_logs=SimpleNamespace(load_state=lambda *args: copy.deepcopy(state), configured_sids=lambda roots: ["parent-sid"], advance_job=advance, save_state=save),
+            _append_audit_event=Mock())
+        self.scope["_twilio_inventory_configured_roots"] = Mock(return_value=([self.root], []))
+        self.scope["_twilio_all_recent_logs_cycle"]()
+        advance.assert_not_called()
+        self.get.assert_not_called()
+        save.assert_called_once()
+        self.assertEqual(save.call_args.args[1]["status"], "failed")
+        self.assertEqual(len(save.call_args.args), 2)
 
 
 class SMSInventoryTests(unittest.TestCase):
