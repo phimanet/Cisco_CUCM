@@ -93,6 +93,7 @@ from toolkit import twilio_all_recent_logs
 from toolkit import sms_inventory
 from toolkit import bulk_separation
 from toolkit import webex_admin
+from toolkit import unneeded_directory_numbers
 from toolkit import unity_number_search
 from toolkit import unity_sql_lookup
 from toolkit.transunion_sdpr import (
@@ -46857,6 +46858,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="adddn">Add Directory Numbers (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="exportdn">Export Directory Numbers</button>
             <button type="button" class="portal-nav-btn" data-panel="delete-unassigned-dn">Delete Directory Number from CUCM</button>
+            <button type="button" class="portal-nav-btn" data-panel="remove-unneeded-dn">Remove Un-Needed Unassigned Directory Numbers</button>
             <button type="button" class="portal-nav-btn" data-panel="exportusers">Export End Users</button>
             <button type="button" class="portal-nav-btn" data-panel="jabber-primary-missing">Jabber Users Missing Primary Extension</button>
             <button type="button" class="portal-nav-btn" data-panel="route-plan-report">CUCM Route Plan Report</button>
@@ -47125,6 +47127,146 @@ def menu_admin_page(request: Request):
 
         <p id="admin-unassigned-dn-status" style="color:#2c5c8a; min-height:18px; margin-top:12px;">Set search filters, then click Lookup Unassigned DNs (NOT Active + Unassigned only).</p>
         <div id="admin-unassigned-dn-results" style="overflow-x:auto;"></div>
+      </section>
+
+      <section class="panel tool-panel" data-panel="remove-unneeded-dn">
+        <h3>Remove Un-Needed Unassigned Directory Numbers</h3>
+        <p>Paste one or more exact 10-digit numbers. Review checks every matching CUCM Directory Number line across partitions and device mappings. Only a unique, inactive, unassigned line in <strong>ENT_DEVICE_PT</strong> is eligible. Review is read-only; deletion is permanent.</p>
+        <form id="admin-remove-unneeded-dn-form" action="javascript:void(0)" onsubmit="if(window.reviewUnneededDns){return window.reviewUnneededDns(event);}document.getElementById('admin-remove-unneeded-dn-status').textContent='Review handler missing (JavaScript did not load).';return false;">
+          <label for="admin-remove-unneeded-dn-input">Directory Numbers (comma, space, semicolon, or one per line; up to 100)</label>
+          <textarea id="admin-remove-unneeded-dn-input" name="numbers" required placeholder="2142451718&#10;2142739284" style="width:100%;min-height:110px;box-sizing:border-box;"></textarea>
+          <div class="compact-inline-row" style="margin-top:8px;">
+            <button type="button" id="admin-remove-unneeded-dn-review" onclick="if(window.reviewUnneededDns){return window.reviewUnneededDns(event);}document.getElementById('admin-remove-unneeded-dn-status').textContent='Review handler missing (JavaScript did not load).';return false;">Check Numbers</button>
+          </div>
+          <p id="admin-remove-unneeded-dn-status" role="status" style="min-height:18px;color:#2c5c8a;">No changes are made during review.</p>
+          <div id="admin-remove-unneeded-dn-results" style="overflow-x:auto;"></div>
+          <div class="compact-inline-row" style="margin-top:12px;">
+            <label for="admin-remove-unneeded-dn-confirm">Type DELETE to confirm selected numbers:</label>
+            <input id="admin-remove-unneeded-dn-confirm" autocomplete="off" style="max-width:180px;">
+            <button type="button" id="admin-remove-unneeded-dn-delete" disabled style="background:linear-gradient(180deg,#9f1239,#7f1d1d);" onclick="if(window.deleteUnneededDns){return window.deleteUnneededDns(event);}document.getElementById('admin-remove-unneeded-dn-status').textContent='Delete handler missing (JavaScript did not load).';return false;">Delete Selected</button>
+          </div>
+        </form>
+        <p style="color:#7a1020;font-size:12px;">A number assigned to any device, active, missing, ambiguous, or found in another partition is blocked. Eligible means CUCM shows no device assignment; it is not a Jabber-registration-age test.</p>
+        <script>
+          (function () {
+            var form = document.getElementById("admin-remove-unneeded-dn-form");
+            var input = document.getElementById("admin-remove-unneeded-dn-input");
+            var reviewButton = document.getElementById("admin-remove-unneeded-dn-review");
+            var deleteButton = document.getElementById("admin-remove-unneeded-dn-delete");
+            var confirmation = document.getElementById("admin-remove-unneeded-dn-confirm");
+            var status = document.getElementById("admin-remove-unneeded-dn-status");
+            var results = document.getElementById("admin-remove-unneeded-dn-results");
+            var currentRows = [];
+            var busy = false;
+            if (!form || !input || !reviewButton || !deleteButton || !confirmation || !status || !results) return;
+
+            function selectedNumbers() {
+              return Array.from(results.querySelectorAll('input[data-unneeded-dn="1"]:checked')).map(function (box) { return box.value; });
+            }
+            function updateDeleteState() {
+              deleteButton.disabled = busy || confirmation.value !== "DELETE" || selectedNumbers().length === 0;
+            }
+            function renderRows(rows) {
+              currentRows = Array.isArray(rows) ? rows : [];
+              results.replaceChildren();
+              if (!currentRows.length) { results.textContent = "No review results."; updateDeleteState(); return; }
+              var table = document.createElement("table");
+              table.style.cssText = "width:100%;min-width:620px;border-collapse:collapse;font-size:13px;";
+              var head = table.createTHead().insertRow();
+              ["Select", "Directory Number", "Status", "Details"].forEach(function (label) { var th = document.createElement("th"); th.textContent = label; th.style.cssText = "padding:7px 9px;text-align:left;background:#005eb8;color:#fff;"; head.appendChild(th); });
+              var body = table.createTBody();
+              currentRows.forEach(function (item) {
+                var row = body.insertRow();
+                var action = row.insertCell();
+                if (item.eligible) {
+                  var checkbox = document.createElement("input");
+                  checkbox.type = "checkbox";
+                  checkbox.value = item.pattern;
+                  checkbox.setAttribute("data-unneeded-dn", "1");
+                  checkbox.setAttribute("aria-label", "Select Directory Number " + item.pattern);
+                  checkbox.addEventListener("change", updateDeleteState);
+                  action.appendChild(checkbox);
+                } else {
+                  action.textContent = item.status === "Deleted" ? "Done" : (item.status === "Failed" ? "Review" : "Blocked");
+                }
+                [item.pattern, item.status, item.detail].forEach(function (value) {
+                  var cell = row.insertCell();
+                  cell.textContent = String(value || "-");
+                  cell.style.cssText = "padding:7px 9px;border-bottom:1px solid #d9e4ef;vertical-align:top;overflow-wrap:anywhere;";
+                });
+                action.style.cssText = "padding:7px 9px;border-bottom:1px solid #d9e4ef;vertical-align:top;";
+              });
+              results.appendChild(table);
+              updateDeleteState();
+            }
+
+            window.reviewUnneededDns = async function (event) {
+              if (event) event.preventDefault();
+              if (busy) return false;
+              busy = true;
+              reviewButton.disabled = true;
+              deleteButton.disabled = true;
+              confirmation.value = "";
+              results.replaceChildren();
+              status.textContent = "Checking exact numbers against CUCM lines, partitions, and device assignments...";
+              try {
+                var response = await fetch("/admin/unneeded-dn/review", {method:"POST",body:new FormData(form),credentials:"same-origin",headers:{"Accept":"application/json"}});
+                var payload = await response.json();
+                if (!response.ok || !payload.ok) throw new Error(payload.error || ("HTTP " + response.status));
+                renderRows(payload.results || []);
+                status.textContent = "Review complete: " + Number(payload.eligible_count || 0) + " eligible; " + Number(payload.blocked_count || 0) + " blocked. Select only the rows to remove.";
+              } catch (error) {
+                currentRows = [];
+                results.replaceChildren();
+                status.textContent = "Review failed; no numbers were deleted: " + ((error && error.message) || "Unknown error.");
+              } finally {
+                busy = false;
+                reviewButton.disabled = false;
+                updateDeleteState();
+              }
+              return false;
+            };
+
+            window.deleteUnneededDns = async function (event) {
+              if (event) event.preventDefault();
+              var selected = selectedNumbers();
+              if (!selected.length || confirmation.value !== "DELETE" || busy) { updateDeleteState(); return false; }
+              if (!window.confirm("Permanently remove " + selected.length + " selected inactive, unassigned Directory Number(s) from CUCM? This does not delete any device.")) return false;
+              busy = true;
+              reviewButton.disabled = true;
+              deleteButton.disabled = true;
+              status.textContent = "Rechecking the selected numbers, then removing eligible lines from CUCM...";
+              try {
+                var data = new FormData();
+                data.append("numbers_json", JSON.stringify(selected));
+                var response = await fetch("/admin/unneeded-dn/delete", {method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});
+                var payload = await response.json();
+                if (!response.ok || !payload.ok) throw new Error(payload.error || ("HTTP " + response.status));
+                renderRows(payload.results || []);
+                confirmation.value = "";
+                status.textContent = "Delete finished: " + Number(payload.deleted_count || 0) + " deleted, " + Number(payload.blocked_count || 0) + " blocked, " + Number(payload.failed_count || 0) + " failed. Review each result.";
+              } catch (error) {
+                status.textContent = "Delete request failed: " + ((error && error.message) || "Unknown error.") + ". Review the numbers again before retrying.";
+              } finally {
+                busy = false;
+                reviewButton.disabled = false;
+                updateDeleteState();
+              }
+              return false;
+            };
+
+            input.addEventListener("input", function () {
+              currentRows = [];
+              results.replaceChildren();
+              confirmation.value = "";
+              status.textContent = "Input changed. Check Numbers again before selecting anything to delete.";
+              updateDeleteState();
+            });
+            confirmation.addEventListener("input", updateDeleteState);
+            form.addEventListener("submit", function (event) { event.preventDefault(); window.reviewUnneededDns(event); });
+            updateDeleteState();
+          })();
+        </script>
       </section>
 
       <section class="panel tool-panel" data-panel="exportusers">
@@ -62650,6 +62792,132 @@ def admin_unassigned_dn_delete_route(
     "skipped_count": skipped_count,
     "results": results,
   })
+
+
+def _review_unneeded_directory_numbers(cucm_host: str, cucm_user: str, cucm_pass: str, raw_numbers: str) -> list[dict]:
+  numbers = unneeded_directory_numbers.parse_directory_numbers(raw_numbers)
+  sql = unneeded_directory_numbers.build_exact_number_sql(numbers)
+  rows = _axl_execute_sql_rows(cucm_host, cucm_user, cucm_pass, sql)
+  return unneeded_directory_numbers.classify_directory_numbers(numbers, rows)
+
+
+@app.post("/admin/unneeded-dn/review")
+def admin_unneeded_dn_review_route(request: Request, numbers: str = Form("")):
+  try:
+    cucm_host, cucm_user, cucm_pass, operator = _page2_jabber_primary_credentials(request)
+    results = _review_unneeded_directory_numbers(cucm_host, cucm_user, cucm_pass, numbers)
+    eligible_count = sum(1 for row in results if row.get("eligible"))
+    _append_audit_event(
+      action="review_unneeded_directory_numbers",
+      cucm_host=cucm_host,
+      operator=operator,
+      target=f"requested={len(results)};eligible={eligible_count};read_only=true",
+      output_filename="inline_json_ok",
+      inline_mode=True,
+    )
+    return JSONResponse({
+      "ok": True,
+      "cucm_host": cucm_host,
+      "count": len(results),
+      "eligible_count": eligible_count,
+      "blocked_count": len(results) - eligible_count,
+      "results": results,
+    }, headers={"Cache-Control": "no-store"})
+  except PermissionError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
+  except ValueError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+  except Exception:
+    logger.exception("Unneeded Directory Number review failed")
+    return JSONResponse({"ok": False, "error": "CUCM review failed. No numbers were deleted."}, status_code=502)
+
+
+@app.post("/admin/unneeded-dn/delete")
+def admin_unneeded_dn_delete_route(request: Request, numbers_json: str = Form("")):
+  try:
+    cucm_host, cucm_user, cucm_pass, operator = _page2_jabber_primary_credentials(request)
+  except PermissionError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=403)
+
+  try:
+    parsed = json.loads(numbers_json or "[]")
+    if not isinstance(parsed, list) or not parsed:
+      raise ValueError("Select one or more reviewed Directory Numbers.")
+    numbers = unneeded_directory_numbers.parse_directory_numbers("\n".join(str(item) for item in parsed))
+  except (ValueError, TypeError) as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+  try:
+    results = _review_unneeded_directory_numbers(cucm_host, cucm_user, cucm_pass, "\n".join(numbers))
+  except Exception:
+    logger.exception("Unneeded Directory Number delete revalidation failed")
+    return JSONResponse({"ok": False, "error": "CUCM revalidation failed. No numbers were deleted."}, status_code=502)
+
+  session = requests.Session()
+  session.verify = False
+  session.trust_env = False
+  session.auth = HTTPBasicAuth(cucm_user, cucm_pass)
+  deleted_count = 0
+  blocked_count = 0
+  failed_count = 0
+  for row in results:
+    if not row.get("eligible"):
+      blocked_count += 1
+      continue
+
+    pattern = row["pattern"]
+    status = "Deleted"
+    detail = "Directory Number removed from CUCM after fresh batch revalidation."
+    try:
+      _axl_remove_line(session, cucm_host, pattern, unneeded_directory_numbers.ROUTE_PARTITION)
+      deleted_count += 1
+      row["status"] = "Deleted"
+      row["eligible"] = False
+      row["detail"] = detail
+    except Exception:
+      logger.exception("Unneeded Directory Number removal failed for %s", pattern)
+      status = "Failed"
+      detail = "AXL removal failed or returned an uncertain result. Review CUCM before retrying."
+      failed_count += 1
+      row["status"] = status
+      row["eligible"] = False
+      row["detail"] = detail
+
+    email_sent = True
+    email_error = ""
+    try:
+      _send_unassigned_dn_delete_email(
+        cucm_host=cucm_host,
+        operator=operator,
+        pattern=pattern,
+        route_partition=unneeded_directory_numbers.ROUTE_PARTITION,
+        status=status,
+        detail=detail,
+      )
+    except Exception as exc:
+      email_sent = False
+      email_error = str(exc)
+    row["email_sent"] = email_sent
+    if email_error:
+      row["email_error"] = email_error
+
+  _append_audit_event(
+    action="delete_unneeded_unassigned_directory_numbers",
+    cucm_host=cucm_host,
+    operator=operator,
+    target=f"requested={len(results)};deleted={deleted_count};blocked={blocked_count};failed={failed_count}",
+    output_filename="inline_json_ok",
+    inline_mode=True,
+  )
+  return JSONResponse({
+    "ok": True,
+    "cucm_host": cucm_host,
+    "requested_count": len(results),
+    "deleted_count": deleted_count,
+    "blocked_count": blocked_count,
+    "failed_count": failed_count,
+    "results": results,
+  }, headers={"Cache-Control": "no-store"})
 
 
 def _update_translation_pattern_to_available_2481001(
