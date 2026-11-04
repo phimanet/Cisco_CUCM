@@ -1,8 +1,10 @@
+import csv
+import io
 import re
 
 
 ROUTE_PARTITION = "ENT_DEVICE_PT"
-MAX_DIRECTORY_NUMBERS = 100
+MAX_DIRECTORY_NUMBERS = 1000
 INACTIVE_VALUES = {"f", "false", "0"}
 
 
@@ -99,3 +101,29 @@ def classify_directory_numbers(numbers, rows):
         })
 
     return results
+
+
+def results_csv(results):
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(["Directory Number", "Route Partition", "Result", "Action Taken", "Details", "Notification Email"])
+    for row in results or []:
+        status = str(row.get("status", "") or "")
+        action = "Removed from CUCM" if status == "Deleted" else "Not removed"
+        email_status = "Sent" if row.get("email_sent") else ("Not sent" if "email_sent" in row else "Not applicable")
+        values = [
+            row.get("pattern", ""),
+            row.get("route_partition", ROUTE_PARTITION),
+            status,
+            action,
+            row.get("detail", ""),
+            email_status,
+        ]
+        safe_values = []
+        for value in values:
+            text = str(value or "")
+            if text.lstrip().startswith(("=", "+", "-", "@")):
+                text = "'" + text
+            safe_values.append(text)
+        writer.writerow(safe_values)
+    return output.getvalue().encode("utf-8-sig")

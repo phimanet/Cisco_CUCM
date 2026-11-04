@@ -1,3 +1,4 @@
+import csv
 import unittest
 
 from toolkit import unneeded_directory_numbers as numbers
@@ -17,6 +18,12 @@ class DirectoryNumberInputTests(unittest.TestCase):
             numbers.parse_directory_numbers("2142451718, 1234")
         with self.assertRaisesRegex(ValueError, "no more than 1"):
             numbers.parse_directory_numbers("2142451718, 2142739284", limit=1)
+
+    def test_accepts_one_thousand_unique_numbers_and_rejects_one_thousand_one(self):
+        batch = [f"{index:010d}" for index in range(1000)]
+        self.assertEqual(len(numbers.parse_directory_numbers("\n".join(batch))), 1000)
+        with self.assertRaisesRegex(ValueError, "no more than 1000"):
+            numbers.parse_directory_numbers("\n".join(batch + ["9999999999"]))
 
     def test_builds_exact_digit_only_batched_query(self):
         sql = numbers.build_exact_number_sql(["2142451718", "2142739284"])
@@ -82,6 +89,18 @@ class DirectoryNumberEligibilityTests(unittest.TestCase):
         result = numbers.classify_directory_numbers(["2142451718"], [])[0]
         self.assertEqual(result["status"], "Not Found")
         self.assertFalse(result["eligible"])
+
+    def test_results_csv_lists_action_and_formula_safe_details(self):
+        rows = [
+            {"pattern": "2142451718", "route_partition": "ENT_DEVICE_PT", "status": "Deleted", "detail": "Removed from CUCM.", "email_sent": True},
+            {"pattern": "2142739284", "route_partition": "ENT_DEVICE_PT", "status": "Blocked", "detail": "=review this number", "email_sent": False},
+        ]
+        text = numbers.results_csv(rows).decode("utf-8-sig")
+        parsed = list(csv.reader(text.splitlines()))
+        self.assertEqual(parsed[0][0:4], ["Directory Number", "Route Partition", "Result", "Action Taken"])
+        self.assertEqual(parsed[1][0], "2142451718")
+        self.assertEqual(parsed[1][3], "Removed from CUCM")
+        self.assertEqual(parsed[2][4], "'=review this number")
 
 
 if __name__ == "__main__":

@@ -47133,13 +47133,18 @@ def menu_admin_page(request: Request):
         <h3>Remove Un-Needed Unassigned Directory Numbers</h3>
         <p>Paste one or more exact 10-digit numbers. Review checks every matching CUCM Directory Number line across partitions and device mappings. Only a unique, inactive, unassigned line in <strong>ENT_DEVICE_PT</strong> is eligible. Review is read-only; deletion is permanent.</p>
         <form id="admin-remove-unneeded-dn-form" action="javascript:void(0)" onsubmit="if(window.reviewUnneededDns){return window.reviewUnneededDns(event);}document.getElementById('admin-remove-unneeded-dn-status').textContent='Review handler missing (JavaScript did not load).';return false;">
-          <label for="admin-remove-unneeded-dn-input">Directory Numbers (comma, space, semicolon, or one per line; up to 100)</label>
+          <label for="admin-remove-unneeded-dn-input">Directory Numbers (comma, space, semicolon, or one per line; up to 1,000)</label>
           <textarea id="admin-remove-unneeded-dn-input" name="numbers" required placeholder="2142451718&#10;2142739284" style="width:100%;min-height:110px;box-sizing:border-box;"></textarea>
           <div class="compact-inline-row" style="margin-top:8px;">
             <button type="button" id="admin-remove-unneeded-dn-review" onclick="if(window.reviewUnneededDns){return window.reviewUnneededDns(event);}document.getElementById('admin-remove-unneeded-dn-status').textContent='Review handler missing (JavaScript did not load).';return false;">Check Numbers</button>
           </div>
           <p id="admin-remove-unneeded-dn-status" role="status" style="min-height:18px;color:#2c5c8a;">No changes are made during review.</p>
+          <label style="display:flex;align-items:center;gap:7px;margin:8px 0;width:max-content;max-width:100%;">
+            <input id="admin-remove-unneeded-dn-select-all" type="checkbox" disabled style="width:16px;height:16px;margin:0;">
+            Select/DeSelect All Eligible
+          </label>
           <div id="admin-remove-unneeded-dn-results" style="overflow-x:auto;"></div>
+          <p><a id="admin-remove-unneeded-dn-csv" href="#" style="display:none;">Download Deletion Results CSV</a></p>
           <div class="compact-inline-row" style="margin-top:12px;">
             <label for="admin-remove-unneeded-dn-confirm">Type DELETE to confirm selected numbers:</label>
             <input id="admin-remove-unneeded-dn-confirm" autocomplete="off" style="max-width:180px;">
@@ -47154,17 +47159,24 @@ def menu_admin_page(request: Request):
             var reviewButton = document.getElementById("admin-remove-unneeded-dn-review");
             var deleteButton = document.getElementById("admin-remove-unneeded-dn-delete");
             var confirmation = document.getElementById("admin-remove-unneeded-dn-confirm");
+            var selectAll = document.getElementById("admin-remove-unneeded-dn-select-all");
+            var csvDownload = document.getElementById("admin-remove-unneeded-dn-csv");
             var status = document.getElementById("admin-remove-unneeded-dn-status");
             var results = document.getElementById("admin-remove-unneeded-dn-results");
             var currentRows = [];
             var busy = false;
-            if (!form || !input || !reviewButton || !deleteButton || !confirmation || !status || !results) return;
+            if (!form || !input || !reviewButton || !deleteButton || !confirmation || !selectAll || !csvDownload || !status || !results) return;
 
             function selectedNumbers() {
               return Array.from(results.querySelectorAll('input[data-unneeded-dn="1"]:checked')).map(function (box) { return box.value; });
             }
             function updateDeleteState() {
-              deleteButton.disabled = busy || confirmation.value !== "DELETE" || selectedNumbers().length === 0;
+              var eligibleBoxes = Array.from(results.querySelectorAll('input[data-unneeded-dn="1"]'));
+              var selectedCount = selectedNumbers().length;
+              selectAll.disabled = busy || eligibleBoxes.length === 0;
+              selectAll.checked = eligibleBoxes.length > 0 && selectedCount === eligibleBoxes.length;
+              selectAll.indeterminate = selectedCount > 0 && selectedCount < eligibleBoxes.length;
+              deleteButton.disabled = busy || confirmation.value !== "DELETE" || selectedCount === 0;
             }
             function renderRows(rows) {
               currentRows = Array.isArray(rows) ? rows : [];
@@ -47206,6 +47218,8 @@ def menu_admin_page(request: Request):
               busy = true;
               reviewButton.disabled = true;
               deleteButton.disabled = true;
+              csvDownload.style.display = "none";
+              csvDownload.removeAttribute("href");
               confirmation.value = "";
               results.replaceChildren();
               status.textContent = "Checking exact numbers against CUCM lines, partitions, and device assignments...";
@@ -47235,6 +47249,8 @@ def menu_admin_page(request: Request):
               busy = true;
               reviewButton.disabled = true;
               deleteButton.disabled = true;
+              csvDownload.style.display = "none";
+              csvDownload.removeAttribute("href");
               status.textContent = "Rechecking the selected numbers, then removing eligible lines from CUCM...";
               try {
                 var data = new FormData();
@@ -47243,6 +47259,10 @@ def menu_admin_page(request: Request):
                 var payload = await response.json();
                 if (!response.ok || !payload.ok) throw new Error(payload.error || ("HTTP " + response.status));
                 renderRows(payload.results || []);
+                if (payload.csv_download_url) {
+                  csvDownload.href = payload.csv_download_url;
+                  csvDownload.style.display = "inline";
+                }
                 confirmation.value = "";
                 status.textContent = "Delete finished: " + Number(payload.deleted_count || 0) + " deleted, " + Number(payload.blocked_count || 0) + " blocked, " + Number(payload.failed_count || 0) + " failed. Review each result.";
               } catch (error) {
@@ -47259,7 +47279,14 @@ def menu_admin_page(request: Request):
               currentRows = [];
               results.replaceChildren();
               confirmation.value = "";
+              csvDownload.style.display = "none";
+              csvDownload.removeAttribute("href");
               status.textContent = "Input changed. Check Numbers again before selecting anything to delete.";
+              updateDeleteState();
+            });
+            selectAll.addEventListener("change", function () {
+              var checked = selectAll.checked;
+              results.querySelectorAll('input[data-unneeded-dn="1"]').forEach(function (box) { box.checked = checked; });
               updateDeleteState();
             });
             confirmation.addEventListener("input", updateDeleteState);
@@ -62909,6 +62936,8 @@ def admin_unneeded_dn_delete_route(request: Request, numbers_json: str = Form(""
     output_filename="inline_json_ok",
     inline_mode=True,
   )
+  csv_filename = "unneeded_directory_number_results_" + _audit_now().strftime("%Y%m%d_%H%M%S") + ".csv"
+  csv_job = _prepare_job_output(unneeded_directory_numbers.results_csv(results), csv_filename)
   return JSONResponse({
     "ok": True,
     "cucm_host": cucm_host,
@@ -62917,6 +62946,7 @@ def admin_unneeded_dn_delete_route(request: Request, numbers_json: str = Form(""
     "blocked_count": blocked_count,
     "failed_count": failed_count,
     "results": results,
+    "csv_download_url": f"/download/job-output/{csv_job['job_id']}",
   }, headers={"Cache-Control": "no-store"})
 
 
