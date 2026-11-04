@@ -126,6 +126,11 @@ Priority keys:
 
 ## Conversation Notes
 
+### 2026-11-03 (Page 2 Jabber Rebuild and SMS-Only Builder)
+- The existing Page 2 `Build Jabber with Specific Extension` workflow already accepts email/extension pairs and provisions CSF + Unity voicemail; it remains unchanged.
+- Added Page 2 `Build SMS User Only - No Jabber`: last-name/optional first-name lookup, selection only when SMS pattern status is confirmed Not Found, and required Recruiter/Strike pool selection. The server checks the selected pool prefix and revalidates the DN as inactive and unassigned before deleting its line and creating the SMS translation pattern. It updates AD telephoneNumber/ipPhone and does not create Jabber, voicemail, or welcome email.
+- SMS allocator now treats only explicit inactive states as available. Local validation: 11 focused tests, all 328 repository tests, and all 30 staged Page 2 scripts parsed with both panel navigations and a mocked SMS build. Live LAB/CUCM mutation validation remains pending.
+
 ### 2026-11-03 (AMN AI Agent Sandbox Lookup Exclusion)
 - Excluded only Twilio `AMN AI Agent Sandbox` / `AMN Sandbox` from configured roots, live/cached discovery, direct number lookups, cached matches and Messaging Service lookups. Shared SMS cache scope changes force a fresh permitted-account extract; older queued sandbox reads stop without replacing the prior report. Other accounts, credentials, existing saved reviews/history and the paused separation batch remain unchanged.
 - Local validation: 9 exclusion regressions, all 34 SMS tests and all 324 repository tests pass; editor diagnostics are clear. No live Twilio requests or account changes performed. Historical saved sandbox warnings remain historical evidence, not new lookup attempts.
