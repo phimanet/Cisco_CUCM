@@ -46876,6 +46876,7 @@ def menu_admin_page(request: Request):
             <button type="button" class="portal-nav-btn" data-panel="add-user-hunt-list">Add User to Hunt List</button>
             <button type="button" class="portal-nav-btn" data-panel="jabbernotify">Send Jabber Number/Training Notification</button>
             <button type="button" class="portal-nav-btn" data-panel="jabber-specific-ext">Build Jabber with Specific Extension</button>
+            <button type="button" class="portal-nav-btn" data-panel="sms-only-admin">Build SMS User Only - No Jabber</button>
             <button type="button" class="portal-nav-btn" data-panel="ad-user-lookups">Active Directory Lookup</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkperson">Bulk Person Lookup (CSV)</button>
             <button type="button" class="portal-nav-btn" data-panel="bulkextension">Bulk Extension Lookup (CSV)</button>
@@ -47359,6 +47360,155 @@ def menu_admin_page(request: Request):
               statusEl.textContent = "Done: " + built + " built, " + failed + " failed.";
               return false;
             };
+          })();
+        </script>
+      </section>
+
+      <section class="panel tool-panel" data-panel="sms-only-admin">
+        <h3>Build SMS User Only - No Jabber</h3>
+        <p>Search by last name and optional first name, select a user and DN pool, then build an SMS translation pattern. This updates AD telephoneNumber/ipPhone, but does not create Jabber devices, Unity voicemail, or send a Jabber welcome email.</p>
+        <form id="admin-sms-only-form" action="javascript:void(0)" method="post" onsubmit="return false;">
+          <input type="hidden" name="cucm_host" value="__AUTH_CUCM_HOST__">
+          <input type="hidden" name="cucm_user" value="__AUTH_USER__">
+          <input type="hidden" name="cucm_pass" value="">
+          <div class="compact-inline-row">
+            <label for="admin-sms-only-last-name">Last Name:</label>
+            <input id="admin-sms-only-last-name" required placeholder="Smith">
+            <label for="admin-sms-only-first-name">First Name:</label>
+            <input id="admin-sms-only-first-name" placeholder="Jane">
+            <button type="button" id="admin-sms-only-search" onclick="if(window.searchAdminSmsUsers){return window.searchAdminSmsUsers(event);}document.getElementById('admin-sms-only-lookup-status').textContent='Search handler missing (JavaScript did not load).';return false;">Search User</button>
+          </div>
+          <p id="admin-sms-only-lookup-status" role="status" style="min-height:18px;color:#2c5c8a;">Search for the existing CUCM user first.</p>
+          <div id="admin-sms-only-results" style="overflow-x:auto;"></div>
+          <div class="compact-inline-row" style="margin-top:12px;">
+            <label for="admin-sms-only-target-user">Selected CUCM User ID:</label>
+            <input id="admin-sms-only-target-user" name="target_user" required readonly placeholder="Select a user from the results" style="max-width:320px;">
+            <label for="admin-sms-only-dn-type">DN Pool:</label>
+            <select id="admin-sms-only-dn-type" name="dn_type" required style="min-height:36px;padding:7px 10px;">
+              <option value="">Choose pool</option>
+              <option value="recruiter">Recruiter</option>
+              <option value="strike">Strike</option>
+            </select>
+            <button type="button" id="admin-sms-only-create" disabled onclick="if(window.createAdminSmsUser){return window.createAdminSmsUser(event);}document.getElementById('admin-sms-only-status').textContent='SMS build handler missing (JavaScript did not load).';return false;">Build SMS User Only - No Jabber</button>
+          </div>
+        </form>
+        <p id="admin-sms-only-status" role="status" style="min-height:18px;color:#2c5c8a;">No Jabber or voicemail resources will be created.</p>
+        <p><a id="admin-sms-only-download" href="#" style="display:none;">Download SMS Build CSV</a></p>
+        <textarea id="admin-sms-only-output" readonly aria-label="SMS-only build output" style="width:100%;min-height:150px;box-sizing:border-box;"></textarea>
+        <script>
+          (function () {
+            var form = document.getElementById("admin-sms-only-form");
+            var lastName = document.getElementById("admin-sms-only-last-name");
+            var firstName = document.getElementById("admin-sms-only-first-name");
+            var searchButton = document.getElementById("admin-sms-only-search");
+            var lookupStatus = document.getElementById("admin-sms-only-lookup-status");
+            var results = document.getElementById("admin-sms-only-results");
+            var targetUser = document.getElementById("admin-sms-only-target-user");
+            var dnType = document.getElementById("admin-sms-only-dn-type");
+            var createButton = document.getElementById("admin-sms-only-create");
+            var status = document.getElementById("admin-sms-only-status");
+            var output = document.getElementById("admin-sms-only-output");
+            var download = document.getElementById("admin-sms-only-download");
+            var busy = false;
+            if (!form || !lastName || !firstName || !searchButton || !lookupStatus || !results || !targetUser || !dnType || !createButton || !status || !output || !download) return;
+
+            function updateCreateState() { createButton.disabled = busy || !targetUser.value.trim() || !dnType.value; }
+            function addCell(row, value) { var cell = row.insertCell(); cell.textContent = String(value == null || value === "" ? "-" : value); return cell; }
+            function renderUsers(users) {
+              results.replaceChildren();
+              var table = document.createElement("table");
+              table.style.cssText = "width:100%;min-width:620px;border-collapse:collapse;font-size:13px;";
+              var head = table.createTHead().insertRow();
+              ["Name", "User ID", "Email", "Existing SMS Pattern", "Action"].forEach(function (label) { var cell = document.createElement("th"); cell.textContent = label; cell.style.cssText = "padding:7px 9px;text-align:left;background:#005eb8;color:#fff;"; head.appendChild(cell); });
+              var body = table.createTBody();
+              users.forEach(function (user) {
+                var row = body.insertRow();
+                var sms = user.sms_only_telephony || {};
+                addCell(row, user.display_name || ((user.first_name || "") + " " + (user.last_name || "")).trim());
+                addCell(row, user.userid);
+                addCell(row, user.email);
+                addCell(row, sms.status === "Yes" ? (sms.extensions || []).join(", ") : (sms.status || "Unknown"));
+                var action = row.insertCell();
+                var select = document.createElement("button");
+                select.type = "button";
+                select.textContent = sms.status === "Not Found" ? "Select User" : (sms.status === "Yes" ? "Already has SMS pattern" : "Lookup required");
+                select.disabled = sms.status !== "Not Found" || busy;
+                select.addEventListener("click", function () {
+                  targetUser.value = user.userid || "";
+                  lookupStatus.textContent = "Selected " + targetUser.value + ". The server will recheck SMS patterns before building.";
+                  updateCreateState();
+                });
+                action.appendChild(select);
+              });
+              results.appendChild(table);
+            }
+
+            window.searchAdminSmsUsers = async function (event) {
+              if (event) event.preventDefault();
+              if (!lastName.value.trim()) { lookupStatus.textContent = "Last Name is required."; lastName.focus(); return false; }
+              searchButton.disabled = true;
+              lookupStatus.textContent = "Searching CUCM and checking for existing SMS patterns...";
+              results.replaceChildren();
+              targetUser.value = "";
+              updateCreateState();
+              try {
+                var data = new FormData(form);
+                data.delete("target_user");
+                data.delete("dn_type");
+                data.append("last_name", lastName.value.trim());
+                data.append("first_name", firstName.value.trim());
+                data.append("include_sms_only_status", "1");
+                var response = await fetch("/lookup/person", {method:"POST",body:data,credentials:"same-origin",headers:{"Accept":"application/json"}});
+                var payload = await response.json();
+                if (!response.ok || !payload.ok) throw new Error((payload.error && payload.error.message) || payload.error || ("HTTP " + response.status));
+                var users = Array.isArray(payload.results) ? payload.results : [];
+                if (!users.length) { lookupStatus.textContent = "No users found."; return false; }
+                renderUsers(users);
+                lookupStatus.textContent = "Found " + users.length + " user(s). Only confirmed SMS Not Found results can be selected.";
+              } catch (error) { lookupStatus.textContent = "User lookup failed: " + ((error && error.message) || "Unknown error."); }
+              finally { searchButton.disabled = false; }
+              return false;
+            };
+
+            window.createAdminSmsUser = async function (event) {
+              if (event) event.preventDefault();
+              if (!targetUser.value.trim() || !dnType.value) { status.textContent = "Select a user and DN pool first."; return false; }
+              var pool = dnType.options[dnType.selectedIndex].text;
+              if (!window.confirm("Create an SMS-only translation pattern for " + targetUser.value + " using the " + pool + " pool? This deletes one confirmed inactive/unassigned DN and updates AD phone fields. It does not create Jabber or Unity resources.")) return false;
+              busy = true;
+              updateCreateState();
+              searchButton.disabled = true;
+              status.textContent = "Rechecking the user and selected DN pool, then creating the SMS-only pattern...";
+              status.style.color = "#2c5c8a";
+              output.value = "";
+              download.style.display = "none";
+              try {
+                var response = await fetch("/build/sms-only-user?inline=1", {method:"POST",body:new FormData(form),credentials:"same-origin",headers:{"Accept":"application/json"}});
+                var payload = await response.json().catch(function () { return {detail:"HTTP " + response.status}; });
+                if (!response.ok) throw new Error(payload.detail || ("HTTP " + response.status));
+                output.value = payload.output_text || "";
+                if (payload.download_url) { download.href = payload.download_url; download.style.display = "inline"; }
+                if (payload.built) {
+                  status.textContent = "SMS translation pattern created. Review the output for the AD phone-field result.";
+                  status.style.color = "#146c2e";
+                  targetUser.value = "";
+                } else {
+                  status.textContent = "Build incomplete. Review the output; no successful SMS pattern creation was confirmed.";
+                  status.style.color = "#b42318";
+                }
+              } catch (error) {
+                status.textContent = "SMS-only build failed: " + ((error && error.message) || "Unknown error.");
+                status.style.color = "#b42318";
+              } finally {
+                busy = false;
+                searchButton.disabled = false;
+                updateCreateState();
+              }
+              return false;
+            };
+            dnType.addEventListener("change", updateCreateState);
+            form.addEventListener("submit", function (event) { event.preventDefault(); window.createAdminSmsUser(event); });
+            updateCreateState();
           })();
         </script>
       </section>
@@ -61455,8 +61605,14 @@ async def build_sms_only_user(
   cucm_user: str = Form(""),
   cucm_pass: str = Form(""),
   target_user: str = Form(...),
+  dn_type: str = Form(""),
   inline: bool = Query(False),
 ):
+  clean_dn_type = (dn_type or "").strip().lower()
+  if clean_dn_type:
+    _require_admin_session(request)
+    if clean_dn_type not in {"recruiter", "strike"}:
+      return JSONResponse({"detail": "DN type must be Recruiter or Strike."}, status_code=400)
   cucm_host, cucm_user, cucm_pass = _resolve_cucm_credentials(request, cucm_host, cucm_user, cucm_pass)
   _update_cached_credentials(request, cucm_host=cucm_host, cucm_user=cucm_user)
   clean_target_user = (target_user or "").strip()
@@ -61472,6 +61628,7 @@ async def build_sms_only_user(
     target_user=clean_target_user,
     ad_username=cucm_user,
     ad_password=cucm_pass,
+    dn_type=clean_dn_type,
   )
   created_dn = ""
   pattern_created = False
@@ -61487,7 +61644,7 @@ async def build_sms_only_user(
     action="build_sms_only_user",
     cucm_host=cucm_host,
     operator=cucm_user,
-    target=f"account={clean_target_user};sms_pattern={created_dn if pattern_created else 'none'};pattern_created={str(pattern_created).lower()}",
+    target=f"account={clean_target_user};dn_type={clean_dn_type or 'automatic'};sms_pattern={created_dn if pattern_created else 'none'};pattern_created={str(pattern_created).lower()}",
     account=clean_target_user,
     extension_added=created_dn if pattern_created else "",
     extension_deleted="",
@@ -61501,6 +61658,7 @@ async def build_sms_only_user(
       "filename": job_output["filename"],
       "output_text": job_output["output_text"],
       "download_url": f"/download/job-output/{job_output['job_id']}",
+      "built": pattern_created,
     })
   return _render_job_result("Create SMS Only User", data, filename)
 

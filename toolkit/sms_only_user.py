@@ -11,8 +11,12 @@ try:
     from .create_teams_telephony_user import (
         DN_ROUTE_PARTITION,
         _add_translation_pattern,
+        _choose_available_dn,
         _choose_available_dn_auto,
         _get_user_details,
+        _is_dn_unassigned,
+        _list_available_dns,
+        _load_dn_prefixes,
         _remove_line,
     )
     from .remove_teams_telephony_user import (
@@ -25,8 +29,12 @@ except ImportError:
     from create_teams_telephony_user import (
         DN_ROUTE_PARTITION,
         _add_translation_pattern,
+        _choose_available_dn,
         _choose_available_dn_auto,
         _get_user_details,
+        _is_dn_unassigned,
+        _list_available_dns,
+        _load_dn_prefixes,
         _remove_line,
     )
     from remove_teams_telephony_user import (
@@ -40,6 +48,10 @@ SMS_CALLING_SEARCH_SPACE = "Route_Internal_CSS"
 SMS_CALLED_PARTY_TRANSFORM_MASK = "2481009"
 SMS_PATTERN_PAGE_SIZE = 1000
 SMS_PATTERN_MAX_PAGES = 100
+SMS_DN_POOLS = {
+    "recruiter": ("recruiter_prefix", "Recruiter"),
+    "strike": ("strike_prefix", "Strike"),
+}
 
 SMS_TEMPLATE_FIELDS = {
     "transPattern.blockEnable": "false",
@@ -165,6 +177,29 @@ def list_sms_only_patterns(cucm_host, cucm_user, cucm_pass, read_sql):
     raise RuntimeError(f"SMS translation-pattern inventory exceeded {SMS_PATTERN_MAX_PAGES} pages.")
 
 
+def _choose_sms_directory_number(session, cucm_host, dn_type):
+    clean_type = str(dn_type or "").strip().lower()
+    if not clean_type:
+        number, prefix = _choose_available_dn_auto(session, cucm_host)
+        return number, prefix, "Automatic"
+    if clean_type not in SMS_DN_POOLS:
+        raise RuntimeError("DN type must be Recruiter or Strike.")
+
+    prefix_key, label = SMS_DN_POOLS[clean_type]
+    prefix = str(_load_dn_prefixes().get(prefix_key, "") or "").strip()
+    if not re.fullmatch(r"\d{1,6}", prefix):
+        raise RuntimeError(f"Configured {label} DN prefix is invalid.")
+
+    number = str(_choose_available_dn(session, cucm_host, prefix) or "").strip()
+    if not re.fullmatch(r"\d{10}", number) or not number.startswith(prefix):
+        raise RuntimeError(f"Selected DN does not belong to the {label} pool.")
+
+    current_available = _list_available_dns(session, cucm_host, prefix)
+    if number not in current_available or not _is_dn_unassigned(session, cucm_host, number, DN_ROUTE_PARTITION):
+        raise RuntimeError("Selected DN is no longer inactive and unassigned; no changes were made.")
+    return number, prefix, label
+
+
 def lookup_sms_only_user(cucm_host, cucm_user, cucm_pass, target_user, read_sql):
     clean_target = str(target_user or "").strip()
     if not clean_target:
@@ -189,7 +224,7 @@ def lookup_sms_only_user(cucm_host, cucm_user, cucm_pass, target_user, read_sql)
     }
 
 
-def create_sms_only_user(cucm_host, cucm_user, cucm_pass, target_user, ad_username="", ad_password=""):
+def create_sms_only_user(cucm_host, cucm_user, cucm_pass, target_user, ad_username="", ad_password="", dn_type=""):
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     clean_target = str(target_user or "").strip()
     filename = f"create_sms_only_user_{clean_target or 'unknown'}_{timestamp}.csv"
@@ -212,11 +247,11 @@ def create_sms_only_user(cucm_host, cucm_user, cucm_pass, target_user, ad_userna
             raise RuntimeError("CUCM user must have both first and last name to build the SMS description.")
         writer.writerow(["Lookup User", "Success", f"Found {user.get('userid', clean_target)} ({first_name} {last_name})"])
 
-        new_dn, selected_prefix = _choose_available_dn_auto(session, cucm_host)
+        new_dn, selected_prefix, pool_label = _choose_sms_directory_number(session, cucm_host, dn_type)
         new_dn = str(new_dn or "").strip()
         if not re.fullmatch(r"\d{10}", new_dn):
             raise RuntimeError(f"Selected directory number must be exactly 10 digits; got '{new_dn}'.")
-        writer.writerow(["Select Available DN", "Success", f"Selected {new_dn}/{DN_ROUTE_PARTITION} using auto-prefix {selected_prefix}"])
+        writer.writerow(["Select Available DN", "Success", f"Selected {new_dn}/{DN_ROUTE_PARTITION} from {pool_label} pool using prefix {selected_prefix}"])
 
         _remove_line(session, cucm_host, new_dn, DN_ROUTE_PARTITION)
         writer.writerow(["Delete Inactive Line", "Success", f"Deleted {new_dn}/{DN_ROUTE_PARTITION} before translation-pattern creation"])

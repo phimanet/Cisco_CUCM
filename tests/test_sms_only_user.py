@@ -3,7 +3,23 @@ import io
 import unittest
 from unittest.mock import Mock, patch
 
-from toolkit import sms_only_user
+from toolkit import create_teams_telephony_user, sms_only_user
+
+
+class AvailableDirectoryNumberTests(unittest.TestCase):
+        def test_only_explicitly_inactive_lines_are_available(self):
+                response = Mock(status_code=200, text="""
+                <Envelope>
+                    <line><pattern>4690000001</pattern><routePartitionName>ENT_DEVICE_PT</routePartitionName><active>false</active></line>
+                    <line><pattern>4690000002</pattern><routePartitionName>ENT_DEVICE_PT</routePartitionName><active>unknown</active></line>
+                    <line><pattern>4690000003</pattern><routePartitionName>ENT_DEVICE_PT</routePartitionName></line>
+                    <line><pattern>4690000004</pattern><routePartitionName>ENT_DEVICE_PT</routePartitionName><active>true</active></line>
+                </Envelope>
+                """)
+                with patch.object(create_teams_telephony_user, "_axl_post", return_value=response):
+                        candidates = create_teams_telephony_user._list_available_dns(Mock(), "cucm", "469")
+
+                self.assertEqual(candidates, ["4690000001"])
 
 
 class SmsOnlyPatternMatchingTests(unittest.TestCase):
@@ -86,6 +102,52 @@ class SmsOnlyCreationTests(unittest.TestCase):
 
         self.assertFalse(any(row[0] == "Delete Inactive Line" for row in list(csv.reader(io.StringIO(data.decode("utf-8"))))))
         remove_line.assert_not_called()
+
+    def test_recruiter_type_uses_only_recruiter_pool_and_rechecks_dn(self):
+        with patch.object(sms_only_user, "_get_user_details", return_value={"userid": "alice.smith", "firstName": "Alice", "lastName": "Smith"}), \
+             patch.object(sms_only_user, "_load_dn_prefixes", return_value={"recruiter_prefix": "469", "strike_prefix": "817"}), \
+             patch.object(sms_only_user, "_choose_available_dn", return_value="4691234567") as choose_dn, \
+             patch.object(sms_only_user, "_list_available_dns", return_value=["4691234567"]) as list_dns, \
+             patch.object(sms_only_user, "_is_dn_unassigned", return_value=True) as is_unassigned, \
+             patch.object(sms_only_user, "_remove_line") as remove_line, \
+             patch.object(sms_only_user, "_add_translation_pattern"), \
+             patch.object(sms_only_user, "update_ad_phone_fields", return_value=(True, "Updated")):
+            data, _filename = sms_only_user.create_sms_only_user("cucm", "operator", "secret", "alice.smith", dn_type="recruiter")
+
+        choose_dn.assert_called_once_with(unittest.mock.ANY, "cucm", "469")
+        list_dns.assert_called_once_with(unittest.mock.ANY, "cucm", "469")
+        is_unassigned.assert_called_once_with(unittest.mock.ANY, "cucm", "4691234567", "ENT_DEVICE_PT")
+        remove_line.assert_called_once_with(unittest.mock.ANY, "cucm", "4691234567", "ENT_DEVICE_PT")
+        rows = list(csv.reader(io.StringIO(data.decode("utf-8"))))
+        self.assertTrue(any(row[0] == "Select Available DN" and "Recruiter pool" in row[2] for row in rows))
+
+    def test_recruiter_dn_no_longer_available_is_not_deleted(self):
+        with patch.object(sms_only_user, "_get_user_details", return_value={"userid": "alice.smith", "firstName": "Alice", "lastName": "Smith"}), \
+             patch.object(sms_only_user, "_load_dn_prefixes", return_value={"recruiter_prefix": "469"}), \
+             patch.object(sms_only_user, "_choose_available_dn", return_value="4691234567"), \
+             patch.object(sms_only_user, "_list_available_dns", return_value=[]), \
+             patch.object(sms_only_user, "_is_dn_unassigned", return_value=True), \
+             patch.object(sms_only_user, "_remove_line") as remove_line:
+            data, _filename = sms_only_user.create_sms_only_user("cucm", "operator", "secret", "alice.smith", dn_type="recruiter")
+
+        remove_line.assert_not_called()
+        rows = list(csv.reader(io.StringIO(data.decode("utf-8"))))
+        self.assertTrue(any(row[0] == "Script" and "no longer inactive and unassigned" in row[2] for row in rows))
+
+    def test_strike_type_uses_only_strike_pool(self):
+        with patch.object(sms_only_user, "_get_user_details", return_value={"userid": "alice.smith", "firstName": "Alice", "lastName": "Smith"}), \
+             patch.object(sms_only_user, "_load_dn_prefixes", return_value={"strike_prefix": "817"}), \
+             patch.object(sms_only_user, "_choose_available_dn", return_value="8171234567") as choose_dn, \
+             patch.object(sms_only_user, "_list_available_dns", return_value=["8171234567"]), \
+             patch.object(sms_only_user, "_is_dn_unassigned", return_value=True), \
+             patch.object(sms_only_user, "_remove_line"), \
+             patch.object(sms_only_user, "_add_translation_pattern"), \
+             patch.object(sms_only_user, "update_ad_phone_fields", return_value=(True, "Updated")):
+            data, _filename = sms_only_user.create_sms_only_user("cucm", "operator", "secret", "alice.smith", dn_type="strike")
+
+        choose_dn.assert_called_once_with(unittest.mock.ANY, "cucm", "817")
+        rows = list(csv.reader(io.StringIO(data.decode("utf-8"))))
+        self.assertTrue(any(row[0] == "Select Available DN" and "Strike pool" in row[2] for row in rows))
 
 
 class SmsOnlySeparationTests(unittest.TestCase):

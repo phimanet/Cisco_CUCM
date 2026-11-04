@@ -187,7 +187,7 @@ def _list_available_dns(session, cucm_host, prefix):
         partition = _find_first_text(elem, [["routePartitionName"]])
         active = _find_first_text(elem, [["active"]]).strip().lower()
 
-        is_inactive = active not in {"true", "t", "1", "yes"}
+        is_inactive = active in {"false", "f", "0", "no"}
         if pattern and partition == DN_ROUTE_PARTITION and is_inactive:
             candidates.append(pattern)
 
