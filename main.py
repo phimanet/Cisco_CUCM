@@ -90,6 +90,7 @@ from toolkit import voicemail_box_cleanup
 from toolkit import ms_graph_calling
 from toolkit import twilio_recent_logs
 from toolkit import twilio_all_recent_logs
+from toolkit import twilio_usage
 from toolkit import sms_inventory
 from toolkit import bulk_separation
 from toolkit import webex_admin
@@ -53412,6 +53413,8 @@ def page3_twilio_items(request: Request):
           <button type="button" class="portal-nav-btn" data-panel="twilio-all-account-inventory">Twilio All Accounts Number Inventory</button>
           <button type="button" class="portal-nav-btn" data-panel="sms-all-numbers" onclick="document.querySelectorAll('.tool-panel').forEach(function(p){p.classList.toggle('active',p.getAttribute('data-panel')==='sms-all-numbers');});document.querySelectorAll('.portal-nav-btn[data-panel]').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-panel')==='sms-all-numbers');});">Extract All SMS numbers</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-all-account-recent-logs">Twilio All Acount Recent Logs</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-outbound-usage">Twilio Outbound SMS Usage</button>
+          <button type="button" class="portal-nav-btn" data-panel="twilio-error-report">SMS Error Report</button>
           <button type="button" class="portal-nav-btn" data-panel="twilio-lookup-sfdc">SalesForce-Twilio Number Lookup</button>
           <a class="portal-nav-btn" href="/twilio/salesforce/active-numbers-page" style="display:block; box-sizing:border-box; text-decoration:none;">SalesForce-Twilio Number Lookup</a>
           <a class="portal-nav-btn" href="/twilio/salesforce/configuration-page" style="display:block; box-sizing:border-box; text-decoration:none;">SalesForce-Twilio Configuration Lookup</a>
@@ -53428,6 +53431,220 @@ def page3_twilio_items(request: Request):
         __SMS_LOOK_PANEL__
         __SMS_EXPERIMENTAL_PANEL__
         __AERIALINK_LOA_PANEL__
+        <section class="tool-panel" data-panel="twilio-outbound-usage">
+          <div class="panel">
+            <h3>Twilio Outbound SMS Usage</h3>
+            <div class="search-filter-row" style="flex-wrap:wrap;align-items:end;">
+              <label for="twilio-usage-start">Start date<br><input id="twilio-usage-start" type="date"></label>
+              <label for="twilio-usage-end">End date<br><input id="twilio-usage-end" type="date"></label>
+              <button type="button" id="twilio-usage-load" onclick="if(window.loadTwilioOutboundUsage){return window.loadTwilioOutboundUsage(event);} document.getElementById('twilio-usage-status').textContent='Usage handler missing (JavaScript did not load).'; return false;">Load Usage</button>
+              <button type="button" id="twilio-usage-download" disabled>Download CSV</button>
+              <input id="twilio-usage-filter" type="search" aria-label="Filter Twilio accounts" placeholder="Filter account" style="min-width:160px;max-width:100%;">
+            </div>
+            <p id="twilio-usage-status" role="status" aria-live="polite" style="color:#2c5c8a;min-height:18px;"></p>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr));gap:10px;margin:12px 0;">
+              <div style="border:1px solid #c8dbee;border-left:4px solid #005eb8;border-radius:4px;padding:12px;background:#fff;">
+                <strong>Outbound SMS total</strong>
+                <div id="twilio-usage-total" style="font-size:24px;font-weight:700;margin-top:6px;">Not loaded</div>
+                <div id="twilio-usage-period" style="color:#4e6a84;font-size:12px;margin-top:4px;"></div>
+              </div>
+              <div style="border:1px solid #c8dbee;border-left:4px solid #c68a12;border-radius:4px;padding:12px;background:#fff;">
+                <strong>Twilio Messaging Health Score</strong>
+                <div style="margin-top:8px;"><a href="https://1console.twilio.com/us1/develop/messaging/messaging-insights/overview" target="_blank" rel="noopener noreferrer">Open Twilio Insights</a></div>
+                <div style="color:#4e6a84;font-size:12px;margin-top:6px;">Twilio exposes this score in Console, not through a documented REST API. Select the parent or one subaccount in Insights. The score refreshes daily and summarizes the prior seven days.</div>
+              </div>
+            </div>
+            <p style="color:#4e6a84;font-size:12px;">Dates are interpreted as GMT by Twilio. Counts are outbound SMS messages (not SMS segments); MMS is excluded. The total sums distinct account rows. Any discovery or account lookup failure makes the result partial.</p>
+            <div id="twilio-usage-table" style="overflow-x:auto;"></div>
+            <details style="margin-top:10px;"><summary>Account / Lookup Errors</summary><pre id="twilio-usage-errors" style="white-space:pre-wrap;overflow-wrap:anywhere;"></pre></details>
+          </div>
+          <script>
+            (function () {
+              var startEl = document.getElementById("twilio-usage-start");
+              var endEl = document.getElementById("twilio-usage-end");
+              var loadBtn = document.getElementById("twilio-usage-load");
+              var downloadBtn = document.getElementById("twilio-usage-download");
+              var filterEl = document.getElementById("twilio-usage-filter");
+              var statusEl = document.getElementById("twilio-usage-status");
+              var totalEl = document.getElementById("twilio-usage-total");
+              var periodEl = document.getElementById("twilio-usage-period");
+              var tableEl = document.getElementById("twilio-usage-table");
+              var report = null;
+              var busy = false;
+              function localDate(value) {
+                return value.getUTCFullYear() + "-" + String(value.getUTCMonth() + 1).padStart(2, "0") + "-" + String(value.getUTCDate()).padStart(2, "0");
+              }
+              var today = new Date();
+              startEl.value = localDate(new Date(today.getFullYear(), today.getMonth(), 1));
+              endEl.value = localDate(today);
+              function controls() { loadBtn.disabled = busy; downloadBtn.disabled = busy || !report || !report.rows.length; }
+              function render() {
+                if (!report) return;
+                var term = filterEl.value.trim().toLowerCase();
+                var rows = report.rows.filter(function (row) { return !term || [row.account_name, row.account_type, row.root_account_name].some(function (value) { return String(value || "").toLowerCase().indexOf(term) >= 0; }); });
+                var succeeded = report.rows.filter(function (row) { return row.count !== null; }).length;
+                totalEl.textContent = report.coverage_complete ? report.total_count.toLocaleString() : report.total_count.toLocaleString() + " (partial)";
+                periodEl.textContent = report.start_date + " through " + report.end_date + " | " + succeeded + "/" + report.rows.length + " accounts returned usage";
+                document.getElementById("twilio-usage-errors").textContent = report.errors.map(function (item) { return item.account_name + (item.account_sid ? " (" + item.account_sid + ")" : "") + ": " + item.error; }).join(String.fromCharCode(10));
+                tableEl.replaceChildren();
+                if (!rows.length) { tableEl.textContent = "No accounts match this filter."; controls(); return; }
+                var table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:13px;";
+                var head = table.createTHead().insertRow(); head.style.cssText = "background:#005eb8;color:#fff;";
+                ["Account", "Type", "Outbound SMS", "Parent / Root", "Twilio Health Score"].forEach(function (label) { var cell = document.createElement("th"); cell.scope = "col"; cell.textContent = label; cell.style.cssText = "padding:8px;text-align:left;"; head.appendChild(cell); });
+                var body = table.createTBody();
+                rows.forEach(function (row, index) {
+                  var tr = body.insertRow(); tr.style.background = index % 2 ? "#ffffff" : "#f7fbff";
+                  [row.account_name, row.account_type, row.count === null ? row.status : row.count.toLocaleString(), row.root_account_name || "-"].forEach(function (value) { var cell = tr.insertCell(); cell.textContent = value; cell.style.cssText = "padding:8px;border-bottom:1px solid #c8dbee;overflow-wrap:anywhere;"; });
+                  var healthCell = tr.insertCell(); healthCell.style.cssText = "padding:8px;border-bottom:1px solid #c8dbee;white-space:nowrap;";
+                  var link = document.createElement("a"); link.href = "https://1console.twilio.com/us1/develop/messaging/messaging-insights/overview"; link.target = "_blank"; link.rel = "noopener noreferrer"; link.textContent = "Open Insights"; link.title = "In Twilio Console, select " + row.account_name + " in the parent/subaccount filter."; healthCell.appendChild(link);
+                });
+                tableEl.appendChild(table);
+                controls();
+              }
+              window.loadTwilioOutboundUsage = function (event) {
+                if (event) event.preventDefault();
+                if (busy) return false;
+                if (!startEl.value || !endEl.value || startEl.value > endEl.value) { statusEl.style.color = "#b42318"; statusEl.textContent = "Enter a valid date range with the start on or before the end."; return false; }
+                busy = true; report = null; controls(); totalEl.textContent = "Loading..."; periodEl.textContent = ""; tableEl.replaceChildren(); document.getElementById("twilio-usage-errors").textContent = ""; statusEl.style.color = "#2c5c8a"; statusEl.textContent = "Reading outbound SMS usage for configured Twilio accounts...";
+                (async function () {
+                  try {
+                    var form = new FormData(); form.set("start_date", startEl.value); form.set("end_date", endEl.value);
+                    var response = await fetch("/twilio/usage/outbound-sms", {method:"POST",body:form,credentials:"same-origin",cache:"no-store"});
+                    var payload = await response.json(); if (!response.ok || !payload.ok) throw new Error(payload.error || "Twilio usage lookup failed.");
+                    report = payload; render(); statusEl.style.color = payload.coverage_complete ? "#2c5c8a" : "#9a4b00"; statusEl.textContent = payload.coverage_complete ? "Usage loaded for all discovered accounts." : "Partial coverage: some accounts could not be discovered or queried; see Account / Lookup Errors.";
+                  } catch (error) { report = null; totalEl.textContent = "Unavailable"; statusEl.style.color = "#b42318"; statusEl.textContent = "Usage lookup failed: " + error.message; }
+                  finally { busy = false; controls(); }
+                })();
+                return false;
+              };
+              filterEl.addEventListener("input", render);
+              downloadBtn.addEventListener("click", function () {
+                if (!report || busy) return;
+                function cell(value) { var text = String(value == null ? "" : value); if (/^[=+@-]/.test(text.trimStart())) text = "'" + text; var quote = String.fromCharCode(34); return quote + text.replace(/"/g, '""') + quote; }
+                var lines = [["Account", "Type", "Outbound SMS", "Parent / Root", "Status", "Health Score"].map(cell).join(",")];
+                report.rows.forEach(function (row) { lines.push([row.account_name,row.account_type,row.count === null ? "" : row.count,row.root_account_name,row.status,"View in Twilio Console"].map(cell).join(",")); });
+                report.errors.filter(function (error) { return !report.rows.some(function (row) { return row.account_sid && row.account_sid === error.account_sid; }); }).forEach(function (error) { lines.push([error.account_name,"Account discovery","", "",error.error,"View in Twilio Console"].map(cell).join(",")); });
+                var url = URL.createObjectURL(new Blob([lines.join(String.fromCharCode(13,10))], {type:"text/csv;charset=utf-8"}));
+                var link = document.createElement("a"); link.href = url; link.download = "twilio_outbound_sms_usage_" + report.start_date + "_" + report.end_date + ".csv"; document.body.appendChild(link); link.click(); link.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+              });
+              controls();
+            })();
+          </script>
+        </section>
+        <section class="tool-panel" data-panel="twilio-error-report">
+          <div class="panel">
+            <h3>SMS Error Report</h3>
+            <div class="search-filter-row" style="flex-wrap:wrap;align-items:end;">
+              <label for="twilio-error-account">Twilio account / subaccount<br><select id="twilio-error-account" style="min-width:220px;max-width:100%;"><option value="">Load accounts first</option></select></label>
+              <button type="button" id="twilio-error-accounts" onclick="if(window.loadTwilioErrorAccounts){return window.loadTwilioErrorAccounts(event);} document.getElementById('twilio-error-status').textContent='Account handler missing (JavaScript did not load).'; return false;">Load Accounts</button>
+            </div>
+            <div class="search-filter-row" style="flex-wrap:wrap;align-items:end;margin-top:8px;">
+              <label for="twilio-error-start">Start date/time (local)<br><input id="twilio-error-start" type="datetime-local"></label>
+              <label for="twilio-error-end">End date/time (local)<br><input id="twilio-error-end" type="datetime-local"></label>
+              <button type="button" data-hours="4">Last 4 hours</button>
+              <button type="button" data-hours="12">Last 12 hours</button>
+              <button type="button" data-hours="48">Last 48 hours</button>
+              <button type="button" id="twilio-error-search" onclick="if(window.runTwilioErrorReport){return window.runTwilioErrorReport(event);} document.getElementById('twilio-error-status').textContent='Search handler missing (JavaScript did not load).'; return false;">Search Errors</button>
+              <button type="button" id="twilio-error-download" disabled>Download CSV</button>
+            </div>
+            <p id="twilio-error-status" role="status" aria-live="polite" style="color:#2c5c8a;min-height:18px;"></p>
+            <p style="color:#4e6a84;font-size:12px;">Outbound messages only. Matching codes: 30003, 30004, 30005, 30006, 30008, 60005, 63036, 21610. Date/time inputs use your browser's local time; results are shown in UTC. Message bodies are not requested or displayed.</p>
+            <div id="twilio-error-results" style="overflow-x:auto;"></div>
+            <details style="margin-top:10px;"><summary>Coverage / Account Errors</summary><pre id="twilio-error-errors" style="white-space:pre-wrap;overflow-wrap:anywhere;"></pre></details>
+          </div>
+          <script>
+            (function () {
+              var accountEl = document.getElementById("twilio-error-account");
+              var startEl = document.getElementById("twilio-error-start");
+              var endEl = document.getElementById("twilio-error-end");
+              var accountsBtn = document.getElementById("twilio-error-accounts");
+              var searchBtn = document.getElementById("twilio-error-search");
+              var downloadBtn = document.getElementById("twilio-error-download");
+              var statusEl = document.getElementById("twilio-error-status");
+              var resultsEl = document.getElementById("twilio-error-results");
+              var errorsEl = document.getElementById("twilio-error-errors");
+              var report = null;
+              var accounts = [];
+              var busy = false;
+              function localDateTime(value) {
+                var local = new Date(value.getTime() - value.getTimezoneOffset() * 60000);
+                return local.toISOString().slice(0, 16);
+              }
+              function setHours(hours) {
+                var end = new Date();
+                startEl.value = localDateTime(new Date(end.getTime() - hours * 3600000));
+                endEl.value = localDateTime(end);
+              }
+              setHours(4);
+              function controls() { accountsBtn.disabled = busy; searchBtn.disabled = busy; downloadBtn.disabled = busy || !report || !report.rows.length; }
+              function render() {
+                if (!report) return;
+                resultsEl.replaceChildren();
+                if (!report.rows.length) { resultsEl.textContent = report.complete ? "No matching outbound errors found in this time range." : "No matching rows returned; coverage is incomplete, so this is not a no-error result."; controls(); return; }
+                var table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:13px;";
+                var head = table.createTHead().insertRow(); head.style.cssText = "background:#005eb8;color:#fff;";
+                ["Sent (UTC)", "Destination", "Error Code", "Status", "From", "Message SID"].forEach(function (label) { var cell = document.createElement("th"); cell.scope = "col"; cell.textContent = label; cell.style.cssText = "padding:8px;text-align:left;"; head.appendChild(cell); });
+                var body = table.createTBody();
+                report.rows.forEach(function (row, index) {
+                  var tr = body.insertRow(); tr.style.background = index % 2 ? "#ffffff" : "#f7fbff";
+                  [row.date_sent.replace("T", " ").replace("+00:00", ""), row.to, row.error_code, row.status, row.from, row.message_sid].forEach(function (value) { var cell = tr.insertCell(); cell.textContent = value; cell.style.cssText = "padding:8px;border-bottom:1px solid #c8dbee;overflow-wrap:anywhere;"; });
+                });
+                resultsEl.appendChild(table);
+                controls();
+              }
+              window.loadTwilioErrorAccounts = function (event) {
+                if (event) event.preventDefault();
+                if (busy) return false;
+                busy = true; report = null; controls(); statusEl.textContent = "Loading configured Twilio accounts..."; resultsEl.replaceChildren(); errorsEl.textContent = "";
+                (async function () {
+                  try {
+                    var response = await fetch("/twilio/error-report/accounts", {credentials:"same-origin",cache:"no-store"});
+                    var payload = await response.json(); if (!response.ok || !payload.ok) throw new Error(payload.error || "Account lookup failed.");
+                    accounts = payload.accounts || []; accountEl.replaceChildren();
+                    accounts.forEach(function (account) { var option = document.createElement("option"); option.value = account.sid; option.textContent = account.account_name + " (" + account.account_type + ")"; accountEl.appendChild(option); });
+                    if (!accounts.length) { var empty = document.createElement("option"); empty.value = ""; empty.textContent = "No accessible accounts"; accountEl.appendChild(empty); }
+                    errorsEl.textContent = (payload.errors || []).map(function (item) { return item.account_name + ": " + item.error; }).join(String.fromCharCode(10));
+                    statusEl.style.color = payload.coverage_complete ? "#2c5c8a" : "#9a4b00";
+                    statusEl.textContent = accounts.length + " account(s) available." + (payload.coverage_complete ? "" : " Some accounts could not be discovered; see Coverage / Account Errors.");
+                  } catch (error) { statusEl.style.color = "#b42318"; statusEl.textContent = "Account lookup failed: " + error.message; }
+                  finally { busy = false; controls(); }
+                })();
+                return false;
+              };
+              window.runTwilioErrorReport = function (event) {
+                if (event) event.preventDefault();
+                if (busy) return false;
+                if (!accountEl.value) { statusEl.textContent = "Load and select a Twilio account or subaccount first."; return false; }
+                if (!startEl.value || !endEl.value) { statusEl.textContent = "Enter both date/time values."; return false; }
+                var start = new Date(startEl.value), end = new Date(endEl.value);
+                if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start > end) { statusEl.textContent = "Enter a valid range with the start on or before the end."; return false; }
+                busy = true; report = null; controls(); resultsEl.replaceChildren(); errorsEl.textContent = ""; statusEl.style.color = "#2c5c8a"; statusEl.textContent = "Searching the selected account...";
+                (async function () {
+                  try {
+                    var form = new FormData(); form.set("account_sid", accountEl.value); form.set("start_time", start.toISOString()); form.set("end_time", end.toISOString());
+                    var response = await fetch("/twilio/error-report", {method:"POST",body:form,credentials:"same-origin",cache:"no-store"});
+                    var payload = await response.json(); if (!response.ok || !payload.ok) throw new Error(payload.error || "Error search failed.");
+                    report = payload; render(); errorsEl.textContent = (payload.errors || []).map(function (item) { return item.account_name + ": " + item.error; }).join(String.fromCharCode(10));
+                    statusEl.style.color = payload.complete ? "#2c5c8a" : "#9a4b00";
+                    statusEl.textContent = payload.rows.length + " matching message(s) in " + payload.pages_read + " page(s). " + (payload.complete ? "Search complete." : "Partial results: " + payload.error);
+                  } catch (error) { report = null; statusEl.style.color = "#b42318"; statusEl.textContent = "Error search failed: " + error.message; }
+                  finally { busy = false; controls(); }
+                })();
+                return false;
+              };
+              document.querySelectorAll('[data-panel="twilio-error-report"] [data-hours]').forEach(function (button) { button.addEventListener("click", function () { setHours(Number(button.getAttribute("data-hours"))); }); });
+              downloadBtn.addEventListener("click", function () {
+                if (!report || busy) return;
+                function cell(value) { var text = String(value == null ? "" : value); if (/^[=+@-]/.test(text.trimStart())) text = "'" + text; var quote = String.fromCharCode(34); return quote + text.replace(/"/g, '""') + quote; }
+                var lines = [["Account", "Sent (UTC)", "Destination", "Error Code", "Status", "From", "Message SID", "Search Complete", "Pages Read", "Coverage Warning"].map(cell).join(",")];
+                report.rows.forEach(function (row) { lines.push([report.account_name,row.date_sent,row.to,row.error_code,row.status,row.from,row.message_sid,report.complete,report.pages_read,report.error].map(cell).join(",")); });
+                var url = URL.createObjectURL(new Blob([lines.join(String.fromCharCode(13,10))], {type:"text/csv;charset=utf-8"}));
+                var link = document.createElement("a"); link.href = url; link.download = "twilio_sms_error_report_" + report.account_sid + ".csv"; document.body.appendChild(link); link.click(); link.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+              });
+              controls();
+            })();
+          </script>
+        </section>
         <section class="tool-panel" data-panel="twilio-amieweb-recent-logs">
           <div class="panel">
             <h3>AMIE-Web-Twilio-Recents Logs</h3>
@@ -66294,6 +66511,93 @@ def _twilio_csv_download_html(rows: list[dict], columns: list[tuple[str, str]], 
     'style="display:inline-block;padding:8px 12px;background:#0f5db8;color:#fff;border-radius:6px;text-decoration:none;font-weight:700;">'
     'Download CSV</a></p>'
   )
+
+
+@app.post("/twilio/usage/outbound-sms")
+def twilio_outbound_sms_usage_route(
+  request: Request,
+  start_date: str = Form(...),
+  end_date: str = Form(...),
+):
+  operator = str((_get_auth_session(request) or {}).get("username", "") or "").strip()
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+
+  try:
+    start_date, end_date = twilio_usage.validate_date_range(start_date, end_date)
+    roots, root_errors = _twilio_inventory_configured_roots()
+    report = twilio_usage.build_outbound_sms_usage_report(
+      roots, root_errors, _list_twilio_accounts, start_date, end_date,
+    )
+    _append_audit_event(
+      action="twilio_outbound_sms_usage_lookup", cucm_host="", operator=operator,
+      target=f"start={start_date};end={end_date};accounts={report['account_count']};partial={not report['coverage_complete']}",
+      output_filename="", inline_mode=True,
+    )
+    return JSONResponse({"ok": True, **report}, headers={"Cache-Control": "no-store"})
+  except twilio_usage.TwilioUsageError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+  except Exception:
+    logger.exception("Twilio outbound SMS usage lookup failed")
+    return JSONResponse({"ok": False, "error": "Twilio outbound SMS usage lookup could not complete."}, status_code=502)
+
+
+@app.get("/twilio/error-report/accounts")
+def twilio_error_report_accounts_route(request: Request):
+  operator = str((_get_auth_session(request) or {}).get("username", "") or "").strip()
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  try:
+    roots, root_errors = _twilio_inventory_configured_roots()
+    if not roots and not root_errors:
+      raise twilio_usage.TwilioUsageError("No Twilio account credentials are configured.")
+    accounts, errors = twilio_usage.discover_twilio_accounts(roots, root_errors, _list_twilio_accounts)
+    public_accounts = [{key: account[key] for key in (
+      "sid", "account_name", "account_type", "root_account_sid", "root_account_name",
+    )} for account in accounts]
+    return JSONResponse({
+      "ok": True,
+      "accounts": public_accounts,
+      "errors": errors,
+      "coverage_complete": not errors,
+    }, headers={"Cache-Control": "no-store"})
+  except twilio_usage.TwilioUsageError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+  except Exception:
+    logger.exception("Twilio error-report account discovery failed")
+    return JSONResponse({"ok": False, "error": "Twilio account discovery could not complete."}, status_code=502)
+
+
+@app.post("/twilio/error-report")
+def twilio_error_report_route(
+  request: Request,
+  account_sid: str = Form(...),
+  start_time: str = Form(...),
+  end_time: str = Form(...),
+):
+  operator = str((_get_auth_session(request) or {}).get("username", "") or "").strip()
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  try:
+    start_time, end_time = twilio_usage.validate_datetime_range(start_time, end_time)
+    roots, root_errors = _twilio_inventory_configured_roots()
+    accounts, _discovery_errors = twilio_usage.discover_twilio_accounts(roots, root_errors, _list_twilio_accounts)
+    account = next((item for item in accounts if item["sid"] == account_sid), None)
+    if not account:
+      raise twilio_usage.TwilioUsageError("Selected Twilio account is not configured or accessible.")
+    report = twilio_usage.search_outbound_message_errors(account, start_time, end_time)
+    report["errors"] = [{"account_name": account["account_name"], "account_sid": account_sid, "error": report["error"]}] if report["error"] else []
+    _append_audit_event(
+      action="twilio_sms_error_report", cucm_host="", operator=operator,
+      target=f"account={account_sid};start={start_time};end={end_time};rows={len(report['rows'])};pages={report['pages_read']};complete={report['complete']}",
+      output_filename="", inline_mode=True,
+    )
+    return JSONResponse({"ok": True, **report}, headers={"Cache-Control": "no-store"})
+  except twilio_usage.TwilioUsageError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+  except Exception:
+    logger.exception("Twilio SMS error report failed")
+    return JSONResponse({"ok": False, "error": "Twilio SMS error search could not complete."}, status_code=502)
 
 
 def _twilio_all_recent_logs_cycle() -> None:

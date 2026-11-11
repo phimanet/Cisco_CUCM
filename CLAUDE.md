@@ -126,6 +126,11 @@ Priority keys:
 
 ## Conversation Notes
 
+### 2026-11-11 (Twilio Outbound Usage and SMS Error Report)
+- Added read-only `Twilio Outbound SMS Usage` dashboard with per-root/per-subaccount `sms-outbound` counts, combined totals, GMT date filters, partial-coverage warnings and CSV. Twilio Messaging Health Score links to Console because no documented REST API exposes the score; it is refreshed daily over a seven-day view.
+- Added SMS-page menu option `SMS Error Report`: select one configured account/subaccount, search custom local date/time or last 4/12/48 hours, and show outbound messages with codes 30003, 30004, 30005, 30006, 30008, 60005, 63036 or 21610. Results include destination/source, UTC sent time, status and Message SID; message bodies are not requested or saved. Pagination is bounded at 100 pages and incomplete searches are labeled.
+- Local validation: 10 focused `unittest` cases, Python compilation/editor diagnostics, full SMS-page script parsing, mocked account/search interaction and 390px mobile layout passed. FastAPI is unavailable in the local environment, and no live Twilio API or LAB account validation was performed.
+
 ### 2026-11-03 (Page 2 Jabber Rebuild and SMS-Only Builder)
 - The existing Page 2 `Build Jabber with Specific Extension` workflow already accepts email/extension pairs and provisions CSF + Unity voicemail; it remains unchanged.
 - Added Page 2 `Build SMS User Only - No Jabber`: last-name/optional first-name lookup, selection only when SMS pattern status is confirmed Not Found, and required Recruiter/Strike pool selection. The server checks the selected pool prefix and revalidates the DN as inactive and unassigned before deleting its line and creating the SMS translation pattern. It updates AD telephoneNumber/ipPhone and does not create Jabber, voicemail, or welcome email.
