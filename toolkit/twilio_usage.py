@@ -129,7 +129,7 @@ def _message_page_url(account_sid, next_uri=""):
     return url
 
 
-def search_outbound_message_errors(account, start_time, end_time):
+def search_outbound_message_errors(account, start_time, end_time, next_uri="", pages_read=0, page_limit=None):
     start_iso, end_iso = validate_datetime_range(start_time, end_time)
     account_sid = str(account.get("sid", "") or "").strip()
     auth_sid = str(account.get("auth_sid", "") or "").strip()
@@ -139,16 +139,28 @@ def search_outbound_message_errors(account, start_time, end_time):
 
     start = _validated_datetime(start_iso, "Start time")
     end = _validated_datetime(end_iso, "End time")
-    next_uri = ""
-    pages_read = 0
+    try:
+        pages_read = int(pages_read)
+    except (TypeError, ValueError) as exc:
+        raise TwilioUsageError("Message search cursor is invalid.") from exc
+    if pages_read < 0 or pages_read > MESSAGE_ERROR_MAX_PAGES:
+        raise TwilioUsageError("Message search cursor is invalid.")
+    if not isinstance(next_uri, str):
+        raise TwilioUsageError("Message search cursor is invalid.")
+    if page_limit is not None and (not isinstance(page_limit, int) or page_limit < 1):
+        raise TwilioUsageError("Message search page limit is invalid.")
+    next_uri = next_uri.strip()
     seen_urls = set()
     seen_message_sids = set()
     rows = []
     error = ""
+    request_pages = 0
 
     while True:
         if pages_read >= MESSAGE_ERROR_MAX_PAGES:
             error = f"Page limit reached after {pages_read} pages; results may be incomplete."
+            break
+        if page_limit is not None and request_pages >= page_limit:
             break
         try:
             url = _message_page_url(account_sid, next_uri)
@@ -173,6 +185,7 @@ def search_outbound_message_errors(account, start_time, end_time):
             if not isinstance(messages, list) or "next_page_uri" not in payload:
                 raise TwilioUsageError("Twilio returned an invalid message-page response.")
             pages_read += 1
+            request_pages += 1
             for message in messages:
                 if not isinstance(message, dict) or message.get("account_sid") != account_sid:
                     raise TwilioUsageError("Twilio returned a different-account message.")
@@ -212,6 +225,8 @@ def search_outbound_message_errors(account, start_time, end_time):
             next_uri = str(payload.get("next_page_uri", "") or "").strip()
             if not next_uri:
                 break
+            if _message_page_url(account_sid, next_uri) == url:
+                raise TwilioUsageError("Twilio repeated a message page link.")
         except (requests.RequestException, TwilioUsageError, ValueError, TypeError) as exc:
             error = str(exc) if isinstance(exc, TwilioUsageError) else "Twilio message search could not complete."
             break
@@ -224,7 +239,8 @@ def search_outbound_message_errors(account, start_time, end_time):
         "end_time": end_iso,
         "rows": rows,
         "pages_read": pages_read,
-        "complete": not error,
+        "next_uri": next_uri,
+        "complete": not error and not next_uri,
         "error": error,
     }
 

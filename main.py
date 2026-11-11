@@ -53620,14 +53620,32 @@ def page3_twilio_items(request: Request):
                 if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime()) || start > end) { statusEl.textContent = "Enter a valid range with the start on or before the end."; return false; }
                 busy = true; report = null; controls(); resultsEl.replaceChildren(); errorsEl.textContent = ""; statusEl.style.color = "#2c5c8a"; statusEl.textContent = "Searching the selected account...";
                 (async function () {
+                  var accumulatedRows = [], cursor = "", pagesRead = 0, lastPayload = null;
                   try {
-                    var form = new FormData(); form.set("account_sid", accountEl.value); form.set("start_time", start.toISOString()); form.set("end_time", end.toISOString());
-                    var response = await fetch("/twilio/error-report", {method:"POST",body:form,credentials:"same-origin",cache:"no-store"});
-                    var payload = await response.json(); if (!response.ok || !payload.ok) throw new Error(payload.error || "Error search failed.");
-                    report = payload; render(); errorsEl.textContent = (payload.errors || []).map(function (item) { return item.account_name + ": " + item.error; }).join(String.fromCharCode(10));
-                    statusEl.style.color = payload.complete ? "#2c5c8a" : "#9a4b00";
-                    statusEl.textContent = payload.rows.length + " matching message(s) in " + payload.pages_read + " page(s). " + (payload.complete ? "Search complete." : "Partial results: " + payload.error);
-                  } catch (error) { report = null; statusEl.style.color = "#b42318"; statusEl.textContent = "Error search failed: " + error.message; }
+                    while (true) {
+                      var form = new FormData(); form.set("account_sid", accountEl.value); form.set("start_time", start.toISOString()); form.set("end_time", end.toISOString()); form.set("pages_read", String(pagesRead));
+                      if (cursor) form.set("next_uri", cursor);
+                      var response = await fetch("/twilio/error-report", {method:"POST",body:form,credentials:"same-origin",cache:"no-store"});
+                      var responseText = await response.text(), payload;
+                      try { payload = JSON.parse(responseText); }
+                      catch (_) { throw new Error("Non-JSON response (HTTP " + response.status + "): " + responseText.split(String.fromCharCode(10)).join(" ").trim().slice(0, 240)); }
+                      if (!response.ok || !payload.ok) throw new Error(payload.error || "Error search failed (HTTP " + response.status + ").");
+                      lastPayload = payload; accumulatedRows = accumulatedRows.concat(payload.rows || []); pagesRead = payload.pages_read || pagesRead;
+                      cursor = payload.next_uri || "";
+                      if (payload.error || !cursor) break;
+                      statusEl.textContent = "Searching selected account... " + pagesRead + " page(s) read, " + accumulatedRows.length + " matching message(s) found.";
+                    }
+                    report = Object.assign({}, lastPayload, {rows:accumulatedRows}); render(); errorsEl.textContent = (report.errors || []).map(function (item) { return item.account_name + ": " + item.error; }).join(String.fromCharCode(10));
+                    statusEl.style.color = report.complete ? "#2c5c8a" : "#9a4b00";
+                    statusEl.textContent = accumulatedRows.length + " matching message(s) in " + report.pages_read + " page(s). " + (report.complete ? "Search complete." : "Partial results: " + report.error);
+                  } catch (error) {
+                    if (pagesRead > 0 && lastPayload) {
+                      var pageError = {account_name:lastPayload.account_name,account_sid:lastPayload.account_sid,error:error.message};
+                      report = Object.assign({}, lastPayload, {rows:accumulatedRows,complete:false,error:error.message,errors:[pageError]});
+                      render(); errorsEl.textContent = pageError.account_name + ": " + pageError.error;
+                    }
+                    statusEl.style.color = "#b42318"; statusEl.textContent = (pagesRead > 0 ? "Partial search" : "Error search failed") + " after " + pagesRead + " page(s): " + error.message;
+                  }
                   finally { busy = false; controls(); }
                 })();
                 return false;

@@ -201,3 +201,30 @@ class TwilioUsageTests(unittest.TestCase):
             )
         self.assertFalse(result["complete"])
         self.assertIn("Page limit reached", result["error"])
+
+    def test_error_search_can_resume_one_page_per_request(self):
+        account = {"sid": ACCOUNT_SID, "auth_sid": ROOT_SID, "auth_token": "secret", "account_name": "Child"}
+        next_uri = f"/2010-04-01/Accounts/{ACCOUNT_SID}/Messages.json?PageToken=next"
+        pages = [
+            _message_page([
+                {"account_sid": ACCOUNT_SID, "sid": "SM" + "5" * 32, "direction": "outbound-api", "error_code": 30003, "date_sent": "Wed, 11 Nov 2026 16:00:00 +0000", "from": "+12125550100", "to": "+12125550105", "status": "undelivered"},
+            ], next_uri),
+            _message_page([
+                {"account_sid": ACCOUNT_SID, "sid": "SM" + "6" * 32, "direction": "outbound-api", "error_code": 21610, "date_sent": "Wed, 11 Nov 2026 16:01:00 +0000", "from": "+12125550100", "to": "+12125550106", "status": "undelivered"},
+            ]),
+        ]
+        with patch.object(twilio_usage.requests, "get", side_effect=pages) as get:
+            first = twilio_usage.search_outbound_message_errors(
+                account, "2026-11-11T15:00:00Z", "2026-11-11T17:00:00Z", page_limit=1
+            )
+            second = twilio_usage.search_outbound_message_errors(
+                account, "2026-11-11T15:00:00Z", "2026-11-11T17:00:00Z",
+                next_uri=first["next_uri"], pages_read=first["pages_read"], page_limit=1,
+            )
+
+        self.assertFalse(first["complete"])
+        self.assertEqual(len(first["rows"]), 1)
+        self.assertTrue(second["complete"])
+        self.assertEqual(second["pages_read"], 2)
+        self.assertEqual(second["rows"][0]["error_code"], 21610)
+        self.assertIsNone(get.call_args_list[1].kwargs["params"])
