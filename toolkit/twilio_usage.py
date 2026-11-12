@@ -11,7 +11,8 @@ import requests
 
 _ACCOUNT_SID_RE = re.compile(r"AC[0-9a-fA-F]{32}")
 _COUNT_RE = re.compile(r"[0-9]+")
-MESSAGE_ERROR_CODES = frozenset({30003, 30004, 30005, 30006, 30008, 60005, 63036, 21610})
+MESSAGE_ERROR_CODE_MIN = 10_000
+MESSAGE_ERROR_CODE_MAX = 99_999
 OUTBOUND_DIRECTIONS = frozenset({"outbound-api", "outbound-call", "outbound-reply"})
 MESSAGE_ERROR_PAGE_SIZE = 100
 MESSAGE_ERROR_MAX_PAGES = 100
@@ -197,7 +198,7 @@ def search_outbound_message_errors(account, start_time, end_time, next_uri="", p
                     error_code = int(message.get("error_code"))
                 except (TypeError, ValueError):
                     continue
-                if error_code not in MESSAGE_ERROR_CODES:
+                if error_code == 0 or not MESSAGE_ERROR_CODE_MIN <= error_code <= MESSAGE_ERROR_CODE_MAX:
                     continue
                 sid = str(message.get("sid", "") or "").strip()
                 destination = str(message.get("to", "") or "").strip()

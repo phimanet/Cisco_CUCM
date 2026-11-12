@@ -53546,11 +53546,11 @@ def page3_twilio_items(request: Request):
               <button type="button" data-hours="48">Last 48 hours</button>
               <button type="button" id="twilio-error-search" onclick="if(window.runTwilioErrorReport){return window.runTwilioErrorReport(event);} document.getElementById('twilio-error-status').textContent='Search handler missing (JavaScript did not load).'; return false;">Search Errors</button>
               <button type="button" id="twilio-error-download" disabled>Download CSV</button>
-              <label for="twilio-error-recipient">Email recipient<br><input id="twilio-error-recipient" type="email" autocomplete="email" required></label>
+              <label for="twilio-error-recipient">Email recipient<br><input id="twilio-error-recipient" type="email" value="laura.alvarez@amnhealthcare.com" autocomplete="email" required></label>
               <button type="button" id="twilio-error-email" disabled>Email CSV</button>
             </div>
             <p id="twilio-error-status" role="status" aria-live="polite" style="color:#2c5c8a;min-height:18px;"></p>
-            <p style="color:#4e6a84;font-size:12px;">Outbound messages only. Matching codes: 30003, 30004, 30005, 30006, 30008, 60005, 63036, 21610. Date/time inputs use your browser's local time; results are shown in UTC. Message bodies are not requested or displayed.</p>
+            <p style="color:#4e6a84;font-size:12px;">Outbound messages only. Reports every nonzero five-digit Error Code; code 0 indicates success and is excluded. Date/time inputs use your browser's local time; results are shown in UTC. Message bodies are not requested or displayed.</p>
             <div id="twilio-error-results" style="overflow-x:auto;"></div>
             <details style="margin-top:10px;"><summary>Coverage / Account Errors</summary><pre id="twilio-error-errors" style="white-space:pre-wrap;overflow-wrap:anywhere;"></pre></details>
           </div>

@@ -181,6 +181,9 @@ class TwilioUsageTests(unittest.TestCase):
             {"account_sid": ACCOUNT_SID, "sid": "SM" + "1" * 32, "direction": "outbound-api", "error_code": 30003, "date_sent": "Wed, 11 Nov 2026 16:00:00 +0000", "from": "+12125550100", "to": "+12125550101", "status": "undelivered", "body": "must not be returned"},
             {"account_sid": ACCOUNT_SID, "sid": "SM" + "2" * 32, "direction": "inbound", "error_code": 30004, "date_sent": "Wed, 11 Nov 2026 16:01:00 +0000", "from": "+12125550102", "to": "+12125550100"},
             {"account_sid": ACCOUNT_SID, "sid": "SM" + "3" * 32, "direction": "outbound-api", "error_code": 30007, "date_sent": "Wed, 11 Nov 2026 16:02:00 +0000", "from": "+12125550100", "to": "+12125550103"},
+            {"account_sid": ACCOUNT_SID, "sid": "SM" + "7" * 32, "direction": "outbound-api", "error_code": 0, "date_sent": "Wed, 11 Nov 2026 16:03:00 +0000", "from": "+12125550100", "to": "+12125550107"},
+            {"account_sid": ACCOUNT_SID, "sid": "SM" + "8" * 32, "direction": "outbound-api", "error_code": 9999, "date_sent": "Wed, 11 Nov 2026 16:04:00 +0000", "from": "+12125550100", "to": "+12125550108"},
+            {"account_sid": ACCOUNT_SID, "sid": "SM" + "9" * 32, "direction": "outbound-api", "error_code": 100000, "date_sent": "Wed, 11 Nov 2026 16:05:00 +0000", "from": "+12125550100", "to": "+12125550109"},
         ], f"/2010-04-01/Accounts/{ACCOUNT_SID}/Messages.json?PageToken=next")
         second_page = _message_page([
             {"account_sid": ACCOUNT_SID, "sid": "SM" + "4" * 32, "direction": "outbound-reply", "error_code": "21610", "date_sent": "Wed, 11 Nov 2026 16:03:00 +0000", "from": "+12125550100", "to": "+12125550104", "status": "undelivered"},
@@ -192,8 +195,8 @@ class TwilioUsageTests(unittest.TestCase):
 
         self.assertTrue(result["complete"])
         self.assertEqual(result["pages_read"], 2)
-        self.assertEqual([row["error_code"] for row in result["rows"]], [21610, 30003])
-        self.assertEqual({row["to"] for row in result["rows"]}, {"+12125550101", "+12125550104"})
+        self.assertEqual([row["error_code"] for row in result["rows"]], [21610, 30007, 30003])
+        self.assertEqual({row["to"] for row in result["rows"]}, {"+12125550101", "+12125550103", "+12125550104"})
         self.assertTrue(all("body" not in row for row in result["rows"]))
         self.assertEqual(get.call_args_list[0].kwargs["params"], {
             "DateSent>=": "2026-11-11T15:00:00Z",

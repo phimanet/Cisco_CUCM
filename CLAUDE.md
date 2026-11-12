@@ -128,12 +128,12 @@ Priority keys:
 
 ### 2026-11-11 (Twilio Outbound Usage and SMS Error Report)
 - Added read-only `Twilio Outbound SMS Usage` dashboard with per-root/per-subaccount `sms-outbound` counts, combined totals, GMT date filters, partial-coverage warnings and CSV. Twilio Messaging Health Score links to Console because no documented REST API exposes the score; it is refreshed daily over a seven-day view.
-- Added SMS-page menu option `SMS Error Report`: select one configured account/subaccount, search custom local date/time or last 4/12/48 hours, and show outbound messages with codes 30003, 30004, 30005, 30006, 30008, 60005, 63036 or 21610. Results include destination/source, UTC sent time, status and Message SID; message bodies are not requested or saved. Pagination is bounded at 100 pages and incomplete searches are labeled.
+- Added SMS-page menu option `SMS Error Report`: select one configured account/subaccount, search custom local date/time or last 4/12/48 hours, and show outbound messages with any nonzero five-digit Error Code; code 0 indicates success and is excluded. Results include destination/source, UTC sent time, status and Message SID; message bodies are not requested or saved. Pagination is bounded at 100 pages and incomplete searches are labeled.
 - Local validation: 10 focused `unittest` cases, Python compilation/editor diagnostics, full SMS-page script parsing, mocked account/search interaction and 390px mobile layout passed. FastAPI is unavailable in the local environment, and no live Twilio API or LAB account validation was performed.
 
 ### 2026-11-12 (SMS Error Report Email Attachment)
-- Added an admin-only `Email CSV` action with a per-send recipient field. The endpoint builds a formula-safe CSV from the selected account's report, excludes message bodies, labels coverage, validates account consistency and size, sends through the shared SMTP helper, and audits successful sends.
-- Local validation: 15 focused Twilio tests, staged-source Python compilation, all six Page 3 scripts parsed, mocked search/email interaction, and 390px recipient/button fit passed. Live SMTP delivery and LAB validation remain pending.
+- Added an admin-only `Email CSV` action with a per-send recipient field prefilled to `laura.alvarez@amnhealthcare.com`. The endpoint builds a formula-safe CSV from the selected account's report, excludes message bodies, labels coverage, validates account consistency and size, sends through the shared SMTP helper, and audits successful sends.
+- Local validation: 15 focused Twilio tests cover five-digit classification boundaries, staged-source Python compilation, all six Page 3 scripts parsed, mocked search/email interaction, and 390px recipient/button fit passed. Live SMTP delivery and LAB validation remain pending.
 
 ### 2026-11-03 (Page 2 Jabber Rebuild and SMS-Only Builder)
 - The existing Page 2 `Build Jabber with Specific Extension` workflow already accepts email/extension pairs and provisions CSF + Unity voicemail; it remains unchanged.
