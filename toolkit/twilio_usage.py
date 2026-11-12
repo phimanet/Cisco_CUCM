@@ -1,6 +1,8 @@
 import datetime
 import concurrent.futures
+import csv
 import email.utils
+import io
 import re
 from urllib.parse import urljoin, urlsplit
 
@@ -243,6 +245,39 @@ def search_outbound_message_errors(account, start_time, end_time, next_uri="", p
         "complete": not error and not next_uri,
         "error": error,
     }
+
+
+def build_outbound_message_errors_csv(report):
+    if not isinstance(report, dict) or not isinstance(report.get("rows"), list):
+        raise TwilioUsageError("Error report rows are invalid.")
+
+    output = io.StringIO(newline="")
+    writer = csv.writer(output)
+    writer.writerow(("Account", "Sent (UTC)", "Destination", "Error Code", "Status", "From", "Message SID", "Search Complete", "Pages Read", "Coverage Warning"))
+
+    def safe_cell(value):
+        text = "" if value is None else str(value)
+        if text.lstrip().startswith(("=", "+", "-", "@")):
+            return "'" + text
+        return text
+
+    for row in report["rows"]:
+        if not isinstance(row, dict):
+            raise TwilioUsageError("Error report contains an invalid row.")
+        writer.writerow(safe_cell(value) for value in (
+            report.get("account_name", ""),
+            row.get("date_sent", ""),
+            row.get("to", ""),
+            row.get("error_code", ""),
+            row.get("status", ""),
+            row.get("from", ""),
+            row.get("message_sid", ""),
+            report.get("complete", False),
+            report.get("pages_read", 0),
+            report.get("error", ""),
+        ))
+
+    return output.getvalue().encode("utf-8")
 
 
 def read_outbound_sms_usage(account_sid, auth_sid, auth_token, start_date, end_date):

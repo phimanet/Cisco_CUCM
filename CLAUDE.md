@@ -131,6 +131,10 @@ Priority keys:
 - Added SMS-page menu option `SMS Error Report`: select one configured account/subaccount, search custom local date/time or last 4/12/48 hours, and show outbound messages with codes 30003, 30004, 30005, 30006, 30008, 60005, 63036 or 21610. Results include destination/source, UTC sent time, status and Message SID; message bodies are not requested or saved. Pagination is bounded at 100 pages and incomplete searches are labeled.
 - Local validation: 10 focused `unittest` cases, Python compilation/editor diagnostics, full SMS-page script parsing, mocked account/search interaction and 390px mobile layout passed. FastAPI is unavailable in the local environment, and no live Twilio API or LAB account validation was performed.
 
+### 2026-11-12 (SMS Error Report Email Attachment)
+- Added an admin-only `Email CSV` action with a per-send recipient field. The endpoint builds a formula-safe CSV from the selected account's report, excludes message bodies, labels coverage, validates account consistency and size, sends through the shared SMTP helper, and audits successful sends.
+- Local validation: 15 focused Twilio tests, staged-source Python compilation, all six Page 3 scripts parsed, mocked search/email interaction, and 390px recipient/button fit passed. Live SMTP delivery and LAB validation remain pending.
+
 ### 2026-11-03 (Page 2 Jabber Rebuild and SMS-Only Builder)
 - The existing Page 2 `Build Jabber with Specific Extension` workflow already accepts email/extension pairs and provisions CSF + Unity voicemail; it remains unchanged.
 - Added Page 2 `Build SMS User Only - No Jabber`: last-name/optional first-name lookup, selection only when SMS pattern status is confirmed Not Found, and required Recruiter/Strike pool selection. The server checks the selected pool prefix and revalidates the DN as inactive and unassigned before deleting its line and creating the SMS translation pattern. It updates AD telephoneNumber/ipPhone and does not create Jabber, voicemail, or welcome email.

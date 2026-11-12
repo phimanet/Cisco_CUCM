@@ -53546,6 +53546,8 @@ def page3_twilio_items(request: Request):
               <button type="button" data-hours="48">Last 48 hours</button>
               <button type="button" id="twilio-error-search" onclick="if(window.runTwilioErrorReport){return window.runTwilioErrorReport(event);} document.getElementById('twilio-error-status').textContent='Search handler missing (JavaScript did not load).'; return false;">Search Errors</button>
               <button type="button" id="twilio-error-download" disabled>Download CSV</button>
+              <label for="twilio-error-recipient">Email recipient<br><input id="twilio-error-recipient" type="email" autocomplete="email" required></label>
+              <button type="button" id="twilio-error-email" disabled>Email CSV</button>
             </div>
             <p id="twilio-error-status" role="status" aria-live="polite" style="color:#2c5c8a;min-height:18px;"></p>
             <p style="color:#4e6a84;font-size:12px;">Outbound messages only. Matching codes: 30003, 30004, 30005, 30006, 30008, 60005, 63036, 21610. Date/time inputs use your browser's local time; results are shown in UTC. Message bodies are not requested or displayed.</p>
@@ -53560,6 +53562,8 @@ def page3_twilio_items(request: Request):
               var accountsBtn = document.getElementById("twilio-error-accounts");
               var searchBtn = document.getElementById("twilio-error-search");
               var downloadBtn = document.getElementById("twilio-error-download");
+              var emailBtn = document.getElementById("twilio-error-email");
+              var recipientEl = document.getElementById("twilio-error-recipient");
               var statusEl = document.getElementById("twilio-error-status");
               var resultsEl = document.getElementById("twilio-error-results");
               var errorsEl = document.getElementById("twilio-error-errors");
@@ -53576,7 +53580,7 @@ def page3_twilio_items(request: Request):
                 endEl.value = localDateTime(end);
               }
               setHours(4);
-              function controls() { accountsBtn.disabled = busy; searchBtn.disabled = busy; downloadBtn.disabled = busy || !report || !report.rows.length; }
+              function controls() { accountsBtn.disabled = busy; searchBtn.disabled = busy; downloadBtn.disabled = busy || !report || !report.rows.length; emailBtn.disabled = busy || !report || !report.rows.length; recipientEl.disabled = busy; }
               function render() {
                 if (!report) return;
                 resultsEl.replaceChildren();
@@ -53650,6 +53654,25 @@ def page3_twilio_items(request: Request):
                 })();
                 return false;
               };
+              emailBtn.addEventListener("click", async function (event) {
+                if (event) event.preventDefault();
+                if (!report || busy) return;
+                if (!recipientEl.checkValidity()) { recipientEl.reportValidity(); return; }
+                busy = true; controls(); statusEl.style.color = "#2c5c8a"; statusEl.textContent = "Sending CSV attachment...";
+                try {
+                  var form = new FormData();
+                  form.set("recipient", recipientEl.value.trim());
+                  form.set("report_json", JSON.stringify(report));
+                  var response = await fetch("/twilio/error-report/email", {method:"POST",body:form,credentials:"same-origin",cache:"no-store",headers:{"Accept":"application/json"}});
+                  var responseText = await response.text(), payload;
+                  try { payload = JSON.parse(responseText); }
+                  catch (_) { throw new Error("Email request failed (HTTP " + response.status + ")."); }
+                  if (!response.ok || !payload.ok) throw new Error(payload.error || "Email request failed.");
+                  statusEl.textContent = payload.detail || "CSV attachment sent.";
+                } catch (error) {
+                  statusEl.style.color = "#b42318"; statusEl.textContent = "Email failed: " + error.message;
+                } finally { busy = false; controls(); }
+              });
               document.querySelectorAll('[data-panel="twilio-error-report"] [data-hours]').forEach(function (button) { button.addEventListener("click", function () { setHours(Number(button.getAttribute("data-hours"))); }); });
               downloadBtn.addEventListener("click", function () {
                 if (!report || busy) return;
@@ -66616,6 +66639,90 @@ def twilio_error_report_route(
   except Exception:
     logger.exception("Twilio SMS error report failed")
     return JSONResponse({"ok": False, "error": "Twilio SMS error search could not complete."}, status_code=502)
+
+
+@app.post("/twilio/error-report/email")
+def twilio_error_report_email_route(
+  request: Request,
+  recipient: str = Form(...),
+  report_json: str = Form(...),
+):
+  operator = str((_get_auth_session(request) or {}).get("username", "") or "").strip()
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+
+  clean_recipient = str(recipient or "").strip()
+  if not re.fullmatch(r"[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+", clean_recipient):
+    return JSONResponse({"ok": False, "error": "Enter one valid recipient email address."}, status_code=422)
+  if not isinstance(report_json, str) or len(report_json) > 4_000_000:
+    return JSONResponse({"ok": False, "error": "The report is too large to email."}, status_code=413)
+
+  try:
+    report = json.loads(report_json)
+    if not isinstance(report, dict):
+      raise twilio_usage.TwilioUsageError("Error report is invalid.")
+    account_sid = str(report.get("account_sid", "") or "").strip()
+    if not re.fullmatch(r"AC[0-9a-fA-F]{32}", account_sid):
+      raise twilio_usage.TwilioUsageError("Error report account is invalid.")
+    account_name = str(report.get("account_name", "") or account_sid).strip()[:200]
+    rows = report.get("rows")
+    if not isinstance(rows, list) or not rows or len(rows) > 10_000:
+      raise twilio_usage.TwilioUsageError("Error report rows are invalid or exceed the email limit.")
+    if any(not isinstance(row, dict) or str(row.get("account_sid", "") or "") != account_sid for row in rows):
+      raise twilio_usage.TwilioUsageError("Error report contains a row from a different account.")
+    if not isinstance(report.get("complete"), bool):
+      raise twilio_usage.TwilioUsageError("Error report coverage status is invalid.")
+    pages_read = report.get("pages_read")
+    if type(pages_read) is not int or not 1 <= pages_read <= twilio_usage.MESSAGE_ERROR_MAX_PAGES:
+      raise twilio_usage.TwilioUsageError("Error report page count is invalid.")
+    start_time, end_time = twilio_usage.validate_datetime_range(report.get("start_time"), report.get("end_time"))
+    warning = str(report.get("error", "") or "")[:1000]
+    clean_report = {
+      "account_name": account_name,
+      "complete": report["complete"],
+      "pages_read": pages_read,
+      "error": warning,
+      "rows": rows,
+    }
+    attachment_data = twilio_usage.build_outbound_message_errors_csv(clean_report)
+    if len(attachment_data) > 5_000_000:
+      return JSONResponse({"ok": False, "error": "The report attachment exceeds the email size limit."}, status_code=413)
+
+    filename = f"twilio_sms_error_report_{account_sid}.csv"
+    coverage = "complete" if report["complete"] else "incomplete"
+    body = (
+      "Attached is the requested Twilio SMS Error Report CSV.\n\n"
+      f"Requested by: {operator}\n"
+      f"Account: {account_name} ({account_sid})\n"
+      f"Time range (UTC): {start_time} to {end_time}\n"
+      f"Matching rows: {len(rows)}\n"
+      f"Search coverage: {coverage}\n"
+      f"Pages read: {pages_read}\n"
+      f"Coverage warning: {warning or 'None'}\n\n"
+      "Message bodies are not included."
+    )
+    sender = (SMTP_DEFAULT_FROM or MOBILE_JABBER_EMAIL_FROM or "noreply@amnhealthcare.com").strip()
+    _send_smtp_email(
+      sender=sender,
+      recipients=[clean_recipient],
+      subject="Twilio SMS Error Report",
+      body=body,
+      attachments=[(filename, attachment_data, "text/csv")],
+    )
+    try:
+      _append_audit_event(
+        action="twilio_sms_error_report_emailed", cucm_host="", operator=operator,
+        target=f"account={account_sid};recipient={clean_recipient};rows={len(rows)};complete={report['complete']}",
+        output_filename=filename, inline_mode=True,
+      )
+    except Exception:
+      logger.exception("Twilio SMS error report email audit failed")
+    return JSONResponse({"ok": True, "detail": f"CSV attachment sent to {clean_recipient}."}, headers={"Cache-Control": "no-store"})
+  except (json.JSONDecodeError, twilio_usage.TwilioUsageError) as exc:
+    return JSONResponse({"ok": False, "error": str(exc) if isinstance(exc, twilio_usage.TwilioUsageError) else "Error report payload is invalid."}, status_code=422)
+  except Exception:
+    logger.exception("Twilio SMS error report email failed")
+    return JSONResponse({"ok": False, "error": "Email delivery failed. Check mail settings and try again."}, status_code=502)
 
 
 def _twilio_all_recent_logs_cycle() -> None:

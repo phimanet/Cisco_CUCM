@@ -1,4 +1,11 @@
+import ast
+import csv
+import io
+import json
+import re
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from toolkit import twilio_usage
@@ -23,6 +30,29 @@ def _message_page(messages, next_page_uri=None):
 
 
 class TwilioUsageTests(unittest.TestCase):
+    def test_error_report_csv_is_formula_safe_and_omits_message_body(self):
+        report = {
+            "account_name": "Test Account",
+            "complete": True,
+            "pages_read": 1,
+            "error": "",
+            "rows": [{
+                "date_sent": "2026-11-11T16:00:00+00:00",
+                "to": "+12125550101",
+                "error_code": 30003,
+                "status": "undelivered",
+                "from": "=malicious@example.com",
+                "message_sid": "SM" + "1" * 32,
+                "body": "must not be attached",
+            }],
+        }
+
+        rows = list(csv.reader(io.StringIO(twilio_usage.build_outbound_message_errors_csv(report).decode("utf-8"))))
+
+        self.assertEqual(rows[1][2], "'+12125550101")
+        self.assertEqual(rows[1][5], "'=malicious@example.com")
+        self.assertNotIn("must not be attached", str(rows))
+
     def test_read_outbound_sms_usage_scopes_account_and_dates(self):
         response = _response({
             "account_sid": ACCOUNT_SID,
@@ -228,3 +258,93 @@ class TwilioUsageTests(unittest.TestCase):
         self.assertEqual(second["pages_read"], 2)
         self.assertEqual(second["rows"][0]["error_code"], 21610)
         self.assertIsNone(get.call_args_list[1].kwargs["params"])
+
+
+class TwilioErrorReportEmailRouteTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source = Path(__file__).resolve().parents[1] / "main.py"
+        tree = ast.parse(source.read_text(encoding="utf-8-sig"))
+        node = next(item for item in tree.body if isinstance(item, ast.FunctionDef) and item.name == "twilio_error_report_email_route")
+        cls.route_node = ast.FunctionDef(
+            name=node.name,
+            args=node.args,
+            body=node.body,
+            decorator_list=[],
+            returns=node.returns,
+            type_comment=None,
+        )
+
+    def setUp(self):
+        self.send_email = Mock()
+        self.audit = Mock()
+        self.is_admin = Mock(return_value=True)
+        self.scope = {
+            "Request": object,
+            "Form": lambda value: value,
+            "JSONResponse": lambda content, status_code=200, headers=None: SimpleNamespace(content=content, status_code=status_code, headers=headers),
+            "json": json,
+            "re": re,
+            "twilio_usage": twilio_usage,
+            "_get_auth_session": Mock(return_value={"username": "operator"}),
+            "_is_admin_user": self.is_admin,
+            "_send_smtp_email": self.send_email,
+            "_append_audit_event": self.audit,
+            "SMTP_DEFAULT_FROM": "portal@example.com",
+            "MOBILE_JABBER_EMAIL_FROM": "",
+            "logger": Mock(),
+        }
+        module = ast.fix_missing_locations(ast.Module(body=[self.route_node], type_ignores=[]))
+        exec(compile(module, "main.py", "exec"), self.scope)
+        self.report = {
+            "account_sid": ACCOUNT_SID,
+            "account_name": "Test Account",
+            "start_time": "2026-11-11T15:00:00Z",
+            "end_time": "2026-11-11T17:00:00Z",
+            "complete": True,
+            "pages_read": 1,
+            "error": "",
+            "rows": [{
+                "account_sid": ACCOUNT_SID,
+                "date_sent": "2026-11-11T16:00:00+00:00",
+                "to": "+12125550101",
+                "error_code": 30003,
+                "status": "undelivered",
+                "from": "+12125550100",
+                "message_sid": "SM" + "1" * 32,
+                "body": "must not be attached",
+            }],
+        }
+
+    def send(self, recipient="operator@example.com"):
+        return self.scope["twilio_error_report_email_route"](
+            SimpleNamespace(), recipient, json.dumps(self.report)
+        )
+
+    def test_sends_safe_csv_attachment_and_audits_success(self):
+        response = self.send()
+
+        self.assertEqual(response.status_code, 200)
+        self.send_email.assert_called_once()
+        arguments = self.send_email.call_args.kwargs
+        self.assertEqual(arguments["recipients"], ["operator@example.com"])
+        filename, attachment, mime_type = arguments["attachments"][0]
+        self.assertEqual(filename, f"twilio_sms_error_report_{ACCOUNT_SID}.csv")
+        self.assertEqual(mime_type, "text/csv")
+        self.assertIn(b"Destination", attachment)
+        self.assertNotIn(b"must not be attached", attachment)
+        self.audit.assert_called_once()
+
+    def test_rejects_bad_recipient_and_cross_account_rows(self):
+        self.assertEqual(self.send("bad-address").status_code, 422)
+        self.send_email.assert_not_called()
+
+        self.report["rows"][0]["account_sid"] = ROOT_SID
+        self.assertEqual(self.send().status_code, 422)
+        self.send_email.assert_not_called()
+
+    def test_requires_admin_authentication(self):
+        self.is_admin.return_value = False
+
+        self.assertEqual(self.send().status_code, 403)
+        self.send_email.assert_not_called()
