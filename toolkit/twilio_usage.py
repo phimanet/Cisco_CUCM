@@ -11,7 +11,7 @@ _ACCOUNT_SID_RE = re.compile(r"AC[0-9a-fA-F]{32}")
 _COUNT_RE = re.compile(r"[0-9]+")
 MESSAGE_ERROR_CODES = frozenset({30003, 30004, 30005, 30006, 30008, 60005, 63036, 21610})
 OUTBOUND_DIRECTIONS = frozenset({"outbound-api", "outbound-call", "outbound-reply"})
-MESSAGE_ERROR_PAGE_SIZE = 1000
+MESSAGE_ERROR_PAGE_SIZE = 100
 MESSAGE_ERROR_MAX_PAGES = 100
 
 

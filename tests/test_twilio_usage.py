@@ -168,7 +168,7 @@ class TwilioUsageTests(unittest.TestCase):
         self.assertEqual(get.call_args_list[0].kwargs["params"], {
             "DateSent>=": "2026-11-11T15:00:00Z",
             "DateSent<=": "2026-11-11T17:00:00Z",
-            "PageSize": twilio_usage.MESSAGE_ERROR_PAGE_SIZE,
+            "PageSize": 100,
         })
         self.assertEqual(get.call_args_list[0].kwargs["auth"], (ROOT_SID, "secret"))
         self.assertIsNone(get.call_args_list[1].kwargs["params"])
