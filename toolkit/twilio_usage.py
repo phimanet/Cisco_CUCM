@@ -5,6 +5,7 @@ import email.utils
 import io
 import re
 from urllib.parse import urljoin, urlsplit
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import requests
 
@@ -16,6 +17,7 @@ MESSAGE_ERROR_CODE_MAX = 99_999
 OUTBOUND_DIRECTIONS = frozenset({"outbound-api", "outbound-call", "outbound-reply"})
 MESSAGE_ERROR_PAGE_SIZE = 100
 MESSAGE_ERROR_MAX_PAGES = 100
+CENTRAL_TIME_ZONE = "America/Chicago"
 
 
 class TwilioUsageError(ValueError):
@@ -254,7 +256,7 @@ def build_outbound_message_errors_csv(report):
 
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(("Account", "Sent (UTC)", "Destination", "Error Code", "Status", "From", "Message SID", "Search Complete", "Pages Read", "Coverage Warning"))
+    writer.writerow(("Account", "Sent (CST/CDT)", "Destination", "Error Code", "Status", "From", "Message SID", "Search Complete", "Pages Read", "Coverage Warning"))
 
     def safe_cell(value):
         text = "" if value is None else str(value)
@@ -262,12 +264,26 @@ def build_outbound_message_errors_csv(report):
             return "'" + text
         return text
 
+    def central_sent_time(value):
+        if not value:
+            return ""
+        try:
+            parsed = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if parsed.tzinfo is None:
+                raise ValueError("Timestamp has no timezone.")
+            zone = ZoneInfo(CENTRAL_TIME_ZONE)
+        except ZoneInfoNotFoundError as exc:
+            raise TwilioUsageError("Central timezone data is unavailable on this server.") from exc
+        except ValueError as exc:
+            raise TwilioUsageError("Error report contains an invalid sent time.") from exc
+        return parsed.astimezone(zone).strftime("%Y-%m-%d %H:%M:%S %Z")
+
     for row in report["rows"]:
         if not isinstance(row, dict):
             raise TwilioUsageError("Error report contains an invalid row.")
         writer.writerow(safe_cell(value) for value in (
             report.get("account_name", ""),
-            row.get("date_sent", ""),
+            central_sent_time(row.get("date_sent", "")),
             row.get("to", ""),
             row.get("error_code", ""),
             row.get("status", ""),

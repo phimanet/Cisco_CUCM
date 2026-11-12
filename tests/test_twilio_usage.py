@@ -1,5 +1,6 @@
 import ast
 import csv
+import datetime
 import io
 import json
 import re
@@ -47,8 +48,11 @@ class TwilioUsageTests(unittest.TestCase):
             }],
         }
 
-        rows = list(csv.reader(io.StringIO(twilio_usage.build_outbound_message_errors_csv(report).decode("utf-8"))))
+        with patch.object(twilio_usage, "ZoneInfo", return_value=datetime.timezone(datetime.timedelta(hours=-6), "CST")):
+            rows = list(csv.reader(io.StringIO(twilio_usage.build_outbound_message_errors_csv(report).decode("utf-8"))))
 
+        self.assertEqual(rows[0][1], "Sent (CST/CDT)")
+        self.assertEqual(rows[1][1], "2026-11-11 10:00:00 CST")
         self.assertEqual(rows[1][2], "'+12125550101")
         self.assertEqual(rows[1][5], "'=malicious@example.com")
         self.assertNotIn("must not be attached", str(rows))
@@ -282,6 +286,9 @@ class TwilioErrorReportEmailRouteTests(unittest.TestCase):
         self.send_email = Mock()
         self.audit = Mock()
         self.is_admin = Mock(return_value=True)
+        timezone_patch = patch.object(twilio_usage, "ZoneInfo", return_value=datetime.timezone(datetime.timedelta(hours=-6), "CST"))
+        timezone_patch.start()
+        self.addCleanup(timezone_patch.stop)
         self.scope = {
             "Request": object,
             "Form": lambda value: value,

@@ -91,6 +91,7 @@ from toolkit import ms_graph_calling
 from toolkit import twilio_recent_logs
 from toolkit import twilio_all_recent_logs
 from toolkit import twilio_usage
+from toolkit import twilio_error_report_jobs
 from toolkit import sms_inventory
 from toolkit import bulk_separation
 from toolkit import webex_admin
@@ -248,6 +249,7 @@ def _startup_background_services():
   _unity_user_extract_start_worker()
   _start_genesys_user_extract_all_worker()
   _start_twilio_all_recent_logs_worker()
+  _start_twilio_error_report_jobs_worker()
   _start_genesys_external_contact_load_worker()
   _start_genesys_cucm_sync_scheduler()
   _start_jabber_pool_scheduler()
@@ -986,6 +988,10 @@ TWILIO_ALL_RECENT_LOGS_JOB_LOCK = threading.Lock()
 TWILIO_ALL_RECENT_LOGS_START_LOCK = threading.Lock()
 TWILIO_ALL_RECENT_LOGS_WORKER_STARTED = False
 TWILIO_ALL_RECENT_LOGS_REQUESTS_PER_SECOND = min(5.0, max(0.1, float(os.getenv("TWILIO_ALL_RECENT_LOGS_REQUESTS_PER_SECOND", "2") or "2")))
+TWILIO_ERROR_REPORT_JOBS_DIR = os.path.join(_genesys_queue_data_root, "twilio_error_report_jobs")
+TWILIO_ERROR_REPORT_JOBS_STORE = twilio_error_report_jobs.TwilioErrorReportJobStore(TWILIO_ERROR_REPORT_JOBS_DIR)
+TWILIO_ERROR_REPORT_JOBS_START_LOCK = threading.Lock()
+TWILIO_ERROR_REPORT_JOBS_WORKER_STARTED = False
 WEBEX_LICENSE_REPORT_DIR = os.path.join(_genesys_queue_data_root, "webex_license_lookup")
 WEBEX_LICENSE_REPORT_LOCK = threading.Lock()
 UNITY_NUMBER_SEARCH_DIR = os.path.join(_genesys_queue_data_root, "unity_number_search")
@@ -53543,6 +53549,7 @@ def page3_twilio_items(request: Request):
               <label for="twilio-error-end">End date/time (local)<br><input id="twilio-error-end" type="datetime-local"></label>
               <button type="button" data-hours="4">Last 4 hours</button>
               <button type="button" data-hours="12">Last 12 hours</button>
+              <button type="button" data-hours="24">Last 24 hours</button>
               <button type="button" data-hours="48">Last 48 hours</button>
               <button type="button" id="twilio-error-search" onclick="if(window.runTwilioErrorReport){return window.runTwilioErrorReport(event);} document.getElementById('twilio-error-status').textContent='Search handler missing (JavaScript did not load).'; return false;">Search Errors</button>
               <button type="button" id="twilio-error-download" disabled>Download CSV</button>
@@ -53553,6 +53560,19 @@ def page3_twilio_items(request: Request):
             <p style="color:#4e6a84;font-size:12px;">Outbound messages only. Reports every nonzero five-digit Error Code; code 0 indicates success and is excluded. Date/time inputs use your browser's local time; results are shown in UTC. Message bodies are not requested or displayed.</p>
             <div id="twilio-error-results" style="overflow-x:auto;"></div>
             <details style="margin-top:10px;"><summary>Coverage / Account Errors</summary><pre id="twilio-error-errors" style="white-space:pre-wrap;overflow-wrap:anywhere;"></pre></details>
+            <hr style="margin:18px 0;border:0;border-top:1px solid #c8dbee;">
+            <h4 style="margin:0 0 8px;">Automated Email Jobs</h4>
+            <div class="search-filter-row" style="flex-wrap:wrap;align-items:end;">
+              <label for="twilio-error-job-lookback">Search window<br><select id="twilio-error-job-lookback"><option value="4">Trailing 4 hours</option><option value="12">Trailing 12 hours</option><option value="24" selected>Trailing 24 hours</option><option value="48">Trailing 48 hours</option><option value="168">Trailing 7 days</option></select></label>
+              <label for="twilio-error-job-frequency">Frequency<br><select id="twilio-error-job-frequency"><option value="daily">Daily</option><option value="weekly">Weekly</option></select></label>
+              <label for="twilio-error-job-weekday">Weekday<br><select id="twilio-error-job-weekday"><option value="monday">Monday</option><option value="tuesday">Tuesday</option><option value="wednesday">Wednesday</option><option value="thursday">Thursday</option><option value="friday">Friday</option><option value="saturday">Saturday</option><option value="sunday">Sunday</option></select></label>
+              <label for="twilio-error-job-time">Run time (Pacific)<br><input id="twilio-error-job-time" type="time" value="08:00" required></label>
+              <button type="button" id="twilio-error-job-create">Add Email Job</button>
+              <button type="button" id="twilio-error-job-refresh">Refresh Jobs</button>
+            </div>
+            <p style="color:#4e6a84;font-size:12px;">Uses the selected account and Email recipient above. Jobs run on the server in Pacific time. Run history is retained for 90 days, up to 100 runs per job.</p>
+            <p id="twilio-error-jobs-status" role="status" aria-live="polite" style="color:#2c5c8a;min-height:18px;"></p>
+            <div id="twilio-error-jobs-results" style="overflow-x:auto;"></div>
           </div>
           <script>
             (function () {
@@ -53567,9 +53587,16 @@ def page3_twilio_items(request: Request):
               var statusEl = document.getElementById("twilio-error-status");
               var resultsEl = document.getElementById("twilio-error-results");
               var errorsEl = document.getElementById("twilio-error-errors");
+              var jobsStatusEl = document.getElementById("twilio-error-jobs-status");
+              var jobsResultsEl = document.getElementById("twilio-error-jobs-results");
+              var jobsFrequencyEl = document.getElementById("twilio-error-job-frequency");
+              var jobsWeekdayEl = document.getElementById("twilio-error-job-weekday");
+              var jobsCreateBtn = document.getElementById("twilio-error-job-create");
+              var jobsRefreshBtn = document.getElementById("twilio-error-job-refresh");
               var report = null;
               var accounts = [];
               var busy = false;
+              var jobsBusy = false;
               function localDateTime(value) {
                 var local = new Date(value.getTime() - value.getTimezoneOffset() * 60000);
                 return local.toISOString().slice(0, 16);
@@ -53580,6 +53607,13 @@ def page3_twilio_items(request: Request):
                 endEl.value = localDateTime(end);
               }
               setHours(4);
+              function formatTimeZone(value, timeZone) {
+                var date = new Date(value), parts = new Intl.DateTimeFormat("en-US", {timeZone:timeZone,year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",second:"2-digit",hourCycle:"h23",timeZoneName:"short"}).formatToParts(date);
+                var fields = {}; parts.forEach(function (part) { fields[part.type] = part.value; });
+                return fields.year + "-" + fields.month + "-" + fields.day + " " + fields.hour + ":" + fields.minute + ":" + fields.second + " " + fields.timeZoneName;
+              }
+              function centralSentTime(value) { return formatTimeZone(value, "America/Chicago"); }
+              function pacificRunTime(value) { return formatTimeZone(value, "America/Los_Angeles"); }
               function controls() { accountsBtn.disabled = busy; searchBtn.disabled = busy; downloadBtn.disabled = busy || !report || !report.rows.length; emailBtn.disabled = busy || !report || !report.rows.length; recipientEl.disabled = busy; }
               function render() {
                 if (!report) return;
@@ -53587,14 +53621,84 @@ def page3_twilio_items(request: Request):
                 if (!report.rows.length) { resultsEl.textContent = report.complete ? "No matching outbound errors found in this time range." : "No matching rows returned; coverage is incomplete, so this is not a no-error result."; controls(); return; }
                 var table = document.createElement("table"); table.style.cssText = "width:100%;border-collapse:collapse;font-size:13px;";
                 var head = table.createTHead().insertRow(); head.style.cssText = "background:#005eb8;color:#fff;";
-                ["Sent (UTC)", "Destination", "Error Code", "Status", "From", "Message SID"].forEach(function (label) { var cell = document.createElement("th"); cell.scope = "col"; cell.textContent = label; cell.style.cssText = "padding:8px;text-align:left;"; head.appendChild(cell); });
+                ["Sent (CST/CDT)", "Destination", "Error Code", "Status", "From", "Message SID"].forEach(function (label) { var cell = document.createElement("th"); cell.scope = "col"; cell.textContent = label; cell.style.cssText = "padding:8px;text-align:left;"; head.appendChild(cell); });
                 var body = table.createTBody();
                 report.rows.forEach(function (row, index) {
                   var tr = body.insertRow(); tr.style.background = index % 2 ? "#ffffff" : "#f7fbff";
-                  [row.date_sent.replace("T", " ").replace("+00:00", ""), row.to, row.error_code, row.status, row.from, row.message_sid].forEach(function (value) { var cell = tr.insertCell(); cell.textContent = value; cell.style.cssText = "padding:8px;border-bottom:1px solid #c8dbee;overflow-wrap:anywhere;"; });
+                  [centralSentTime(row.date_sent), row.to, row.error_code, row.status, row.from, row.message_sid].forEach(function (value) { var cell = tr.insertCell(); cell.textContent = value; cell.style.cssText = "padding:8px;border-bottom:1px solid #c8dbee;overflow-wrap:anywhere;"; });
                 });
                 resultsEl.appendChild(table);
                 controls();
+              }
+              function appendCell(row, value) { var cell = row.insertCell(); cell.textContent = value == null ? "" : String(value); cell.style.cssText = "padding:6px;border-bottom:1px solid #c8dbee;overflow-wrap:anywhere;vertical-align:top;"; return cell; }
+              function addJobAction(row, label, action, jobId, runId) {
+                var button = document.createElement("button"); button.type = "button"; button.textContent = label; button.style.cssText = "margin:2px;padding:4px 7px;font-size:12px;";
+                button.addEventListener("click", function () { submitJobAction(action, jobId, runId); }); row.appendChild(button);
+              }
+              function renderJobs(payload) {
+                jobsResultsEl.replaceChildren();
+                var jobs = payload.jobs || [];
+                if (!jobs.length) { jobsResultsEl.textContent = "No automated email jobs saved."; return; }
+                var jobTable = document.createElement("table"); jobTable.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px;";
+                var jobHead = jobTable.createTHead().insertRow(); jobHead.style.cssText = "background:#005eb8;color:#fff;";
+                ["Account", "Window", "Frequency", "Next run (Pacific)", "Recipient", "Job actions"].forEach(function (name) { var cell = document.createElement("th"); cell.textContent = name; cell.scope = "col"; cell.style.cssText = "padding:6px;text-align:left;"; jobHead.appendChild(cell); });
+                var jobBody = jobTable.createTBody();
+                var allRuns = [];
+                jobs.forEach(function (job, index) {
+                  var row = jobBody.insertRow(); row.style.background = index % 2 ? "#fff" : "#f7fbff";
+                  appendCell(row, job.account_name + " (" + job.account_sid + ")");
+                  appendCell(row, "Trailing " + job.lookback_hours + " hours");
+                  appendCell(row, job.frequency === "weekly" ? "Weekly, " + job.weekday : "Daily");
+                  appendCell(row, job.enabled ? pacificRunTime(job.next_run_at) : "Paused");
+                  appendCell(row, job.recipient);
+                  var actions = row.insertCell(); actions.style.cssText = "padding:4px;border-bottom:1px solid #c8dbee;white-space:nowrap;";
+                  addJobAction(actions, job.enabled ? "Pause" : "Resume", job.enabled ? "pause" : "resume", job.job_id, "");
+                  addJobAction(actions, "Run now", "run-now", job.job_id, "");
+                  addJobAction(actions, "Delete", "delete", job.job_id, "");
+                  (job.runs || []).forEach(function (run) { allRuns.push({job:job,run:run}); });
+                });
+                jobsResultsEl.appendChild(jobTable);
+                allRuns.sort(function (left, right) { return right.run.created_at.localeCompare(left.run.created_at); });
+                if (!allRuns.length) { var empty = document.createElement("p"); empty.textContent = "No runs yet."; jobsResultsEl.appendChild(empty); return; }
+                var historyTitle = document.createElement("h4"); historyTitle.textContent = "Recent Job Log (latest 200 runs)"; jobsResultsEl.appendChild(historyTitle);
+                var historyTable = document.createElement("table"); historyTable.style.cssText = "width:100%;border-collapse:collapse;font-size:12px;";
+                var historyHead = historyTable.createTHead().insertRow(); historyHead.style.cssText = "background:#005eb8;color:#fff;";
+                ["Started (Central)", "Account", "Window", "Status", "Pages", "Matches", "Email", "Action"].forEach(function (name) { var cell = document.createElement("th"); cell.textContent = name; cell.scope = "col"; cell.style.cssText = "padding:6px;text-align:left;"; historyHead.appendChild(cell); });
+                var historyBody = historyTable.createTBody();
+                allRuns.slice(0, 200).forEach(function (item, index) {
+                  var row = historyBody.insertRow(); row.style.background = index % 2 ? "#fff" : "#f7fbff";
+                  appendCell(row, centralSentTime(item.run.created_at)); appendCell(row, item.job.account_name);
+                  var coverageLabel = item.run.status === "running" ? "In progress" : item.run.complete ? "Complete coverage" : "Partial coverage";
+                  appendCell(row, item.job.lookback_hours + "h"); appendCell(row, item.run.status + " (" + coverageLabel + ")");
+                  appendCell(row, item.run.pages_read); appendCell(row, item.run.row_count || 0);
+                  appendCell(row, item.run.email_status + (item.run.email_error ? ": " + item.run.email_error : ""));
+                  var action = row.insertCell(); action.style.cssText = "padding:4px;border-bottom:1px solid #c8dbee;white-space:nowrap;";
+                  if (item.run.email_status === "failed" || item.run.email_status === "unknown") addJobAction(action, item.run.email_status === "unknown" ? "Retry email (verify first)" : "Retry email", "retry-email", item.job.job_id, item.run.run_id);
+                });
+                jobsResultsEl.appendChild(historyTable);
+              }
+              async function loadJobs() {
+                if (jobsBusy) return;
+                jobsBusy = true; jobsRefreshBtn.disabled = true; jobsCreateBtn.disabled = true;
+                try {
+                  var response = await fetch("/twilio/error-report/jobs", {credentials:"same-origin",cache:"no-store",headers:{"Accept":"application/json"}});
+                  var payload = await response.json(); if (!response.ok || !payload.ok) throw new Error(payload.error || "Could not load scheduled jobs.");
+                  renderJobs(payload); jobsStatusEl.textContent = "Loaded " + (payload.jobs || []).length + " job(s). " + payload.run_retention_days + "-day history retention.";
+                } catch (error) { jobsStatusEl.style.color = "#b42318"; jobsStatusEl.textContent = error.message; }
+                finally { jobsBusy = false; jobsRefreshBtn.disabled = false; jobsCreateBtn.disabled = false; }
+              }
+              async function submitJobAction(action, jobId, runId) {
+                if (jobsBusy) return;
+                if (action === "delete" && !window.confirm("Delete this scheduled job and its retained run history?")) return;
+                if (action === "retry-email" && runId && !window.confirm("Delivery may already have succeeded. Check the recipient inbox before retrying to avoid a duplicate email.")) return;
+                jobsBusy = true; jobsRefreshBtn.disabled = true; jobsCreateBtn.disabled = true; jobsStatusEl.style.color = "#2c5c8a"; jobsStatusEl.textContent = "Updating job...";
+                try {
+                  var form = new FormData(); form.set("job_id", jobId); form.set("action", action); if (runId) form.set("run_id", runId);
+                  var response = await fetch("/twilio/error-report/jobs/action", {method:"POST",body:form,credentials:"same-origin",cache:"no-store",headers:{"Accept":"application/json"}});
+                  var payload = await response.json(); if (!response.ok || !payload.ok) throw new Error(payload.error || "Job action failed.");
+                  renderJobs(payload); jobsStatusEl.textContent = action === "run-now" ? "Run queued." : "Job updated.";
+                } catch (error) { jobsStatusEl.style.color = "#b42318"; jobsStatusEl.textContent = error.message; }
+                finally { jobsBusy = false; jobsRefreshBtn.disabled = false; jobsCreateBtn.disabled = false; }
               }
               window.loadTwilioErrorAccounts = function (event) {
                 if (event) event.preventDefault();
@@ -53673,16 +53777,34 @@ def page3_twilio_items(request: Request):
                   statusEl.style.color = "#b42318"; statusEl.textContent = "Email failed: " + error.message;
                 } finally { busy = false; controls(); }
               });
+              jobsFrequencyEl.addEventListener("change", function () { jobsWeekdayEl.disabled = jobsFrequencyEl.value !== "weekly"; });
+              jobsWeekdayEl.disabled = jobsFrequencyEl.value !== "weekly";
+              jobsRefreshBtn.addEventListener("click", function () { loadJobs(); });
+              jobsCreateBtn.addEventListener("click", async function (event) {
+                if (event) event.preventDefault();
+                if (jobsBusy || !accountEl.value) { jobsStatusEl.textContent = "Load accounts and select one before adding a job."; return; }
+                if (!recipientEl.checkValidity()) { recipientEl.reportValidity(); return; }
+                if (!document.getElementById("twilio-error-job-time").checkValidity()) { document.getElementById("twilio-error-job-time").reportValidity(); return; }
+                jobsBusy = true; jobsRefreshBtn.disabled = true; jobsCreateBtn.disabled = true; jobsStatusEl.style.color = "#2c5c8a"; jobsStatusEl.textContent = "Saving scheduled job...";
+                try {
+                  var form = new FormData(); form.set("account_sid", accountEl.value); form.set("lookback_hours", document.getElementById("twilio-error-job-lookback").value); form.set("frequency", jobsFrequencyEl.value); form.set("weekday", jobsWeekdayEl.value); form.set("run_time", document.getElementById("twilio-error-job-time").value); form.set("recipient", recipientEl.value.trim());
+                  var response = await fetch("/twilio/error-report/jobs", {method:"POST",body:form,credentials:"same-origin",cache:"no-store",headers:{"Accept":"application/json"}});
+                  var payload = await response.json(); if (!response.ok || !payload.ok) throw new Error(payload.error || "Could not save scheduled job.");
+                  jobsStatusEl.textContent = "Job saved. Next run (Pacific): " + pacificRunTime(payload.next_run_at);
+                } catch (error) { jobsStatusEl.style.color = "#b42318"; jobsStatusEl.textContent = error.message; }
+                finally { jobsBusy = false; jobsRefreshBtn.disabled = false; jobsCreateBtn.disabled = false; loadJobs(); }
+              });
               document.querySelectorAll('[data-panel="twilio-error-report"] [data-hours]').forEach(function (button) { button.addEventListener("click", function () { setHours(Number(button.getAttribute("data-hours"))); }); });
               downloadBtn.addEventListener("click", function () {
                 if (!report || busy) return;
                 function cell(value) { var text = String(value == null ? "" : value); if (/^[=+@-]/.test(text.trimStart())) text = "'" + text; var quote = String.fromCharCode(34); return quote + text.replace(/"/g, '""') + quote; }
-                var lines = [["Account", "Sent (UTC)", "Destination", "Error Code", "Status", "From", "Message SID", "Search Complete", "Pages Read", "Coverage Warning"].map(cell).join(",")];
-                report.rows.forEach(function (row) { lines.push([report.account_name,row.date_sent,row.to,row.error_code,row.status,row.from,row.message_sid,report.complete,report.pages_read,report.error].map(cell).join(",")); });
+                var lines = [["Account", "Sent (CST/CDT)", "Destination", "Error Code", "Status", "From", "Message SID", "Search Complete", "Pages Read", "Coverage Warning"].map(cell).join(",")];
+                report.rows.forEach(function (row) { lines.push([report.account_name,centralSentTime(row.date_sent),row.to,row.error_code,row.status,row.from,row.message_sid,report.complete,report.pages_read,report.error].map(cell).join(",")); });
                 var url = URL.createObjectURL(new Blob([lines.join(String.fromCharCode(13,10))], {type:"text/csv;charset=utf-8"}));
                 var link = document.createElement("a"); link.href = url; link.download = "twilio_sms_error_report_" + report.account_sid + ".csv"; document.body.appendChild(link); link.click(); link.remove(); setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
               });
               controls();
+              loadJobs();
             })();
           </script>
         </section>
@@ -66723,6 +66845,220 @@ def twilio_error_report_email_route(
   except Exception:
     logger.exception("Twilio SMS error report email failed")
     return JSONResponse({"ok": False, "error": "Email delivery failed. Check mail settings and try again."}, status_code=502)
+
+
+def _twilio_error_report_job_account(account_sid: str) -> dict:
+  roots, root_errors = _twilio_inventory_configured_roots()
+  accounts, _errors = twilio_usage.discover_twilio_accounts(roots, root_errors, _list_twilio_accounts)
+  account = next((item for item in accounts if item.get("sid") == account_sid), None)
+  if not account:
+    raise twilio_usage.TwilioUsageError("The scheduled Twilio account is no longer configured or accessible.")
+  return account
+
+
+def _twilio_error_report_job_send_email(job: dict, run: dict) -> None:
+  report = {
+    "account_name": job["account_name"],
+    "complete": run["complete"],
+    "pages_read": run["pages_read"],
+    "error": run["error"],
+    "rows": run["rows"],
+  }
+  attachment_data = twilio_usage.build_outbound_message_errors_csv(report)
+  if len(attachment_data) > 5_000_000:
+    raise ValueError("Report attachment exceeds the email size limit.")
+  filename = f"twilio_sms_error_report_{job['account_sid']}_{run['run_id'][:8]}.csv"
+  coverage = "complete" if run["complete"] else "incomplete"
+  body = (
+    "Attached is the scheduled Twilio SMS Error Report CSV.\n\n"
+    f"Account: {job['account_name']} ({job['account_sid']})\n"
+    f"Window (UTC): {run['start_time']} to {run['end_time']}\n"
+    f"Trailing window: {job['lookback_hours']} hours\n"
+    f"Search coverage: {coverage}\n"
+    f"Pages read: {run['pages_read']}\n"
+    f"Matching messages: {len(run['rows'])}\n"
+    f"Coverage warning: {run['error'] or 'None'}\n\n"
+    "Sent times in the attachment are shown in Central Time (CST/CDT). Message bodies are not included."
+  )
+  _send_smtp_email(
+    sender=(SMTP_DEFAULT_FROM or MOBILE_JABBER_EMAIL_FROM or "noreply@amnhealthcare.com").strip(),
+    recipients=[job["recipient"]],
+    subject=f"Twilio SMS Error Report - {job['account_name']} - {run['end_time']}",
+    body=body,
+    attachments=[(filename, attachment_data, "text/csv")],
+  )
+  try:
+    _append_audit_event(
+      action="twilio_sms_error_report_scheduled_email", cucm_host="", operator=run["operator"],
+      target=f"job={job['job_id']};run={run['run_id']};account={job['account_sid']};recipient={job['recipient']};rows={len(run['rows'])};complete={run['complete']}",
+      output_filename=filename, inline_mode=True,
+    )
+  except Exception:
+    logger.exception("Scheduled Twilio SMS error report email audit failed")
+
+
+def _twilio_error_report_jobs_cycle() -> None:
+  store = TWILIO_ERROR_REPORT_JOBS_STORE
+  for run in store.claim_due_jobs():
+    _append_audit_event(
+      action="twilio_sms_error_report_job_started", cucm_host="", operator="scheduler",
+      target=f"job={run['job_id']};run={run['run_id']};trigger={run['triggered_by']}",
+      output_filename="", inline_mode=True,
+    )
+  active_runs = store.active_runs()
+  if active_runs:
+    run = active_runs[0]
+    updated = twilio_error_report_jobs.advance_run(
+      store, run["run_id"], _twilio_error_report_job_account,
+      twilio_usage.search_outbound_message_errors,
+    )
+    if updated["status"] != "running":
+      _append_audit_event(
+        action="twilio_sms_error_report_job_finished", cucm_host="", operator=updated["operator"],
+        target=f"job={updated['job_id']};run={updated['run_id']};status={updated['status']};rows={updated['row_count']};pages={updated['pages_read']}",
+        output_filename="", inline_mode=True,
+      )
+  for outcome in twilio_error_report_jobs.deliver_pending_emails(store, _twilio_error_report_job_send_email):
+    if not outcome["sent"]:
+      logger.warning("Scheduled Twilio error report email failed; run %s requires manual retry", outcome["run_id"])
+
+
+def _twilio_error_report_jobs_worker() -> None:
+  last_retention_sweep = 0.0
+  while True:
+    now_monotonic = time.monotonic()
+    if now_monotonic - last_retention_sweep >= 3600:
+      try:
+        removed = TWILIO_ERROR_REPORT_JOBS_STORE.prune_history()
+        if removed:
+          logger.info("Pruned %s expired Twilio error report job runs", removed)
+      except Exception:
+        logger.exception("Scheduled Twilio error report retention sweep failed")
+      last_retention_sweep = now_monotonic
+    try:
+      _twilio_error_report_jobs_cycle()
+    except Exception:
+      logger.exception("Scheduled Twilio error report worker cycle failed")
+    threading.Event().wait(5.0)
+
+
+def _start_twilio_error_report_jobs_worker() -> None:
+  global TWILIO_ERROR_REPORT_JOBS_WORKER_STARTED
+  with TWILIO_ERROR_REPORT_JOBS_START_LOCK:
+    if TWILIO_ERROR_REPORT_JOBS_WORKER_STARTED:
+      return
+    try:
+      recovered = TWILIO_ERROR_REPORT_JOBS_STORE.recover_uncertain_emails()
+      if recovered:
+        logger.warning("Marked %s interrupted Twilio report email(s) uncertain; they will not be resent automatically", recovered)
+    except Exception:
+      logger.exception("Scheduled Twilio error report recovery refused saved state; worker was not started")
+      return
+    thread = threading.Thread(
+      target=_twilio_error_report_jobs_worker,
+      name="twilio-error-report-jobs",
+      daemon=True,
+    )
+    thread.start()
+    TWILIO_ERROR_REPORT_JOBS_WORKER_STARTED = True
+
+
+def _twilio_error_report_jobs_public_state() -> dict:
+  state = TWILIO_ERROR_REPORT_JOBS_STORE.snapshot()
+  jobs = []
+  runs_by_job = {}
+  for run in state["runs"]:
+    runs_by_job.setdefault(run["job_id"], []).append({key: value for key, value in run.items() if key != "rows"})
+  for job in state["jobs"]:
+    public = dict(job)
+    public["runs"] = sorted(runs_by_job.get(job["job_id"], []), key=lambda run: run["created_at"], reverse=True)
+    jobs.append(public)
+  return {"jobs": jobs, "time_zone": twilio_error_report_jobs.TIME_ZONE_NAME,
+          "run_retention_days": twilio_error_report_jobs.RUN_RETENTION_DAYS,
+          "max_runs_per_job": twilio_error_report_jobs.MAX_RUNS_PER_JOB}
+
+
+@app.get("/twilio/error-report/jobs")
+def twilio_error_report_jobs_get_route(request: Request):
+  operator = str((_get_auth_session(request) or {}).get("username", "") or "").strip()
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  try:
+    return JSONResponse({"ok": True, **_twilio_error_report_jobs_public_state()}, headers={"Cache-Control": "no-store"})
+  except twilio_error_report_jobs.TwilioErrorReportJobError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=503)
+
+
+@app.post("/twilio/error-report/jobs")
+def twilio_error_report_jobs_create_route(
+  request: Request,
+  account_sid: str = Form(...),
+  lookback_hours: int = Form(...),
+  frequency: str = Form(...),
+  weekday: str = Form("monday"),
+  run_time: str = Form(...),
+  recipient: str = Form(...),
+):
+  operator = str((_get_auth_session(request) or {}).get("username", "") or "").strip()
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  try:
+    account = _twilio_error_report_job_account(str(account_sid or "").strip())
+    job = TWILIO_ERROR_REPORT_JOBS_STORE.create_job(
+      account_sid=account["sid"], account_name=account["account_name"], lookback_hours=lookback_hours,
+      frequency=frequency, weekday=weekday, run_time=run_time, recipient=recipient, operator=operator,
+    )
+    _append_audit_event(action="twilio_sms_error_report_job_created", cucm_host="", operator=operator,
+                        target=f"job={job['job_id']};account={job['account_sid']};frequency={job['frequency']};lookback_hours={job['lookback_hours']}",
+                        output_filename="", inline_mode=True)
+    return JSONResponse({"ok": True, "job_id": job["job_id"], "next_run_at": job["next_run_at"]}, headers={"Cache-Control": "no-store"})
+  except (twilio_usage.TwilioUsageError, twilio_error_report_jobs.TwilioErrorReportJobError) as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+  except Exception:
+    logger.exception("Could not create scheduled Twilio SMS error report")
+    return JSONResponse({"ok": False, "error": "Scheduled report could not be saved."}, status_code=500)
+
+
+@app.post("/twilio/error-report/jobs/action")
+def twilio_error_report_jobs_action_route(
+  request: Request,
+  job_id: str = Form(...),
+  action: str = Form(...),
+  run_id: str = Form(""),
+):
+  operator = str((_get_auth_session(request) or {}).get("username", "") or "").strip()
+  if not _is_admin_user(operator):
+    return JSONResponse({"ok": False, "error": "Administrator authentication required."}, status_code=403)
+  try:
+    safe_job_id = str(job_id or "").strip()
+    if not re.fullmatch(r"[0-9a-f]{32}", safe_job_id):
+      raise twilio_error_report_jobs.TwilioErrorReportJobError("Scheduled job ID is invalid.")
+    if action == "pause":
+      result = TWILIO_ERROR_REPORT_JOBS_STORE.set_enabled(safe_job_id, False)
+    elif action == "resume":
+      result = TWILIO_ERROR_REPORT_JOBS_STORE.set_enabled(safe_job_id, True)
+    elif action == "delete":
+      result = TWILIO_ERROR_REPORT_JOBS_STORE.delete_job(safe_job_id)
+    elif action == "run-now":
+      result = TWILIO_ERROR_REPORT_JOBS_STORE.create_run(safe_job_id, operator, "manual")
+    elif action == "retry-email":
+      if not re.fullmatch(r"[0-9a-f]{32}", str(run_id or "")):
+        raise twilio_error_report_jobs.TwilioErrorReportJobError("Scheduled run ID is invalid.")
+      _job, run = TWILIO_ERROR_REPORT_JOBS_STORE.get_run_context(run_id)
+      if run["job_id"] != safe_job_id:
+        raise twilio_error_report_jobs.TwilioErrorReportJobError("Scheduled run does not belong to this job.")
+      result = TWILIO_ERROR_REPORT_JOBS_STORE.retry_email(run_id)
+    else:
+      raise twilio_error_report_jobs.TwilioErrorReportJobError("Invalid scheduled job action.")
+    _append_audit_event(action="twilio_sms_error_report_job_" + action, cucm_host="", operator=operator,
+                        target=f"job={safe_job_id};run={run_id or result.get('run_id', '')}",
+                        output_filename="", inline_mode=True)
+    return JSONResponse({"ok": True, **_twilio_error_report_jobs_public_state()}, headers={"Cache-Control": "no-store"})
+  except twilio_error_report_jobs.TwilioErrorReportJobError as exc:
+    return JSONResponse({"ok": False, "error": str(exc)}, status_code=422)
+  except Exception:
+    logger.exception("Scheduled Twilio SMS error report action failed")
+    return JSONResponse({"ok": False, "error": "Scheduled report action could not complete."}, status_code=500)
 
 
 def _twilio_all_recent_logs_cycle() -> None:
