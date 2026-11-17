@@ -16,13 +16,26 @@ class EmptyLineGroupTests(unittest.TestCase):
         self.db.row_factory = sqlite3.Row
         self.db.executescript("""
             CREATE TABLE linegroup (pkid TEXT, name TEXT);
-            CREATE TABLE linegroupnumplanmap (fklinegroup TEXT, fknumplan TEXT);
-            CREATE TABLE huntlist (pkid TEXT, fklinegroup TEXT, fkdevice TEXT);
-            CREATE TABLE device (pkid TEXT, name TEXT);
-            INSERT INTO linegroup VALUES ('a', 'Empty & Unreferenced'), ('b', 'Empty Referenced'), ('c', 'Populated');
-            INSERT INTO linegroupnumplanmap VALUES ('c', 'extension-1');
-            INSERT INTO huntlist VALUES ('ref1', 'b', 'device1'), ('ref2', 'b', 'device2'), ('ref3', 'c', 'device1');
-            INSERT INTO device VALUES ('device1', 'Hunt List One'), ('device2', 'Hunt List Two');
+            CREATE TABLE linegroupnumplanmap (pkid TEXT, fklinegroup TEXT, fknumplan TEXT);
+            CREATE TABLE routelist (fkdevice TEXT, fklinegroup TEXT);
+            CREATE TABLE device (pkid TEXT, name TEXT, tkproduct INTEGER);
+            CREATE TABLE typeproduct (enum INTEGER, name TEXT);
+            INSERT INTO linegroup VALUES
+                ('a', 'Empty & Unreferenced'),
+                ('b', 'Empty Referenced'),
+                ('c', 'Populated'),
+                ('d', 'Empty Route-List Only');
+            INSERT INTO linegroupnumplanmap VALUES ('member1', 'c', 'extension-1');
+            INSERT INTO routelist VALUES
+                ('device1', 'b'),
+                ('device2', 'b'),
+                ('device1', 'c'),
+                ('device3', 'd');
+            INSERT INTO device VALUES
+                ('device1', 'Hunt List One', 1),
+                ('device2', 'Hunt List Two', 1),
+                ('device3', 'Route List Only', 2);
+            INSERT INTO typeproduct VALUES (1, 'Hunt List'), (2, 'Route List');
         """)
         self.queries = []
 
@@ -40,25 +53,26 @@ class EmptyLineGroupTests(unittest.TestCase):
 
     def test_only_empty_groups_and_all_hunt_list_references_in_one_read(self):
         rows = self.find()
-        self.assertEqual([row["line_group_id"] for row in rows], ["a", "b"])
+        self.assertEqual([row["line_group_id"] for row in rows], ["a", "b", "d"])
         self.assertEqual(rows[0]["hunt_list_reference_count"], 0)
         self.assertEqual(rows[1]["hunt_lists"], ["Hunt List One", "Hunt List Two"])
         self.assertEqual(rows[1]["hunt_list_reference_count"], 2)
+        self.assertEqual(rows[2]["hunt_list_reference_count"], 0)
         self.assertTrue(all(row["extension_count"] == 0 for row in rows))
         self.assertEqual(len(self.queries), 1)
 
     def test_membership_without_resolvable_extension_still_excludes_group(self):
-        self.db.execute("INSERT INTO linegroupnumplanmap VALUES ('a', NULL)")
-        self.assertEqual([row["line_group_id"] for row in self.find()], ["b"])
+        self.db.execute("INSERT INTO linegroupnumplanmap VALUES ('member2', 'a', NULL)")
+        self.assertEqual([row["line_group_id"] for row in self.find()], ["b", "d"])
 
     def test_missing_hunt_list_name_is_not_unreferenced(self):
-        self.db.execute("DELETE FROM device WHERE pkid = 'device2'")
+        self.db.execute("UPDATE device SET name = NULL WHERE pkid = 'device2'")
         row = self.find()[1]
         self.assertEqual(row["hunt_list_reference_count"], 2)
         self.assertIn("Name unavailable", row["hunt_lists"])
 
     def test_pagination_and_empty_inventory(self):
-        self.db.executescript("DELETE FROM huntlist; DELETE FROM linegroupnumplanmap; DELETE FROM linegroup;")
+        self.db.executescript("DELETE FROM routelist; DELETE FROM linegroupnumplanmap; DELETE FROM linegroup;")
         self.assertEqual(self.find(), [])
         self.queries.clear()
         self.db.executemany("INSERT INTO linegroup VALUES (?, ?)", [(str(index), f"Group {index}") for index in range(1001)])
