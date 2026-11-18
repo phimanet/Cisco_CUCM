@@ -172,11 +172,7 @@ def _resolve_ldap_bind_credentials(auth_context, config):
         return None, None, "NTLM auth selected but username is not DOMAIN\\user and AD_LDAP_DOMAIN is not set"
 
     if mode == "simple":
-        if "@" in username:
-            return username, SIMPLE, ""
-        if config["upn_suffix"]:
-            return _resolve_ldapsearch_bind_user(auth_context, config), SIMPLE, ""
-        return username, SIMPLE, ""
+        return _resolve_ldapsearch_bind_user(auth_context, config), SIMPLE, ""
 
     if "\\" in username:
         return username, NTLM, ""
@@ -1655,19 +1651,16 @@ def _resolve_ldapsearch_bind_user(auth_context, config):
     if not username:
         return ""
 
-    if "@" in username:
+    if "@" in username or "\\" in username:
         return username
 
-    if "\\" in username:
-        username = username.split("\\", 1)[-1].strip()
+    default_domain = str((config or {}).get("default_domain") or "").strip()
+    if default_domain:
+        return f"{default_domain}\\{username}"
 
     upn_suffix = str((config or {}).get("upn_suffix") or "").strip()
     if upn_suffix:
         return f"{username}@{upn_suffix}"
-
-    default_domain = str((config or {}).get("default_domain") or "").strip()
-    if default_domain and "." in default_domain:
-        return f"{username}@{default_domain}"
 
     return username
 

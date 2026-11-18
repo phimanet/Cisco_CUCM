@@ -3,32 +3,100 @@ import importlib.util
 import io
 import os
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from toolkit import ad_phone_fields as fields
 from toolkit import update_ad_phone_only as standalone
 
 
 class ADPhoneLDAPCredentialsTests(unittest.TestCase):
-    def test_simple_bind_normalizes_cached_domain_username_without_changing_password(self):
+    def test_simple_bind_preserves_explicit_identity_and_qualifies_bare_username(self):
         config = {"auth_mode": "simple", "upn_suffix": "example.test", "default_domain": "EXAMPLE"}
         cases = [
-            (r"EXAMPLE\operator", "example.test", "operator@example.test"),
-            ("operator", "example.test", "operator@example.test"),
-            ("operator@other.test", "example.test", "operator@other.test"),
-            (r"EXAMPLE\operator", "", r"EXAMPLE\operator"),
+            (r"OTHER\operator", "EXAMPLE", "example.test", r"OTHER\operator"),
+            ("operator", "EXAMPLE", "example.test", r"EXAMPLE\operator"),
+            ("operator@other.test", "EXAMPLE", "example.test", "operator@other.test"),
+            (r"EXAMPLE\operator", "EXAMPLE", "", r"EXAMPLE\operator"),
+            ("operator", "", "example.test", "operator@example.test"),
+            ("operator", "", "", "operator"),
         ]
         with patch.dict(os.environ, {}, clear=True), \
                 patch.object(fields, "SIMPLE", "SIMPLE", create=True):
-            for username, suffix, expected in cases:
-                with self.subTest(username=username, suffix=suffix):
+            for username, domain, suffix, expected in cases:
+                with self.subTest(username=username, domain=domain, suffix=suffix):
+                    config["default_domain"] = domain
                     config["upn_suffix"] = suffix
                     context = {"username": username, "password": "session-password"}
                     self.assertEqual(
                         fields._resolve_ldap_bind_credentials(context, config),
                         (expected, "SIMPLE", ""),
                     )
+                    self.assertEqual(fields._resolve_ldapsearch_bind_user(context, config), expected)
                     self.assertEqual(context, {"username": username, "password": "session-password"})
+
+    def test_standalone_python_lookup_and_modify_use_same_cached_domain_identity(self):
+        config = {
+            "auth_mode": "simple", "upn_suffix": "example.test", "default_domain": "EXAMPLE",
+            "server": "directory.example.test", "port": 636, "use_ssl": True, "base_dn": "DC=example,DC=test",
+        }
+        for username in ("operator", r"EXAMPLE\operator"):
+            for phone in ("8585236648", ""):
+                with self.subTest(username=username, clearing=not phone):
+                    conn = Mock(entries=[Mock(entry_dn="CN=Target")], result={})
+                    connection = Mock(return_value=conn)
+                    with patch.dict(os.environ, {}, clear=True), \
+                            patch.object(fields, "_resolve_ldap_config", return_value=(config, "")), \
+                            patch.object(fields, "_run_powershell_json", return_value=(None, "Unavailable")), \
+                            patch.multiple(
+                                fields, LDAP3_AVAILABLE=True, Server=Mock(), Connection=connection,
+                                ALL="ALL", SIMPLE="SIMPLE", SUBTREE="SUBTREE",
+                                MODIFY_REPLACE="REPLACE", MODIFY_DELETE="DELETE", create=True,
+                            ), \
+                            patch.object(fields, "_lookup_ad_user_ldapsearch") as cli:
+                        data, _ = standalone.update_ad_phone_fields_only(
+                            "Target.User", phone, username, "session-password"
+                        )
+                        self.assertEqual(list(csv.reader(io.StringIO(data.decode())))[-1][1], "Success")
+                        self.assertEqual(connection.call_count, 2)
+                        for call in connection.call_args_list:
+                            self.assertEqual(call.kwargs["user"], r"EXAMPLE\operator")
+                            self.assertEqual(call.kwargs["password"], "session-password")
+                            self.assertEqual(call.kwargs["authentication"], "SIMPLE")
+                        expected = (
+                            {"telephoneNumber": [("REPLACE", ["+1 (858) 5236648"])],
+                             "ipPhone": [("REPLACE", ["8585236648"])]}
+                            if phone else
+                            {"telephoneNumber": [("DELETE", [])], "ipPhone": [("DELETE", [])]}
+                        )
+                        conn.modify.assert_called_once_with("CN=Target", expected)
+                        cli.assert_not_called()
+
+    def test_standalone_cli_lookup_and_modify_preserve_cached_domain_identity(self):
+        config = {"upn_suffix": "example.test", "default_domain": "EXAMPLE", "base_dn": "DC=example,DC=test"}
+        for username in ("operator", r"EXAMPLE\operator"):
+            with self.subTest(username=username), \
+                    patch.dict(os.environ, {}, clear=True), \
+                    patch.object(fields, "_resolve_ldap_config", return_value=(config, "")), \
+                    patch.object(fields, "_run_powershell_json", return_value=(None, "Unavailable")), \
+                    patch.object(fields, "LDAP3_AVAILABLE", False), \
+                    patch.object(fields, "_resolve_ldapsearch_executable", return_value="ldapsearch"), \
+                    patch.object(fields, "_resolve_ldapmodify_executable", return_value="ldapmodify"), \
+                    patch.object(fields, "_ldap_uri_candidates", return_value=["ldaps://directory.example.test:636"]), \
+                    patch.object(fields.subprocess, "run", side_effect=[
+                        fields.subprocess.CompletedProcess([], 0, "dn: CN=Target\n", ""),
+                        fields.subprocess.CompletedProcess([], 0, "", ""),
+                    ]) as run:
+                data, _ = standalone.update_ad_phone_fields_only(
+                    "Target.User", "8585236648", username, "session-password"
+                )
+                self.assertEqual(list(csv.reader(io.StringIO(data.decode())))[-1][1], "Success")
+                self.assertEqual(run.call_count, 2)
+                for call in run.call_args_list:
+                    command = call.args[0]
+                    self.assertEqual(command[command.index("-D") + 1], r"EXAMPLE\operator")
+                    self.assertEqual(command[command.index("-w") + 1], "session-password")
+                self.assertIn("telephoneNumber: +1 (858) 5236648", run.call_args.kwargs["input"])
+                self.assertIn("ipPhone: 8585236648", run.call_args.kwargs["input"])
 
     def test_ntlm_and_auto_keep_cached_domain_username(self):
         with patch.dict(os.environ, {}, clear=True), \
