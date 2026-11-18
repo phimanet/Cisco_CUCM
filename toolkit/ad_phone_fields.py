@@ -175,7 +175,7 @@ def _resolve_ldap_bind_credentials(auth_context, config):
         if "@" in username:
             return username, SIMPLE, ""
         if config["upn_suffix"]:
-            return f"{username}@{config['upn_suffix']}", SIMPLE, ""
+            return _resolve_ldapsearch_bind_user(auth_context, config), SIMPLE, ""
         return username, SIMPLE, ""
 
     if "\\" in username:

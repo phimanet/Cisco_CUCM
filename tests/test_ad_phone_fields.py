@@ -10,6 +10,39 @@ from toolkit import update_ad_phone_only as standalone
 
 
 class ADPhoneLDAPCredentialsTests(unittest.TestCase):
+    def test_simple_bind_normalizes_cached_domain_username_without_changing_password(self):
+        config = {"auth_mode": "simple", "upn_suffix": "example.test", "default_domain": "EXAMPLE"}
+        cases = [
+            (r"EXAMPLE\operator", "example.test", "operator@example.test"),
+            ("operator", "example.test", "operator@example.test"),
+            ("operator@other.test", "example.test", "operator@other.test"),
+            (r"EXAMPLE\operator", "", r"EXAMPLE\operator"),
+        ]
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.object(fields, "SIMPLE", "SIMPLE", create=True):
+            for username, suffix, expected in cases:
+                with self.subTest(username=username, suffix=suffix):
+                    config["upn_suffix"] = suffix
+                    context = {"username": username, "password": "session-password"}
+                    self.assertEqual(
+                        fields._resolve_ldap_bind_credentials(context, config),
+                        (expected, "SIMPLE", ""),
+                    )
+                    self.assertEqual(context, {"username": username, "password": "session-password"})
+
+    def test_ntlm_and_auto_keep_cached_domain_username(self):
+        with patch.dict(os.environ, {}, clear=True), \
+                patch.object(fields, "NTLM", "NTLM", create=True):
+            for mode in ("ntlm", "auto"):
+                with self.subTest(mode=mode):
+                    self.assertEqual(
+                        fields._resolve_ldap_bind_credentials(
+                            {"username": r"EXAMPLE\operator", "password": "session-password"},
+                            {"auth_mode": mode, "upn_suffix": "example.test", "default_domain": "EXAMPLE"},
+                        ),
+                        (r"EXAMPLE\operator", "NTLM", ""),
+                    )
+
     @unittest.skipUnless(importlib.util.find_spec("ldap3"), "ldap3 is optional")
     def test_installed_ldap3_enables_transport_and_sid_formatter(self):
         self.assertTrue(fields.LDAP3_AVAILABLE)
