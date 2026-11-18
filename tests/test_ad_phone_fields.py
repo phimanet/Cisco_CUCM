@@ -1,4 +1,5 @@
 import csv
+import importlib.util
 import io
 import os
 import unittest
@@ -9,6 +10,14 @@ from toolkit import update_ad_phone_only as standalone
 
 
 class ADPhoneLDAPCredentialsTests(unittest.TestCase):
+    @unittest.skipUnless(importlib.util.find_spec("ldap3"), "ldap3 is optional")
+    def test_installed_ldap3_enables_transport_and_sid_formatter(self):
+        self.assertTrue(fields.LDAP3_AVAILABLE)
+        self.assertEqual(
+            fields._sid_to_string(bytes.fromhex("010100000000000520000000")),
+            "S-1-5-32",
+        )
+
     def test_phone_and_email_lookups_use_matching_credentials(self):
         config = {"upn_suffix": "example.test", "default_domain": ""}
         session = {"username": "operator", "password": "session-password"}

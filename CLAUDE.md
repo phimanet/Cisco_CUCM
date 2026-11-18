@@ -129,6 +129,8 @@ Priority keys:
 ### 2026-11-18 (AD phone-update LDAP credentials)
 - Fixed the Linux phone-update lookup mixing `AD_LDAP_BIND_USER` with the operator session password. Username/email lookups and phone modifications now select the complete service-account pair, or the session pair when no override is configured; incomplete overrides fail explicitly before LDAP execution.
 - Local validation: all eight AD phone tests pass, covering the reproduced credential mismatch, service-only/session-only lookup, incomplete overrides, update/clear transport credentials, and unchanged phone formatting. No live AD reads/writes or server configuration changes; LAB validation remains required.
+- LAB follow-up confirmed ldap3 2.9.1 was installed but an invalid `ldap3.utils.conv.format_sid` import disabled the entire Python LDAP transport. Corrected the import to `ldap3.protocol.formatters.formatters`; a regression using the real dependency reproduces the old failure and verifies LDAP availability plus binary SID formatting.
+- Local follow-up: all nine AD phone tests pass with ldap3 2.9.1. No live AD access or credential validation was performed; the separate LDAP 49/52e login failure is not yet confirmed resolved.
 
 ### 2026-11-11 (Twilio Outbound Usage and SMS Error Report)
 - Added read-only `Twilio Outbound SMS Usage` dashboard with per-root/per-subaccount `sms-outbound` counts, combined totals, GMT date filters, partial-coverage warnings and CSV. Twilio Messaging Health Score links to Console because no documented REST API exposes the score; it is refreshed daily over a seven-day view.

@@ -18,7 +18,7 @@ try:
         Connection,
         Server,
     )
-    from ldap3.utils.conv import format_sid
+    from ldap3.protocol.formatters.formatters import format_sid
 
     LDAP3_AVAILABLE = True
 except Exception:
