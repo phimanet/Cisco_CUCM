@@ -1382,13 +1382,9 @@ def _run_ldapmodify_attributes(distinguished_name, auth_context, replace_attrs=N
     if config_error:
         return config_error
 
-    password = str(os.getenv("AD_LDAP_BIND_PASSWORD") or str((auth_context or {}).get("password") or ""))
-    if not password:
-        return "LDAP bind requires username and password"
-
-    bind_user = _resolve_ldapsearch_bind_user(auth_context, config)
-    if not bind_user:
-        return "LDAP bind requires username"
+    bind_user, password, bind_error = _resolve_ldapsearch_bind_credentials(auth_context, config)
+    if bind_error:
+        return bind_error
 
     ldapmodify_bin = _resolve_ldapmodify_executable()
     if not ldapmodify_bin:
@@ -1461,13 +1457,9 @@ def _lookup_ad_user_ldapsearch(samaccountname, auth_context):
     if config_error:
         return None, config_error
 
-    password = str((auth_context or {}).get("password") or "")
-    if not password:
-        return None, "LDAP bind requires username and password"
-
-    bind_user = _resolve_ldapsearch_bind_user(auth_context, config)
-    if not bind_user:
-        return None, "LDAP bind requires username"
+    bind_user, password, bind_error = _resolve_ldapsearch_bind_credentials(auth_context, config)
+    if bind_error:
+        return None, bind_error
 
     search_filter = f"(&(objectClass=user)(sAMAccountName={_escape_ldap_filter_value(samaccountname)}))"
     attrs, lookup_error = _run_ldapsearch_query(
@@ -1678,6 +1670,19 @@ def _resolve_ldapsearch_bind_user(auth_context, config):
         return f"{username}@{default_domain}"
 
     return username
+
+
+def _resolve_ldapsearch_bind_credentials(auth_context, config):
+    env_bind_user = str(os.getenv("AD_LDAP_BIND_USER") or "").strip()
+    env_bind_password = str(os.getenv("AD_LDAP_BIND_PASSWORD") or "")
+    if bool(env_bind_user) != bool(env_bind_password):
+        return None, None, "AD_LDAP_BIND_USER and AD_LDAP_BIND_PASSWORD must be set together"
+
+    bind_user = _resolve_ldapsearch_bind_user(auth_context, config)
+    password = env_bind_password if env_bind_user else str((auth_context or {}).get("password") or "")
+    if not bind_user or not password:
+        return None, None, "LDAP bind requires username and password"
+    return bind_user, password, ""
 
 
 def _parse_ldif_attributes(output_text):
@@ -1970,13 +1975,9 @@ def _resolve_samaccountname_by_email_ldapsearch(email, auth_context):
     if config_error:
         return None, config_error
 
-    password = str((auth_context or {}).get("password") or "")
-    if not password:
-        return None, "LDAP bind requires username and password"
-
-    bind_user = _resolve_ldapsearch_bind_user(auth_context, config)
-    if not bind_user:
-        return None, "LDAP bind requires username"
+    bind_user, password, bind_error = _resolve_ldapsearch_bind_credentials(auth_context, config)
+    if bind_error:
+        return None, bind_error
 
     escaped = _escape_ldap_filter_value(email)
     search_filter = (

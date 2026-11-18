@@ -121,6 +121,10 @@ Priority keys:
 - Decision on 2026-05-01: Do not change `verify=False` yet; revisit after controlled internal CA trust-chain validation to avoid breaking current automation workflows.
 
 ## Open Questions
+### 2026-11-18 (AD phone-update LDAP credentials)
+- Fixed the Linux phone-update lookup mixing `AD_LDAP_BIND_USER` with the operator session password. Username/email lookups and phone modifications now select the complete service-account pair, or the session pair when no override is configured; incomplete overrides fail explicitly before LDAP execution.
+- Local validation: all eight AD phone tests pass, covering the reproduced credential mismatch, service-only/session-only lookup, incomplete overrides, update/clear transport credentials, and unchanged phone formatting. No live AD reads/writes or server configuration changes; LAB validation remains required.
+
 - Which immediate deliverable should be prioritized first in this repository?
 - `10.241.17.165`: Unknown FTP client connecting to vsftpd — asked Sean Beavers to identify; suspected networking device sending backups. Pending confirmation on whether it can switch to SFTP.
 
