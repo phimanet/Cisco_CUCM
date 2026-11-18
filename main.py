@@ -1212,18 +1212,18 @@ def _prune_auth_sessions_locked(now_epoch: float):
 def _cache_secret(session: dict, key: str, value: str, now_epoch: float | None = None):
   if not session:
     return
-  cleaned = (value or "").strip()
-  if not cleaned:
+  secret = value or ""
+  if not secret:
     return
   now = now_epoch if now_epoch is not None else time.time()
   if _CREDENTIAL_CIPHER:
-    token = _CREDENTIAL_CIPHER.encrypt(cleaned.encode("utf-8")).decode("utf-8")
+    token = _CREDENTIAL_CIPHER.encrypt(secret.encode("utf-8")).decode("utf-8")
     session[f"{key}_enc"] = token
     # Keep an in-memory fallback copy to tolerate cache-metadata edge cases.
-    session[key] = cleaned
+    session[key] = secret
   else:
     # Compatibility fallback: keep service running if cryptography is unavailable.
-    session[key] = cleaned
+    session[key] = secret
     session.pop(f"{key}_enc", None)
   session[f"{key}_cached_at"] = now
   session["credential_expires_at"] = now + CREDENTIAL_CACHE_TTL_SECONDS
@@ -1237,7 +1237,7 @@ def _get_cached_secret(session: dict, key: str, now_epoch: float | None = None) 
   expires_at = float(session.get("credential_expires_at", 0) or 0)
   cached_at = float(session.get(f"{key}_cached_at", 0) or 0)
   encrypted_value = (session.get(f"{key}_enc", "") or "").strip()
-  legacy_plain_value = (session.get(key, "") or "").strip()
+  legacy_plain_value = session.get(key, "") or ""
 
   if not encrypted_value and not legacy_plain_value:
     return ""
@@ -1262,7 +1262,7 @@ def _get_cached_secret(session: dict, key: str, now_epoch: float | None = None) 
       session.pop(f"{key}_cached_at", None)
       return ""
     try:
-      return _CREDENTIAL_CIPHER.decrypt(encrypted_value.encode("utf-8")).decode("utf-8").strip()
+      return _CREDENTIAL_CIPHER.decrypt(encrypted_value.encode("utf-8")).decode("utf-8")
     except (InvalidToken, ValueError, TypeError):
       session.pop(f"{key}_enc", None)
       session.pop(f"{key}_cached_at", None)
@@ -7385,7 +7385,7 @@ def _create_auth_session(cucm_host: str, username: str, cucm_pass: str) -> str:
     "credential_expires_at": now_epoch + CREDENTIAL_CACHE_TTL_SECONDS,
   }
   AUTH_SESSION_SECRETS[session_id] = {
-    "cucm_pass": (cucm_pass or "").strip(),
+    "cucm_pass": cucm_pass or "",
     "unity_pass": "",
   }
   _cache_secret(AUTH_SESSIONS[session_id], "cucm_pass", cucm_pass, now_epoch)
@@ -7462,16 +7462,16 @@ def _update_cached_credentials(
     session["cucm_host"] = cucm_host.strip()
   if (cucm_user or "").strip():
     session["cucm_user"] = cucm_user.strip()
-  if (cucm_pass or "").strip():
+  if cucm_pass:
     _cache_secret(session, "cucm_pass", cucm_pass)
     if secret_store is not None:
-      secret_store["cucm_pass"] = (cucm_pass or "").strip()
+      secret_store["cucm_pass"] = cucm_pass
   if (unity_user or "").strip():
     session["unity_user"] = unity_user.strip()
-  if (unity_pass or "").strip():
+  if unity_pass:
     _cache_secret(session, "unity_pass", unity_pass)
     if secret_store is not None:
-      secret_store["unity_pass"] = (unity_pass or "").strip()
+      secret_store["unity_pass"] = unity_pass
 
 
 def _load_settings():
@@ -9739,7 +9739,7 @@ def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, 
   if provided_user:
     session["cucm_user"] = provided_user
   resolved_user = provided_user or session.get("cucm_user", "") or session.get("username", "")
-  provided_pass = (cucm_pass or "").strip()
+  provided_pass = cucm_pass or ""
   session_id = request.cookies.get(SESSION_COOKIE_NAME, "")
   secret_store = AUTH_SESSION_SECRETS.get(session_id, {}) if session_id else {}
   if provided_pass:
@@ -9749,10 +9749,10 @@ def _resolve_cucm_credentials(request: Request, cucm_host: str, cucm_user: str, 
       secret_store["cucm_pass"] = provided_pass
   resolved_pass = provided_pass or _get_cached_secret(session, "cucm_pass")
   if not resolved_pass:
-    resolved_pass = (secret_store.get("cucm_pass", "") or "").strip()
+    resolved_pass = secret_store.get("cucm_pass", "") or ""
   if not resolved_pass:
     # Final fallback for sessions that still carry plain value from compatibility path.
-    resolved_pass = (session.get("cucm_pass", "") or "").strip()
+    resolved_pass = session.get("cucm_pass", "") or ""
     if resolved_pass:
       _cache_secret(session, "cucm_pass", resolved_pass)
 
@@ -9768,7 +9768,7 @@ def _resolve_unity_credentials(request: Request, unity_user: str, unity_pass: st
     raise RuntimeError("Authentication required.")
 
   resolved_user = (unity_user or "").strip() or session.get("unity_user", "") or session.get("username", "")
-  provided_pass = (unity_pass or "").strip()
+  provided_pass = unity_pass or ""
   session_id = request.cookies.get(SESSION_COOKIE_NAME, "")
   secret_store = AUTH_SESSION_SECRETS.get(session_id, {}) if session_id else {}
   if provided_pass:
@@ -9778,7 +9778,7 @@ def _resolve_unity_credentials(request: Request, unity_user: str, unity_pass: st
       secret_store["unity_pass"] = provided_pass
   resolved_pass = provided_pass or _get_cached_secret(session, "unity_pass") or _get_cached_secret(session, "cucm_pass")
   if not resolved_pass:
-    resolved_pass = (secret_store.get("unity_pass", "") or "").strip() or (secret_store.get("cucm_pass", "") or "").strip()
+    resolved_pass = secret_store.get("unity_pass", "") or secret_store.get("cucm_pass", "") or ""
 
   if not resolved_user or not resolved_pass:
     raise RuntimeError("Missing Unity credentials. Enter Unity admin username/password for this action.")

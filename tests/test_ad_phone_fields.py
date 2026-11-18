@@ -1,12 +1,99 @@
+import ast
+import base64
 import csv
 import importlib.util
 import io
 import os
 import unittest
+from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
+from uuid import uuid4
 
 from toolkit import ad_phone_fields as fields
 from toolkit import update_ad_phone_only as standalone
+
+
+class ADPhoneSessionCredentialsTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source = Path(__file__).resolve().parents[1] / "main.py"
+        tree = ast.parse(source.read_text(encoding="utf-8-sig"))
+        names = {
+            "_cache_secret", "_get_cached_secret", "_prune_auth_sessions_locked",
+            "_create_auth_session", "_get_auth_session", "_update_cached_credentials",
+            "_resolve_cucm_credentials", "_resolve_unity_credentials", "update_ad_phone_fields_route",
+        }
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
+        for node in functions:
+            node.decorator_list = []
+        cls.code = compile(ast.Module(body=functions, type_ignores=[]), str(source), "exec")
+
+    def scope(self, encrypted):
+        cipher = Mock() if encrypted else None
+        if cipher:
+            cipher.encrypt.side_effect = base64.urlsafe_b64encode
+            cipher.decrypt.side_effect = base64.urlsafe_b64decode
+        scope = {
+            "time": SimpleNamespace(time=lambda: 1000), "uuid4": uuid4, "Request": object,
+            "Form": lambda default: default, "Query": lambda default: default,
+            "_CREDENTIAL_CIPHER": cipher, "InvalidToken": ValueError,
+            "CREDENTIAL_CACHE_TTL_SECONDS": 3600, "SESSION_IDLE_TIMEOUT_SECONDS": 3600,
+            "SESSION_COOKIE_NAME": "test-session", "AUTH_SESSIONS": {}, "AUTH_SESSION_SECRETS": {},
+            "update_ad_phone_fields_only": standalone.update_ad_phone_fields_only,
+            "_append_audit_event": Mock(), "_render_job_result": lambda title, data, filename: data,
+        }
+        exec(self.code, scope)
+        return scope
+
+    def test_login_cache_and_option_11_preserve_exact_password(self):
+        for encrypted in (False, True):
+            with self.subTest(encrypted=encrypted):
+                scope = self.scope(encrypted)
+                password = " \tExample-password \t"
+                session_id = scope["_create_auth_session"]("cucm.example.test", "operator", password)
+                request = SimpleNamespace(cookies={"test-session": session_id})
+                with patch.object(fields, "_lookup_ad_user", return_value=(
+                    {"found": True, "distinguishedName": "CN=Target"}, ""
+                )) as lookup, patch.object(fields, "_run_powershell_json", return_value=({}, "")) as update:
+                    data = scope["update_ad_phone_fields_route"](
+                        request, target_user="Target.User", phone_number="8585236648"
+                    )
+                self.assertEqual(list(csv.reader(io.StringIO(data.decode())))[-1][1], "Success")
+                self.assertEqual(lookup.call_args.args[1], {"username": "operator", "password": password})
+                self.assertEqual(update.call_args.args[1]["password"], password)
+                self.assertEqual(scope["AUTH_SESSION_SECRETS"][session_id]["cucm_pass"], password)
+                if encrypted:
+                    self.assertEqual(scope["_CREDENTIAL_CIPHER"].encrypt.call_args.args[0], password.encode())
+
+    def test_provided_updated_and_fallback_cucm_unity_passwords_are_not_trimmed(self):
+        password = "\t Example-password "
+        for encrypted in (False, True):
+            for source in ("provided", "updated", "cache", "fallback"):
+                with self.subTest(encrypted=encrypted, source=source):
+                    scope = self.scope(encrypted)
+                    session_id = scope["_create_auth_session"]("cucm.example.test", "operator", password)
+                    request = SimpleNamespace(cookies={"test-session": session_id})
+                    if source == "updated":
+                        scope["_update_cached_credentials"](
+                            request, cucm_pass=password, unity_pass=password
+                        )
+                    elif source == "fallback":
+                        scope["AUTH_SESSIONS"][session_id].pop("cucm_pass", None)
+                        scope["AUTH_SESSIONS"][session_id].pop("cucm_pass_enc", None)
+                    supplied = password if source == "provided" else ""
+                    self.assertEqual(scope["_resolve_cucm_credentials"](request, "", "", supplied)[2], password)
+                    self.assertEqual(scope["_resolve_unity_credentials"](request, "", supplied)[1], password)
+
+    def test_preserving_password_does_not_bypass_expiry(self):
+        for encrypted in (False, True):
+            with self.subTest(encrypted=encrypted):
+                scope = self.scope(encrypted)
+                session = {"username": "operator"}
+                scope["_cache_secret"](session, "cucm_pass", " Example-password ", now_epoch=1000)
+                self.assertEqual(scope["_get_cached_secret"](session, "cucm_pass", now_epoch=4601), "")
+                self.assertNotIn("cucm_pass", session)
+                self.assertNotIn("cucm_pass_enc", session)
 
 
 class ADPhoneLDAPCredentialsTests(unittest.TestCase):
